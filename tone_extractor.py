@@ -640,33 +640,43 @@ class PhoneticsApp:
             total = len(flat_words)
             
             word_idx = 0
+            results = [] # 存储计算结果，最后统一插入 UI
+            
             for grp in groups:
-                def add_grp(g=grp['group']): return self._ensure_group(g)
-                gid = self.root.after(0, add_grp)
-                
                 for word in grp['items']:
                     self.root.after(0, lambda v=word_idx/total: self.set_progress(v))
                     
                     if word_idx < len(macro_segments):
                         mac_s, mac_e = macro_segments[word_idx]
                         mic_s, mic_e = self._microscopic_vowel_nucleus(snd, global_pitch, mac_s, mac_e)
-                        
-                        def insert_item(w=word, g=grp['group'], ms=mac_s, me=mac_e, mis=mic_s, mie=mic_e, gid_in=gid):
-                            iid = self.tree.insert(gid_in, tk.END, text=w, tags=('item',))
-                            self.items[iid] = {
-                                'label': w, 'group': g, 'snd': snd, 'pitch': global_pitch,
-                                'macro_start': ms, 'macro_end': me, 'start': mis, 'end': mie
-                            }
-                        self.root.after(0, insert_item)
+                        results.append({
+                            'word': word, 'group': grp['group'], 'missing': False,
+                            'ms': mac_s, 'me': mac_e, 'mis': mic_s, 'mie': mic_e
+                        })
                         word_idx += 1
                     else:
-                        def insert_missing(w=word, g=grp['group'], gid_in=gid):
-                            iid = self.tree.insert(gid_in, tk.END, text=w + " (缺失)", tags=('item',))
-                            self.items[iid] = {'label': w, 'group': g, 'snd': None, 'start': 0.0, 'end': 0.0}
-                        self.root.after(0, insert_missing)
+                        results.append({
+                            'word': word, 'group': grp['group'], 'missing': True
+                        })
             
-            self.root.after(0, lambda: self.stop_loading("长音频切分完成"))
-            self.root.after(0, self._select_first_item)
+            def finalize():
+                for res in results:
+                    gid = self._ensure_group(res['group'])
+                    if not res['missing']:
+                        iid = self.tree.insert(gid, tk.END, text=res['word'], tags=('item',))
+                        self.items[iid] = {
+                            'label': res['word'], 'group': res['group'], 'snd': snd, 'pitch': global_pitch,
+                            'macro_start': res['ms'], 'macro_end': res['me'], 
+                            'start': res['mis'], 'end': res['mie']
+                        }
+                    else:
+                        iid = self.tree.insert(gid, tk.END, text=res['word'] + " (缺失)", tags=('item',))
+                        self.items[iid] = {'label': res['word'], 'group': res['group'], 'snd': None, 'start': 0.0, 'end': 0.0}
+                
+                self.stop_loading("长音频切分完成")
+                self._select_first_item()
+            
+            self.root.after(0, finalize)
 
         threading.Thread(target=run, daemon=True).start()
 
