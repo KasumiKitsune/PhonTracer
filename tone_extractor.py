@@ -8,7 +8,9 @@ import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import os
+import csv
 import warnings
+from PIL import Image
 
 # 解决中文字体显示问题
 matplotlib.rcParams['font.sans-serif'] =['SimHei', 'Microsoft YaHei', 'PingFang SC', 'Arial Unicode MS', 'sans-serif']
@@ -94,8 +96,40 @@ class PhoneticsApp:
         self.font_main = ctk.CTkFont(family="Microsoft YaHei", size=13)
         self.font_code = ctk.CTkFont(family="Consolas", size=13)
 
+        self.setup_icons()
         self.setup_ui()
         
+    def setup_icons(self):
+        # 预加载所有图标
+        icon_path = os.path.join(os.path.dirname(__file__), "icons")
+        self.icons = {}
+        
+        icon_files = {
+            "audio": "audio_file.png",
+            "cut": "cut.png",
+            "batch": "batch.png",
+            "magic": "magic.png",
+            "list": "list.png",
+            "plus": "plus.png",
+            "play": "play.png",
+            "save": "save.png",
+            "check": "check.png",
+            "auto": "auto.png",
+            "points": "points.png",
+            "energy": "energy.png",
+            "duration": "duration.png",
+            "trim": "trim.png",
+            "tag": "tag.png"
+        }
+        
+        for key, filename in icon_files.items():
+            path = os.path.join(icon_path, filename)
+            if os.path.exists(path):
+                img = Image.open(path)
+                self.icons[key] = ctk.CTkImage(light_image=img, dark_image=img, size=(20, 20))
+            else:
+                self.icons[key] = None
+
     def setup_ui(self):
         # ---------------- 1. 左侧控制面板 ----------------
         left_scrollable = ctk.CTkScrollableFrame(self.root, width=320, fg_color="transparent")
@@ -109,22 +143,22 @@ class PhoneticsApp:
         card_mode1 = ctk.CTkFrame(left_scrollable, fg_color="white", corner_radius=10)
         card_mode1.pack(fill=tk.X, pady=(0, 10))
         ctk.CTkLabel(card_mode1, text="模式一：单条长音频", font=self.font_title, text_color="#111827").pack(anchor=tk.W, padx=15, pady=(15, 5))
-        ctk.CTkButton(card_mode1, text="1. 导入长音频", command=self.load_long_audio, **btn_kwargs_primary).pack(fill=tk.X, padx=15, pady=(5, 2))
+        ctk.CTkButton(card_mode1, text=" 导入长音频", image=self.icons.get("audio"), compound="left", command=self.load_long_audio, **btn_kwargs_primary).pack(fill=tk.X, padx=15, pady=(5, 2))
         self.lbl_long_file = ctk.CTkLabel(card_mode1, text="未选择", font=self.font_main, text_color="#6B7280")
         self.lbl_long_file.pack(pady=(0, 5))
-        ctk.CTkButton(card_mode1, text="2. 导入字表并切分", command=lambda: self.open_text_dialog('long'), **btn_kwargs_secondary).pack(fill=tk.X, padx=15, pady=(0, 15))
+        ctk.CTkButton(card_mode1, text=" 导入字表并切分", image=self.icons.get("cut"), compound="left", command=lambda: self.open_text_dialog('long'), **btn_kwargs_secondary).pack(fill=tk.X, padx=15, pady=(0, 15))
 
         # --- 卡片 2：多条独立音频 ---
         card_mode2 = ctk.CTkFrame(left_scrollable, fg_color="white", corner_radius=10)
         card_mode2.pack(fill=tk.X, pady=5)
         ctk.CTkLabel(card_mode2, text="模式二：多条独立音频", font=self.font_title, text_color="#111827").pack(anchor=tk.W, padx=15, pady=(15, 5))
-        ctk.CTkButton(card_mode2, text="1. 选择多个音频文件", command=self.load_batch_audio, **btn_kwargs_primary).pack(fill=tk.X, padx=15, pady=(5, 2))
+        ctk.CTkButton(card_mode2, text=" 选择多个音频文件", image=self.icons.get("batch"), compound="left", command=self.load_batch_audio, **btn_kwargs_primary).pack(fill=tk.X, padx=15, pady=(5, 2))
         self.lbl_batch_files = ctk.CTkLabel(card_mode2, text="未选择", font=self.font_main, text_color="#6B7280")
         self.lbl_batch_files.pack(pady=(0, 5))
         row_mode2_btns = ctk.CTkFrame(card_mode2, fg_color="transparent")
         row_mode2_btns.pack(fill=tk.X, padx=15, pady=(0, 15))
-        ctk.CTkButton(row_mode2_btns, text="按文件名提取", command=self.process_batch_direct, **btn_kwargs_secondary, width=120).pack(side=tk.LEFT, expand=True, padx=(0, 5))
-        ctk.CTkButton(row_mode2_btns, text="导入字表提取", command=lambda: self.open_text_dialog('batch'), **btn_kwargs_secondary, width=120).pack(side=tk.RIGHT, expand=True, padx=(5, 0))
+        ctk.CTkButton(row_mode2_btns, text="文件名提取", image=self.icons.get("tag"), compound="left", command=self.process_batch_direct, **btn_kwargs_secondary, width=120).pack(side=tk.LEFT, expand=True, padx=(0, 5))
+        ctk.CTkButton(row_mode2_btns, text="导入字表", image=self.icons.get("list"), compound="left", command=lambda: self.open_text_dialog('batch'), **btn_kwargs_secondary, width=120).pack(side=tk.RIGHT, expand=True, padx=(5, 0))
 
         # --- 卡片 3：全局算法与参数设置 ---
         card_params = ctk.CTkFrame(left_scrollable, fg_color="white", corner_radius=10)
@@ -134,43 +168,44 @@ class PhoneticsApp:
         # N 等分数据点
         row_pts = ctk.CTkFrame(card_params, fg_color="transparent")
         row_pts.pack(fill=tk.X, padx=15, pady=5)
-        lbl_pts = ctk.CTkLabel(row_pts, text="等分数据点 (N):", text_color="#374151", font=self.font_main)
+        lbl_pts = ctk.CTkLabel(row_pts, text=" 等分数据点 (N):", image=self.icons.get("points"), compound="left", text_color="#374151", font=self.font_main)
         lbl_pts.pack(side=tk.LEFT)
-        self.entry_points = ctk.CTkEntry(row_pts, width=60, justify="center", corner_radius=8, height=28)
+        self.entry_points = ctk.CTkEntry(row_pts, width=60, justify="center", corner_radius=20, height=28)
         self.entry_points.insert(0, str(self.last_params['pts'])) 
         self.entry_points.pack(side=tk.RIGHT)
         ToolTip(lbl_pts, "导出数据时，对这段录音提取多少个 F0 频率点\n(默认11点，即 0%, 10% ... 100%)")
-        self.entry_points.bind('<Return>', self.on_param_change)
-        self.entry_points.bind('<FocusOut>', self.on_param_change)
+        self.setup_entry_behavior(self.entry_points, 'pts')
         
         # 算法: 元音能量落差
         row_db = ctk.CTkFrame(card_params, fg_color="transparent")
         row_db.pack(fill=tk.X, padx=15, pady=5)
-        lbl_db = ctk.CTkLabel(row_db, text="元音能量落差 (dB):", text_color="#374151", font=self.font_main)
+        lbl_db = ctk.CTkLabel(row_db, text=" 元音能量落差 (dB):", image=self.icons.get("energy"), compound="left", text_color="#374151", font=self.font_main)
         lbl_db.pack(side=tk.LEFT)
         self.var_drop_db = ctk.StringVar(value=str(self.last_params['db']))
-        self.entry_drop_db = ctk.CTkEntry(row_db, textvariable=self.var_drop_db, width=60, justify="center", corner_radius=8, height=28)
+        self.entry_drop_db = ctk.CTkEntry(row_db, textvariable=self.var_drop_db, width=60, justify="center", corner_radius=20, height=28)
         self.entry_drop_db.pack(side=tk.RIGHT)
         ToolTip(lbl_db, "用于定位元音核心区。\n落差值越大 (如 60dB)，保留的头尾边缘越多；\n值越小 (如 15dB)，越向最高能量的元音核心靠拢。")
-        self.entry_drop_db.bind('<Return>', self.on_param_change)
-        self.entry_drop_db.bind('<FocusOut>', self.on_param_change)
+        self.setup_entry_behavior(self.entry_drop_db, 'db')
         
         # 算法: 最短持续时间
         row_dur = ctk.CTkFrame(card_params, fg_color="transparent")
         row_dur.pack(fill=tk.X, padx=15, pady=5)
-        lbl_dur = ctk.CTkLabel(row_dur, text="最短持续时间 (s):", text_color="#374151", font=self.font_main)
+        lbl_dur = ctk.CTkLabel(row_dur, text=" 最短持续时间 (s):", image=self.icons.get("duration"), compound="left", text_color="#374151", font=self.font_main)
         lbl_dur.pack(side=tk.LEFT)
         self.var_min_dur = ctk.StringVar(value=str(self.last_params['dur']))
-        self.entry_min_dur = ctk.CTkEntry(row_dur, textvariable=self.var_min_dur, width=60, justify="center", corner_radius=8, height=28)
+        self.entry_min_dur = ctk.CTkEntry(row_dur, textvariable=self.var_min_dur, width=60, justify="center", corner_radius=20, height=28)
         self.entry_min_dur.pack(side=tk.RIGHT)
         ToolTip(lbl_dur, "算法会自动丢弃所有持续时间短于此值的切片。\n调大可以过滤掉短促的杂音。")
-        self.entry_min_dur.bind('<Return>', self.on_param_change)
-        self.entry_min_dur.bind('<FocusOut>', self.on_param_change)
+        self.setup_entry_behavior(self.entry_min_dur, 'dur')
         
         # 算法: 边缘静音裁切开关
-        self.switch_trim_silence = ctk.CTkSwitch(card_params, text="开启边缘静音裁切 (<-50dB)", font=self.font_main, 
+        row_trim = ctk.CTkFrame(card_params, fg_color="transparent")
+        row_trim.pack(fill=tk.X, padx=15, pady=(10, 15))
+        self.lbl_trim_icon = ctk.CTkLabel(row_trim, text="", image=self.icons.get("trim"))
+        self.lbl_trim_icon.pack(side=tk.LEFT, padx=(0, 5))
+        self.switch_trim_silence = ctk.CTkSwitch(row_trim, text="开启边缘静音裁切 (<-50dB)", font=self.font_main, 
                                                  progress_color="#10B981", text_color="#374151", command=self.on_trim_silence_toggle)
-        self.switch_trim_silence.pack(anchor=tk.W, padx=15, pady=(10, 15))
+        self.switch_trim_silence.pack(side=tk.LEFT)
         self.switch_trim_silence.select() # 默认开启
         ToolTip(self.switch_trim_silence, "开启后将在图表上自动忽略首尾低于 -50dB 的绝对静音区域，\n让有效波形占满屏幕。")
 
@@ -199,21 +234,24 @@ class PhoneticsApp:
         scroll_tree.pack(side=tk.RIGHT, fill=tk.Y, padx=(5, 0))
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
+        self.drag_indicator = tk.Frame(self.tree, height=2, bg="#3B82F6") # 拖拽指示线
+        
         self.tree.tag_configure('hover', background='#F3F4F6')
         self.tree.tag_configure('drag_target', background='#DBEAFE')
         
-        btn_add_group = ctk.CTkButton(frame_list, text="＋ 新增组", width=120, height=30, corner_radius=8, command=self.add_new_group, fg_color="#F3F4F6", text_color="#374151", hover_color="#E5E7EB")
+        btn_add_group = ctk.CTkButton(frame_list, text=" 新增组", image=self.icons.get("plus"), compound="left", width=120, height=30, corner_radius=8, command=self.add_new_group, fg_color="#F3F4F6", text_color="#374151", hover_color="#E5E7EB")
         btn_add_group.pack(pady=(0, 15))
 
-        self.tree.bind('<<TreeviewSelect>>', self.on_tree_select)
         self.tree.bind('<Double-1>', self.on_tree_double_click)
         self.tree.bind('<BackSpace>', self.on_tree_backspace)
         self.tree.bind('<Delete>', self.on_tree_backspace)
         self.tree.bind('<Motion>', self.on_tree_hover)
         self.tree.bind('<Leave>', self.on_tree_leave)
-        self.tree.bind('<ButtonPress-1>', self.on_tree_drag_start, add='+')
-        self.tree.bind('<B1-Motion>', self.on_tree_drag_motion, add='+')
-        self.tree.bind('<ButtonRelease-1>', self.on_tree_drag_release, add='+')
+        
+        # 拦截原生的按下事件，防止按下就触发选中，由松开事件接管
+        self.tree.bind('<ButtonPress-1>', self.on_tree_press)
+        self.tree.bind('<B1-Motion>', self.on_tree_drag_motion)
+        self.tree.bind('<ButtonRelease-1>', self.on_tree_release)
 
         frame_rule = ctk.CTkFrame(right_sidebar, fg_color="white", corner_radius=10)
         frame_rule.pack(fill=tk.X, pady=5)
@@ -243,20 +281,27 @@ class PhoneticsApp:
         frame_tune = ctk.CTkFrame(top_bar, fg_color="#F9FAFB", corner_radius=8)
         frame_tune.pack(side=tk.TOP, fill=tk.X, pady=(0, 10))
         ctk.CTkLabel(frame_tune, text="当前区间(s):", font=self.font_title, text_color="#111827").pack(side=tk.LEFT, padx=(10, 10), pady=10)
-        ctk.CTkLabel(frame_tune, text="起:").pack(side=tk.LEFT)
+        ctk.CTkLabel(frame_tune, text=" 起:", image=self.icons.get("play"), compound="left").pack(side=tk.LEFT)
         self.var_t_start = ctk.StringVar(value="0.000")
-        ctk.CTkEntry(frame_tune, textvariable=self.var_t_start, width=70, corner_radius=8, height=28).pack(side=tk.LEFT, padx=(5, 10))
+        self.entry_t_start = ctk.CTkEntry(frame_tune, textvariable=self.var_t_start, width=70, corner_radius=20, height=28)
+        self.entry_t_start.pack(side=tk.LEFT, padx=(5, 10))
+        self.setup_entry_behavior(self.entry_t_start, 'start_manual')
         ctk.CTkLabel(frame_tune, text="止:").pack(side=tk.LEFT)
         self.var_t_end = ctk.StringVar(value="0.000")
-        ctk.CTkEntry(frame_tune, textvariable=self.var_t_end, width=70, corner_radius=8, height=28).pack(side=tk.LEFT, padx=(5, 15))
-        ctk.CTkButton(frame_tune, text="手动应用", command=self.apply_manual_time, corner_radius=8, height=28, width=75, fg_color="#E5E7EB", text_color="#1F2937", hover_color="#D1D5DB").pack(side=tk.LEFT, padx=(0, 10))
-        ctk.CTkButton(frame_tune, text="自动识别", command=self.apply_auto_detect, corner_radius=8, height=28, width=75, fg_color="#FCE7F3", text_color="#BE185D", hover_color="#FBCFE8").pack(side=tk.LEFT, padx=(0, 10))
+        self.entry_t_end = ctk.CTkEntry(frame_tune, textvariable=self.var_t_end, width=70, corner_radius=20, height=28)
+        self.entry_t_end.pack(side=tk.LEFT, padx=(5, 15))
+        self.entry_t_end.pack(side=tk.LEFT, padx=(5, 15))
+        self.setup_entry_behavior(self.entry_t_end, 'end_manual')
         
-        # 第二行：主要动作按钮（试听 + 导出）
+        # 第二行：主要动作按钮（手动应用 + 自动识别 + 试听 + 导出）
         frame_actions = ctk.CTkFrame(top_bar, fg_color="transparent")
-        frame_actions.pack(side=tk.TOP, fill=tk.X)
-        ctk.CTkButton(frame_actions, text="▶ 试听当前片段", command=self.play_selected, font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), corner_radius=8, height=36, width=130, fg_color="#E5E7EB", text_color="#1F2937", hover_color="#D1D5DB").pack(side=tk.LEFT, padx=(0, 10))
-        ctk.CTkButton(frame_actions, text="💾 导出全表数据", command=self.export_project, font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), corner_radius=8, height=36, width=130, fg_color="#10B981", hover_color="#059669").pack(side=tk.LEFT)
+        frame_actions.pack(side=tk.TOP, fill=tk.X, pady=(5, 0))
+        
+        ctk.CTkButton(frame_actions, text="应用", image=self.icons.get("check"), compound="left", command=self.apply_manual_time, corner_radius=20, height=36, width=110, fg_color="#E5E7EB", text_color="#1F2937", hover_color="#D1D5DB").pack(side=tk.LEFT, padx=(0, 10))
+        ctk.CTkButton(frame_actions, text="自动识别", image=self.icons.get("auto"), compound="left", command=self.apply_auto_detect, corner_radius=20, height=36, width=110, fg_color="#FCE7F3", text_color="#BE185D", hover_color="#FBCFE8").pack(side=tk.LEFT, padx=(0, 20))
+        
+        ctk.CTkButton(frame_actions, text=" 试听", image=self.icons.get("play"), compound="left", command=self.play_selected, font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), corner_radius=20, height=36, width=60, fg_color="#E5E7EB", text_color="#1F2937", hover_color="#D1D5DB").pack(side=tk.LEFT, padx=(0, 10))
+        ctk.CTkButton(frame_actions, text=" 导出", image=self.icons.get("save"), compound="left", command=self.export_project, font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), corner_radius=20, height=36, width=60, fg_color="#10B981", hover_color="#059669").pack(side=tk.LEFT)
 
         self.fig = plt.Figure(figsize=(7, 5), facecolor='white') 
         self.canvas = FigureCanvasTkAgg(self.fig, master=center_frame)
@@ -266,6 +311,36 @@ class PhoneticsApp:
         self.canvas.mpl_connect('button_release_event', self.on_release)
 
     # =============== 通用工具与清理 ===============
+    def setup_entry_behavior(self, entry, param_key):
+        """为输入框增加悬停、按下效果，以及失去焦点自动应用功能"""
+        def on_enter(e):
+            entry.configure(border_color="#3B82F6", border_width=2)
+        def on_leave(e):
+            if self.root.focus_get() != entry:
+                entry.configure(border_color=["#979DA2", "#565B5E"], border_width=1)
+        def on_focus_in(e):
+            entry.configure(border_color="#2563EB", border_width=2)
+            # 记录进入时的值，用于对比是否发生变化
+            entry._last_val = entry.get()
+            
+        def on_focus_out(e):
+            entry.configure(border_color=["#979DA2", "#565B5E"], border_width=1)
+            current_val = entry.get()
+            if hasattr(entry, '_last_val') and current_val == entry._last_val:
+                return # 值没变，不触发应用
+            
+            # 自动应用逻辑
+            if param_key in ['pts', 'db', 'dur']:
+                self.on_param_change()
+            elif param_key in ['start_manual', 'end_manual']:
+                self.apply_manual_time()
+
+        entry.bind("<Enter>", on_enter)
+        entry.bind("<Leave>", on_leave)
+        entry.bind("<FocusIn>", on_focus_in)
+        entry.bind("<FocusOut>", on_focus_out)
+        entry.bind("<Return>", lambda e: self.root.focus_set()) # 回车即失去焦点
+
     def _clear_project(self):
         self.tree.delete(*self.tree.get_children())
         self.project_groups.clear()
@@ -599,7 +674,7 @@ class PhoneticsApp:
             if mode == 'long': self.process_long_with_wordlist(raw_text)
             else: self.process_batch_with_wordlist(raw_text, match_mode=match_mode_var.get())
             
-        ctk.CTkButton(dlg, text="开始匹配提取", command=process, corner_radius=20, height=40).pack(pady=15)
+        ctk.CTkButton(dlg, text="开始匹配提取", command=process, corner_radius=20, height=40, font=self.font_main).pack(pady=15)
 
     # =============== Treeview 拖拽与重命名管理 ===============
     def add_new_group(self):
@@ -614,26 +689,51 @@ class PhoneticsApp:
     def on_tree_double_click(self, event):
         iid = self.tree.identify_row(event.y)
         if not iid: return
+        
+        # 获取该项在 Treeview 中的位置
+        bbox = self.tree.bbox(iid, "#0")
+        if not bbox: return
+        x, y, w, h = bbox
+        
         old_name = self.tree.item(iid, 'text')
         
-        dialog = ctk.CTkInputDialog(text="输入新名称:", title="重命名")
-        new_name = dialog.get_input()
-        if not new_name or new_name == old_name: return
+        # 创建临时的输入框覆盖在上面
+        edit_entry = tk.Entry(self.tree, font=("Microsoft YaHei", 12), borderwidth=1, relief="solid")
+        edit_entry.insert(0, old_name)
+        edit_entry.select_range(0, tk.END)
+        edit_entry.focus_set()
         
-        if 'group' in self.tree.item(iid, 'tags'):
-            if new_name in self.project_groups:
-                messagebox.showwarning("错误", "组名已存在")
-                return
-            idx = self.project_groups.index(old_name)
-            self.project_groups[idx] = new_name
-            self.group_nodes[new_name] = self.group_nodes.pop(old_name)
-            self.tree.item(iid, text=new_name)
-            for child in self.tree.get_children(iid):
-                if child in self.items:
-                    self.items[child]['group'] = new_name
-        elif 'item' in self.tree.item(iid, 'tags'):
-            self.tree.item(iid, text=new_name)
-            self.items[iid]['label'] = new_name
+        # 放置输入框
+        edit_entry.place(x=x, y=y, width=w, height=h)
+        
+        def save_edit(event=None):
+            new_name = edit_entry.get().strip()
+            if not edit_entry.winfo_exists(): return
+            
+            if new_name and new_name != old_name:
+                if 'group' in self.tree.item(iid, 'tags'):
+                    if new_name in self.project_groups:
+                        messagebox.showwarning("错误", "组名已存在")
+                        edit_entry.destroy()
+                        return
+                    idx = self.project_groups.index(old_name)
+                    self.project_groups[idx] = new_name
+                    self.group_nodes[new_name] = self.group_nodes.pop(old_name)
+                    self.tree.item(iid, text=new_name)
+                    for child in self.tree.get_children(iid):
+                        if child in self.items:
+                            self.items[child]['group'] = new_name
+                elif 'item' in self.tree.item(iid, 'tags'):
+                    self.tree.item(iid, text=new_name)
+                    self.items[iid]['label'] = new_name
+                self.update_preview()
+            
+            edit_entry.destroy()
+
+        # 绑定保存与取消事件
+        edit_entry.bind("<Return>", save_edit)
+        edit_entry.bind("<FocusOut>", save_edit)
+        edit_entry.bind("<Escape>", lambda e: edit_entry.destroy())
             
         self.update_preview()
 
@@ -660,13 +760,37 @@ class PhoneticsApp:
                 self._clear_canvas()
             self.update_preview()
 
-    def on_tree_drag_start(self, event):
-        self.tree_drag_item = self.tree.identify_row(event.y)
+    def on_tree_press(self, event):
+        region = self.tree.identify_region(event.x, event.y)
+        if region == 'tree': 
+            self.tree_drag_item = None
+            return # 允许原生的折叠/展开操作
+            
+        iid = self.tree.identify_row(event.y)
+        if not iid:
+            self.tree_drag_item = None
+            return
+            
+        self.tree_drag_item = iid
+        return "break" # 阻止默认的按下即选中行为
 
     def on_tree_drag_motion(self, event):
-        if not hasattr(self, 'tree_drag_item') or not self.tree_drag_item: 
+        if getattr(self, 'tree_drag_item', None) is None: 
             return
         target = self.tree.identify_row(event.y)
+        
+        # 绘制指示线
+        if target:
+            bbox = self.tree.bbox(target)
+            if bbox:
+                x, y, w, h = bbox
+                if event.y < y + h/2:
+                    self.drag_indicator.place(x=x, y=y, width=w)
+                else:
+                    self.drag_indicator.place(x=x, y=y+h, width=w)
+        else:
+            self.drag_indicator.place_forget()
+
         if hasattr(self, 'last_drag_target') and self.last_drag_target and self.tree.exists(self.last_drag_target):
             if self.last_drag_target != target:
                 tags = list(self.tree.item(self.last_drag_target, 'tags'))
@@ -680,17 +804,21 @@ class PhoneticsApp:
                 self.tree.item(target, tags=tags)
             self.last_drag_target = target
 
-    def on_tree_drag_release(self, event):
+    def on_tree_release(self, event):
+        self.drag_indicator.place_forget()
         if hasattr(self, 'last_drag_target') and self.last_drag_target and self.tree.exists(self.last_drag_target):
             tags = list(self.tree.item(self.last_drag_target, 'tags'))
             if 'drag_target' in tags:
                 tags.remove('drag_target')
                 self.tree.item(self.last_drag_target, tags=tags)
                 
-        if not hasattr(self, 'tree_drag_item') or not self.tree_drag_item: 
+        if getattr(self, 'tree_drag_item', None) is None: 
             return
+            
         target = self.tree.identify_row(event.y)
+        
         if target and target != self.tree_drag_item:
+            # 拖拽到新位置：执行移动逻辑
             if 'item' in self.tree.item(self.tree_drag_item, 'tags'):
                 if 'group' in self.tree.item(target, 'tags'):
                     self.tree.move(self.tree_drag_item, target, 'end')
@@ -701,6 +829,12 @@ class PhoneticsApp:
                     self.tree.move(self.tree_drag_item, parent_grp, target_idx)
                     self.items[self.tree_drag_item]['group'] = self.tree.item(parent_grp, 'text')
                 self.update_preview()
+                
+        elif target and target == self.tree_drag_item:
+            # 在原位置松开：执行选中逻辑（这就是松开才触发的关键）
+            self.tree.selection_set(self.tree_drag_item)
+            self.on_tree_select(None)
+            
         self.tree_drag_item = None
 
     def on_tree_hover(self, event):
@@ -973,28 +1107,67 @@ class PhoneticsApp:
         out_file = filedialog.asksaveasfilename(
             title="导出全表数据",
             defaultextension=".txt",
-            initialfile="tone_export_data.txt",
-            filetypes=[("文本文件", "*.txt"), ("所有文件", "*.*")]
+            initialfile="tone_export_data",
+            filetypes=[("CSV 表格", "*.csv"), ("文本文件", "*.txt"), ("所有文件", "*.*")]
         )
         if not out_file: return  # 用户取消了对话框
-        is_continuous = (self.num_rule_var.get() == "continuous")
         try:
-            with open(out_file, "w", encoding="utf-8") as f:
-                global_idx = 1
-                for grp_name in self.project_groups:
-                    if not is_continuous: global_idx = 1
-                    f.write(f"{grp_name}\n")
-                    grp_node = self.group_nodes[grp_name]
-                    for child in self.tree.get_children(grp_node):
-                        if child in self.items:
-                            item = self.items[child]
-                            if item['start'] > 0:
-                                txt_data = self.get_export_text_for_item(item, global_idx)
-                                f.write(txt_data)
-                                global_idx += 1
-            messagebox.showinfo("成功", f"数据已按选中规则导出至 {out_file}")
+            if out_file.lower().endswith(".csv"):
+                self._export_csv(out_file)
+            else:
+                self._export_txt(out_file)
+            messagebox.showinfo("成功", f"数据已导出至:\n{out_file}")
         except Exception as e:
             messagebox.showerror("错误", str(e))
+
+    def _export_txt(self, out_file):
+        """原有的纵向文本格式导出"""
+        is_continuous = (self.num_rule_var.get() == "continuous")
+        with open(out_file, "w", encoding="utf-8") as f:
+            global_idx = 1
+            for grp_name in self.project_groups:
+                if not is_continuous: global_idx = 1
+                f.write(f"{grp_name}\n")
+                grp_node = self.group_nodes[grp_name]
+                for child in self.tree.get_children(grp_node):
+                    if child in self.items:
+                        item = self.items[child]
+                        if item['start'] > 0:
+                            txt_data = self.get_export_text_for_item(item, global_idx)
+                            f.write(txt_data)
+                            global_idx += 1
+
+    def _export_csv(self, out_file):
+        """宽表 CSV 格式：每行一个字，列为 组别/编号/字/时长/T1"""
+        is_continuous = (self.num_rule_var.get() == "continuous")
+
+        headers = ["组别", "编号", "字", "时长(s)", "T1(Hz)"]
+
+        with open(out_file, "w", encoding="utf-8-sig", newline="") as f:
+            # utf-8-sig 写入 BOM，让 Excel 正确识别中文
+            writer = csv.writer(f)
+            writer.writerow(headers)
+
+            global_idx = 1
+            for grp_name in self.project_groups:
+                if not is_continuous: global_idx = 1
+                grp_node = self.group_nodes[grp_name]
+                for child in self.tree.get_children(grp_node):
+                    if child not in self.items: continue
+                    item = self.items[child]
+                    if item['start'] <= 0 or not item['snd']: continue
+
+                    t_s, t_e = item['start'], item['end']
+                    duration = t_e - t_s
+                    if duration <= 0: continue
+
+                    f0 = item['pitch'].get_value_at_time(t_s)
+                    f0_str = "" if np.isnan(f0) else f"{f0:.6f}"
+
+                    row = [grp_name, global_idx, item['label'], f"{duration:.6f}", f0_str]
+                    writer.writerow(row)
+                    global_idx += 1
+
 
 if __name__ == "__main__":
     root = ctk.CTk()
