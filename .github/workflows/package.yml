@@ -1,0 +1,45 @@
+name: Package Application
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Build with PyInstaller
+      run: |
+        pyinstaller --onedir --name "ToneExtractor" --windowed --noconfirm tone_extractor.py
+
+    - name: Upload Artifacts (Windows)
+      if: matrix.os == 'windows-latest'
+      uses: actions/upload-artifact@v4
+      with:
+        name: ToneExtractor-Windows
+        path: dist/ToneExtractor/
+
+    - name: Upload Artifacts (macOS)
+      if: matrix.os == 'macos-latest'
+      uses: actions/upload-artifact@v4
+      with:
+        name: ToneExtractor-MacOS
+        path: dist/ToneExtractor/
