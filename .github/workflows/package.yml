@@ -2,7 +2,8 @@ name: Package Application
 
 on:
   push:
-    branches: [ "main", "master" ]
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 jobs:
@@ -29,7 +30,7 @@ jobs:
 
     - name: Build with PyInstaller
       run: |
-        pyinstaller --onedir --name "ToneExtractor" --windowed --noconfirm tone_extractor.py
+        pyinstaller --noconsole --noconfirm ToneExtractor.spec
 
     - name: Upload Artifacts (Windows)
       if: matrix.os == 'windows-latest'
