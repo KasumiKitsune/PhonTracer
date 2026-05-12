@@ -248,10 +248,10 @@ class PhoneticsApp:
         self.tree.bind('<Motion>', self.on_tree_hover)
         self.tree.bind('<Leave>', self.on_tree_leave)
         
-        # 拦截原生的按下事件，防止按下就触发选中，由松开事件接管
-        self.tree.bind('<ButtonPress-1>', self.on_tree_press)
-        self.tree.bind('<B1-Motion>', self.on_tree_drag_motion)
-        self.tree.bind('<ButtonRelease-1>', self.on_tree_release)
+        self.tree.bind('<<TreeviewSelect>>', self.on_tree_select)
+        self.tree.bind('<ButtonPress-1>', self.on_tree_drag_start, add='+')
+        self.tree.bind('<B1-Motion>', self.on_tree_drag_motion, add='+')
+        self.tree.bind('<ButtonRelease-1>', self.on_tree_drag_release, add='+')
 
         frame_rule = ctk.CTkFrame(right_sidebar, fg_color="white", corner_radius=10)
         frame_rule.pack(fill=tk.X, pady=5)
@@ -760,22 +760,11 @@ class PhoneticsApp:
                 self._clear_canvas()
             self.update_preview()
 
-    def on_tree_press(self, event):
-        region = self.tree.identify_region(event.x, event.y)
-        if region == 'tree': 
-            self.tree_drag_item = None
-            return # 允许原生的折叠/展开操作
-            
-        iid = self.tree.identify_row(event.y)
-        if not iid:
-            self.tree_drag_item = None
-            return
-            
-        self.tree_drag_item = iid
-        return "break" # 阻止默认的按下即选中行为
+    def on_tree_drag_start(self, event):
+        self.tree_drag_item = self.tree.identify_row(event.y)
 
     def on_tree_drag_motion(self, event):
-        if getattr(self, 'tree_drag_item', None) is None: 
+        if not hasattr(self, 'tree_drag_item') or not self.tree_drag_item: 
             return
         target = self.tree.identify_row(event.y)
         
@@ -804,7 +793,7 @@ class PhoneticsApp:
                 self.tree.item(target, tags=tags)
             self.last_drag_target = target
 
-    def on_tree_release(self, event):
+    def on_tree_drag_release(self, event):
         self.drag_indicator.place_forget()
         if hasattr(self, 'last_drag_target') and self.last_drag_target and self.tree.exists(self.last_drag_target):
             tags = list(self.tree.item(self.last_drag_target, 'tags'))
@@ -812,7 +801,7 @@ class PhoneticsApp:
                 tags.remove('drag_target')
                 self.tree.item(self.last_drag_target, tags=tags)
                 
-        if getattr(self, 'tree_drag_item', None) is None: 
+        if not hasattr(self, 'tree_drag_item') or not self.tree_drag_item: 
             return
             
         target = self.tree.identify_row(event.y)
@@ -829,11 +818,6 @@ class PhoneticsApp:
                     self.tree.move(self.tree_drag_item, parent_grp, target_idx)
                     self.items[self.tree_drag_item]['group'] = self.tree.item(parent_grp, 'text')
                 self.update_preview()
-                
-        elif target and target == self.tree_drag_item:
-            # 在原位置松开：执行选中逻辑（这就是松开才触发的关键）
-            self.tree.selection_set(self.tree_drag_item)
-            self.on_tree_select(None)
             
         self.tree_drag_item = None
 
@@ -872,6 +856,7 @@ class PhoneticsApp:
         selection = self.tree.selection()
         if not selection: return
         iid = selection[0]
+            
         if 'item' not in self.tree.item(iid, 'tags'): return
         
         self.current_iid = iid
