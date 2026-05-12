@@ -10,8 +10,6 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import os
 import csv
 import warnings
-import threading
-import queue
 from PIL import Image
 
 # 解决中文字体显示问题
@@ -96,9 +94,6 @@ class PhoneticsApp:
         self.dragging = None 
         self.tree_drag_item = None 
         
-        # 防抖计时器
-        self.debounce_timer = None
-        
         # 记录上一次的参数状态，避免仅仅聚焦就触发全部重算
         self.last_params = {
             'pts': 11,
@@ -134,9 +129,7 @@ class PhoneticsApp:
             "energy": "energy.png",
             "duration": "duration.png",
             "trim": "trim.png",
-            "tag": "tag.png",
-            "tab_single": "tab_single.png",
-            "tab_batch": "tab_batch.png"
+            "tag": "tag.png"
         }
         
         for key, filename in icon_files.items():
@@ -172,15 +165,11 @@ class PhoneticsApp:
         ctk.CTkLabel(header_frame, text="PhonTracer", font=ctk.CTkFont(family="Segoe UI", size=26, weight="bold"), text_color="#1F2937").pack(side=tk.LEFT)
 
         # --- 模式切换选项卡 (合并模式一、二) ---
-        self.tabview = ctk.CTkTabview(left_scrollable, height=250, corner_radius=12, fg_color="white", 
-                                      segmented_button_selected_color="#60A5FA", segmented_button_fg_color="#F3F4F6")
+        self.tabview = ctk.CTkTabview(left_scrollable, height=240, corner_radius=12, fg_color="white", 
+                                      segmented_button_selected_color="#2563EB", segmented_button_fg_color="#F3F4F6")
         self.tabview.pack(fill=tk.X, pady=(0, 10))
         tab_long = self.tabview.add("单条长音频")
         tab_batch = self.tabview.add("多条独立音频")
-        
-        # 为选项卡设置图标
-        self.tabview._segmented_button._buttons_dict["单条长音频"].configure(image=self.icons.get("tab_single"), compound="left")
-        self.tabview._segmented_button._buttons_dict["多条独立音频"].configure(image=self.icons.get("tab_batch"), compound="left")
 
         # 选项卡 1：单条长音频
         ctk.CTkButton(tab_long, text=" 导入长音频", image=self.icons.get("audio"), compound="left", command=self.load_long_audio, **btn_kwargs_primary).pack(fill=tk.X, padx=10, pady=(15, 2))
@@ -205,43 +194,34 @@ class PhoneticsApp:
         # N 等分数据点
         row_pts = ctk.CTkFrame(card_params, fg_color="transparent")
         row_pts.pack(fill=tk.X, padx=15, pady=5)
-        lbl_pts = ctk.CTkLabel(row_pts, text=" 等分点 (N):", image=self.icons.get("points"), compound="left", text_color="#374151", font=self.font_main)
+        lbl_pts = ctk.CTkLabel(row_pts, text=" 等分数据点 (N):", image=self.icons.get("points"), compound="left", text_color="#374151", font=self.font_main)
         lbl_pts.pack(side=tk.LEFT)
-        self.slider_pts = ctk.CTkSlider(row_pts, from_=5, to=20, number_of_steps=15, width=100, height=16, 
-                                        command=lambda v: self._on_slider_change(v, self.entry_points, 'pts'))
-        self.slider_pts.set(self.last_params['pts'])
-        self.slider_pts.pack(side=tk.LEFT, padx=10)
-        self.entry_points = ctk.CTkEntry(row_pts, width=60, justify="center", corner_radius=20, height=26)
+        self.entry_points = ctk.CTkEntry(row_pts, width=60, justify="center", corner_radius=20, height=28)
         self.entry_points.insert(0, str(self.last_params['pts'])) 
         self.entry_points.pack(side=tk.RIGHT)
+        ToolTip(lbl_pts, "导出数据时，对这段录音提取多少个 F0 频率点\n(默认11点，即 0%, 10% ... 100%)")
         self.setup_entry_behavior(self.entry_points, 'pts')
-
+        
         # 算法: 元音能量落差
         row_db = ctk.CTkFrame(card_params, fg_color="transparent")
         row_db.pack(fill=tk.X, padx=15, pady=5)
-        lbl_db = ctk.CTkLabel(row_db, text=" 能量落差:", image=self.icons.get("energy"), compound="left", text_color="#374151", font=self.font_main)
+        lbl_db = ctk.CTkLabel(row_db, text=" 元音能量落差 (dB):", image=self.icons.get("energy"), compound="left", text_color="#374151", font=self.font_main)
         lbl_db.pack(side=tk.LEFT)
-        self.slider_db = ctk.CTkSlider(row_db, from_=10, to=100, number_of_steps=90, width=100, height=16,
-                                       command=lambda v: self._on_slider_change(v, self.entry_drop_db, 'db'))
-        self.slider_db.set(self.last_params['db'])
-        self.slider_db.pack(side=tk.LEFT, padx=10)
         self.var_drop_db = ctk.StringVar(value=str(self.last_params['db']))
-        self.entry_drop_db = ctk.CTkEntry(row_db, textvariable=self.var_drop_db, width=60, justify="center", corner_radius=20, height=26)
+        self.entry_drop_db = ctk.CTkEntry(row_db, textvariable=self.var_drop_db, width=60, justify="center", corner_radius=20, height=28)
         self.entry_drop_db.pack(side=tk.RIGHT)
+        ToolTip(lbl_db, "用于定位元音核心区。\n落差值越大 (如 60dB)，保留的头尾边缘越多；\n值越小 (如 15dB)，越向最高能量的元音核心靠拢。")
         self.setup_entry_behavior(self.entry_drop_db, 'db')
-
+        
         # 算法: 最短持续时间
         row_dur = ctk.CTkFrame(card_params, fg_color="transparent")
         row_dur.pack(fill=tk.X, padx=15, pady=5)
-        lbl_dur = ctk.CTkLabel(row_dur, text=" 最短时长:", image=self.icons.get("duration"), compound="left", text_color="#374151", font=self.font_main)
+        lbl_dur = ctk.CTkLabel(row_dur, text=" 最短持续时间 (s):", image=self.icons.get("duration"), compound="left", text_color="#374151", font=self.font_main)
         lbl_dur.pack(side=tk.LEFT)
-        self.slider_dur = ctk.CTkSlider(row_dur, from_=0.01, to=0.5, number_of_steps=49, width=100, height=16,
-                                        command=lambda v: self._on_slider_change(v, self.entry_min_dur, 'dur'))
-        self.slider_dur.set(self.last_params['dur'])
-        self.slider_dur.pack(side=tk.LEFT, padx=10)
         self.var_min_dur = ctk.StringVar(value=str(self.last_params['dur']))
-        self.entry_min_dur = ctk.CTkEntry(row_dur, textvariable=self.var_min_dur, width=60, justify="center", corner_radius=20, height=26)
+        self.entry_min_dur = ctk.CTkEntry(row_dur, textvariable=self.var_min_dur, width=60, justify="center", corner_radius=20, height=28)
         self.entry_min_dur.pack(side=tk.RIGHT)
+        ToolTip(lbl_dur, "算法会自动丢弃所有持续时间短于此值的切片。\n调大可以过滤掉短促的杂音。")
         self.setup_entry_behavior(self.entry_min_dur, 'dur')
         
         # 算法: 边缘静音裁切开关
@@ -256,12 +236,7 @@ class PhoneticsApp:
         ToolTip(self.switch_trim_silence, "开启后将在图表上自动忽略首尾低于 -50dB 的绝对静音区域，\n让有效波形占满屏幕。")
 
         self.lbl_status = ctk.CTkLabel(left_scrollable, text="就绪", text_color="#10B981", font=self.font_main, wraplength=280)
-        self.lbl_status.pack(pady=(20, 5))
-
-        self.progress_bar = ctk.CTkProgressBar(left_scrollable, width=280, height=10, corner_radius=10, 
-                                               progress_color="#60A5FA", fg_color="#E5E7EB")
-        # 默认不显示进度条
-        self.progress_bar.set(0)
+        self.lbl_status.pack(pady=20)
 
         # ---------------- 2. 右侧面板 (列表 + 标号规则 + 预览) ----------------
         right_sidebar = ctk.CTkFrame(self.root, width=300, fg_color="transparent")
@@ -360,68 +335,6 @@ class PhoneticsApp:
         self.canvas.mpl_connect('button_press_event', self.on_press)
         self.canvas.mpl_connect('motion_notify_event', self.on_motion)
         self.canvas.mpl_connect('button_release_event', self.on_release)
-
-    def _on_slider_change(self, value, entry, key):
-        """Slider 改变时更新 Entry 并触发带防抖的应用"""
-        if key == 'pts':
-            ival = int(value)
-            entry.delete(0, tk.END)
-            entry.insert(0, str(ival))
-        else:
-            entry.delete(0, tk.END)
-            entry.insert(0, f"{value:.2f}")
-        
-        self._debounce_apply_params(key)
-
-    def _debounce_apply_params(self, key):
-        """防抖应用逻辑：用户停止操作 400ms 后才触发计算"""
-        if self.debounce_timer:
-            self.root.after_cancel(self.debounce_timer)
-        self.debounce_timer = self.root.after(400, lambda: self.apply_params_from_entry(key))
-
-    def apply_params_from_entry(self, key):
-        """从 Entry 获取值并应用"""
-        try:
-            if key == 'pts':
-                val = int(self.entry_points.get())
-                if val != self.last_params['pts']:
-                    self.last_params['pts'] = val
-                    self.slider_pts.set(val)
-                    self.update_preview()
-            elif key == 'db':
-                val = float(self.entry_drop_db.get())
-                if val != self.last_params['db']:
-                    self.last_params['db'] = val
-                    self.slider_db.set(val)
-                    self.recalculate_all_audio() # 算法参数改变需要重算
-            elif key == 'dur':
-                val = float(self.entry_min_dur.get())
-                if val != self.last_params['dur']:
-                    self.last_params['dur'] = val
-                    self.slider_dur.set(val)
-                    self.recalculate_all_audio() # 算法参数改变需要重算
-        except: pass
-
-    def set_status(self, text, color="#10B981"):
-        self.lbl_status.configure(text=text, text_color=color)
-
-    def set_progress(self, val):
-        """val range 0-1，仅手动 set，不调用 start()/stop()"""
-        self.progress_bar.set(val)
-
-    def start_loading(self, text="正在处理..."):
-        """显示进度条，初始设为 0，不启动动画（避免抖动）"""
-        self.set_status(text, "#3B82F6")
-        self.progress_bar.set(0)
-        if self.progress_bar.winfo_manager() == "":
-            self.progress_bar.pack(pady=(0, 20), before=self.lbl_status)
-
-    def stop_loading(self, text="完成"):
-        """完成后将进度条填满，然后延迟隐藏"""
-        self.set_progress(1.0)
-        self.set_status(text, "#10B981")
-        # 延迟消失，避免闪烁
-        self.root.after(1500, lambda: self.progress_bar.pack_forget())
 
     # =============== 通用工具与清理 ===============
     def setup_entry_behavior(self, entry, param_key):
@@ -529,29 +442,21 @@ class PhoneticsApp:
 
     def recalculate_all_audio(self):
         if not self.items: return
-        items_snapshot = list(self.items.items())  # 拍快照，避免线程竞争
-        total = len(items_snapshot)
-
-        def run():
-            self.root.after(0, lambda: self.start_loading("正在根据新参数重新计算..."))
-            for i, (iid, item) in enumerate(items_snapshot):
-                if item.get('snd'):
-                    mac_s, mac_e = item['macro_start'], item['macro_end']
-                    mic_s, mic_e = self._microscopic_vowel_nucleus(item['snd'], item['pitch'], mac_s, mac_e)
-                    item['start'], item['end'] = mic_s, mic_e
-                # 更新进度（均匀推进）
-                self.root.after(0, lambda v=(i + 1) / total: self.set_progress(v))
-
-            def finalize():
-                if self.current_iid and self.current_iid in self.items:
-                    self.plot_item_spectrogram(self.items[self.current_iid])
-                    self.update_ui_times()
-                self.update_preview()
-                self.stop_loading("全局参数已应用")
-
-            self.root.after(0, finalize)
-
-        threading.Thread(target=run, daemon=True).start()
+        self.lbl_status.configure(text="正在根据新参数重新计算全部音频...", text_color="#F59E0B")
+        self.root.update()
+        
+        for iid, item in self.items.items():
+            if item['snd']:
+                mac_s, mac_e = item['macro_start'], item['macro_end']
+                mic_s, mic_e = self._microscopic_vowel_nucleus(item['snd'], item['pitch'], mac_s, mac_e)
+                item['start'], item['end'] = mic_s, mic_e
+                
+        if self.current_iid and self.current_iid in self.items:
+            self.plot_item_spectrogram(self.items[self.current_iid])
+            self.update_ui_times()
+            
+        self.update_preview()
+        self.lbl_status.configure(text="全局参数已应用至全部音频", text_color="#10B981")
 
     # =============== 核心识别算法 ===============
     def _macroscopic_vad(self, snd):
@@ -624,51 +529,34 @@ class PhoneticsApp:
     def process_long_with_wordlist(self, raw_text):
         groups, flat_words = self._parse_wordlist(raw_text)
         if not flat_words: return
-        
-        def run():
-            self.root.after(0, lambda: self.start_loading("正在切分长音频..."))
-            self.root.after(0, self._clear_project)
-            
-            # 这里需要等待主线程清空项目后再开始工作，或者直接在线程里清空逻辑变量
-            self.items.clear()
-            self.project_groups.clear()
-            self.group_nodes.clear()
-            
-            snd = self.pending_long_snd
-            global_pitch = snd.to_pitch()
-            macro_segments = self._macroscopic_vad(snd)
-            total = len(flat_words)
-            
-            word_idx = 0
-            for grp in groups:
-                def add_grp(g=grp['group']): return self._ensure_group(g)
-                gid = self.root.after(0, add_grp)
-                
-                for word in grp['items']:
-                    self.root.after(0, lambda v=word_idx/total: self.set_progress(v))
-                    
-                    if word_idx < len(macro_segments):
-                        mac_s, mac_e = macro_segments[word_idx]
-                        mic_s, mic_e = self._microscopic_vowel_nucleus(snd, global_pitch, mac_s, mac_e)
-                        
-                        def insert_item(w=word, g=grp['group'], ms=mac_s, me=mac_e, mis=mic_s, mie=mic_e, gid_in=gid):
-                            iid = self.tree.insert(gid_in, tk.END, text=w, tags=('item',))
-                            self.items[iid] = {
-                                'label': w, 'group': g, 'snd': snd, 'pitch': global_pitch,
-                                'macro_start': ms, 'macro_end': me, 'start': mis, 'end': mie
-                            }
-                        self.root.after(0, insert_item)
-                        word_idx += 1
-                    else:
-                        def insert_missing(w=word, g=grp['group'], gid_in=gid):
-                            iid = self.tree.insert(gid_in, tk.END, text=w + " (缺失)", tags=('item',))
-                            self.items[iid] = {'label': w, 'group': g, 'snd': None, 'start': 0.0, 'end': 0.0}
-                        self.root.after(0, insert_missing)
-            
-            self.root.after(0, lambda: self.stop_loading("长音频切分完成"))
-            self.root.after(0, self._select_first_item)
+        self.lbl_status.configure(text="正在按照全局参数切分...", text_color="#F59E0B")
+        self.root.update()
+        self._clear_project()
 
-        threading.Thread(target=run, daemon=True).start()
+        snd = self.pending_long_snd
+        global_pitch = snd.to_pitch()
+        macro_segments = self._macroscopic_vad(snd)
+        
+        word_idx = 0
+        for grp in groups:
+            gid = self._ensure_group(grp['group'])
+            for word in grp['items']:
+                if word_idx < len(macro_segments):
+                    mac_s, mac_e = macro_segments[word_idx]
+                    mic_s, mic_e = self._microscopic_vowel_nucleus(snd, global_pitch, mac_s, mac_e)
+                    
+                    iid = self.tree.insert(gid, tk.END, text=word, tags=('item',))
+                    self.items[iid] = {
+                        'label': word, 'group': grp['group'], 'snd': snd, 'pitch': global_pitch,
+                        'macro_start': mac_s, 'macro_end': mac_e, 'start': mic_s, 'end': mic_e
+                    }
+                    word_idx += 1
+                else:
+                    iid = self.tree.insert(gid, tk.END, text=word + " (缺失)", tags=('item',))
+                    self.items[iid] = {'label': word, 'group': grp['group'], 'snd': None, 'start': 0.0, 'end': 0.0}
+        
+        self.lbl_status.configure(text="长音频切分完成", text_color="#10B981")
+        self._select_first_item()
 
     # =============== 模式二：独立音频 ===============
     def load_batch_audio(self):
@@ -679,53 +567,26 @@ class PhoneticsApp:
         self.lbl_status.configure(text="独立音频就绪", text_color="#10B981")
 
     def process_batch_direct(self):
-        """直接从文件名提取"""
-        if not self.pending_batch_paths:
-            messagebox.showwarning("提示", "请先选择多个音频文件")
-            return
+        if not self.pending_batch_paths: return messagebox.showwarning("提示", "请先选择独立音频。")
+        self.lbl_status.configure(text="正在处理...", text_color="#F59E0B")
+        self.root.update()
+        self._clear_project()
+        
+        gid = self._ensure_group("独立文件")
+        for p in self.pending_batch_paths:
+            snd = parselmouth.Sound(p)
+            pitch = snd.to_pitch()
+            mac_s, mac_e = 0.0, snd.get_total_duration()
+            mic_s, mic_e = self._microscopic_vowel_nucleus(snd, pitch, mac_s, mac_e)
             
-        def run():
-            self.root.after(0, lambda: self.start_loading("正在批量提取..."))
-            # 立即清理
-            self.items.clear()
-            self.project_groups.clear()
-            self.group_nodes.clear()
-            self.root.after(0, self._clear_project)
-            
-            total = len(self.pending_batch_paths)
-            
-            for i, path in enumerate(self.pending_batch_paths):
-                # 更新进度
-                self.root.after(0, lambda v=i/total: self.set_progress(v))
-                
-                # 提取逻辑
-                name = os.path.splitext(os.path.basename(path))[0]
-                iid = f"batch_{i}_{name}"
-                snd = parselmouth.Sound(path)
-                pitch = snd.to_pitch()
-                mac_s, mac_e = 0.0, snd.get_total_duration()
-                mic_s, mic_e = self._microscopic_vowel_nucleus(snd, pitch, mac_s, mac_e)
-                
-                # 存入数据
-                self.items[iid] = {
-                    'label': name, 'group': '独立文件', 'snd': snd, 'pitch': pitch,
-                    'macro_start': mac_s, 'macro_end': mac_e, 'start': mic_s, 'end': mic_e
-                }
-                
-            def finalize():
-                # 注意：这里不能再调用 self._clear_project()，因为它会清空 self.items
-                # self._clear_project() 已在 run() 开始时执行
-                gid = self._ensure_group("独立文件")
-                for iid, itm in self.items.items():
-                    self.tree.insert(gid, tk.END, iid=iid, text=itm['label'], tags=('item',))
-                
-                self.set_status(f"批量提取完成 ({total}个文件)")
-                self.stop_loading()
-                self._select_first_item()
-                
-            self.root.after(0, finalize)
-
-        threading.Thread(target=run, daemon=True).start()
+            word = os.path.splitext(os.path.basename(p))[0]
+            iid = self.tree.insert(gid, tk.END, text=word, tags=('item',))
+            self.items[iid] = {
+                'label': word, 'group': "独立文件", 'snd': snd, 'pitch': pitch,
+                'macro_start': mac_s, 'macro_end': mac_e, 'start': mic_s, 'end': mic_e
+            }
+        self.lbl_status.configure(text="独立文件提取完成", text_color="#10B981")
+        self._select_first_item()
 
     def _fuzzy_match_word_to_path(self, word, available_paths):
         word_lower = word.lower()
@@ -744,98 +605,72 @@ class PhoneticsApp:
     def process_batch_with_wordlist(self, raw_text, match_mode='order'):
         groups, flat_words = self._parse_wordlist(raw_text)
         if not flat_words: return
+        self.lbl_status.configure(text="正在分配与提取...", text_color="#F59E0B")
+        self.root.update()
+        self._clear_project()
         
-        def run():
-            self.root.after(0, lambda: self.start_loading("正在匹配独立音频..."))
-            self.items.clear()
-            self.project_groups.clear()
-            self.group_nodes.clear()
-            self.root.after(0, self._clear_project)
-            total = len(flat_words)
-            processed_count = 0
+        if match_mode == 'fuzzy':
+            available = list(range(len(self.pending_batch_paths)))
+            matched_count = 0
+            unmatched_words =[]
             
-            if match_mode == 'fuzzy':
-                available = list(range(len(self.pending_batch_paths)))
-                matched_count = 0
-                unmatched_words =[]
-                
-                for grp in groups:
-                    group_name = grp['group']
-                    for word in grp['items']:
-                        # 进度汇报
-                        self.root.after(0, lambda v=processed_count/total: self.set_progress(v))
+            for grp in groups:
+                gid = self._ensure_group(grp['group'])
+                for word in grp['items']:
+                    remaining_paths =[self.pending_batch_paths[i] for i in available]
+                    local_idx = self._fuzzy_match_word_to_path(word, remaining_paths)
+                    
+                    if local_idx is not None:
+                        real_idx = available[local_idx]
+                        p = self.pending_batch_paths[real_idx]
+                        available.remove(real_idx)
                         
-                        remaining_paths =[self.pending_batch_paths[i] for i in available]
-                        local_idx = self._fuzzy_match_word_to_path(word, remaining_paths)
+                        snd = parselmouth.Sound(p)
+                        pitch = snd.to_pitch()
+                        mac_s, mac_e = 0.0, snd.get_total_duration()
+                        mic_s, mic_e = self._microscopic_vowel_nucleus(snd, pitch, mac_s, mac_e)
                         
-                        if local_idx is not None:
-                            real_idx = available[local_idx]
-                            p = self.pending_batch_paths[real_idx]
-                            available.remove(real_idx)
-                            
-                            snd = parselmouth.Sound(p)
-                            pitch = snd.to_pitch()
-                            mac_s, mac_e = 0.0, snd.get_total_duration()
-                            mic_s, mic_e = self._microscopic_vowel_nucleus(snd, pitch, mac_s, mac_e)
-                            
-                            def insert_matched(w=word, g=group_name, path=p, s=snd, pi=pitch, ms=mac_s, me=mac_e, mis=mic_s, mie=mic_e):
-                                gid = self._ensure_group(g)
-                                display = f"{w} ← {os.path.basename(path)}"
-                                iid = self.tree.insert(gid, tk.END, text=display, tags=('item',))
-                                self.items[iid] = {
-                                    'label': w, 'group': g, 'snd': s, 'pitch': pi,
-                                    'macro_start': ms, 'macro_end': me, 'start': mis, 'end': mie
-                                }
-                            self.root.after(0, insert_matched)
-                            matched_count += 1
-                        else:
-                            unmatched_words.append(word)
-                            def insert_unmatched(w=word, g=group_name):
-                                gid = self._ensure_group(g)
-                                iid = self.tree.insert(gid, tk.END, text=w + " (未匹配)", tags=('item',))
-                                self.items[iid] = {'label': w, 'group': g, 'snd': None, 'start': 0.0, 'end': 0.0}
-                            self.root.after(0, insert_unmatched)
-                        processed_count += 1
-                
-                def finalize_fuzzy():
-                    status = f"模糊匹配完成: {matched_count}/{total}"
-                    if unmatched_words: status += f"，{len(unmatched_words)} 个未匹配"
-                    self.stop_loading(status)
-                    self._select_first_item()
-                self.root.after(0, finalize_fuzzy)
-            else:
-                path_idx = 0
-                for grp in groups:
-                    group_name = grp['group']
-                    for word in grp['items']:
-                        self.root.after(0, lambda v=processed_count/total: self.set_progress(v))
-                        if path_idx < len(self.pending_batch_paths):
-                            p = self.pending_batch_paths[path_idx]
-                            snd = parselmouth.Sound(p)
-                            pitch = snd.to_pitch()
-                            mac_s, mac_e = 0.0, snd.get_total_duration()
-                            mic_s, mic_e = self._microscopic_vowel_nucleus(snd, pitch, mac_s, mac_e)
-                            
-                            def insert_order(w=word, g=group_name, s=snd, pi=pitch, ms=mac_s, me=mac_e, mis=mic_s, mie=mic_e):
-                                gid = self._ensure_group(g)
-                                iid = self.tree.insert(gid, tk.END, text=w, tags=('item',))
-                                self.items[iid] = {
-                                    'label': w, 'group': g, 'snd': s, 'pitch': pi,
-                                    'macro_start': ms, 'macro_end': me, 'start': mis, 'end': mie
-                                }
-                            self.root.after(0, insert_order)
-                            path_idx += 1
-                        else:
-                            def insert_missing_order(w=word, g=group_name):
-                                gid = self._ensure_group(g)
-                                iid = self.tree.insert(gid, tk.END, text=w + " (缺失)", tags=('item',))
-                                self.items[iid] = {'label': w, 'group': g, 'snd': None, 'start': 0.0, 'end': 0.0}
-                            self.root.after(0, insert_missing_order)
-                        processed_count += 1
-                self.root.after(0, lambda: self.stop_loading("独立文件贴字表提取完成"))
-                self.root.after(0, self._select_first_item)
-
-        threading.Thread(target=run, daemon=True).start()
+                        display = f"{word} ← {os.path.basename(p)}"
+                        iid = self.tree.insert(gid, tk.END, text=display, tags=('item',))
+                        self.items[iid] = {
+                            'label': word, 'group': grp['group'], 'snd': snd, 'pitch': pitch,
+                            'macro_start': mac_s, 'macro_end': mac_e, 'start': mic_s, 'end': mic_e
+                        }
+                        matched_count += 1
+                    else:
+                        unmatched_words.append(word)
+                        iid = self.tree.insert(gid, tk.END, text=word + " (未匹配)", tags=('item',))
+                        self.items[iid] = {'label': word, 'group': grp['group'], 'snd': None, 'start': 0.0, 'end': 0.0}
+            
+            status = f"模糊匹配完成: {matched_count}/{len(flat_words)} 匹配成功"
+            if unmatched_words: status += f"，{len(unmatched_words)} 个未匹配"
+            self.lbl_status.configure(text=status, text_color="#10B981" if not unmatched_words else "#F59E0B")
+        else:
+            if len(flat_words) != len(self.pending_batch_paths):
+                if not messagebox.askyesno("数量不匹配", f"字表有 {len(flat_words)} 个字，导入了 {len(self.pending_batch_paths)} 个音频。\n是否继续？"): return
+            
+            path_idx = 0
+            for grp in groups:
+                gid = self._ensure_group(grp['group'])
+                for word in grp['items']:
+                    if path_idx < len(self.pending_batch_paths):
+                        p = self.pending_batch_paths[path_idx]
+                        snd = parselmouth.Sound(p)
+                        pitch = snd.to_pitch()
+                        mac_s, mac_e = 0.0, snd.get_total_duration()
+                        mic_s, mic_e = self._microscopic_vowel_nucleus(snd, pitch, mac_s, mac_e)
+                        
+                        iid = self.tree.insert(gid, tk.END, text=word, tags=('item',))
+                        self.items[iid] = {
+                            'label': word, 'group': grp['group'], 'snd': snd, 'pitch': pitch,
+                            'macro_start': mac_s, 'macro_end': mac_e, 'start': mic_s, 'end': mic_e
+                        }
+                        path_idx += 1
+                    else:
+                        iid = self.tree.insert(gid, tk.END, text=word + " (缺失)", tags=('item',))
+                        self.items[iid] = {'label': word, 'group': grp['group'], 'snd': None, 'start': 0.0, 'end': 0.0}
+            self.lbl_status.configure(text="独立文件贴字表提取完成", text_color="#10B981")
+        self._select_first_item()
 
     # =============== 文本导入对话框 ===============
     def open_text_dialog(self, mode):
@@ -1212,35 +1047,14 @@ class PhoneticsApp:
             messagebox.showerror("错误", "请输入有效的数字")
 
     def apply_auto_detect(self):
-        """自动识别当前音频的起止点"""
-        if not self.current_iid or self.current_iid not in self.items:
-            return
-        
+        if not self.current_iid: return
         item = self.items[self.current_iid]
-        snd = item['snd']
-        pitch = item['pitch']
+        if not item['snd']: return
         mac_s, mac_e = item['macro_start'], item['macro_end']
-        
-        def run():
-            try:
-                self.root.after(0, lambda: self.start_loading("正在智能识别..."))
-                mic_s, mic_e = self._microscopic_vowel_nucleus(snd, pitch, mac_s, mac_e)
-                
-                def update_ui():
-                    self.var_t_start.set(f"{mic_s:.3f}")
-                    self.var_t_end.set(f"{mic_e:.3f}")
-                    item['start'] = mic_s
-                    item['end'] = mic_e
-                    self.update_lines(mic_s, mic_e)
-                    self.update_preview()
-                    self.stop_loading("识别完成")
-                
-                self.root.after(0, update_ui)
-            except Exception as e:
-                self.root.after(0, lambda: self.set_status(f"识别失败: {str(e)}", "#EF4444"))
-                self.root.after(0, self.stop_loading)
-
-        threading.Thread(target=run, daemon=True).start()
+        mic_s, mic_e = self._microscopic_vowel_nucleus(item['snd'], item['pitch'], mac_s, mac_e)
+        item['start'], item['end'] = mic_s, mic_e
+        self.update_lines(mic_s, mic_e)
+        self.update_ui_times()
 
     def on_trim_silence_toggle(self):
         self.recalculate_all_audio()
