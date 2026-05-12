@@ -74,6 +74,16 @@ class PhoneticsApp:
         self.root.geometry("1200x700")
         self.root.configure(fg_color="#F3F4F6") 
         
+        # 设置窗口图标
+        try:
+            icon_file = "icon.ico"
+            if not os.path.exists(icon_file):
+                icon_file = os.path.join(os.path.dirname(__file__), "icon.ico")
+            if os.path.exists(icon_file):
+                self.root.iconbitmap(icon_file)
+        except Exception:
+            pass
+        
         # 核心数据结构
         self.pending_long_snd = None 
         self.pending_batch_paths =[]

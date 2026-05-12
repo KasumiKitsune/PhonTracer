@@ -5,7 +5,7 @@ a = Analysis(
     ['tone_extractor.py'],
     pathex=[],
     binaries=[],
-    datas=[('icons', 'icons')],
+    datas=[('icons', 'icons'), ('icon.ico', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -32,6 +32,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=['icon.ico'],
 )
 coll = COLLECT(
     exe,
