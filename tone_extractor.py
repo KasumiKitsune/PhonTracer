@@ -970,7 +970,13 @@ class PhoneticsApp:
 
     def export_project(self):
         if not self.items: return messagebox.showwarning("提示", "没有可导出的数据。")
-        out_file = "tone_export_data.txt"
+        out_file = filedialog.asksaveasfilename(
+            title="导出全表数据",
+            defaultextension=".txt",
+            initialfile="tone_export_data.txt",
+            filetypes=[("文本文件", "*.txt"), ("所有文件", "*.*")]
+        )
+        if not out_file: return  # 用户取消了对话框
         is_continuous = (self.num_rule_var.get() == "continuous")
         try:
             with open(out_file, "w", encoding="utf-8") as f:
