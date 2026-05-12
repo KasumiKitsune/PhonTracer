@@ -1,0 +1,6 @@
+praat-parselmouth
+numpy
+sounddevice
+matplotlib
+customtkinter
+pyinstaller
