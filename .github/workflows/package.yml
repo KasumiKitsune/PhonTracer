@@ -9,12 +9,17 @@ name: Package Application (macOS Only)
 # =================================================================
 
 on:
-  workflow_dispatch: # 允许在 GitHub Actions 页面手动点击运行
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*' # 当推送 v1.1.0 等标签时触发自动发布
 
 jobs:
   build_macos:
-    name: Build and Package for macOS
+    name: Build and Release for macOS
     runs-on: macos-latest
+    permissions: # 赋予 Action 创建 Release 的权限
+      contents: write
 
     steps:
     - name: Checkout code
@@ -24,7 +29,7 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
-        cache: 'pip' # 开启 pip 缓存加速后续运行
+        cache: 'pip'
 
     - name: Install dependencies
       run: |
@@ -32,14 +37,20 @@ jobs:
         pip install -r requirements.txt
 
     - name: Build with PyInstaller
-      # 使用项目根目录下的 spec 文件进行打包
       run: |
         pyinstaller --noconfirm ToneExtractor.spec
 
-    - name: Upload Artifacts (macOS)
-      # 将打包生成的 dist/ToneExtractor 目录上传为名为 ToneExtractor-MacOS 的文件
-      uses: actions/upload-artifact@v4
+    - name: Create Release and Upload Artifacts
+      uses: softprops/action-gh-release@v2
+      if: startsWith(github.ref, 'refs/tags/')
       with:
-        name: ToneExtractor-MacOS
-        path: dist/ToneExtractor/
+        files: dist/ToneExtractor/*
+        name: PhonTracer ${{ github.ref_name }}
+        body: |
+          ### 🚀 自动化发布
+          - 自动构建 macOS 可执行文件
+          - 基于最新代码逻辑与资源路径
+        draft: false
+        prerelease: false
+
 
