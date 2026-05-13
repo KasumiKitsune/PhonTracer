@@ -1,3 +1,4 @@
+import sys
 import customtkinter as ctk
 import matplotlib
 import warnings
@@ -14,7 +15,7 @@ def main():
     ctk.set_default_color_theme("blue")
 
     root = ctk.CTk()
-    app = PhoneticsApp(root)
+    app = PhoneticsApp(root, initial_files=sys.argv[1:])
     root.mainloop()
 
 if __name__ == "__main__":
