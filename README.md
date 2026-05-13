@@ -31,22 +31,22 @@
 graph TD
     A[原始音频信号 .wav/.mp3] --> B[Praat Parselmouth 引擎]
     
-    subgraph 宏观处理 Macro-Level
+    subgraph "宏观处理 Macro-Level"
     B --> C[Intensity 强度提取]
     C --> D{VAD 语音端点检测}
     D -- "粗切分" --> E[音节候选段落]
     end
     
-    subgraph 微观定位 Micro-Level (元音核心)
+    subgraph "微观定位 Micro-Level"
     E --> F[Praat 基频算法 To_Pitch]
     E --> G[最大能量点 Peak 定位]
-    G --> H{双向能量阈值截断\n根据 Drop dB 向两侧寻找边界}
-    H -- "排除边缘绝对静音\n约束: 最短有效时长" --> I[精确定位元音核心\nVowel Nucleus]
+    G --> H{双向能量阈值截断}
+    H -- "约束: 最短有效时长" --> I[精确定位元音核心]
     end
     
-    subgraph 归一化与输出 Normalization
+    subgraph "归一化与输出 Normalization"
     F --> J
-    I --> J[指定 N 等分点\n进行时间轴等距采样]
+    I --> J[指定 N 等分点采样]
     J --> K[时间点与 F0 对齐]
     K --> L[(标准化数据表格)]
     end
