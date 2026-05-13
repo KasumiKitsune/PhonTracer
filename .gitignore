@@ -5,9 +5,12 @@ __pycache__/
 *.pyd
 .Python
 *.egg-info/
+# Packaging & Archiving
+archive/
+upx.exe
+ToneExtractor.spec
 dist/
 build/
-# *.spec
 
 # Virtual environments
 venv/
@@ -32,3 +35,4 @@ desktop.ini
 # Logs & temp
 *.log
 *.tmp
+

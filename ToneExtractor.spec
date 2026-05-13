@@ -2,8 +2,8 @@
 
 
 a = Analysis(
-    ['tone_extractor.py'],
-    pathex=[],
+    ['main.py'],
+    pathex=['.'],
     binaries=[],
     datas=[('icons', 'icons'), ('icon.ico', '.')],
     hiddenimports=[],

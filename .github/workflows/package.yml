@@ -10,8 +10,8 @@ jobs:
   build:
     strategy:
       matrix:
-        # 只在 macOS 上运行
-        os: [macos-latest]
+        # 支持 macOS 和 Windows
+        os: [macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -37,4 +37,11 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: ToneExtractor-MacOS
+        path: dist/ToneExtractor/
+
+    - name: Upload Artifacts (Windows)
+      if: matrix.os == 'windows-latest'
+      uses: actions/upload-artifact@v4
+      with:
+        name: ToneExtractor-Windows
         path: dist/ToneExtractor/

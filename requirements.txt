@@ -4,3 +4,4 @@ sounddevice
 matplotlib
 customtkinter
 pyinstaller
+Pillow
