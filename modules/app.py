@@ -27,10 +27,10 @@ class PhoneticsApp:
         
         # 设置窗口图标
         try:
-            icon_file = "icon.ico"
+            icon_file = os.path.join("assets", "icon.ico")
             if not os.path.exists(icon_file):
                 # 如果是作为模块运行，图标在上一级目录
-                icon_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "icon.ico")
+                icon_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "icon.ico")
             if os.path.exists(icon_file):
                 self.root.iconbitmap(icon_file)
         except Exception:
@@ -45,6 +45,8 @@ class PhoneticsApp:
         self.dragging = None 
         self.tree_drag_item = None 
         self.debounce_timer = None
+        self.ax = None
+        self.ax2 = None
         
         self.last_params = {
             'pts': 11,
@@ -72,7 +74,10 @@ class PhoneticsApp:
             "play": "play.png", "save": "save.png", "check": "check.png",
             "auto": "auto.png", "points": "points.png", "energy": "energy.png",
             "duration": "duration.png", "trim": "trim.png", "tag": "tag.png",
-            "tab_single": "tab_single.png", "tab_batch": "tab_batch.png"
+            "tab_single": "tab_single.png", "tab_batch": "tab_batch.png",
+            "status_success": "status_success.png", 
+            "status_loading": "status_loading.png", 
+            "status_error": "status_error.png"
         }
         for key, filename in icon_files.items():
             path = os.path.join(icon_path, filename)
@@ -82,12 +87,22 @@ class PhoneticsApp:
             else:
                 self.icons[key] = None
 
-        logo_path = "icon.png"
+        logo_path = os.path.join("assets", "icon.png")
         if not os.path.exists(logo_path):
-            logo_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "icon.png")
+            logo_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "icon.png")
         if os.path.exists(logo_path):
             img = Image.open(logo_path)
             self.icons["logo"] = ctk.CTkImage(light_image=img, dark_image=img, size=(45, 45))
+
+        brand_logo_path = os.path.join("assets", "logo.png")
+        if not os.path.exists(brand_logo_path):
+            brand_logo_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "logo.png")
+        if os.path.exists(brand_logo_path):
+            img = Image.open(brand_logo_path)
+            orig_w, orig_h = img.size
+            target_h = 60
+            target_w = int(orig_w * (target_h / orig_h))
+            self.icons["brand_logo"] = ctk.CTkImage(light_image=img, dark_image=img, size=(target_w, target_h))
 
     def setup_ui(self):
         left_scrollable = ctk.CTkScrollableFrame(self.root, width=320, fg_color="transparent")
@@ -97,10 +112,25 @@ class PhoneticsApp:
                                 "fg_color": "#E5E7EB", "text_color": "#1F2937", "hover_color": "#D1D5DB"}
         
         header_frame = ctk.CTkFrame(left_scrollable, fg_color="transparent")
-        header_frame.pack(fill=tk.X, pady=(10, 25))
-        if self.icons.get("logo"):
-            ctk.CTkLabel(header_frame, text="", image=self.icons.get("logo")).pack(side=tk.LEFT, padx=(10, 10))
-        ctk.CTkLabel(header_frame, text="PhonTracer", font=ctk.CTkFont(family="Segoe UI", size=26, weight="bold"), text_color="#1F2937").pack(side=tk.LEFT)
+        header_frame.pack(fill=tk.X, pady=(10, 20))
+        
+        if self.icons.get("brand_logo"):
+            logo_lbl = ctk.CTkLabel(header_frame, text="", image=self.icons.get("brand_logo"))
+            logo_lbl.pack(side=tk.LEFT, padx=(10, 15))
+        else:
+            logo_lbl = ctk.CTkLabel(header_frame, text="PhonTracer", font=ctk.CTkFont(family="Segoe UI", size=26, weight="bold"), text_color="#1F2937")
+            logo_lbl.pack(side=tk.LEFT, padx=(10, 15))
+            
+        status_container = ctk.CTkFrame(header_frame, fg_color="transparent")
+        status_container.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        self.lbl_status = ctk.CTkLabel(status_container, text=" 就绪", image=self.icons.get("status_success"), compound="left", text_color="#10B981", font=ctk.CTkFont(family="Microsoft YaHei", size=12), wraplength=120)
+        self.lbl_status.pack(pady=(5, 5), expand=True)
+        
+        self.progress_bar = ctk.CTkProgressBar(status_container, height=6, corner_radius=10, 
+                                               progress_color="#60A5FA", fg_color="#E5E7EB")
+        self.progress_bar.set(0)
+        # 初始时不 pack 进度条
 
         self.tabview = ctk.CTkTabview(left_scrollable, height=250, corner_radius=12, fg_color="white", 
                                       segmented_button_selected_color="#60A5FA", segmented_button_fg_color="#F3F4F6")
@@ -178,12 +208,6 @@ class PhoneticsApp:
         self.switch_trim_silence.select() 
         ToolTip(self.switch_trim_silence, "开启后将在图表上自动忽略首尾低于 -50dB 的绝对静音区域，\n让有效波形占满屏幕。")
 
-        self.lbl_status = ctk.CTkLabel(left_scrollable, text="就绪", text_color="#10B981", font=self.font_main, wraplength=280)
-        self.lbl_status.pack(pady=(20, 5))
-
-        self.progress_bar = ctk.CTkProgressBar(left_scrollable, width=280, height=10, corner_radius=10, 
-                                               progress_color="#60A5FA", fg_color="#E5E7EB")
-        self.progress_bar.set(0)
 
         right_sidebar = ctk.CTkFrame(self.root, width=300, fg_color="transparent")
         right_sidebar.pack(side=tk.RIGHT, fill=tk.Y, padx=10, pady=10)
@@ -312,21 +336,21 @@ class PhoneticsApp:
                     self.recalculate_all_audio()
         except: pass
 
-    def set_status(self, text, color="#10B981"):
-        self.lbl_status.configure(text=text, text_color=color)
+    def set_status(self, text, color="#10B981", icon_key="status_success"):
+        self.lbl_status.configure(text=f" {text}", text_color=color, image=self.icons.get(icon_key))
 
     def set_progress(self, val):
         self.progress_bar.set(val)
 
     def start_loading(self, text="正在处理..."):
-        self.set_status(text, "#3B82F6")
+        self.set_status(text, "#3B82F6", "status_loading")
         self.progress_bar.set(0)
         if self.progress_bar.winfo_manager() == "":
-            self.progress_bar.pack(pady=(0, 20), before=self.lbl_status)
+            self.progress_bar.pack(fill=tk.X, padx=(0, 15), pady=(0, 8))
 
     def stop_loading(self, text="完成"):
         self.set_progress(1.0)
-        self.set_status(text, "#10B981")
+        self.set_status(text, "#10B981", "status_success")
         self.root.after(1500, lambda: self.progress_bar.pack_forget())
 
     def setup_entry_behavior(self, entry, param_key):
@@ -868,14 +892,14 @@ class PhoneticsApp:
 
     def plot_item_spectrogram(self, item):
         if (not item.get('snd') or not item.get('pitch')) and item.get('path'):
-            self.set_status(f"正在读取音频: {item['label']}...", "#3B82F6")
-            self.root.update_idletasks()
-            try:
-                item['snd'] = parselmouth.Sound(item['path'])
-                item['pitch'] = item['snd'].to_pitch()
-                self.set_status("就绪", "#10B981")
-            except Exception as e:
-                self.set_status(f"加载失败: {str(e)}", "#EF4444")
+                self.set_status(f"正在读取音频: {item['label']}...", "#3B82F6", "status_loading")
+                self.root.update_idletasks()
+                try:
+                    item['snd'] = parselmouth.Sound(item['path'])
+                    item['pitch'] = item['snd'].to_pitch()
+                    self.set_status("就绪", "#10B981", "status_success")
+                except Exception as e:
+                    self.set_status(f"加载失败: {str(e)}", "#EF4444", "status_error")
                 return
 
         if not item.get('snd') or item.get('start') == 0.0: return
@@ -933,6 +957,7 @@ class PhoneticsApp:
         self.canvas.draw()
 
     def on_press(self, event):
+        if not self.ax or not self.ax2: return
         if event.inaxes not in [self.ax, self.ax2] or event.button != 1 or not self.current_iid: return
         item = self.items[self.current_iid]
         start_px = self.ax.transData.transform((item['start'], 0))[0]
@@ -950,7 +975,7 @@ class PhoneticsApp:
         if self.dragging: self.canvas.draw_idle()
 
     def on_motion(self, event):
-        if not self.current_iid or event.xdata is None: return
+        if not self.ax or not self.current_iid or event.xdata is None: return
         item = self.items[self.current_iid]
         
         if not self.dragging:
@@ -1046,7 +1071,7 @@ class PhoneticsApp:
                     self.stop_loading("识别完成")
                 self.root.after(0, update_ui)
             except Exception as e:
-                self.root.after(0, lambda: self.set_status(f"识别失败: {str(e)}", "#EF4444"))
+                self.root.after(0, lambda: self.set_status(f"识别失败: {str(e)}", "#EF4444", "status_error"))
                 self.root.after(0, self.stop_loading)
         threading.Thread(target=run, daemon=True).start()
 

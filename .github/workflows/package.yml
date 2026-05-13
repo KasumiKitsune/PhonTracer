@@ -1,18 +1,20 @@
-name: Package Application
+name: Package Application (macOS Only)
+
+# =================================================================
+# 【意图说明】
+# 1. 触发机制：仅支持手动触发 (workflow_dispatch)，禁用了自动触发（如 push 或 tags）。
+# 2. 运行平台：专门为 macOS 设计，使用 macos-latest 运行环境。
+# 3. 功能：打包 Python GUI 程序为 macOS 可执行文件，并上传为 Artifact。
+# 4. 注意事项：此脚本依赖根目录下的 ToneExtractor.spec 和 requirements.txt。
+# =================================================================
 
 on:
-  push:
-    tags:
-      - 'v*'
-  workflow_dispatch:
+  workflow_dispatch: # 允许在 GitHub Actions 页面手动点击运行
 
 jobs:
-  build:
-    strategy:
-      matrix:
-        # 支持 macOS 和 Windows
-        os: [macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+  build_macos:
+    name: Build and Package for macOS
+    runs-on: macos-latest
 
     steps:
     - name: Checkout code
@@ -22,6 +24,7 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
+        cache: 'pip' # 开启 pip 缓存加速后续运行
 
     - name: Install dependencies
       run: |
@@ -29,19 +32,14 @@ jobs:
         pip install -r requirements.txt
 
     - name: Build with PyInstaller
+      # 使用项目根目录下的 spec 文件进行打包
       run: |
         pyinstaller --noconfirm ToneExtractor.spec
 
     - name: Upload Artifacts (macOS)
-      if: matrix.os == 'macos-latest'
+      # 将打包生成的 dist/ToneExtractor 目录上传为名为 ToneExtractor-MacOS 的文件
       uses: actions/upload-artifact@v4
       with:
         name: ToneExtractor-MacOS
         path: dist/ToneExtractor/
 
-    - name: Upload Artifacts (Windows)
-      if: matrix.os == 'windows-latest'
-      uses: actions/upload-artifact@v4
-      with:
-        name: ToneExtractor-Windows
-        path: dist/ToneExtractor/
