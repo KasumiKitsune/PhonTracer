@@ -386,6 +386,8 @@ class PhoneticsApp:
                 if val != self.last_params['pts']:
                     self.last_params['pts'] = val
                     self.slider_pts.set(val)
+                    for iid in self.items.keys():
+                        self.tree_panel.update_item_icon(iid)
                     self.tree_panel.update_preview()
             elif key == 'db':
                 val = float(self.entry_drop_db.get())
@@ -463,6 +465,8 @@ class PhoneticsApp:
             if changed_algo: self.recalculate_all_audio()
             if new_pts != self.last_params['pts']:
                 self.last_params['pts'] = new_pts
+                for iid in self.items.keys():
+                    self.tree_panel.update_item_icon(iid)
                 self.tree_panel.update_preview()
         except ValueError: pass
 
@@ -488,6 +492,11 @@ class PhoneticsApp:
                 if self.spectrogram_panel.current_item:
                     self.spectrogram_panel.plot_item_spectrogram()
                     self.spectrogram_panel.update_ui_times()
+                
+                # 更新所有列表项的图标（刷新警告标志）
+                for iid in self.items.keys():
+                    self.tree_panel.update_item_icon(iid)
+                    
                 self.tree_panel.update_preview()
                 self.stop_loading("全局参数已应用")
 

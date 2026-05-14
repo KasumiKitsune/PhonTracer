@@ -56,15 +56,24 @@ def core_microscopic_vowel_nucleus(snd, global_pitch, t_min, t_max, drop_db, min
             
         temp_s, temp_e = t_min + best_s, t_min + best_e
         
+        final_s, final_e = temp_s, temp_e
+        
         if trim_silence:
             trim_part = snd.extract_part(from_time=temp_s, to_time=temp_e)
             vals = trim_part.values[0]
             trim_xs = trim_part.xs()
             valid_idx = np.where(np.abs(vals) > SILENCE_AMPLITUDE_THRESHOLD)[0]
             if len(valid_idx) > 0:
-                return temp_s + trim_xs[valid_idx[0]], temp_s + trim_xs[valid_idx[-1]]
+                final_s = temp_s + trim_xs[valid_idx[0]]
+                final_e = temp_s + trim_xs[valid_idx[-1]]
                 
-        return temp_s, temp_e
+        # --- 算法优化：严格收缩到有效基频区间，消除头尾 0 值 ---
+        valid_pitch_xs = [x for x, f in zip(xs, freqs) if f > 0 and final_s <= x <= final_e]
+        if len(valid_pitch_xs) >= 2:
+            final_s = valid_pitch_xs[0]
+            final_e = valid_pitch_xs[-1]
+            
+        return final_s, final_e
     except Exception:
         return t_min, t_max
 

@@ -4,6 +4,7 @@ import customtkinter as ctk
 import csv
 import parselmouth
 import numpy as np
+import math
 from .data_utils import get_export_text_for_item
 from .ui_widgets import CTkReleaseButton
 
@@ -434,14 +435,150 @@ class ProjectTreePanel:
                 
         out_file = filedialog.asksaveasfilename(
             title="导出全表数据", defaultextension=".txt", initialfile="tone_export_data",
-            filetypes=[("CSV 表格", "*.csv"), ("文本文件", "*.txt"), ("所有文件", "*.*")]
+            filetypes=[("Excel 表格", "*.xlsx"), ("文本文件", "*.txt"), ("所有文件", "*.*")]
         )
         if not out_file: return
         try:
-            if out_file.lower().endswith(".csv"): self._export_csv(out_file)
-            else: self._export_txt(out_file)
+            if out_file.lower().endswith(".xlsx"):
+                # 弹出询问是否包含图表
+                include_chart = messagebox.askyesno("导出设置", "是否在 Excel 中包含分析图表？\n(包含图表可能在部分旧版 Office 中打开较慢)", default=messagebox.NO)
+                self._export_xlsx(out_file, include_chart=include_chart)
+            else:
+                self._export_txt(out_file)
             messagebox.showinfo("成功", f"数据已导出至:\n{out_file}")
         except Exception as e: messagebox.showerror("错误", str(e))
+
+    def _export_xlsx(self, out_file, include_chart=False):
+        try:
+            import xlsxwriter
+        except ImportError:
+            messagebox.showerror("错误", "缺少 xlsxwriter 库，请先安装：pip install xlsxwriter")
+            return
+            
+        is_continuous = (self.num_rule_var.get() == "continuous")
+        num_points = self.app_state_params['pts']
+        
+        workbook = xlsxwriter.Workbook(out_file)
+        ws_data = workbook.add_worksheet("数据")
+        ws_res = workbook.add_worksheet("分析结果")
+        
+        headers = ["组别", "编号", "字", "时长(s)"]
+        for i in range(1, num_points + 1):
+            headers.append(f"T{i}(Hz)")
+            
+        for col, header in enumerate(headers):
+            ws_data.write(0, col, header)
+            
+        global_idx = 1
+        row_idx = 1
+        raw_data = [] 
+        
+        for grp_name in self.project_groups:
+            if not is_continuous: global_idx = 1
+            grp_node = self.group_nodes[grp_name]
+            for child in self.tree.get_children(grp_node):
+                if child not in self.items: continue
+                item = self.items[child]
+                
+                if (not item.get('snd') or not item.get('pitch')) and item.get('path'):
+                    try:
+                        item['snd'] = parselmouth.Sound(item['path'])
+                        item['pitch'] = item['snd'].to_pitch()
+                    except Exception: continue
+                    
+                if item.get('start') is None or not item.get('snd'): continue
+                
+                t_s, t_e = item['start'], item['end']
+                duration = t_e - t_s
+                if duration <= 0: continue
+                
+                row = [grp_name, global_idx, item['label'], float(f"{duration:.6f}")]
+                times = np.linspace(t_s, t_e, num_points)
+                hz_vals = []
+                for t in times:
+                    f0 = item['pitch'].get_value_at_time(t)
+                    hz_vals.append(f0)
+                    row.append("" if np.isnan(f0) else float(f"{f0:.6f}"))
+                    
+                for col, val in enumerate(row):
+                    ws_data.write(row_idx, col, val)
+                
+                raw_data.append([grp_name, duration] + hz_vals)
+                row_idx += 1
+                global_idx += 1
+                
+        all_hz = [hz for r in raw_data for hz in r[2:] if not np.isnan(hz) and hz > 0]
+        if not all_hz:
+            workbook.close()
+            return
+            
+        res_headers = ["声调类型"]
+        for i in range(1, num_points + 1): res_headers.append(f"T{i}")
+        res_headers.append("平均时长(s)")
+        for col, header in enumerate(res_headers): ws_res.write(0, col, header)
+            
+        dict_data = {}
+        tone_counts = {}
+        
+        for r in raw_data:
+            tone_name = r[0]
+            if not tone_name: continue
+            if tone_name not in dict_data:
+                dict_data[tone_name] = [0.0] * (num_points + 1)
+                tone_counts[tone_name] = 0
+            dict_data[tone_name][0] += r[1]
+            for i in range(num_points):
+                val = r[i+2]
+                if not np.isnan(val) and val > 0: dict_data[tone_name][i+1] += val
+            tone_counts[tone_name] += 1
+            
+        # 第一步：计算各组的所有均值点
+        avg_points = {}
+        all_avg_hz = []
+        for k, v in dict_data.items():
+            count = tone_counts[k]
+            avg_points[k] = []
+            for j in range(1, num_points + 1):
+                avg_hz = v[j] / count if count > 0 else 0
+                avg_points[k].append(avg_hz)
+                if avg_hz > 0: all_avg_hz.append(avg_hz)
+                
+        if not all_avg_hz:
+            workbook.close()
+            return
+            
+        # 根据实验语音学“声调格局图”规范，使用均值折线中的最大和最小值进行对数归一化
+        min_hz = min(all_avg_hz)
+        max_hz = max(all_avg_hz)
+        
+        res_row = 1
+        for k, v in dict_data.items():
+            ws_res.write(res_row, 0, k)
+            count = tone_counts[k]
+            for j in range(num_points):
+                avg_hz = avg_points[k][j]
+                if avg_hz > 0 and max_hz > min_hz and min_hz > 0:
+                    t_val = 5 * (math.log10(avg_hz) - math.log10(min_hz)) / (math.log10(max_hz) - math.log10(min_hz))
+                    ws_res.write(res_row, j + 1, round(t_val, 2))
+                else: ws_res.write(res_row, j + 1, "")
+            avg_dur = v[0] / count if count > 0 else 0
+            ws_res.write(res_row, num_points + 1, round(avg_dur, 4))
+            res_row += 1
+            
+        if include_chart:
+            chart = workbook.add_chart({'type': 'scatter', 'subtype': 'straight'})
+            for i in range(1, res_row):
+                chart.add_series({
+                    'name':       ['分析结果', i, 0],
+                    'categories': ['分析结果', 0, 1, 0, num_points],
+                    'values':     ['分析结果', i, 1, i, num_points],
+                })
+            chart.set_title({'name': '声调格局图 (0-5标度)'})
+            chart.set_y_axis({'min': 0, 'max': 5, 'major_unit': 0.5})
+            chart.set_legend({'position': 'right'})
+            ws_res.insert_chart('O2', chart)
+        
+        workbook.close()
 
     def _export_txt(self, out_file):
         is_continuous = (self.num_rule_var.get() == "continuous")
@@ -459,42 +596,3 @@ class ProjectTreePanel:
                             f.write(txt_data)
                             global_idx += 1
 
-    def _export_csv(self, out_file):
-        is_continuous = (self.num_rule_var.get() == "continuous")
-        num_points = self.app_state_params['pts']
-        headers = ["组别", "编号", "字", "时长(s)"]
-        for i in range(1, num_points + 1):
-            headers.append(f"T{i}(Hz)")
-            
-        with open(out_file, "w", encoding="utf-8-sig", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(headers)
-            global_idx = 1
-            for grp_name in self.project_groups:
-                if not is_continuous: global_idx = 1
-                grp_node = self.group_nodes[grp_name]
-                for child in self.tree.get_children(grp_node):
-                    if child not in self.items: continue
-                    item = self.items[child]
-                    
-                    if (not item.get('snd') or not item.get('pitch')) and item.get('path'):
-                        try:
-                            item['snd'] = parselmouth.Sound(item['path'])
-                            item['pitch'] = item['snd'].to_pitch()
-                        except Exception: continue
-                        
-                    if item.get('start') is None or not item.get('snd'): continue
-                    
-                    t_s, t_e = item['start'], item['end']
-                    duration = t_e - t_s
-                    if duration <= 0: continue
-                    
-                    row = [grp_name, global_idx, item['label'], f"{duration:.6f}"]
-                    times = np.linspace(t_s, t_e, num_points)
-                    for t in times:
-                        f0 = item['pitch'].get_value_at_time(t)
-                        f0_str = "" if np.isnan(f0) else f"{f0:.6f}"
-                        row.append(f0_str)
-                        
-                    writer.writerow(row)
-                    global_idx += 1
