@@ -12,7 +12,7 @@ from PIL import Image
 import windnd
 
 # 导入拆分后的模块
-from modules.ui_widgets import ToolTip
+from modules.ui_widgets import ToolTip, CTkReleaseButton
 from modules.data_utils import parse_wordlist, fuzzy_match_word_to_path
 from modules.audio_core import core_microscopic_vowel_nucleus, batch_process_worker, macroscopic_vad
 from modules.visual_splitter import VisualSplitter
@@ -190,19 +190,19 @@ class PhoneticsApp:
         self.tabview._segmented_button._buttons_dict["单条长音频"].configure(image=self.icons.get("tab_single"), compound="left")
         self.tabview._segmented_button._buttons_dict["多条独立音频"].configure(image=self.icons.get("tab_batch"), compound="left")
 
-        ctk.CTkButton(tab_long, text=" 导入长音频", image=self.icons.get("audio"), compound="left", command=self.load_long_audio, **btn_kwargs_primary).pack(fill=tk.X, padx=10, pady=(15, 2))
+        CTkReleaseButton(tab_long, text=" 导入长音频", image=self.icons.get("audio"), compound="left", command=self.load_long_audio, **btn_kwargs_primary).pack(fill=tk.X, padx=10, pady=(15, 2))
         self.lbl_long_file = ctk.CTkLabel(tab_long, text="未选择", font=self.font_main, text_color="#6B7280")
         self.lbl_long_file.pack(pady=(0, 10))
-        ctk.CTkButton(tab_long, text=" 导入字表并切分", image=self.icons.get("cut"), compound="left", command=lambda: self.open_text_dialog('long'), **btn_kwargs_secondary).pack(fill=tk.X, padx=10, pady=(0, 5))
-        ctk.CTkButton(tab_long, text=" 可视化手动切分", image=self.icons.get("eye"), compound="left", command=self.open_visual_splitter, **btn_kwargs_secondary).pack(fill=tk.X, padx=10, pady=(0, 15))
+        CTkReleaseButton(tab_long, text=" 导入字表并切分", image=self.icons.get("cut"), compound="left", command=lambda: self.open_text_dialog('long'), **btn_kwargs_secondary).pack(fill=tk.X, padx=10, pady=(0, 5))
+        CTkReleaseButton(tab_long, text=" 可视化手动切分", image=self.icons.get("eye"), compound="left", command=self.open_visual_splitter, **btn_kwargs_secondary).pack(fill=tk.X, padx=10, pady=(0, 15))
 
-        ctk.CTkButton(tab_batch, text=" 选择多个音频文件", image=self.icons.get("batch"), compound="left", command=self.load_batch_audio, **btn_kwargs_primary).pack(fill=tk.X, padx=10, pady=(15, 2))
+        CTkReleaseButton(tab_batch, text=" 选择多个音频文件", image=self.icons.get("batch"), compound="left", command=self.load_batch_audio, **btn_kwargs_primary).pack(fill=tk.X, padx=10, pady=(15, 2))
         self.lbl_batch_files = ctk.CTkLabel(tab_batch, text="未选择", font=self.font_main, text_color="#6B7280")
         self.lbl_batch_files.pack(pady=(0, 10))
         row_mode2_btns = ctk.CTkFrame(tab_batch, fg_color="transparent")
         row_mode2_btns.pack(fill=tk.X, padx=10, pady=(0, 15))
-        ctk.CTkButton(row_mode2_btns, text="文件名提取", image=self.icons.get("tag"), compound="left", command=self.process_batch_direct, **btn_kwargs_secondary, width=110).pack(side=tk.LEFT, expand=True, padx=(0, 5))
-        ctk.CTkButton(row_mode2_btns, text="导入字表", image=self.icons.get("list"), compound="left", command=lambda: self.open_text_dialog('batch'), **btn_kwargs_secondary, width=110).pack(side=tk.RIGHT, expand=True, padx=(5, 0))
+        CTkReleaseButton(row_mode2_btns, text="文件名提取", image=self.icons.get("tag"), compound="left", command=self.process_batch_direct, **btn_kwargs_secondary, width=110).pack(side=tk.LEFT, expand=True, padx=(0, 5))
+        CTkReleaseButton(row_mode2_btns, text="导入字表", image=self.icons.get("list"), compound="left", command=lambda: self.open_text_dialog('batch'), **btn_kwargs_secondary, width=110).pack(side=tk.RIGHT, expand=True, padx=(5, 0))
 
         card_params = ctk.CTkFrame(left_scrollable, fg_color="white", corner_radius=10)
         card_params.pack(fill=tk.X, pady=10)
@@ -716,4 +716,4 @@ class PhoneticsApp:
             if mode == 'long': self.process_long_with_wordlist(raw_text)
             else: self.process_batch_with_wordlist(raw_text, match_mode=match_mode_var.get())
             
-        ctk.CTkButton(dlg, text="开始匹配提取", command=process, corner_radius=20, height=40, font=self.font_main).pack(pady=15)
+        CTkReleaseButton(dlg, text="开始匹配提取", command=process, corner_radius=20, height=40, font=self.font_main).pack(pady=15)

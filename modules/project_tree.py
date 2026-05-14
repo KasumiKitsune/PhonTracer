@@ -5,6 +5,7 @@ import csv
 import parselmouth
 import numpy as np
 from modules.data_utils import get_export_text_for_item
+from modules.ui_widgets import CTkReleaseButton
 
 class ProjectTreePanel:
     def __init__(self, parent, icons, items_dict, app_state_params, on_item_selected_callback, on_clear_canvas_callback):
@@ -53,7 +54,7 @@ class ProjectTreePanel:
         self.tree.tag_configure('hover', background='#F3F4F6')
         self.tree.tag_configure('drag_target', background='#DBEAFE')
         
-        btn_add_group = ctk.CTkButton(frame_list, text=" 新增组", image=self.icons.get("plus"), compound="left", width=120, height=30, corner_radius=8, command=self.add_new_group, fg_color="#F3F4F6", text_color="#374151", hover_color="#E5E7EB")
+        btn_add_group = CTkReleaseButton(frame_list, text=" 新增组", image=self.icons.get("plus"), compound="left", width=120, height=30, corner_radius=8, command=self.add_new_group, fg_color="#F3F4F6", text_color="#374151", hover_color="#E5E7EB")
         btn_add_group.pack(pady=(0, 15))
 
         self.tree.bind('<Double-1>', self.on_tree_double_click)

@@ -4,6 +4,7 @@ import customtkinter as ctk
 import numpy as np
 import parselmouth
 import sounddevice as sd
+from modules.ui_widgets import CTkReleaseButton
 
 class VisualSplitter(ctk.CTkToplevel):
     def __init__(self, master, snd, icons, callback, existing_items=None):
@@ -59,14 +60,14 @@ class VisualSplitter(ctk.CTkToplevel):
         bottom_frame.pack(side=tk.BOTTOM, fill=tk.X)
         
         if self.mode == 'cut':
-            ctk.CTkButton(bottom_frame, text="清空所有点", image=self.icons.get("cut"), compound="left",
+            CTkReleaseButton(bottom_frame, text="清空所有点", image=self.icons.get("cut"), compound="left",
                          fg_color="#FEE2E2", hover_color="#FECACA", text_color="#DC2626", corner_radius=20, height=36,
                          command=self.clear_cuts).pack(side=tk.LEFT, padx=20, pady=15)
                          
             self.lbl_count = ctk.CTkLabel(bottom_frame, text="当前切分点：0", font=("Microsoft YaHei", 13, "bold"), text_color="#4B5563")
             self.lbl_count.pack(side=tk.RIGHT, padx=20)
         
-        ctk.CTkButton(bottom_frame, text="确认并应用",
+        CTkReleaseButton(bottom_frame, text="确认并应用",
                      fg_color="#10B981", hover_color="#059669", corner_radius=20, height=36,
                      command=self.confirm).pack(side=tk.RIGHT, padx=20, pady=15)
         
