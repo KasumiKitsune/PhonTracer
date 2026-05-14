@@ -404,7 +404,11 @@ class ProjectTreePanel:
 
     def _export_csv(self, out_file):
         is_continuous = (self.num_rule_var.get() == "continuous")
-        headers = ["组别", "编号", "字", "时长(s)", "T1(Hz)"]
+        num_points = self.app_state_params['pts']
+        headers = ["组别", "编号", "字", "时长(s)"]
+        for i in range(1, num_points + 1):
+            headers.append(f"T{i}(Hz)")
+            
         with open(out_file, "w", encoding="utf-8-sig", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(headers)
@@ -415,17 +419,25 @@ class ProjectTreePanel:
                 for child in self.tree.get_children(grp_node):
                     if child not in self.items: continue
                     item = self.items[child]
+                    # 如果数据未加载，先尝试加载
                     if (not item.get('snd') or not item.get('pitch')) and item.get('path'):
                         try:
                             item['snd'] = parselmouth.Sound(item['path'])
                             item['pitch'] = item['snd'].to_pitch()
                         except: continue
+                    
                     if item.get('start') <= 0 or not item.get('snd'): continue
+                    
                     t_s, t_e = item['start'], item['end']
                     duration = t_e - t_s
                     if duration <= 0: continue
-                    f0 = item['pitch'].get_value_at_time(t_s)
-                    f0_str = "" if np.isnan(f0) else f"{f0:.6f}"
-                    row = [grp_name, global_idx, item['label'], f"{duration:.6f}", f0_str]
+                    
+                    row = [grp_name, global_idx, item['label'], f"{duration:.6f}"]
+                    times = np.linspace(t_s, t_e, num_points)
+                    for t in times:
+                        f0 = item['pitch'].get_value_at_time(t)
+                        f0_str = "" if np.isnan(f0) else f"{f0:.6f}"
+                        row.append(f0_str)
+                        
                     writer.writerow(row)
                     global_idx += 1

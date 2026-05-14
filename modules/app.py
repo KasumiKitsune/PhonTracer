@@ -43,6 +43,7 @@ class PhoneticsApp:
         self.items = {}
         
         self.debounce_timer = None
+        self.recalc_id_counter = 0
         
         self.last_params = {
             'pts': 11,
@@ -415,31 +416,61 @@ class PhoneticsApp:
                 self.last_params['dur'] = new_dur
                 changed_algo = True
                 
-            if changed_algo: self.recalculate_all_audio()
+            if changed_algo: self.recalculate_all_audio_debounced()
             if new_pts != self.last_params['pts']:
                 self.last_params['pts'] = new_pts
                 self.tree_panel.update_preview()
         except ValueError: pass
 
     def on_trim_silence_toggle(self):
-        self.recalculate_all_audio()
+        self.recalculate_all_audio_debounced()
+
+    def recalculate_all_audio_debounced(self):
+        if self.debounce_timer:
+            self.root.after_cancel(self.debounce_timer)
+        self.debounce_timer = self.root.after(500, self.recalculate_all_audio)
 
     def recalculate_all_audio(self):
         if not self.items: return
+        self.recalc_id_counter += 1
+        current_id = self.recalc_id_counter
+        
         items_snapshot = list(self.items.items())
         total = len(items_snapshot)
+        results = []
 
         def run():
             self.root.after(0, lambda: self.start_loading("正在重新计算..."))
             for i, (iid, item) in enumerate(items_snapshot):
+                # 检查是否已有新的重算请求，如果有则立即中止当前线程
+                if current_id != self.recalc_id_counter:
+                    return
+
+                # 如果没有加载 snd，尝试通过 path 加载
+                if not item.get('snd') and item.get('path'):
+                    try:
+                        item['snd'] = parselmouth.Sound(item['path'])
+                        item['pitch'] = item['snd'].to_pitch()
+                    except: continue
+
                 if item.get('snd'):
                     mac_s, mac_e = item['macro_start'], item['macro_end']
                     mic_s, mic_e = self._microscopic_vowel_nucleus(item['snd'], item['pitch'], mac_s, mac_e)
-                    item['start'], item['end'] = mic_s, mic_e
+                    results.append((iid, mic_s, mic_e))
+                
                 if i % 5 == 0 or i == total - 1:
                     self.root.after(0, lambda v=(i + 1) / total: self.set_progress(v))
 
             def finalize():
+                # 再次确认 ID，防止在 finalize 调度期间产生了新请求
+                if current_id != self.recalc_id_counter:
+                    return
+                    
+                for iid, mic_s, mic_e in results:
+                    if iid in self.items:
+                        self.items[iid]['start'] = mic_s
+                        self.items[iid]['end'] = mic_e
+                
                 if self.spectrogram_panel.current_item:
                     self.spectrogram_panel.plot_item_spectrogram()
                     self.spectrogram_panel.update_ui_times()

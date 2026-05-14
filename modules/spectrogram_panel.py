@@ -7,6 +7,7 @@ import numpy as np
 import sounddevice as sd
 import parselmouth
 from modules.ui_widgets import CTkReleaseButton
+from modules.audio_core import SILENCE_THRESHOLD_RMS
 
 class SpectrogramPanel:
     def __init__(self, parent, icons, on_time_changed_callback, on_auto_detect_callback, on_export_callback):
@@ -112,7 +113,7 @@ class SpectrogramPanel:
             mac_part = snd.extract_part(from_time=item['macro_start'], to_time=item['macro_end'])
             vals = mac_part.values[0]
             mac_xs = mac_part.xs()
-            valid_idx = np.where(np.abs(vals) > 0.00316)[0]
+            valid_idx = np.where(np.abs(vals) > SILENCE_THRESHOLD_RMS)[0]
             if len(valid_idx) > 0:
                 view_s = item['macro_start'] + mac_xs[valid_idx[0]]
                 view_e = item['macro_start'] + mac_xs[valid_idx[-1]]
