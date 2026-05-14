@@ -211,8 +211,8 @@ class PhoneticsApp:
         CTkReleaseButton(tab_long, text=" 导入长音频", image=self.icons.get("audio"), compound="left", command=self.load_long_audio, **btn_kwargs_primary).pack(fill=tk.X, padx=10, pady=(15, 2))
         self.lbl_long_file = ctk.CTkLabel(tab_long, text="未选择", font=self.font_main, text_color="#6B7280")
         self.lbl_long_file.pack(pady=(0, 10))
-        CTkReleaseButton(tab_long, text=" 导入字表并切分", image=self.icons.get("cut"), compound="left", command=lambda: self.open_text_dialog('long'), **btn_kwargs_secondary).pack(fill=tk.X, padx=10, pady=(0, 5))
-        CTkReleaseButton(tab_long, text=" 可视化手动切分", image=self.icons.get("eye"), compound="left", command=self.open_visual_splitter, **btn_kwargs_secondary).pack(fill=tk.X, padx=10, pady=(0, 15))
+        CTkReleaseButton(tab_long, text=" 导入字表", image=self.icons.get("cut"), compound="left", command=lambda: self.open_text_dialog('long'), **btn_kwargs_secondary).pack(fill=tk.X, padx=10, pady=(0, 5))
+        CTkReleaseButton(tab_long, text=" 音频段落编辑", image=self.icons.get("eye"), compound="left", command=self.open_visual_splitter, **btn_kwargs_secondary).pack(fill=tk.X, padx=10, pady=(0, 15))
 
         CTkReleaseButton(tab_batch, text=" 选择多个音频文件", image=self.icons.get("batch"), compound="left", command=self.load_batch_audio, **btn_kwargs_primary).pack(fill=tk.X, padx=10, pady=(15, 2))
         self.lbl_batch_files = ctk.CTkLabel(tab_batch, text="未选择", font=self.font_main, text_color="#6B7280")
@@ -651,7 +651,7 @@ class PhoneticsApp:
             messagebox.showinfo("提示", f"手动微调已应用，时间边界已更新。{deleted_msg}")
         else:
             self.manual_segments = segments
-            messagebox.showinfo("提示", f"全新手动切分完成，共 {len(segments)} 个片段。\n现在请点击“导入字表并切分”来匹配文本。")
+            messagebox.showinfo("提示", f"全新手动切分完成，共 {len(segments)} 个片段。\n现在请点击“导入字表”来匹配文本。")
 
     def process_long_with_wordlist(self, raw_text):
         groups, flat_words = parse_wordlist(raw_text)
@@ -921,7 +921,14 @@ class PhoneticsApp:
             
         dlg = ctk.CTkToplevel(self.root)
         dlg.title("导入字表")
-        dlg.geometry("450x600" if mode == 'batch' else "450x520")
+        w, h = 450, (600 if mode == 'batch' else 520)
+        # 居中计算
+        sw = dlg.winfo_screenwidth()
+        sh = dlg.winfo_screenheight()
+        x = (sw - w) // 2
+        y = (sh - h) // 2
+        dlg.geometry(f"{w}x{h}+{x}+{y}")
+        
         dlg.transient(self.root)  # 关键：设置为父窗口的临时窗口，使其保持在父窗口上方
         dlg.focus_set()           # 自动获取焦点
         

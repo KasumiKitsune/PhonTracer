@@ -9,8 +9,16 @@ from .ui_widgets import CTkReleaseButton
 class VisualSplitter(ctk.CTkToplevel):
     def __init__(self, master, snd, icons, callback, existing_items=None, vad_segments=None):
         super().__init__(master)
-        self.title("可视化手动切分 / 微调")
-        self.geometry("950x550")
+        self.title("音频段落编辑")
+        
+        w, h = 950, 550
+        # 居中计算
+        sw = self.winfo_screenwidth()
+        sh = self.winfo_screenheight()
+        x = (sw - w) // 2
+        y = (sh - h) // 2
+        self.geometry(f"{w}x{h}+{x}+{y}")
+        
         self.attributes('-topmost', True)
         
         self.snd = snd
