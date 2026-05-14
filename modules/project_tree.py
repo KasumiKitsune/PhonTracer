@@ -419,13 +419,13 @@ class ProjectTreePanel:
                 for child in self.tree.get_children(grp_node):
                     if child not in self.items: continue
                     item = self.items[child]
-                    # 如果数据未加载，先尝试加载
+                    
                     if (not item.get('snd') or not item.get('pitch')) and item.get('path'):
                         try:
                             item['snd'] = parselmouth.Sound(item['path'])
                             item['pitch'] = item['snd'].to_pitch()
                         except: continue
-                    
+                        
                     if item.get('start') <= 0 or not item.get('snd'): continue
                     
                     t_s, t_e = item['start'], item['end']
