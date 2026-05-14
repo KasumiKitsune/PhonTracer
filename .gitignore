@@ -1,38 +1,59 @@
-# Python
+# --- Python ---
 __pycache__/
 *.py[cod]
-*.pyo
-*.pyd
+*$py.class
+*.so
 .Python
-*.egg-info/
-# Packaging & Archiving
-archive/
-upx.exe
-ToneExtractor.spec
-dist/
-build/
-
-# Virtual environments
-venv/
 env/
+venv/
 .venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.toast
+.cache
+.pytest_cache/
+.coverage
+*.egg-info/
+.eggs/
 
-# IDE
+# --- PyInstaller / Packaging ---
+# Usually, .spec files are tracked, but if you prefer to generate them, uncomment the line below.
+# ToneExtractor.spec
+build/
+dist/
+
+# UPX
+upx.exe
+upx.zip
+upx-*/
+
+# --- IDEs & Editors ---
 .vscode/
 .idea/
 *.swp
+*.swo
+.history/
+*.code-workspace
 
-# OS
+# --- OS Specific ---
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
 desktop.ini
 
-# Audio / data files (根据需要取消注释)
+# --- Data & Temp ---
+archive/
+*.log
+*.tmp
+*.bak
+
+# --- Audio / Linguistic Data (Uncomment to ignore) ---
 # *.wav
 # *.mp3
 # *.TextGrid
-
-# Logs & temp
-*.log
-*.tmp
-
+# *.csv
+# *.xlsx
