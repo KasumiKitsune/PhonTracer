@@ -397,7 +397,7 @@ class ProjectTreePanel:
                 for child in self.tree.get_children(grp_node):
                     if child in self.items:
                         item = self.items[child]
-                        if item['start'] > 0:
+                        if item['start'] is not None:
                             txt_data = get_export_text_for_item(item, global_idx, self.app_state_params['pts'])
                             f.write(txt_data)
                             global_idx += 1
@@ -426,7 +426,7 @@ class ProjectTreePanel:
                             item['pitch'] = item['snd'].to_pitch()
                         except: continue
                         
-                    if item.get('start') <= 0 or not item.get('snd'): continue
+                    if item.get('start') is None or not item.get('snd'): continue
                     
                     t_s, t_e = item['start'], item['end']
                     duration = t_e - t_s

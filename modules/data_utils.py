@@ -36,6 +36,7 @@ def fuzzy_match_word_to_path(word, available_paths):
     return None
 
 def get_export_text_for_item(item, real_index, num_points):
+    if item.get('start') is None or item.get('end') is None: return ""
     t_s, t_e = item['start'], item['end']
     duration = t_e - t_s
     

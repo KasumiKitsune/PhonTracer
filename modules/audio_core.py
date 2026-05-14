@@ -1,9 +1,6 @@
 import numpy as np
 import os
 
-# 学术规范：静音阈值定义 (约为 -50dB)
-SILENCE_THRESHOLD_RMS = 10 ** (-50 / 20) 
-
 def macroscopic_vad(snd):
     """长音频宏观静音检测分割"""
     intensity = snd.to_intensity(time_step=0.01)
@@ -58,7 +55,7 @@ def core_microscopic_vowel_nucleus(snd, global_pitch, t_min, t_max, drop_db, min
             trim_part = snd.extract_part(from_time=temp_s, to_time=temp_e)
             vals = trim_part.values[0]
             trim_xs = trim_part.xs()
-            valid_idx = np.where(np.abs(vals) > SILENCE_THRESHOLD_RMS)[0]
+            valid_idx = np.where(np.abs(vals) > 0.00316)[0]
             if len(valid_idx) > 0:
                 return temp_s + trim_xs[valid_idx[0]], temp_s + trim_xs[valid_idx[-1]]
                 
@@ -71,7 +68,7 @@ def batch_process_worker(path, params, trim_silence):
     import parselmouth
     try:
         snd = parselmouth.Sound(path)
-        pitch = snd.to_pitch()
+        pitch = snd.to_pitch(pitch_floor=params.get('pitch_floor', 75), pitch_ceiling=params.get('pitch_ceiling', 600))
         mac_s, mac_e = 0.0, snd.get_total_duration()
         
         mic_s, mic_e = core_microscopic_vowel_nucleus(

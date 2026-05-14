@@ -43,12 +43,13 @@ class PhoneticsApp:
         self.items = {}
         
         self.debounce_timer = None
-        self.recalc_id_counter = 0
         
         self.last_params = {
             'pts': 11,
             'db': 60.0,
-            'dur': 0.04
+            'dur': 0.04,
+            'pitch_floor': 75,
+            'pitch_ceiling': 600
         }
         
         self.font_title = ctk.CTkFont(family="Microsoft YaHei", size=15, weight="bold")
@@ -247,6 +248,21 @@ class PhoneticsApp:
         self.entry_min_dur = ctk.CTkEntry(row_dur, textvariable=self.var_min_dur, width=60, justify="center", corner_radius=20, height=26)
         self.entry_min_dur.pack(side=tk.RIGHT)
         self.setup_entry_behavior(self.entry_min_dur, 'dur')
+
+        # Pitch 范围参数
+        row_pitch = ctk.CTkFrame(card_params, fg_color="transparent")
+        row_pitch.pack(fill=tk.X, padx=15, pady=5)
+        ctk.CTkLabel(row_pitch, text=" F0 范围 (Hz):", image=self.icons.get("points"), compound="left", text_color="#374151", font=self.font_main).pack(side=tk.LEFT)
+        self.entry_pitch_ceiling = ctk.CTkEntry(row_pitch, width=55, justify="center", corner_radius=20, height=26)
+        self.entry_pitch_ceiling.insert(0, str(self.last_params['pitch_ceiling']))
+        self.entry_pitch_ceiling.pack(side=tk.RIGHT)
+        self.setup_entry_behavior(self.entry_pitch_ceiling, 'pitch_ceiling')
+        ctk.CTkLabel(row_pitch, text="~", text_color="#6B7280").pack(side=tk.RIGHT, padx=2)
+        self.entry_pitch_floor = ctk.CTkEntry(row_pitch, width=55, justify="center", corner_radius=20, height=26)
+        self.entry_pitch_floor.insert(0, str(self.last_params['pitch_floor']))
+        self.entry_pitch_floor.pack(side=tk.RIGHT)
+        self.setup_entry_behavior(self.entry_pitch_floor, 'pitch_floor')
+        ToolTip(lbl_dur, "Praat pitch 分析的频率范围。\n男声建议 75~300，女声/儿童建议 100~500。")
         
         row_trim = ctk.CTkFrame(card_params, fg_color="transparent")
         row_trim.pack(fill=tk.X, padx=15, pady=(10, 15))
@@ -286,7 +302,7 @@ class PhoneticsApp:
             self.root.update_idletasks()
             try:
                 item['snd'] = parselmouth.Sound(item['path'])
-                item['pitch'] = item['snd'].to_pitch()
+                item['pitch'] = item['snd'].to_pitch(pitch_floor=self.last_params['pitch_floor'], pitch_ceiling=self.last_params['pitch_ceiling'])
                 self.set_status("就绪", "#10B981", "status_success")
             except Exception as e:
                 self.set_status(f"加载失败: {str(e)}", "#EF4444", "status_error")
@@ -363,6 +379,14 @@ class PhoneticsApp:
                     self.last_params['dur'] = val
                     self.slider_dur.set(val)
                     self.recalculate_all_audio()
+            elif key == 'pitch_floor':
+                val = int(self.entry_pitch_floor.get())
+                if val != self.last_params['pitch_floor']:
+                    self.last_params['pitch_floor'] = val
+            elif key == 'pitch_ceiling':
+                val = int(self.entry_pitch_ceiling.get())
+                if val != self.last_params['pitch_ceiling']:
+                    self.last_params['pitch_ceiling'] = val
         except: pass
 
     def set_status(self, text, color="#10B981", icon_key="status_success"):
@@ -416,77 +440,31 @@ class PhoneticsApp:
                 self.last_params['dur'] = new_dur
                 changed_algo = True
                 
-            if changed_algo: self.recalculate_all_audio_debounced()
+            if changed_algo: self.recalculate_all_audio()
             if new_pts != self.last_params['pts']:
                 self.last_params['pts'] = new_pts
                 self.tree_panel.update_preview()
         except ValueError: pass
 
     def on_trim_silence_toggle(self):
-        self.recalculate_all_audio_debounced()
-
-    def recalculate_all_audio_debounced(self):
-        if self.debounce_timer:
-            self.root.after_cancel(self.debounce_timer)
-        self.debounce_timer = self.root.after(500, self.recalculate_all_audio)
+        self.recalculate_all_audio()
 
     def recalculate_all_audio(self):
         if not self.items: return
-        self.recalc_id_counter += 1
-        current_id = self.recalc_id_counter
-        
         items_snapshot = list(self.items.items())
         total = len(items_snapshot)
-        results = []
-
-        def process_item(args):
-            iid, item = args
-            # 如果已经中止，提前返回
-            if current_id != self.recalc_id_counter: return None
-            
-            # Lazy load in thread
-            if not item.get('snd') and item.get('path'):
-                try:
-                    item['snd'] = parselmouth.Sound(item['path'])
-                    item['pitch'] = item['snd'].to_pitch()
-                except: return None
-            
-            if item.get('snd'):
-                mac_s, mac_e = item['macro_start'], item['macro_end']
-                mic_s, mic_e = self._microscopic_vowel_nucleus(item['snd'], item['pitch'], mac_s, mac_e)
-                return (iid, mic_s, mic_e)
-            return None
 
         def run():
-            self.root.after(0, lambda: self.start_loading("正在重新计算 (首次较慢)..."))
-            
-            # 使用 ThreadPoolExecutor 以便共享内存缓存 snd 和 pitch
-            import concurrent.futures
-            completed_count = 0
-            with concurrent.futures.ThreadPoolExecutor(max_workers=min(os.cpu_count() or 4, 8)) as executor:
-                futures = [executor.submit(process_item, (iid, item)) for iid, item in items_snapshot]
-                for future in concurrent.futures.as_completed(futures):
-                    if current_id != self.recalc_id_counter:
-                        # 放弃剩下的
-                        executor.shutdown(wait=False, cancel_futures=True)
-                        return
-                    res = future.result()
-                    if res:
-                        results.append(res)
-                        
-                    completed_count += 1
-                    if completed_count % 5 == 0 or completed_count == total:
-                        self.root.after(0, lambda v=completed_count / total: self.set_progress(v))
+            self.root.after(0, lambda: self.start_loading("正在重新计算..."))
+            for i, (iid, item) in enumerate(items_snapshot):
+                if item.get('snd'):
+                    mac_s, mac_e = item['macro_start'], item['macro_end']
+                    mic_s, mic_e = self._microscopic_vowel_nucleus(item['snd'], item['pitch'], mac_s, mac_e)
+                    item['start'], item['end'] = mic_s, mic_e
+                if i % 5 == 0 or i == total - 1:
+                    self.root.after(0, lambda v=(i + 1) / total: self.set_progress(v))
 
             def finalize():
-                if current_id != self.recalc_id_counter:
-                    return
-                    
-                for iid, mic_s, mic_e in results:
-                    if iid in self.items:
-                        self.items[iid]['start'] = mic_s
-                        self.items[iid]['end'] = mic_e
-                
                 if self.spectrogram_panel.current_item:
                     self.spectrogram_panel.plot_item_spectrogram()
                     self.spectrogram_panel.update_ui_times()
@@ -507,9 +485,19 @@ class PhoneticsApp:
     def load_long_audio(self):
         path = filedialog.askopenfilename(filetypes=[("Audio Files", "*.wav *.mp3")])
         if not path: return
-        self.pending_long_snd = parselmouth.Sound(path)
-        self.lbl_long_file.configure(text=os.path.basename(path), text_color="#2563EB")
-        self.lbl_status.configure(text="长音频就绪", text_color="#10B981")
+        self.lbl_long_file.configure(text=os.path.basename(path), text_color="#9CA3AF")
+        def run():
+            self.root.after(0, lambda: self.start_loading(f"正在加载: {os.path.basename(path)}"))
+            try:
+                snd = parselmouth.Sound(path)
+                def done():
+                    self.pending_long_snd = snd
+                    self.lbl_long_file.configure(text=os.path.basename(path), text_color="#2563EB")
+                    self.stop_loading("长音频就绪")
+                self.root.after(0, done)
+            except Exception as e:
+                self.root.after(0, lambda: self.stop_loading(f"加载失败: {e}"))
+        threading.Thread(target=run, daemon=True).start()
 
     def open_visual_splitter(self):
         if not self.pending_long_snd:
@@ -560,7 +548,7 @@ class PhoneticsApp:
             self.root.after(0, self.tree_panel.clear_all)
             
             snd = self.pending_long_snd
-            global_pitch = snd.to_pitch()
+            global_pitch = snd.to_pitch(pitch_floor=self.last_params['pitch_floor'], pitch_ceiling=self.last_params['pitch_ceiling'])
             
             if hasattr(self, 'manual_segments') and self.manual_segments:
                 macro_segments = self.manual_segments
@@ -598,7 +586,7 @@ class PhoneticsApp:
                         }
                     else:
                         iid = self.tree_panel.tree.insert(gid, tk.END, text=res['word'] + " (缺失)", tags=('item',))
-                        self.items[iid] = {'label': res['word'], 'group': res['group'], 'snd': None, 'start': 0.0, 'end': 0.0}
+                        self.items[iid] = {'label': res['word'], 'group': res['group'], 'snd': None, 'start': None, 'end': None}
                 
                 self.stop_loading("长音频切分完成")
                 self.tree_panel.select_first_item()
@@ -623,7 +611,7 @@ class PhoneticsApp:
             self.root.after(0, self.tree_panel.clear_all)
             
             total = len(self.pending_batch_paths)
-            params = {'db': self.last_params['db'], 'dur': self.last_params['dur']}
+            params = {'db': self.last_params['db'], 'dur': self.last_params['dur'], 'pitch_floor': self.last_params['pitch_floor'], 'pitch_ceiling': self.last_params['pitch_ceiling']}
             trim = self.switch_trim_silence.get()
             
             results = []
@@ -691,7 +679,7 @@ class PhoneticsApp:
                             tasks.append({'word': word, 'group': group_name, 'missing': True})
 
             results = [None] * len(tasks)
-            params = {'db': self.last_params['db'], 'dur': self.last_params['dur']}
+            params = {'db': self.last_params['db'], 'dur': self.last_params['dur'], 'pitch_floor': self.last_params['pitch_floor'], 'pitch_ceiling': self.last_params['pitch_ceiling']}
             trim = self.switch_trim_silence.get()
             
             with concurrent.futures.ProcessPoolExecutor(max_workers=min(os.cpu_count() or 4, 8)) as executor:
@@ -728,7 +716,7 @@ class PhoneticsApp:
                         suffix = " (未匹配)" if match_mode == 'fuzzy' else " (缺失)"
                         iid = f"missing_{res['label']}_{id(res)}"
                         self.tree_panel.tree.insert(gid, tk.END, iid=iid, text=res['label'] + suffix, tags=('item',))
-                        self.items[iid] = {'label': res['label'], 'group': res['group'], 'snd': None, 'start': 0.0, 'end': 0.0}
+                        self.items[iid] = {'label': res['label'], 'group': res['group'], 'snd': None, 'start': None, 'end': None}
                 
                 self.stop_loading(f"并行处理完成: {matched_count}/{total}")
                 self.tree_panel.select_first_item()
