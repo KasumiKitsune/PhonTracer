@@ -8,9 +8,10 @@ from .data_utils import get_export_text_for_item
 from .ui_widgets import CTkReleaseButton
 
 class ProjectTreePanel:
-    def __init__(self, parent, icons, items_dict, app_state_params, on_item_selected_callback, on_clear_canvas_callback):
+    def __init__(self, parent, icons, items_dict, app_state_params, on_item_selected_callback, on_clear_canvas_callback, tk_icons=None):
         self.parent = parent
         self.icons = icons
+        self.tk_icons = tk_icons or {}
         self.items = items_dict
         self.app_state_params = app_state_params
         self.on_item_selected = on_item_selected_callback
@@ -371,10 +372,66 @@ class ProjectTreePanel:
         self.text_preview.configure(state='normal')
         self.text_preview.delete('1.0', tk.END)
         self.text_preview.insert(tk.END, text)
+        
+        self.text_preview.tag_config("zero", foreground="#EF4444")
+        start_idx = "1.0"
+        while True:
+            pos = self.text_preview.search("0.000000", start_idx, stopindex=tk.END)
+            if not pos: break
+            end_pos = f"{pos}+8c"
+            self.text_preview.tag_add("zero", pos, end_pos)
+            start_idx = end_pos
+            
         self.text_preview.configure(state='disabled')
+    def update_item_icon(self, iid):
+        item = self.items.get(iid)
+        if not item or item.get('start') is None: return
+        has_empty = False
+        num_points = self.app_state_params['pts']
+        if (not item.get('snd') or not item.get('pitch')) and item.get('path'):
+            if item.get('preview_f0'):
+                has_empty = any(f == 0 for f in item['preview_f0'])
+        else:
+            if item.get('snd') and item.get('pitch'):
+                times = np.linspace(item['start'], item['end'], num_points)
+                has_empty = any(np.isnan(item['pitch'].get_value_at_time(t)) or item['pitch'].get_value_at_time(t) == 0 for t in times)
+        
+        img = self.tk_icons.get('warning', '') if has_empty else ''
+        try:
+            self.tree.item(iid, image=img)
+        except tk.TclError:
+            pass
 
     def export_project(self):
         if not self.items: return messagebox.showwarning("提示", "没有可导出的数据。")
+        
+        empty_labels = []
+        num_points = self.app_state_params['pts']
+        for grp_name in self.project_groups:
+            grp_node = self.group_nodes[grp_name]
+            for child in self.tree.get_children(grp_node):
+                if child in self.items:
+                    item = self.items[child]
+                    if item.get('start') is None: continue
+                    has_empty = False
+                    if (not item.get('snd') or not item.get('pitch')) and item.get('path'):
+                        if item.get('preview_f0'):
+                            has_empty = any(f == 0 for f in item['preview_f0'])
+                    else:
+                        if item.get('snd') and item.get('pitch'):
+                            times = np.linspace(item['start'], item['end'], num_points)
+                            has_empty = any(np.isnan(item['pitch'].get_value_at_time(t)) or item['pitch'].get_value_at_time(t) == 0 for t in times)
+                    if has_empty:
+                        empty_labels.append(f"[{grp_name}] {item['label']}")
+        
+        if empty_labels:
+            msg = "以下项目的基频数据包含 0 值（可能无法提取有效声调）：\n\n"
+            msg += "\n".join(empty_labels[:10])
+            if len(empty_labels) > 10: msg += f"\n... 等共 {len(empty_labels)} 项"
+            msg += "\n\n是否继续导出？"
+            if not messagebox.askyesno("空数据警告", msg):
+                return
+                
         out_file = filedialog.asksaveasfilename(
             title="导出全表数据", defaultextension=".txt", initialfile="tone_export_data",
             filetypes=[("CSV 表格", "*.csv"), ("文本文件", "*.txt"), ("所有文件", "*.*")]

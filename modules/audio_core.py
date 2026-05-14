@@ -13,13 +13,15 @@ def macroscopic_vad(snd):
     max_int = np.mean(sorted_vals[-int(len(sorted_vals)*0.05):]) if len(sorted_vals) > 20 else 70
     thresh = max_int - 25 
     is_sp = vals > thresh
-    segs, start =[], None
-    for i, s in enumerate(is_sp):
-        if s and start is None: start = xs[i]
-        elif not s and start is not None:
-            segs.append([start, xs[i]])
-            start = None
-    if start is not None: segs.append([start, xs[-1]])
+    
+    # 使用 numpy 向量化寻找连续区间，避免 Python 循环引发的潜在 GIL 竞争
+    starts_idx = np.where(np.diff(is_sp.astype(int), prepend=0) == 1)[0]
+    ends_idx = np.where(np.diff(is_sp.astype(int), append=0) == -1)[0]
+    
+    segs = []
+    for s_idx, e_idx in zip(starts_idx, ends_idx):
+        if s_idx < len(xs) and e_idx < len(xs):
+            segs.append([xs[s_idx], xs[e_idx]])
     
     merged =[]
     for s in segs:
@@ -66,6 +68,12 @@ def core_microscopic_vowel_nucleus(snd, global_pitch, t_min, t_max, drop_db, min
     except Exception:
         return t_min, t_max
 
+def check_audio_segments(path):
+    """在子进程中检查音频区段数量，避免主线程 GIL 冲突"""
+    import parselmouth
+    snd = parselmouth.Sound(path)
+    return len(macroscopic_vad(snd))
+
 def batch_process_worker(path, params, trim_silence):
     """独立文件处理工人。不返回 parselmouth 对象以避免 Windows 下的 Pickle 错误"""
     import parselmouth
@@ -83,6 +91,7 @@ def batch_process_worker(path, params, trim_silence):
         preview_times = np.linspace(mic_s, mic_e, 11)
         preview_f0 = [pitch.get_value_at_time(t) for t in preview_times]
         preview_f0 = [0.0 if np.isnan(f) else f for f in preview_f0]
+        has_empty_data = any(f == 0.0 for f in preview_f0)
         
         name = os.path.splitext(os.path.basename(path))[0]
         return {
@@ -93,7 +102,8 @@ def batch_process_worker(path, params, trim_silence):
             'start': mic_s,
             'end': mic_e,
             'preview_f0': preview_f0, # 传递数值而非对象
-            'success': True
+            'success': True,
+            'has_empty_data': has_empty_data
         }
     except Exception as e:
         return {'success': False, 'error': str(e), 'path': path}

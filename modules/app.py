@@ -15,7 +15,7 @@ from PIL import Image
 # 导入拆分后的模块
 from .ui_widgets import ToolTip, CTkReleaseButton
 from .data_utils import parse_wordlist, fuzzy_match_word_to_path
-from .audio_core import core_microscopic_vowel_nucleus, batch_process_worker, macroscopic_vad
+from .audio_core import core_microscopic_vowel_nucleus, batch_process_worker, macroscopic_vad, check_audio_segments
 from .visual_splitter import VisualSplitter
 from .spectrogram_panel import SpectrogramPanel
 from .project_tree import ProjectTreePanel
@@ -42,6 +42,7 @@ class PhoneticsApp:
         
         # 全局数据源 (Source of Truth)
         self.items = {}
+        self.audio_cache = {}
         
         self.debounce_timer = None
         
@@ -92,18 +93,20 @@ class PhoneticsApp:
             self.start_loading("正在分析音频区段...")
             def check_audio():
                 try:
-                    snd = parselmouth.Sound(path)
-                    segments = macroscopic_vad(snd)
+                    # 在子进程中运行 parselmouth，避免 C 扩展与主线程 GIL 冲突
+                    with concurrent.futures.ProcessPoolExecutor(max_workers=1) as executor:
+                        future = executor.submit(check_audio_segments, path)
+                        seg_count = future.result()
                     def update_ui():
                         self.stop_loading()
-                        if len(segments) <= 1:
+                        if seg_count <= 1:
                             self.tabview.set("多条独立音频")
                             self.pending_batch_paths = [path]
                             self.lbl_batch_files.configure(text=f"已选 1 个文件 (从拖拽)", text_color="#2563EB")
                             self.lbl_status.configure(text="独立音频就绪", text_color="#10B981")
                         else:
                             self.tabview.set("单条长音频")
-                            self.pending_long_snd = snd
+                            self.pending_long_snd = parselmouth.Sound(path)
                             self.lbl_long_file.configure(text=os.path.basename(path) + " (从拖拽)", text_color="#2563EB")
                             self.lbl_status.configure(text="长音频就绪", text_color="#10B981")
                     self.root.after(0, update_ui)
@@ -115,7 +118,8 @@ class PhoneticsApp:
             self.tabview.set("多条独立音频")
             self.pending_batch_paths = paths
             self.lbl_batch_files.configure(text=f"已选 {len(paths)} 个文件 (从拖拽)", text_color="#2563EB")
-            self.lbl_status.configure(text="独立音频就绪", text_color="#10B981")
+            self.lbl_status.configure(text="独立音频就绪，正在后台分析...", text_color="#10B981")
+            self.start_background_batch_processing(paths)
         
     def setup_icons(self):
         # 预加载所有图标
@@ -133,15 +137,22 @@ class PhoneticsApp:
             "tab_single": "tab_single.png", "tab_batch": "tab_batch.png",
             "status_success": "status_success.png", 
             "status_loading": "status_loading.png", 
-            "status_error": "status_error.png"
+            "status_error": "status_error.png",
+            "warning": "warning.png"
         }
+        from PIL import ImageTk
+        self.tk_icons = {}
         for key, filename in icon_files.items():
             path = os.path.join(icon_path, filename)
             if os.path.exists(path):
                 img = Image.open(path)
                 self.icons[key] = ctk.CTkImage(light_image=img, dark_image=img, size=(20, 20))
+                # Resize for ttk.Treeview
+                img_tk = img.resize((16, 16), Image.Resampling.LANCZOS)
+                self.tk_icons[key] = ImageTk.PhotoImage(img_tk)
             else:
                 self.icons[key] = None
+                self.tk_icons[key] = None
 
         logo_path = os.path.join("assets", "icon.png")
         if not os.path.exists(logo_path):
@@ -292,6 +303,7 @@ class PhoneticsApp:
         self.tree_panel = ProjectTreePanel(
             parent=self.root,
             icons=self.icons,
+            tk_icons=self.tk_icons,
             items_dict=self.items,
             app_state_params=self.last_params,
             on_item_selected_callback=self.on_tree_item_selected,
@@ -315,6 +327,10 @@ class PhoneticsApp:
 
     def on_spectrogram_time_changed(self, item):
         self.tree_panel.update_preview()
+        for iid, it in self.items.items():
+            if it is item:
+                self.tree_panel.update_item_icon(iid)
+                break
 
     def on_export_callback(self):
         self.tree_panel.export_project()
@@ -532,6 +548,7 @@ class PhoneticsApp:
                         item['snd'], item['pitch'], item['macro_start'], item['macro_end']
                     )
                     item['start'], item['end'] = mic_s, mic_e
+                    self.tree_panel.update_item_icon(seg['id'])
             
             self.tree_panel.update_preview()
             if self.spectrogram_panel.current_item:
@@ -567,9 +584,14 @@ class PhoneticsApp:
                     if word_idx < len(macro_segments):
                         ms, me = macro_segments[word_idx]
                         mic_s, mic_e = self._microscopic_vowel_nucleus(snd, global_pitch, ms, me)
+                        
+                        # 检查是否有空数据
+                        times = np.linspace(mic_s, mic_e, 11)
+                        has_empty = any(np.isnan(global_pitch.get_value_at_time(t)) or global_pitch.get_value_at_time(t) == 0 for t in times)
+                        
                         results.append({
                             'word': word, 'group': grp['group'], 'ms': ms, 'me': me,
-                            'mis': mic_s, 'mie': mic_e, 'missing': False
+                            'mis': mic_s, 'mie': mic_e, 'missing': False, 'has_empty_data': has_empty
                         })
                         word_idx += 1
                     else:
@@ -582,7 +604,9 @@ class PhoneticsApp:
                 for res in results:
                     gid = self.tree_panel.ensure_group(res['group'])
                     if not res['missing']:
-                        iid = self.tree_panel.tree.insert(gid, tk.END, text=res['word'], tags=('item',))
+                        has_empty = res.get('has_empty_data', False)
+                        img = self.tk_icons.get('warning', '') if has_empty else ''
+                        iid = self.tree_panel.tree.insert(gid, tk.END, text=res['word'], tags=('item',), image=img)
                         self.items[iid] = {
                             'label': res['word'], 'group': res['group'], 'snd': snd, 'pitch': global_pitch,
                             'macro_start': res['ms'], 'macro_end': res['me'], 
@@ -604,7 +628,34 @@ class PhoneticsApp:
         if not paths: return
         self.pending_batch_paths = paths
         self.lbl_batch_files.configure(text=f"已选 {len(paths)} 个文件", text_color="#2563EB")
-        self.lbl_status.configure(text="独立音频就绪", text_color="#10B981")
+        self.lbl_status.configure(text="独立音频就绪，正在后台分析...", text_color="#10B981")
+        self.start_background_batch_processing(paths)
+
+    def start_background_batch_processing(self, paths):
+        def run():
+            params = {'db': self.last_params['db'], 'dur': self.last_params['dur'], 'pitch_floor': self.last_params['pitch_floor'], 'pitch_ceiling': self.last_params['pitch_ceiling']}
+            trim = self.switch_trim_silence.get()
+            paths_to_process = [p for p in paths if p not in self.audio_cache]
+            if not paths_to_process:
+                self.root.after(0, lambda: self.lbl_status.configure(text="后台分析完成", text_color="#10B981"))
+                return
+            
+            total = len(paths_to_process)
+            self.root.after(0, lambda: self.start_loading(f"正在后台预分析 {total} 个音频..."))
+            
+            with concurrent.futures.ProcessPoolExecutor(max_workers=min(os.cpu_count() or 4, 8)) as executor:
+                futures = {executor.submit(batch_process_worker, p, params, trim): p for p in paths_to_process}
+                for i, future in enumerate(concurrent.futures.as_completed(futures)):
+                    p = futures[future]
+                    try:
+                        self.audio_cache[p] = future.result()
+                    except Exception as e:
+                        self.audio_cache[p] = {'success': False, 'error': str(e), 'path': p}
+                    
+                    self.root.after(0, lambda v=(i+1)/total: self.set_progress(v))
+            
+            self.root.after(0, lambda: self.stop_loading("后台分析完成"))
+        threading.Thread(target=run, daemon=True).start()
 
     def process_batch_direct(self):
         if not self.pending_batch_paths:
@@ -619,15 +670,29 @@ class PhoneticsApp:
             trim = self.switch_trim_silence.get()
             
             results = []
-            with concurrent.futures.ProcessPoolExecutor(max_workers=min(os.cpu_count() or 4, 8)) as executor:
-                futures = {executor.submit(batch_process_worker, p, params, trim): i for i, p in enumerate(self.pending_batch_paths)}
+            futures = {}
+            executor = concurrent.futures.ProcessPoolExecutor(max_workers=min(os.cpu_count() or 4, 8))
+            for i, p in enumerate(self.pending_batch_paths):
+                if p in self.audio_cache:
+                    results.append((i, self.audio_cache[p]))
+                else:
+                    futures[executor.submit(batch_process_worker, p, params, trim)] = i
+                    
+            if futures:
                 for i, future in enumerate(concurrent.futures.as_completed(futures)):
                     orig_idx = futures[future]
-                    try: results.append((orig_idx, future.result()))
+                    try: 
+                        res = future.result()
+                        self.audio_cache[self.pending_batch_paths[orig_idx]] = res
+                        results.append((orig_idx, res))
                     except Exception as e: print(f"Error: {e}")
                     
-                    if i % 2 == 0 or i == total - 1:
-                        self.root.after(0, lambda v=(i+1)/total: self.set_progress(v))
+                    if i % 2 == 0 or i == len(futures) - 1:
+                        self.root.after(0, lambda v=(len(results))/total: self.set_progress(v))
+            else:
+                self.root.after(0, lambda: self.set_progress(1.0))
+            
+            executor.shutdown(wait=False)
 
             def finalize():
                 results.sort(key=lambda x: x[0])
@@ -637,7 +702,9 @@ class PhoneticsApp:
                         res['group'] = "独立文件"
                         iid = f"batch_{res['label']}_{id(res)}"
                         self.items[iid] = res
-                        self.tree_panel.tree.insert(gid, tk.END, iid=iid, text=res['label'], tags=('item',))
+                        has_empty = res.get('has_empty_data', False)
+                        img = self.tk_icons.get('warning', '') if has_empty else ''
+                        self.tree_panel.tree.insert(gid, tk.END, iid=iid, text=res['label'], tags=('item',), image=img)
                 
                 self.set_status(f"批量并行提取完成 ({len(results)}/{total})")
                 self.stop_loading()
@@ -657,16 +724,24 @@ class PhoneticsApp:
             
             tasks = []
             if match_mode == 'fuzzy':
-                available = list(range(len(self.pending_batch_paths)))
+                # 自然排序：确保 1, 2, 10 的顺序
+                import re
+                def natural_sort_key(s):
+                    return [int(text) if text.isdigit() else text.lower()
+                            for text in re.split('([0-9]+)', s)]
+                
+                sorted_paths = sorted(self.pending_batch_paths, key=natural_sort_key)
+                used_indices = set()
+                
                 for grp in groups:
                     group_name = grp['group']
                     for word in grp['items']:
-                        remaining_paths = [self.pending_batch_paths[i] for i in available]
-                        local_idx = fuzzy_match_word_to_path(word, remaining_paths)
-                        if local_idx is not None:
-                            real_idx = available[local_idx]
-                            path = self.pending_batch_paths[real_idx]
-                            available.remove(real_idx)
+                        # 核心修改：不再移除已匹配路径，而是通过 used_indices 优先级来“尽可能”匹配不同文件
+                        # 如果没有更多可选文件，它会自动复用最匹配的那一个
+                        idx = fuzzy_match_word_to_path(word, sorted_paths, used_indices=list(used_indices))
+                        if idx is not None:
+                            path = sorted_paths[idx]
+                            used_indices.add(idx)
                             tasks.append({'word': word, 'group': group_name, 'path': path, 'missing': False})
                         else:
                             tasks.append({'word': word, 'group': group_name, 'missing': True})
@@ -686,24 +761,37 @@ class PhoneticsApp:
             params = {'db': self.last_params['db'], 'dur': self.last_params['dur'], 'pitch_floor': self.last_params['pitch_floor'], 'pitch_ceiling': self.last_params['pitch_ceiling']}
             trim = self.switch_trim_silence.get()
             
-            with concurrent.futures.ProcessPoolExecutor(max_workers=min(os.cpu_count() or 4, 8)) as executor:
-                futures = {executor.submit(batch_process_worker, t['path'], params, trim): i for i, t in enumerate(tasks) if not t['missing']}
-                for i, t in enumerate(tasks):
-                    if t['missing']:
-                        results[i] = {'label': t['word'], 'group': t['group'], 'success': False, 'missing': True}
-                
-                total_futures = len(futures) if futures else 1
-                done_count = 0
-                for i, future in enumerate(concurrent.futures.as_completed(futures)):
+            futures = {}
+            executor = concurrent.futures.ProcessPoolExecutor(max_workers=min(os.cpu_count() or 4, 8))
+            for i, t in enumerate(tasks):
+                if t['missing']:
+                    results[i] = {'label': t['word'], 'group': t['group'], 'success': False, 'missing': True}
+                else:
+                    path = t['path']
+                    if path in self.audio_cache:
+                        res = self.audio_cache[path]
+                        results[i] = {**res, 'missing': False, 'group': t['group']}
+                    else:
+                        futures[executor.submit(batch_process_worker, path, params, trim)] = i
+            
+            total_futures = len(futures) if futures else 1
+            done_count = 0
+            if futures:
+                for future in concurrent.futures.as_completed(futures):
                     orig_idx = futures[future]
                     try:
                         res = future.result()
-                        results[orig_idx] = {**res, 'missing': False}
+                        self.audio_cache[tasks[orig_idx]['path']] = res
+                        results[orig_idx] = {**res, 'missing': False, 'group': tasks[orig_idx]['group']}
                     except Exception as e:
                         results[orig_idx] = {'label': tasks[orig_idx]['word'], 'group': tasks[orig_idx]['group'], 'success': False, 'missing': True, 'error': str(e)}
                     
                     done_count += 1
                     self.root.after(0, lambda v=done_count/total_futures: self.set_progress(v))
+            else:
+                self.root.after(0, lambda: self.set_progress(1.0))
+            
+            executor.shutdown(wait=False)
 
             def finalize():
                 matched_count = 0
@@ -713,7 +801,11 @@ class PhoneticsApp:
                         res['group'] = tasks[i]['group']
                         display = f"{res['label']} ← {os.path.basename(res['path'])}" if match_mode == 'fuzzy' else res['label']
                         iid = f"batch_wl_{res['label']}_{id(res)}"
-                        self.tree_panel.tree.insert(gid, tk.END, iid=iid, text=display, tags=('item',))
+                        
+                        has_empty = res.get('has_empty_data', False)
+                        img = self.tk_icons.get('warning', '') if has_empty else ''
+                        self.tree_panel.tree.insert(gid, tk.END, iid=iid, text=display, tags=('item',), image=img)
+                        
                         self.items[iid] = res
                         matched_count += 1
                     else:

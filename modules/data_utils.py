@@ -21,18 +21,46 @@ def parse_wordlist(raw_text):
     if curr_items: groups.append({"group": curr_group, "items": curr_items})
     return groups, flat_words
 
-def fuzzy_match_word_to_path(word, available_paths):
-    word_lower = word.lower()
-    exact_matches, contains_matches = [],[]
-    for i, p in enumerate(available_paths):
-        fname = os.path.splitext(os.path.basename(p))[0].lower()
-        if fname == word_lower: exact_matches.append(i)
-        elif word_lower in fname or fname in word_lower: contains_matches.append(i)
+def fuzzy_match_word_to_path(word, available_paths, used_indices=None):
+    def clean_str(s):
+        if not s: return ""
+        import re
+        import unicodedata
+        s = s.replace('\ufeff', '')
+        s = unicodedata.normalize('NFC', s)
+        s = re.sub(r'[^\w\u4e00-\u9fa5]|_', '', s)
+        return s.lower().strip()
+        
+    if used_indices is None: used_indices = []
+    word_clean = clean_str(word)
+    if not word_clean: return None
+        
+    exact_matches = []
+    substring_matches = []
     
-    if exact_matches: return exact_matches[0]
-    if contains_matches:
-        contains_matches.sort(key=lambda i: len(os.path.basename(available_paths[i])))
-        return contains_matches[0]
+    for i, p in enumerate(available_paths):
+        fname_raw = os.path.splitext(os.path.basename(p))[0]
+        fname_clean = clean_str(fname_raw)
+        
+        if fname_clean == word_clean:
+            exact_matches.append(i)
+        elif word_clean in fname_clean or fname_clean in word_clean:
+            substring_matches.append(i)
+    
+    def sort_key(idx):
+        # 优先级权重：是否已被使用 (已使用则权重+1000) + 长度差异
+        is_used = 1 if idx in used_indices else 0
+        len_diff = abs(len(os.path.splitext(os.path.basename(available_paths[idx]))[0]) - len(word))
+        return (is_used, len_diff)
+
+    if exact_matches:
+        exact_matches.sort(key=sort_key)
+        return exact_matches[0]
+        
+    if substring_matches:
+        substring_matches.sort(key=sort_key)
+        return substring_matches[0]
+        
     return None
 
 def get_export_text_for_item(item, real_index, num_points):

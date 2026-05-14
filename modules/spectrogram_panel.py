@@ -93,8 +93,13 @@ class SpectrogramPanel:
 
     def load_item(self, item):
         self.current_item = item
-        self.var_t_start.set(f"{item['start']:.3f}")
-        self.var_t_end.set(f"{item['end']:.3f}")
+        # 修复：检查 None 值避免格式化报错
+        t_start = item.get('start')
+        t_end = item.get('end')
+        
+        self.var_t_start.set(f"{t_start:.3f}" if t_start is not None else "0.000")
+        self.var_t_end.set(f"{t_end:.3f}" if t_end is not None else "0.000")
+        
         self.plot_item_spectrogram()
 
     def plot_item_spectrogram(self):
