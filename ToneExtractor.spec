@@ -7,9 +7,40 @@ import customtkinter
 ctk_path = os.path.dirname(customtkinter.__file__)
 
 # 根据平台设置隐藏导入
-hidden_imports = ['parselmouth', 'PIL._tkinter_finder']
+hidden_imports = [
+    'parselmouth', 
+    'PIL._tkinter_finder',
+    'xlsxwriter',
+    'scipy.interpolate',
+    'scipy.signal',
+    'scipy.stats'
+]
 if sys.platform == 'win32':
     hidden_imports.append('windnd')
+
+# 显式排除不需要的大型库，防止环境污染导致包体积过大
+excluded_modules = [
+    'seaborn',
+    'pandas',
+    'matplotlib.tests',
+    'matplotlib.mpl-data',
+    'scipy.spatial.tests',
+    'scipy.stats.tests',
+    'IPython',
+    'jupyter',
+    'notebook',
+    'sqlite3',
+    'numpy.f2py',
+    'tkinter.test',
+    'PIL.ImageQt',
+    'PIL.ImageTk' if sys.platform != 'win32' else '', # Windows 下有时需要，保留
+    'matplotlib.backends.backend_qt5agg',
+    'matplotlib.backends.backend_qt4agg',
+    'matplotlib.backends.backend_qtagg',
+    'matplotlib.backends.backend_wxagg',
+    'matplotlib.backends.backend_gtk3agg',
+    'matplotlib.backends.backend_gtk4agg',
+]
 
 # 根据平台选择图标
 icon_file = 'assets/icon.ico'
@@ -33,9 +64,9 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=[m for m in excluded_modules if m],
     noarchive=False,
-    optimize=0,
+    optimize=2, # 开启字节码优化
 )
 pyz = PYZ(a.pure)
 
@@ -47,7 +78,7 @@ exe = EXE(
     name='ToneExtractor',
     debug=False,
     bootloader_ignore_signals=False,
-    strip=False,
+    strip=True, # 移除符号表
     upx=True,
     console=False,
     disable_windowed_traceback=False,
@@ -61,7 +92,7 @@ coll = COLLECT(
     exe,
     a.binaries,
     a.datas,
-    strip=False,
+    strip=True,
     upx=True,
     upx_exclude=[],
     name='ToneExtractor',

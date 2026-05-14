@@ -728,9 +728,9 @@ class ProjectTreePanel:
 
     def _export_kde_heatmap(self, out_file):
         """导出 KDE 密度热力图：直接从音频提取高密度 F0，按组绘制 KDE"""
-        import seaborn as sns
         from scipy.interpolate import interp1d
         from scipy.signal import savgol_filter
+        from scipy.stats import gaussian_kde
 
         N_DENSE = 100  # 高密度采样点
         group_contours = {}  # {grp_name: [normalized_contour_array, ...]}
@@ -870,9 +870,31 @@ class ProjectTreePanel:
             
             ax = axes_flat[idx]
             contours = norm_contours[grp_name]
-            X = np.tile(x_vals, len(contours))
-            Y = np.concatenate(contours)
-            sns.kdeplot(x=X, y=Y, fill=True, cmap="YlOrRd", bw_adjust=0.5, ax=ax, thresh=0.05)
+            
+            # 使用 scipy 计算 KDE 密度
+            X_all = np.tile(x_vals, len(contours))
+            Y_all = np.concatenate(contours)
+            
+            # 定义网格范围
+            xmin, xmax = 0, 100
+            ymin, ymax = -1, 6
+            
+            # 创建 KDE 模型
+            positions = np.vstack([X_all, Y_all])
+            kernel = gaussian_kde(positions, bw_method=0.3) # 对应 seaborn 的 bw_adjust
+            
+            # 在网格上评估
+            xi, yi = np.mgrid[xmin:xmax:100j, ymin:ymax:100j]
+            zi = kernel(np.vstack([xi.flatten(), yi.flatten()]))
+            zi = zi.reshape(xi.shape)
+            
+            # 使用 matplotlib 绘制，通过设置 levels 过滤掉低密度背景（模仿 seaborn 的 thresh）
+            vmax = zi.max()
+            if vmax > 0:
+                # 从最大值的 5% 开始填充，这样 0 密度区域就是白色背景
+                levels = np.linspace(vmax * 0.05, vmax, 30)
+                ax.contourf(xi, yi, zi, levels=levels, cmap="YlOrRd", extend='neither')
+            
             for c in contours:
                 ax.plot(x_vals, c, color="black", alpha=0.05, linewidth=0.5)
             ax.set_title(grp_name, fontsize=14)
