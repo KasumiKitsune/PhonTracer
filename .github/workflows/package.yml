@@ -1,12 +1,4 @@
-name: Package Application (macOS Only)
-
-# =================================================================
-# 【意图说明】
-# 1. 触发机制：仅支持手动触发 (workflow_dispatch)，禁用了自动触发（如 push 或 tags）。
-# 2. 运行平台：专门为 macOS 设计，使用 macos-latest 运行环境。
-# 3. 功能：打包 Python GUI 程序为 macOS 可执行文件，并上传为 Artifact。
-# 4. 注意事项：此脚本依赖根目录下的 ToneExtractor.spec 和 requirements.txt。
-# =================================================================
+name: Multi-Platform Package
 
 on:
   workflow_dispatch:
@@ -15,10 +7,13 @@ on:
       - 'v*' # 当推送 v1.1.0 等标签时触发自动发布
 
 jobs:
-  build_macos:
-    name: Build and Release for macOS
-    runs-on: macos-latest
-    permissions: # 赋予 Action 创建 Release 的权限
+  build:
+    name: Build for ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest]
+    permissions:
       contents: write
 
     steps:
@@ -40,17 +35,39 @@ jobs:
       run: |
         pyinstaller --noconfirm ToneExtractor.spec
 
+    - name: Create Zip Archive (Windows)
+      if: matrix.os == 'windows-latest'
+      shell: pwsh
+      run: |
+        Compress-Archive -Path dist/ToneExtractor/* -DestinationPath dist/ToneExtractor-Windows.zip
+
+    - name: Create Zip Archive (macOS)
+      if: matrix.os == 'macos-latest'
+      run: |
+        cd dist
+        zip -r ToneExtractor-macOS.zip ToneExtractor/
+
     - name: Create Release and Upload Artifacts
       uses: softprops/action-gh-release@v2
       if: startsWith(github.ref, 'refs/tags/')
       with:
-        files: dist/ToneExtractor/*
-        name: PhonTracer ${{ github.ref_name }}
+        files: |
+          dist/ToneExtractor-Windows.zip
+          dist/ToneExtractor-macOS.zip
+        name: ToneExtractor ${{ github.ref_name }}
         body: |
           ### 🚀 自动化发布
-          - 自动构建 macOS 可执行文件
+          - 平台: ${{ matrix.os }}
+          - 自动构建可执行文件 (Zip 打包)
           - 基于最新代码逻辑与资源路径
         draft: false
         prerelease: false
 
-
+    - name: Upload Artifact (Development)
+      if: "!startsWith(github.ref, 'refs/tags/')"
+      uses: actions/upload-artifact@v4
+      with:
+        name: ToneExtractor-${{ matrix.os }}
+        path: |
+          dist/ToneExtractor-Windows.zip
+          dist/ToneExtractor-macOS.zip

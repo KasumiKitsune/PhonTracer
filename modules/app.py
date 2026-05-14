@@ -1,6 +1,7 @@
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import customtkinter as ctk
+# pyrefly: ignore [missing-import]
 import parselmouth
 import numpy as np
 import sounddevice as sd
@@ -9,7 +10,7 @@ import csv
 import threading
 import concurrent.futures
 from PIL import Image
-import windnd
+
 
 # 导入拆分后的模块
 from modules.ui_widgets import ToolTip, CTkReleaseButton
@@ -60,8 +61,11 @@ class PhoneticsApp:
         self.setup_ui()
         
         # 绑定拖拽事件
-        try: windnd.hook_dropfiles(self.root, func=self.on_files_dropped)
-        except Exception: pass
+        try:
+            import windnd
+            windnd.hook_dropfiles(self.root, func=self.on_files_dropped)
+        except Exception:
+            pass
         
         # 处理初始传入的文件（例如“打开方式”或拖动到图标）
         if initial_files:

@@ -5,4 +5,4 @@ matplotlib
 customtkinter
 pyinstaller
 Pillow
-windnd
+windnd; sys_platform == 'win32'
