@@ -11,7 +11,6 @@ import threading
 import concurrent.futures
 from PIL import Image
 
-
 # 导入拆分后的模块
 from .ui_widgets import ToolTip, CTkReleaseButton
 from .data_utils import parse_wordlist, fuzzy_match_word_to_path
@@ -138,7 +137,9 @@ class PhoneticsApp:
             "status_success": "status_success.png", 
             "status_loading": "status_loading.png", 
             "status_error": "status_error.png",
-            "warning": "warning.png"
+            "warning": "warning.png",
+            "import": "import_file.png", "ai_prompt": "ai_prompt.png", "copy": "copy_icon.png",
+            "import_white": "import_white.png", "copy_white": "copy_white.png"
         }
         from PIL import ImageTk
         self.tk_icons = {}
@@ -544,27 +545,110 @@ class PhoneticsApp:
                     })
             existing_items.sort(key=lambda x: x['start'])
             
-        VisualSplitter(self.root, self.pending_long_snd, self.icons, self.on_visual_split_confirm, existing_items)
+            # 追加剩余的未分配音频段
+            if hasattr(self, 'current_macro_segments') and self.current_macro_segments:
+                num_assigned = len(existing_items)
+                if num_assigned < len(self.current_macro_segments):
+                    for i in range(num_assigned, len(self.current_macro_segments)):
+                        ms, me = self.current_macro_segments[i]
+                        existing_items.append({
+                            'id': None,
+                            'label': f"【未分配段】",
+                            'start': ms,
+                            'end': me
+                        })
+            
+        if existing_items:
+            # 已有字表匹配结果 → 直接进入 edit 模式微调
+            VisualSplitter(self.root, self.pending_long_snd, self.icons, self.on_visual_split_confirm, existing_items=existing_items)
+        else:
+            # 未导入字表 → 先自动跑 VAD，然后进入 review 模式
+            def run_vad():
+                self.root.after(0, lambda: self.start_loading("正在自动检测音频区段..."))
+                try:
+                    vad_segs = macroscopic_vad(self.pending_long_snd)
+                    def open_splitter():
+                        self.stop_loading(f"检测到 {len(vad_segs)} 个区段")
+                        VisualSplitter(self.root, self.pending_long_snd, self.icons, 
+                                      self.on_visual_split_confirm, vad_segments=vad_segs)
+                    self.root.after(0, open_splitter)
+                except Exception as e:
+                    self.root.after(0, lambda: self.stop_loading(f"检测失败: {e}"))
+            threading.Thread(target=run_vad, daemon=True).start()
 
-    def on_visual_split_confirm(self, segments, is_update=False):
+    def on_visual_split_confirm(self, segments, is_update=False, deleted_count=0):
         if is_update:
-            for seg in segments:
-                if 'id' in seg and seg['id'] in self.items:
-                    item = self.items[seg['id']]
+            # segments 包含了所有的有效段映射：{'id': new_iid, 'old_id': old_iid, 'start', 'end', 'is_modified'}
+            mapped_segs = {seg['id']: seg for seg in segments}
+            
+            # 备份旧的 micro 边界，以便在未修改宏观边界时重用（避免覆盖手动微调且节省算力）
+            old_micro_bounds = {}
+            for iid, item in self.items.items():
+                if item.get('start') is not None and item.get('end') is not None:
+                    old_micro_bounds[iid] = (item['start'], item['end'])
+            
+            # 1. 收集树中所有的 word items (保持顺序)
+            all_iids = []
+            for grp_name in self.tree_panel.project_groups:
+                grp_node = self.tree_panel.group_nodes[grp_name]
+                for child in self.tree_panel.tree.get_children(grp_node):
+                    if child in self.items:
+                        all_iids.append(child)
+            
+            # 2. 应用映射
+            for iid in all_iids:
+                item = self.items[iid]
+                if iid in mapped_segs:
+                    # 有对应的音频段
+                    seg = mapped_segs[iid]
                     item['macro_start'] = seg['start']
                     item['macro_end'] = seg['end']
-                    mic_s, mic_e = self._microscopic_vowel_nucleus(
-                        item['snd'], item['pitch'], item['macro_start'], item['macro_end']
-                    )
-                    item['start'], item['end'] = mic_s, mic_e
-                    self.tree_panel.update_item_icon(seg['id'])
+                    
+                    # 恢复 snd 和 pitch（如果之前是缺失状态，需要从 pending_long_snd 获取）
+                    if not item.get('snd'):
+                        item['snd'] = self.pending_long_snd
+                        item['pitch'] = item['snd'].to_pitch(
+                            pitch_floor=self.last_params['pitch_floor'], 
+                            pitch_ceiling=self.last_params['pitch_ceiling']
+                        )
+                    
+                    # 核心优化：如果该音频段没有被拖拽修改边界，且原来就有微观边界，直接继承！
+                    if not seg.get('is_modified') and seg.get('old_id') and seg['old_id'] in old_micro_bounds:
+                        item['start'], item['end'] = old_micro_bounds[seg['old_id']]
+                    else:
+                        mic_s, mic_e = self._microscopic_vowel_nucleus(
+                            item['snd'], item['pitch'], item['macro_start'], item['macro_end']
+                        )
+                        item['start'], item['end'] = mic_s, mic_e
+                    
+                    # 移除可能的 "(缺失)" 后缀
+                    if item['label'].endswith(" (缺失)"):
+                        item['label'] = item['label'].replace(" (缺失)", "")
+                    self.tree_panel.tree.item(iid, text=item['label'])
+                    self.tree_panel.update_item_icon(iid)
+                else:
+                    # 音频段不够了，标记为缺失
+                    item['snd'] = None
+                    item['pitch'] = None
+                    item['macro_start'] = None
+                    item['macro_end'] = None
+                    item['start'] = None
+                    item['end'] = None
+                    
+                    if not item['label'].endswith(" (缺失)"):
+                        self.tree_panel.tree.item(iid, text=item['label'] + " (缺失)")
+                    self.tree_panel.tree.item(iid, image='')
+
+            if self.spectrogram_panel.current_item:
+                self.spectrogram_panel.clear_canvas()
+            
+            # 3. 更新全局的宏观区段记录，以便下次打开时仍能顺延
+            self.current_macro_segments = [(seg['start'], seg['end']) for seg in segments]
             
             self.tree_panel.update_preview()
-            if self.spectrogram_panel.current_item:
-                self.spectrogram_panel.plot_item_spectrogram() 
-                self.spectrogram_panel.update_ui_times()
-                
-            messagebox.showinfo("提示", "手动微调已应用，时间边界已更新。")
+            
+            deleted_msg = f"\n由于您删除了音频段，后续字表已自动向前顺延对齐。" if deleted_count else ""
+            messagebox.showinfo("提示", f"手动微调已应用，时间边界已更新。{deleted_msg}")
         else:
             self.manual_segments = segments
             messagebox.showinfo("提示", f"全新手动切分完成，共 {len(segments)} 个片段。\n现在请点击“导入字表并切分”来匹配文本。")
@@ -585,6 +669,7 @@ class PhoneticsApp:
             else:
                 macro_segments = macroscopic_vad(snd)
             
+            self.current_macro_segments = macro_segments.copy()
             total = len(flat_words)
             results = []
             word_idx = 0
@@ -745,8 +830,6 @@ class PhoneticsApp:
                 for grp in groups:
                     group_name = grp['group']
                     for word in grp['items']:
-                        # 核心修改：不再移除已匹配路径，而是通过 used_indices 优先级来“尽可能”匹配不同文件
-                        # 如果没有更多可选文件，它会自动复用最匹配的那一个
                         idx = fuzzy_match_word_to_path(word, sorted_paths, used_indices=list(used_indices))
                         if idx is not None:
                             path = sorted_paths[idx]
@@ -830,18 +913,70 @@ class PhoneticsApp:
         threading.Thread(target=run, daemon=True).start()
 
     def open_text_dialog(self, mode):
-        if mode == 'long' and not self.pending_long_snd: return messagebox.showwarning("提示", "请先导入一条长音频。")
-        if mode == 'batch' and not self.pending_batch_paths: return messagebox.showwarning("提示", "请先选择独立音频。")
+        """完全重构后的文本导入对话框"""
+        if mode == 'long' and not self.pending_long_snd: 
+            return messagebox.showwarning("提示", "请先导入一条长音频。")
+        if mode == 'batch' and not self.pending_batch_paths: 
+            return messagebox.showwarning("提示", "请先选择独立音频。")
             
         dlg = ctk.CTkToplevel(self.root)
         dlg.title("导入字表")
-        dlg.geometry("400x520" if mode == 'batch' else "360x450")
-        dlg.attributes('-topmost', True)
+        dlg.geometry("450x600" if mode == 'batch' else "450x520")
+        dlg.transient(self.root)  # 关键：设置为父窗口的临时窗口，使其保持在父窗口上方
+        dlg.focus_set()           # 自动获取焦点
         
-        ctk.CTkLabel(dlg, text="请粘贴文本字表，组别前加【】或 #：\n\n【阴平】\n八\n【阳平】\n拔", justify=tk.LEFT, text_color="#374151").pack(pady=(15, 10))
-        text_box = ctk.CTkTextbox(dlg, width=320, height=200, corner_radius=8, border_width=1, border_color="#D1D5DB")
-        text_box.pack(padx=20, pady=5)
+        # 1. 顶部工具栏 (导入文件 / 复制AI提示词)
+        toolbar = ctk.CTkFrame(dlg, fg_color="transparent")
+        toolbar.pack(fill=tk.X, padx=20, pady=(15, 5))
         
+        def load_txt():
+            path = filedialog.askopenfilename(filetypes=[("Text/CSV Files", "*.txt *.csv"), ("All Files", "*.*")])
+            if not path: return
+            try:
+                with open(path, 'r', encoding='utf-8') as f: text = f.read()
+            except UnicodeDecodeError:
+                try:
+                    with open(path, 'r', encoding='gbk') as f: text = f.read()
+                except Exception as e:
+                    return messagebox.showerror("错误", f"读取文件失败: {e}")
+            text_box.delete("1.0", tk.END)
+            text_box.insert("1.0", text)
+            update_stats()
+
+        def copy_prompt():
+            prompt = "请帮我把下面这段字表转换成特定格式：\n1. 每个组别名称用【】包裹并独占一行\n2. 组别下的字跟在组别名称下面，可以一行一个字，也可以用空格或逗号分隔\n3. 去除所有不相关的序号、拼音和多余的空行\n\n示例输出格式：\n【阴平】\n八 扒 吧\n【阳平】\n拔 跋\n\n以下是我的原始字表，请直接返回转换后的结果即可：\n\n[在此处粘贴你的字表]"
+            self.root.clipboard_clear()
+            self.root.clipboard_append(prompt)
+            messagebox.showinfo("成功", "AI 整理提示词已复制！\n您可以前往 ChatGPT / 豆包 / DeepSeek 等平台粘贴使用。", parent=dlg)
+
+        btn_import = ctk.CTkButton(toolbar, text=" 导入 .txt文件", image=self.icons.get("import_white"), compound="left", 
+                                   width=110, height=28, corner_radius=14, fg_color="#3B82F6", text_color="white", 
+                                   hover_color="#2563EB", command=load_txt)
+        btn_import.pack(side=tk.LEFT)
+        btn_prompt = ctk.CTkButton(toolbar, text=" 复制 AI 整理提示词", image=self.icons.get("copy_white"), compound="left", 
+                                   width=150, height=28, corner_radius=14, fg_color="#F59E0B", text_color="white", 
+                                   hover_color="#D97706", command=copy_prompt)
+        btn_prompt.pack(side=tk.LEFT, padx=10)
+        
+        # 2. 文本输入区
+        ctk.CTkLabel(dlg, text="请粘贴文本或导入文件，组别前加【】或 #：\n示例格式：\n【阴平】\n八 扒 吧 (支持空格/逗号拆分多个字)", justify=tk.LEFT, text_color="#374151").pack(pady=(5, 5), anchor="w", padx=20)
+        
+        text_box = ctk.CTkTextbox(dlg, width=380, height=220, corner_radius=8, border_width=1, border_color="#D1D5DB")
+        text_box.pack(padx=20, pady=5, fill=tk.BOTH, expand=True)
+        
+        # 3. 实时统计栏
+        lbl_stats = ctk.CTkLabel(dlg, text="实时统计：已识别 0 个组别 | 0 个单字", text_color="#6B7280", font=("Microsoft YaHei", 12))
+        lbl_stats.pack(pady=(0, 10), padx=20, anchor="w")
+
+        def update_stats(event=None):
+            raw_text = text_box.get("1.0", tk.END)
+            groups, flat_words = parse_wordlist(raw_text)
+            color = "#10B981" if flat_words else "#6B7280"
+            lbl_stats.configure(text=f"实时统计：已识别 {len(groups)} 个组别 | {len(flat_words)} 个单字", text_color=color)
+            
+        text_box.bind("<KeyRelease>", update_stats)
+        
+        # 4. 匹配参数区
         match_mode_var = ctk.StringVar(value="fuzzy")
         if mode == 'batch':
             frame_match = ctk.CTkFrame(dlg, fg_color="#F3F4F6", corner_radius=8)
@@ -850,10 +985,34 @@ class PhoneticsApp:
             ctk.CTkRadioButton(frame_match, text="模糊匹配 (按文件名自动识别)", variable=match_mode_var, value="fuzzy").pack(anchor=tk.W, padx=15, pady=5)
             ctk.CTkRadioButton(frame_match, text="顺序匹配 (按字表顺序依次对应)", variable=match_mode_var, value="order").pack(anchor=tk.W, padx=15, pady=(0, 10))
         
+        # 5. 执行处理与防错预检
         def process():
             raw_text = text_box.get("1.0", tk.END)
+            groups, flat_words = parse_wordlist(raw_text)
+            
+            if not flat_words:
+                return messagebox.showwarning("提示", "未识别到任何单字，请检查文本格式。")
+                
+            # --- 防呆设计：字数与音频数匹配预检 ---
+            if mode == 'batch':
+                audio_count = len(self.pending_batch_paths)
+                word_count = len(flat_words)
+                if audio_count != word_count:
+                    if not messagebox.askyesno("数量不匹配警告", f"检测到 {audio_count} 个独立音频文件，但字表内包含 {word_count} 个单字。\n\n数量不一致可能导致映射错位或部分缺失，是否继续强制提取？"):
+                        return
+            elif mode == 'long':
+                if hasattr(self, 'manual_segments') and self.manual_segments:
+                    seg_count = len(self.manual_segments)
+                    word_count = len(flat_words)
+                    if seg_count != word_count:
+                        if not messagebox.askyesno("数量不匹配警告", f"您刚才手动切分了 {seg_count} 个片段，但字表内包含 {word_count} 个单字。\n\n数量不一致将导致音频与文本错位，是否继续强制提取？"):
+                            return
+                            
             dlg.destroy()
             if mode == 'long': self.process_long_with_wordlist(raw_text)
             else: self.process_batch_with_wordlist(raw_text, match_mode=match_mode_var.get())
             
         CTkReleaseButton(dlg, text="开始匹配提取", command=process, corner_radius=20, height=40, font=self.font_main).pack(pady=15)
+        
+        # 初始触发一次统计
+        update_stats()

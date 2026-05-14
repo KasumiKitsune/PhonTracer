@@ -1,6 +1,7 @@
 import os
 import numpy as np
 import parselmouth
+import re  # 新增正则库用于支持多种分隔符拆分
 
 def parse_wordlist(raw_text):
     groups = []
@@ -16,8 +17,11 @@ def parse_wordlist(raw_text):
                 curr_items = []
             curr_group = line.replace('【', '').replace('】', '').replace('[', '').replace(']', '').replace('#', '').strip()
         else:
-            curr_items.append(line)
-            flat_words.append(line)
+            # 核心修改：支持一行多个字，通过空格、制表符、中英文逗号、顿号灵活拆分
+            words = [w.strip() for w in re.split(r'[,\s\t，、]+', line) if w.strip()]
+            curr_items.extend(words)
+            flat_words.extend(words)
+            
     if curr_items: groups.append({"group": curr_group, "items": curr_items})
     return groups, flat_words
 
