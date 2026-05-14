@@ -4,8 +4,8 @@ import customtkinter as ctk
 import csv
 import parselmouth
 import numpy as np
-from modules.data_utils import get_export_text_for_item
-from modules.ui_widgets import CTkReleaseButton
+from .data_utils import get_export_text_for_item
+from .ui_widgets import CTkReleaseButton
 
 class ProjectTreePanel:
     def __init__(self, parent, icons, items_dict, app_state_params, on_item_selected_callback, on_clear_canvas_callback):

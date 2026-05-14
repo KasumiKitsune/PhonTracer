@@ -6,8 +6,8 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import numpy as np
 import sounddevice as sd
 import parselmouth
-from modules.audio_core import SILENCE_AMPLITUDE_THRESHOLD
-from modules.ui_widgets import CTkReleaseButton
+from .audio_core import SILENCE_AMPLITUDE_THRESHOLD
+from .ui_widgets import CTkReleaseButton
 
 class SpectrogramPanel:
     def __init__(self, parent, icons, on_time_changed_callback, on_auto_detect_callback, on_export_callback):

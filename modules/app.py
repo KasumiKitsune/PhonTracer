@@ -13,12 +13,12 @@ from PIL import Image
 
 
 # 导入拆分后的模块
-from modules.ui_widgets import ToolTip, CTkReleaseButton
-from modules.data_utils import parse_wordlist, fuzzy_match_word_to_path
-from modules.audio_core import core_microscopic_vowel_nucleus, batch_process_worker, macroscopic_vad
-from modules.visual_splitter import VisualSplitter
-from modules.spectrogram_panel import SpectrogramPanel
-from modules.project_tree import ProjectTreePanel
+from .ui_widgets import ToolTip, CTkReleaseButton
+from .data_utils import parse_wordlist, fuzzy_match_word_to_path
+from .audio_core import core_microscopic_vowel_nucleus, batch_process_worker, macroscopic_vad
+from .visual_splitter import VisualSplitter
+from .spectrogram_panel import SpectrogramPanel
+from .project_tree import ProjectTreePanel
 
 class PhoneticsApp:
     def __init__(self, root, initial_files=None):

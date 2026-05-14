@@ -4,7 +4,7 @@ import customtkinter as ctk
 import numpy as np
 import parselmouth
 import sounddevice as sd
-from modules.ui_widgets import CTkReleaseButton
+from .ui_widgets import CTkReleaseButton
 
 class VisualSplitter(ctk.CTkToplevel):
     def __init__(self, master, snd, icons, callback, existing_items=None):
