@@ -5,6 +5,7 @@ import csv
 import parselmouth
 import numpy as np
 import math
+import matplotlib.pyplot as plt
 from .data_utils import get_export_text_for_item
 from .ui_widgets import CTkReleaseButton
 
@@ -433,20 +434,64 @@ class ProjectTreePanel:
             if not messagebox.askyesno("空数据警告", msg):
                 return
                 
-        out_file = filedialog.asksaveasfilename(
-            title="导出全表数据", defaultextension=".txt", initialfile="tone_export_data",
-            filetypes=[("Excel 表格", "*.xlsx"), ("文本文件", "*.txt"), ("所有文件", "*.*")]
-        )
-        if not out_file: return
-        try:
-            if out_file.lower().endswith(".xlsx"):
-                # 弹出询问是否包含图表
-                include_chart = messagebox.askyesno("导出设置", "是否在 Excel 中包含分析图表？\n(包含图表可能在部分旧版 Office 中打开较慢)", default=messagebox.NO)
-                self._export_xlsx(out_file, include_chart=include_chart)
-            else:
-                self._export_txt(out_file)
-            messagebox.showinfo("成功", f"数据已导出至:\n{out_file}")
-        except Exception as e: messagebox.showerror("错误", str(e))
+        # 弹出导出选择菜单
+        self._show_export_menu()
+
+    def _show_export_menu(self):
+        """弹出导出格式选择对话框"""
+        dlg = ctk.CTkToplevel(self.parent)
+        dlg.title("选择导出格式")
+        dlg.geometry("320x320")
+        dlg.attributes('-topmost', True)
+        dlg.resizable(False, False)
+        
+        # 居中显示
+        dlg.update_idletasks()
+        main_win = self.parent.winfo_toplevel()
+        x = main_win.winfo_rootx() + (main_win.winfo_width() - 320) // 2
+        y = main_win.winfo_rooty() + (main_win.winfo_height() - 320) // 2
+        dlg.geometry(f"+{x}+{y}")
+        
+        ctk.CTkLabel(dlg, text="请选择导出格式", font=self.font_title, text_color="#111827").pack(pady=(20, 15))
+        
+        btn_kwargs = {"corner_radius": 12, "height": 44, "font": self.font_main, "anchor": "w", "compound": "left"}
+        
+        def do_export(mode):
+            dlg.destroy()
+            if mode == 'txt':
+                out_file = filedialog.asksaveasfilename(title="导出文本", defaultextension=".txt", initialfile="tone_export_data", filetypes=[("文本文件", "*.txt")])
+                if not out_file: return
+                try:
+                    self._export_txt(out_file)
+                    messagebox.showinfo("成功", f"数据已导出至:\n{out_file}")
+                except Exception as e: messagebox.showerror("错误", str(e))
+            elif mode == 'xlsx':
+                out_file = filedialog.asksaveasfilename(title="导出Excel", defaultextension=".xlsx", initialfile="tone_export_data", filetypes=[("Excel 表格", "*.xlsx")])
+                if not out_file: return
+                try:
+                    include_chart = messagebox.askyesno("导出设置", "是否在 Excel 中包含分析图表？\n(包含图表可能在部分旧版 Office 中打开较慢)", default=messagebox.NO)
+                    self._export_xlsx(out_file, include_chart=include_chart)
+                    messagebox.showinfo("成功", f"数据已导出至:\n{out_file}")
+                except Exception as e: messagebox.showerror("错误", str(e))
+            elif mode == 'line_chart':
+                out_file = filedialog.asksaveasfilename(title="导出折线图", defaultextension=".png", initialfile="tone_line_chart", filetypes=[("PNG 图片", "*.png"), ("SVG 矢量图", "*.svg"), ("PDF 文档", "*.pdf")])
+                if not out_file: return
+                try:
+                    self._export_line_chart(out_file)
+                    messagebox.showinfo("成功", f"图表已导出至:\n{out_file}")
+                except Exception as e: messagebox.showerror("错误", str(e))
+            elif mode == 'kde':
+                out_file = filedialog.asksaveasfilename(title="导出KDE热力图", defaultextension=".png", initialfile="tone_kde_heatmap", filetypes=[("PNG 图片", "*.png"), ("SVG 矢量图", "*.svg"), ("PDF 文档", "*.pdf")])
+                if not out_file: return
+                try:
+                    self._export_kde_heatmap(out_file)
+                    messagebox.showinfo("成功", f"热力图已导出至:\n{out_file}")
+                except Exception as e: messagebox.showerror("错误", str(e))
+        
+        ctk.CTkButton(dlg, text="  📄  文本文件 (.txt)", command=lambda: do_export('txt'), fg_color="#F3F4F6", text_color="#374151", hover_color="#E5E7EB", **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
+        ctk.CTkButton(dlg, text="  📊  Excel 表格 (.xlsx)", command=lambda: do_export('xlsx'), fg_color="#ECFDF5", text_color="#047857", hover_color="#D1FAE5", **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
+        ctk.CTkButton(dlg, text="  📈  声调格局折线图", command=lambda: do_export('line_chart'), fg_color="#EFF6FF", text_color="#1E40AF", hover_color="#DBEAFE", **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
+        ctk.CTkButton(dlg, text="  🔥  KDE 密度热力图", command=lambda: do_export('kde'), fg_color="#FFF7ED", text_color="#9A3412", hover_color="#FFEDD5", **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
 
     def _export_xlsx(self, out_file, include_chart=False):
         try:
@@ -596,3 +641,254 @@ class ProjectTreePanel:
                             f.write(txt_data)
                             global_idx += 1
 
+    def _collect_group_avg_data(self):
+        """收集各组均值数据，返回 (group_name, t_values_list) 和 min/max_hz"""
+        num_points = self.app_state_params['pts']
+        raw_data = []
+        for grp_name in self.project_groups:
+            grp_node = self.group_nodes[grp_name]
+            for child in self.tree.get_children(grp_node):
+                if child not in self.items: continue
+                item = self.items[child]
+                if (not item.get('snd') or not item.get('pitch')) and item.get('path'):
+                    try:
+                        item['snd'] = parselmouth.Sound(item['path'])
+                        item['pitch'] = item['snd'].to_pitch()
+                    except Exception: continue
+                if item.get('start') is None or not item.get('snd'): continue
+                t_s, t_e = item['start'], item['end']
+                if t_e - t_s <= 0: continue
+                times = np.linspace(t_s, t_e, num_points)
+                hz_vals = [item['pitch'].get_value_at_time(t) for t in times]
+                raw_data.append([grp_name] + hz_vals)
+
+        dict_data, tone_counts = {}, {}
+        for r in raw_data:
+            name = r[0]
+            if name not in dict_data:
+                dict_data[name] = [0.0] * num_points
+                tone_counts[name] = 0
+            for i in range(num_points):
+                val = r[i+1]
+                if not np.isnan(val) and val > 0: dict_data[name][i] += val
+            tone_counts[name] += 1
+
+        avg_points = {}
+        all_avg_hz = []
+        for k, v in dict_data.items():
+            count = tone_counts[k]
+            avg_points[k] = [v[j] / count if count > 0 else 0 for j in range(num_points)]
+            all_avg_hz.extend([h for h in avg_points[k] if h > 0])
+
+        if not all_avg_hz: return None
+        min_hz, max_hz = min(all_avg_hz), max(all_avg_hz)
+
+        result = {}
+        for k, avgs in avg_points.items():
+            t_vals = []
+            for h in avgs:
+                if h > 0 and max_hz > min_hz and min_hz > 0:
+                    t_vals.append(5 * (math.log10(h) - math.log10(min_hz)) / (math.log10(max_hz) - math.log10(min_hz)))
+                else:
+                    t_vals.append(None)
+            result[k] = t_vals
+        return result
+
+    def _export_line_chart(self, out_file):
+        """导出声调格局折线图 (PNG/SVG/PDF)"""
+        data = self._collect_group_avg_data()
+        if not data: return messagebox.showwarning("提示", "没有有效数据可供绘图。")
+
+        num_points = self.app_state_params['pts']
+        plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
+        plt.rcParams['axes.unicode_minus'] = False
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        x_vals = list(range(1, num_points + 1))
+
+        colors = ['#2563EB', '#DC2626', '#16A34A', '#9333EA', '#EA580C', '#0891B2', '#CA8A04', '#6366F1']
+        for i, (name, t_vals) in enumerate(data.items()):
+            valid_x = [x for x, v in zip(x_vals, t_vals) if v is not None]
+            valid_y = [v for v in t_vals if v is not None]
+            if valid_x:
+                ax.plot(valid_x, valid_y, '-o', color=colors[i % len(colors)], linewidth=2, markersize=5, label=name)
+
+        ax.set_ylim(0, 5)
+        ax.set_xlim(0.5, num_points + 0.5)
+        ax.set_xlabel('测量点', fontsize=12)
+        ax.set_ylabel('T 值 (0-5 标度)', fontsize=12)
+        ax.set_title('声调格局图', fontsize=16, fontweight='bold')
+        ax.legend(loc='best', fontsize=10)
+        ax.grid(True, alpha=0.3)
+        ax.set_yticks([0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5])
+
+        fig.tight_layout()
+        fig.savefig(out_file, dpi=300, bbox_inches='tight')
+        plt.close(fig)
+
+    def _export_kde_heatmap(self, out_file):
+        """导出 KDE 密度热力图：直接从音频提取高密度 F0，按组绘制 KDE"""
+        import seaborn as sns
+        from scipy.interpolate import interp1d
+        from scipy.signal import savgol_filter
+
+        N_DENSE = 100  # 高密度采样点
+        group_contours = {}  # {grp_name: [normalized_contour_array, ...]}
+
+        # 创建进度条弹窗
+        prog_dlg = ctk.CTkToplevel(self.parent)
+        prog_dlg.title("正在导出")
+        prog_dlg.geometry("300x120")
+        prog_dlg.attributes('-topmost', True)
+        prog_dlg.resizable(False, False)
+        
+        prog_dlg.update_idletasks()
+        main_win = self.parent.winfo_toplevel()
+        px = main_win.winfo_rootx() + (main_win.winfo_width() - 300) // 2
+        py = main_win.winfo_rooty() + (main_win.winfo_height() - 120) // 2
+        prog_dlg.geometry(f"+{px}+{py}")
+        
+        lbl_status = ctk.CTkLabel(prog_dlg, text="正在处理数据，请稍候...", font=self.font_main)
+        lbl_status.pack(pady=(20, 5))
+        pbar = ctk.CTkProgressBar(prog_dlg, width=250)
+        pbar.pack()
+        pbar.set(0)
+        prog_dlg.update()
+
+        # 收集全局 min/max F0 用于归一化
+        all_raw_f0 = []
+        
+        total_items = sum(len(self.tree.get_children(self.group_nodes[g])) for g in self.project_groups)
+        processed = 0
+
+        for grp_name in self.project_groups:
+            grp_node = self.group_nodes[grp_name]
+            group_contours[grp_name] = []
+            for child in self.tree.get_children(grp_node):
+                processed += 1
+                # 提高颗粒度：每处理一个就更新进度，且数据处理占总进度的 70%
+                pbar.set(0.7 * (processed / total_items))
+                prog_dlg.update()
+                    
+                if child not in self.items: continue
+                item = self.items[child]
+                # 确保音频已加载
+                if (not item.get('snd') or not item.get('pitch')) and item.get('path'):
+                    try:
+                        item['snd'] = parselmouth.Sound(item['path'])
+                        item['pitch'] = item['snd'].to_pitch(
+                            pitch_floor=self.app_state_params.get('pitch_floor', 75),
+                            pitch_ceiling=self.app_state_params.get('pitch_ceiling', 600)
+                        )
+                    except Exception: continue
+                if item.get('start') is None or not item.get('snd') or not item.get('pitch'): continue
+
+                t_s, t_e = item['start'], item['end']
+                if t_e - t_s <= 0: continue
+
+                pitch = item['pitch']
+                xs = pitch.xs()
+                freqs = pitch.selected_array['frequency']
+                mask = (xs >= t_s) & (xs <= t_e) & (freqs > 0)
+                valid_freqs = freqs[mask]
+
+                if len(valid_freqs) < 3: continue
+
+                # Savitzky-Golay 平滑
+                win = len(valid_freqs) // 3
+                if win % 2 == 0: win += 1
+                if win < 3: win = 3
+                if len(valid_freqs) > win:
+                    smoothed = savgol_filter(valid_freqs, win, 2)
+                else:
+                    smoothed = valid_freqs
+
+                # 插值到 N_DENSE 点
+                x_orig = np.linspace(0, 1, len(smoothed))
+                f_interp = interp1d(x_orig, smoothed, kind='linear')
+                contour = f_interp(np.linspace(0, 1, N_DENSE))
+
+                group_contours[grp_name].append(contour)
+                all_raw_f0.extend(contour.tolist())
+
+        if not all_raw_f0:
+            return messagebox.showwarning("提示", "没有有效的音频数据可供绘制热力图。")
+
+        # 使用各组均值的 min/max 做归一化（与折线图一致）
+        group_means = {}
+        all_mean_vals = []
+        for name, contours in group_contours.items():
+            if contours:
+                mean_contour = np.mean(contours, axis=0)
+                group_means[name] = mean_contour
+                all_mean_vals.extend(mean_contour.tolist())
+        
+        if not all_mean_vals:
+            return messagebox.showwarning("提示", "没有有效数据可供绘制热力图。")
+            
+        min_f0 = min(all_mean_vals)
+        max_f0 = max(all_mean_vals)
+
+        lbl_status.configure(text="正在进行数据归一化...")
+        pbar.set(0.75)
+        prog_dlg.update()
+
+        def hz_to_5_scale(hz):
+            # 取消 clip 限制，让自然数据延伸出 0-5 边界，防止 KDE 在边界处发生密度截断堆积
+            if max_f0 == min_f0: return 3.0
+            return 5 * (np.log(hz) - np.log(min_f0)) / (np.log(max_f0) - np.log(min_f0))
+
+        # 对所有 contour 做归一化
+        norm_contours = {}
+        for name, contours in group_contours.items():
+            norm_contours[name] = [np.array([hz_to_5_scale(h) for h in c]) for c in contours]
+            
+        pbar.set(0.8)
+        prog_dlg.update()
+
+        # 绘图
+        plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
+        plt.rcParams['axes.unicode_minus'] = False
+
+        groups_with_data = [g for g in self.project_groups if norm_contours.get(g)]
+        n_groups = len(groups_with_data)
+        if n_groups == 0:
+            prog_dlg.destroy()
+            return messagebox.showwarning("提示", "没有有效数据可供绘制热力图。")
+
+        n_cols = min(4, n_groups)
+        n_rows = math.ceil(n_groups / n_cols)
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(5 * n_cols, 5 * n_rows), squeeze=False, sharex=True, sharey=True)
+        axes_flat = axes.flatten()
+
+        x_vals = np.linspace(0, 100, N_DENSE)
+        for idx, grp_name in enumerate(groups_with_data):
+            lbl_status.configure(text=f"正在绘制 {grp_name} ({idx+1}/{n_groups})...")
+            # 绘图过程占剩余的 20%
+            pbar.set(0.8 + 0.2 * (idx / n_groups))
+            prog_dlg.update()
+            
+            ax = axes_flat[idx]
+            contours = norm_contours[grp_name]
+            X = np.tile(x_vals, len(contours))
+            Y = np.concatenate(contours)
+            sns.kdeplot(x=X, y=Y, fill=True, cmap="YlOrRd", bw_adjust=0.5, ax=ax, thresh=0.05)
+            for c in contours:
+                ax.plot(x_vals, c, color="black", alpha=0.05, linewidth=0.5)
+            ax.set_title(grp_name, fontsize=14)
+            # 扩展 y 轴显示范围，容纳未 clip 的自然极值点
+            ax.set_ylim(-1, 6)
+            ax.set_xlim(0, 100)
+            ax.set_yticks([-1, 0, 1, 2, 3, 4, 5, 6])
+            ax.set_ylabel('T 值')
+            ax.set_xlabel('归一化时间 (%)')
+
+        # 隐藏多余的子图
+        for idx in range(n_groups, len(axes_flat)):
+            axes_flat[idx].set_visible(False)
+
+        fig.suptitle('声调 KDE 密度热力图', fontsize=18, fontweight='bold', y=1.02)
+        fig.tight_layout()
+        fig.savefig(out_file, dpi=300, bbox_inches='tight')
+        plt.close(fig)
+        prog_dlg.destroy()
