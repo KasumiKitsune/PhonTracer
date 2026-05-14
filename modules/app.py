@@ -387,7 +387,7 @@ class PhoneticsApp:
                 val = int(self.entry_pitch_ceiling.get())
                 if val != self.last_params['pitch_ceiling']:
                     self.last_params['pitch_ceiling'] = val
-        except: pass
+        except Exception: pass
 
     def set_status(self, text, color="#10B981", icon_key="status_success"):
         self.lbl_status.configure(text=f" {text}", text_color=color, image=self.icons.get(icon_key))

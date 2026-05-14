@@ -19,7 +19,7 @@ class ProjectTreePanel:
         self.project_groups = []
         self.group_nodes = {}
         self.current_iid = None
-        self.tree_drag_item = None
+        self.tree_drag_items = None
         self.last_hover = None
         
         self.font_title = ctk.CTkFont(family="Microsoft YaHei", size=15, weight="bold")
@@ -317,7 +317,7 @@ class ProjectTreePanel:
         self.tree_drag_items = None
 
     def on_tree_hover(self, event):
-        if getattr(self, 'tree_drag_item', None): return
+        if getattr(self, 'tree_drag_items', None): return
         iid = self.tree.identify_row(event.y)
         if getattr(self, 'last_hover', None) and self.tree.exists(self.last_hover) and self.last_hover != iid:
             tags = list(self.tree.item(self.last_hover, 'tags'))
@@ -424,7 +424,7 @@ class ProjectTreePanel:
                         try:
                             item['snd'] = parselmouth.Sound(item['path'])
                             item['pitch'] = item['snd'].to_pitch()
-                        except: continue
+                        except Exception: continue
                         
                     if item.get('start') is None or not item.get('snd'): continue
                     

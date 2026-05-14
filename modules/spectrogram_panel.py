@@ -6,6 +6,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import numpy as np
 import sounddevice as sd
 import parselmouth
+from modules.audio_core import SILENCE_AMPLITUDE_THRESHOLD
 from modules.ui_widgets import CTkReleaseButton
 
 class SpectrogramPanel:
@@ -112,7 +113,7 @@ class SpectrogramPanel:
             mac_part = snd.extract_part(from_time=item['macro_start'], to_time=item['macro_end'])
             vals = mac_part.values[0]
             mac_xs = mac_part.xs()
-            valid_idx = np.where(np.abs(vals) > 0.00316)[0]
+            valid_idx = np.where(np.abs(vals) > SILENCE_AMPLITUDE_THRESHOLD)[0]
             if len(valid_idx) > 0:
                 view_s = item['macro_start'] + mac_xs[valid_idx[0]]
                 view_e = item['macro_start'] + mac_xs[valid_idx[-1]]
@@ -255,7 +256,7 @@ class SpectrogramPanel:
         if not item: return
         if not item.get('snd') and item.get('path'):
             try: item['snd'] = parselmouth.Sound(item['path'])
-            except: return
+            except Exception: return
         if not item.get('snd'): return
         try:
             part = item['snd'].extract_part(from_time=item['start'], to_time=item['end'])

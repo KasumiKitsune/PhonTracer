@@ -1,6 +1,9 @@
 import numpy as np
 import os
 
+# 静音阈值：振幅 ≈ -50dB (10^(-50/20) ≈ 0.00316)
+SILENCE_AMPLITUDE_THRESHOLD = 10 ** (-50 / 20)
+
 def macroscopic_vad(snd):
     """长音频宏观静音检测分割"""
     intensity = snd.to_intensity(time_step=0.01)
@@ -55,12 +58,12 @@ def core_microscopic_vowel_nucleus(snd, global_pitch, t_min, t_max, drop_db, min
             trim_part = snd.extract_part(from_time=temp_s, to_time=temp_e)
             vals = trim_part.values[0]
             trim_xs = trim_part.xs()
-            valid_idx = np.where(np.abs(vals) > 0.00316)[0]
+            valid_idx = np.where(np.abs(vals) > SILENCE_AMPLITUDE_THRESHOLD)[0]
             if len(valid_idx) > 0:
                 return temp_s + trim_xs[valid_idx[0]], temp_s + trim_xs[valid_idx[-1]]
                 
         return temp_s, temp_e
-    except:
+    except Exception:
         return t_min, t_max
 
 def batch_process_worker(path, params, trim_silence):
