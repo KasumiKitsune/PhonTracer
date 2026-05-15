@@ -22,6 +22,10 @@ if sys.platform == 'win32':
 excluded_modules = [
     'seaborn',
     'pandas',
+    'torch',
+    'torchvision',
+    'torchaudio',
+    'whisper',
     'matplotlib.tests',
     'matplotlib.mpl-data',
     'scipy.spatial.tests',
@@ -73,7 +77,7 @@ a = Analysis(
     runtime_hooks=[],
     excludes=[m for m in excluded_modules if m],
     noarchive=False,
-    optimize=2, # 开启字节码优化
+    optimize=0, # 降低优化等级，防止 numpy 因为文档字符串被删除而报错
 )
 pyz = PYZ(a.pure)
 
