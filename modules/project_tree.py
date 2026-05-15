@@ -21,6 +21,7 @@ class ProjectTreePanel:
         
         self.project_groups = []
         self.group_nodes = {}
+        self.group_items = {} # group_name -> [iid, ...]
         self.current_iid = None
         self.tree_drag_items = None
         self.last_hover = None
@@ -114,6 +115,7 @@ class ProjectTreePanel:
         self.tree.delete(*self.tree.get_children())
         self.project_groups.clear()
         self.group_nodes.clear()
+        self.group_items.clear()
         self.items.clear()
         self.current_iid = None
         self.warning_group_id = None
@@ -127,6 +129,7 @@ class ProjectTreePanel:
             self.project_groups.append(group_name)
             gid = self.tree.insert("", tk.END, text=group_name, open=True, tags=('group',))
             self.group_nodes[group_name] = gid
+            self.group_items[group_name] = []
         return self.group_nodes[group_name]
 
     def add_new_group(self):
@@ -141,6 +144,7 @@ class ProjectTreePanel:
         self.project_groups.append(temp_name)
         gid = self.tree.insert("", tk.END, text=temp_name, open=True, tags=('group',))
         self.group_nodes[temp_name] = gid
+        self.group_items[temp_name] = []
         
         # 滚动到新组并选中
         self.tree.see(gid)
@@ -180,6 +184,7 @@ class ProjectTreePanel:
                 idx = self.project_groups.index(old_name)
                 self.project_groups[idx] = new_name
                 self.group_nodes[new_name] = self.group_nodes.pop(old_name)
+                self.group_items[new_name] = self.group_items.pop(old_name, [])
                 self.tree.item(iid, text=new_name)
                 # 同步更新子项的组属性
                 for child in self.tree.get_children(iid):
@@ -246,6 +251,7 @@ class ProjectTreePanel:
                     self.tree.delete(gid)
                     if group_name in self.project_groups: self.project_groups.remove(group_name)
                     self.group_nodes.pop(group_name, None)
+                    self.group_items.pop(group_name, None)
                     
         real_items_to_del = set()
         for iid in items_to_del:
@@ -256,6 +262,12 @@ class ProjectTreePanel:
                 
         for iid in real_items_to_del:
             if self.tree.exists(iid):
+                # Sync group_items cache before deletion
+                group_name = self.items.get(iid, {}).get('group')
+                if group_name and group_name in self.group_items:
+                    if iid in self.group_items[group_name]:
+                        self.group_items[group_name].remove(iid)
+
                 self.items.pop(iid, None)
                 self.tree.delete(iid)
                 if iid in self.warning_iids:
@@ -344,7 +356,22 @@ class ProjectTreePanel:
             if parent_grp:
                 group_name = self.tree.item(parent_grp, 'text')
                 for drag_item in reversed(self.tree_drag_items):
+                    # Sync cache: remove from old group, insert into new group
+                    old_group = self.items[drag_item].get('group')
+                    if old_group and old_group in self.group_items:
+                        if drag_item in self.group_items[old_group]:
+                            self.group_items[old_group].remove(drag_item)
+
                     self.tree.move(drag_item, parent_grp, target_idx)
+
+                    if group_name not in self.group_items:
+                        self.group_items[group_name] = []
+
+                    if target_idx == 'end':
+                        self.group_items[group_name].append(drag_item)
+                    else:
+                        self.group_items[group_name].insert(target_idx, drag_item)
+
                     self.items[drag_item]['group'] = group_name
                 self.update_preview()
         self.tree_drag_items = None
@@ -372,32 +399,67 @@ class ProjectTreePanel:
                 self.tree.item(self.last_hover, tags=tags)
             self.last_hover = None
 
+    def insert_item(self, parent_node, index, iid=None, text="", tags=(), image=""):
+        """Helper to insert an item into the tree and sync it with our group cache."""
+        new_iid = self.tree.insert(parent_node, index, iid=iid, text=text, tags=tags, image=image)
+
+        # Sync with group_items cache if it's a regular project item
+        if 'item' in tags and parent_node:
+            group_name = None
+            for gname, gid in self.group_nodes.items():
+                if gid == parent_node:
+                    group_name = gname
+                    break
+
+            if group_name:
+                if group_name not in self.group_items:
+                    self.group_items[group_name] = []
+
+                if index == tk.END or index == "end":
+                    self.group_items[group_name].append(new_iid)
+                else:
+                    self.group_items[group_name].insert(index, new_iid)
+
+        return new_iid
+
     def _get_all_items_by_group(self):
         """Helper to collect all items in the tree, grouped by their project groups."""
+        # Optimized: Use self.group_items cache instead of querying UI tree
         structure = []
         for grp_name in self.project_groups:
-            grp_node = self.group_nodes.get(grp_name)
-            if grp_node:
-                # Only include children that are actually in self.items
-                children = [c for c in self.tree.get_children(grp_node) if c in self.items]
+            if grp_name in self.group_items:
+                # Ensure we only include items that exist in self.items
+                children = [c for c in self.group_items[grp_name] if c in self.items]
                 structure.append((grp_name, children))
         return structure
 
     def _get_item_index(self, target_iid):
-        is_continuous = (self.num_rule_var.get() == "continuous")
-        if not is_continuous:
-            return self.tree.index(target_iid) + 1
+        # Handle warning items: they should have the same index as their original counterparts
+        real_iid = target_iid[8:] if str(target_iid).startswith('warning_') else target_iid
 
-        target_group = self.items[target_iid]['group']
+        if real_iid not in self.items:
+            return 0
+
+        is_continuous = (self.num_rule_var.get() == "continuous")
+        target_group = self.items[real_iid]['group']
+
+        # Get index within its group using the cache
+        try:
+            items_in_group = self.group_items.get(target_group, [])
+            in_group_idx = items_in_group.index(real_iid)
+        except ValueError:
+            return 0
+
+        if not is_continuous:
+            return in_group_idx + 1
+
         idx = 0
         for grp_name in self.project_groups:
             if grp_name == target_group:
                 break
-            grp_node = self.group_nodes.get(grp_name)
-            if grp_node:
-                idx += len(self.tree.get_children(grp_node))
+            idx += len(self.group_items.get(grp_name, []))
 
-        return idx + self.tree.index(target_iid) + 1
+        return idx + in_group_idx + 1
 
     def update_preview(self):
         self._apply_zebra_stripes()

@@ -859,7 +859,7 @@ class PhoneticsApp:
                     if not res.get('missing'):
                         has_empty = res.get('has_empty_data', False)
                         img = self.tk_icons.get('warning', '') if has_empty else ''
-                        iid = self.tree_panel.tree.insert(gid, tk.END, text=res['word'], tags=('item',), image=img)
+                        iid = self.tree_panel.insert_item(gid, tk.END, text=res['word'], tags=('item',), image=img)
                         self.items[iid] = {
                             'label': res['word'], 'group': res['group'], 'snd': snd, 'pitch': global_pitch,
                             'macro_start': res['ms'], 'macro_end': res['me'], 
@@ -868,7 +868,7 @@ class PhoneticsApp:
                         }
                         self.tree_panel.update_item_icon(iid)
                     else:
-                        iid = self.tree_panel.tree.insert(gid, tk.END, text=res['word'] + " (缺失)", tags=('item',))
+                        iid = self.tree_panel.insert_item(gid, tk.END, text=res['word'] + " (缺失)", tags=('item',))
                         self.items[iid] = {'label': res['word'], 'group': res['group'], 'snd': None, 'start': None, 'end': None}
                 
                 self.stop_loading("长音频切分完成")
@@ -958,7 +958,7 @@ class PhoneticsApp:
                         self.items[iid] = res
                         has_empty = res.get('has_empty_data', False)
                         img = self.tk_icons.get('warning', '') if has_empty else ''
-                        self.tree_panel.tree.insert(gid, tk.END, iid=iid, text=res['label'], tags=('item',), image=img)
+                        self.tree_panel.insert_item(gid, tk.END, iid=iid, text=res['label'], tags=('item',), image=img)
                         self.tree_panel.update_item_icon(iid)
                 
                 self.set_status(f"批量并行提取完成 ({len(results)}/{total})")
@@ -1057,7 +1057,7 @@ class PhoneticsApp:
                         
                         has_empty = res.get('has_empty_data', False)
                         img = self.tk_icons.get('warning', '') if has_empty else ''
-                        self.tree_panel.tree.insert(gid, tk.END, iid=iid, text=display, tags=('item',), image=img)
+                        self.tree_panel.insert_item(gid, tk.END, iid=iid, text=display, tags=('item',), image=img)
                         
                         self.items[iid] = res
                         self.tree_panel.update_item_icon(iid)
@@ -1065,7 +1065,7 @@ class PhoneticsApp:
                     else:
                         suffix = " (未匹配)" if match_mode == 'fuzzy' else " (缺失)"
                         iid = f"missing_{res['label']}_{id(res)}"
-                        self.tree_panel.tree.insert(gid, tk.END, iid=iid, text=res['label'] + suffix, tags=('item',))
+                        self.tree_panel.insert_item(gid, tk.END, iid=iid, text=res['label'] + suffix, tags=('item',))
                         self.items[iid] = {'label': res['label'], 'group': res['group'], 'snd': None, 'start': None, 'end': None}
                 
                 self.stop_loading(f"并行处理完成: {matched_count}/{total}")
