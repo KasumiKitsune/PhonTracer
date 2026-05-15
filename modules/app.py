@@ -1,12 +1,9 @@
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox
 import customtkinter as ctk
 # pyrefly: ignore [missing-import]
 import parselmouth
-import numpy as np
-import sounddevice as sd
 import os
-import csv
 import threading
 import concurrent.futures
 from PIL import Image
