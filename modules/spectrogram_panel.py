@@ -58,6 +58,8 @@ class SpectrogramPanel:
         CTkReleaseButton(frame_actions, text=" 导出", image=self.icons.get("save"), compound="left", command=self.on_export_callback, font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), corner_radius=20, height=36, width=60, fg_color="#10B981", hover_color="#059669").pack(side=tk.LEFT)
 
         self.fig = plt.Figure(figsize=(7, 5), facecolor='white') 
+        self.ax = self.fig.add_subplot(111)
+        self.ax2 = self.ax.twinx()
         self.canvas = FigureCanvasTkAgg(self.fig, master=center_frame)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         self.canvas.mpl_connect('button_press_event', self.on_press)
@@ -86,7 +88,8 @@ class SpectrogramPanel:
 
     def clear_canvas(self):
         self.current_item = None
-        self.fig.clf()
+        self.ax.clear()
+        self.ax2.clear()
         self.canvas.draw()
         self.var_t_start.set("0.000")
         self.var_t_end.set("0.000")
@@ -107,9 +110,8 @@ class SpectrogramPanel:
         if not item: return
         if not item.get('snd') or item.get('start') is None: return
         
-        self.fig.clf()
-        self.ax = self.fig.add_subplot(111)
-        self.ax2 = self.ax.twinx()
+        self.ax.clear()
+        self.ax2.clear()
         
         snd = item['snd']
         t_s, t_e = item['start'], item['end']

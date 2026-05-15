@@ -1,9 +1,10 @@
 import os
+from typing import List, Dict, Optional, Any, Tuple
 import numpy as np
 import parselmouth
 import re  # 新增正则库用于支持多种分隔符拆分
 
-def parse_wordlist(raw_text):
+def parse_wordlist(raw_text: str) -> Tuple[List[Dict[str, Any]], List[str]]:
     groups = []
     flat_words =[]
     curr_group = "未分组"
@@ -25,7 +26,7 @@ def parse_wordlist(raw_text):
     if curr_items: groups.append({"group": curr_group, "items": curr_items})
     return groups, flat_words
 
-def fuzzy_match_word_to_path(word, available_paths, used_indices=None):
+def fuzzy_match_word_to_path(word: str, available_paths: List[str], used_indices: Optional[List[int]] = None) -> Optional[int]:
     def clean_str(s):
         if not s: return ""
         import re
@@ -67,7 +68,7 @@ def fuzzy_match_word_to_path(word, available_paths, used_indices=None):
         
     return None
 
-def get_export_text_for_item(item, real_index, num_points):
+def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: int) -> str:
     if item.get('start') is None or item.get('end') is None: return ""
     t_s, t_e = item['start'], item['end']
     duration = t_e - t_s
