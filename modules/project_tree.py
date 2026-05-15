@@ -454,7 +454,11 @@ class ProjectTreePanel:
         else:
             if item.get('snd') and item.get('pitch'):
                 times = np.linspace(item['start'], item['end'], num_points)
-                has_empty = any(np.isnan(item['pitch'].get_value_at_time(t)) or item['pitch'].get_value_at_time(t) == 0 for t in times)
+                # 性能优化：使用生成器保持短路求值
+                has_empty = any(
+                    np.isnan(hz) or hz == 0
+                    for hz in (item['pitch'].get_value_at_time(t) for t in times)
+                )
         
         img = self.tk_icons.get('warning', '') if has_empty else ''
         try:
@@ -504,7 +508,10 @@ class ProjectTreePanel:
                 else:
                     if item.get('snd') and item.get('pitch'):
                         times = np.linspace(item['start'], item['end'], num_points)
-                        has_empty = any(np.isnan(item['pitch'].get_value_at_time(t)) or item['pitch'].get_value_at_time(t) == 0 for t in times)
+                        has_empty = any(
+                            np.isnan(hz) or hz == 0
+                            for hz in (item['pitch'].get_value_at_time(t) for t in times)
+                        )
                 if has_empty:
                     empty_labels.append(f"[{grp_name}] {item['label']}")
         

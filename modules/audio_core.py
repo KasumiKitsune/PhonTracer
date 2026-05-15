@@ -47,13 +47,16 @@ def detect_vowel_onset(snd: parselmouth.Sound, rough_start: float, rough_end: fl
     for i in range(num_frames):
         frame = vals[i*hop_len : i*hop_len + win_len]
         # 1. 计算过零率 (Zero-Crossing Rate) - 清辅音(s, f)特征
-        crossings = np.sum(np.abs(np.diff(frame > 0)))
+        # 学术优化：对音频进行中心化处理，避免直流偏置(DC offset)导致过零率计算不准
+        frame_centered = frame - np.mean(frame)
+        crossings = np.sum(np.abs(np.diff(frame_centered > 0)))
         zcr[i] = crossings / max(1, (win_len - 1))
         
         # 2. 计算短时能量 (Short-Time Energy: RMS) - 韵母/元音特征
         ste[i] = np.sqrt(np.mean(frame**2))
         times[i] = part_s + (i * hop_len + win_len / 2) / sr
         
+
     max_ste = np.max(ste)
     if max_ste < 1e-5:  # 全是绝对静音
         return rough_start
@@ -61,8 +64,16 @@ def detect_vowel_onset(snd: parselmouth.Sound, rough_start: float, rough_end: fl
     # 局部能量归一化
     ste_norm = ste / max_ste
     
+    # 学术优化：对短时能量进行简单的平滑，消除瞬态噪声引起的伪峰
+    window = np.ones(3)/3.0
+    if len(ste_norm) > 3:
+        ste_norm_smooth = np.convolve(ste_norm, window, mode='same')
+    else:
+        ste_norm_smooth = ste_norm
+
     # 3. 能量一阶导数（寻找能量暴涨的瞬间，对应浊辅音 m/n 的除阻，或韵母起振）
-    ste_diff = np.diff(ste_norm, prepend=ste_norm[0])
+    ste_diff = np.diff(ste_norm_smooth, prepend=ste_norm_smooth[0])
+
     ste_diff[ste_diff < 0] = 0  # 只关注能量上升阶段
     
     # 4. 综合得分：能量增量越大越好，ZCR 越小越好。
@@ -92,8 +103,16 @@ def macroscopic_vad(snd: parselmouth.Sound) -> List[List[float]]:
     vals = intensity.values[0]
     xs = intensity.xs()
     sorted_vals = np.sort(vals[~np.isnan(vals)])
-    max_int = np.mean(sorted_vals[-int(len(sorted_vals)*0.05):]) if len(sorted_vals) > 20 else 70
-    thresh = max_int - 25 
+
+    if len(sorted_vals) > 20:
+        max_int = np.mean(sorted_vals[-int(len(sorted_vals)*0.05):])
+        noise_floor = np.mean(sorted_vals[:int(len(sorted_vals)*0.1)])
+        # Adaptive threshold: 15 dB above noise floor, or max - 25, whichever is lower (more inclusive)
+        # However, to be robust, we use a balanced formula
+        thresh = max(noise_floor + 15, max_int - 25)
+    else:
+        thresh = 50.0
+
     is_sp = vals > thresh
     
     starts_idx = np.where(np.diff(is_sp.astype(int), prepend=0) == 1)[0]
@@ -125,20 +144,29 @@ def core_microscopic_vowel_nucleus(snd: parselmouth.Sound, global_pitch_or_array
         part = snd.extract_part(from_time=t_min, to_time=t_max) if t_min != 0 or t_max != snd.get_total_duration() else snd
         intensity = part.to_intensity()
         
+
         try: max_int = np.nanmax(intensity.values)
         except Exception: return t_min, t_max, t_min, t_max
             
         best_s, best_e = 0.0, part.get_total_duration()
         thresh = max_int - drop_db
-        valid =[]
-        for t in part.xs():
-            idx = np.argmin(np.abs(xs - (t_min + t)))
-            if idx < len(freqs) and freqs[idx] > 0:
-                val = intensity.get_value(t)
-                if val and not np.isnan(val) and val > thresh: valid.append(t)
-                
-        if len(valid) > 2:
-            best_s, best_e = valid[0], valid[-1]
+        int_xs = intensity.xs()
+        int_vals = intensity.values[0]
+
+        # 向量化寻找有效起始点：
+        # int_xs 是相对于截取片段的时间 (0 到 duration)
+        # 将其转换为绝对时间进行基频查找
+        abs_int_xs = t_min + int_xs
+        valid_freqs_interp = np.interp(abs_int_xs, xs, freqs, left=0, right=0)
+
+        # 2. 有效点条件：强度 > thresh 且 对应时间点附近有基频 (freq > 0)
+        valid_mask = (int_vals > thresh) & (valid_freqs_interp > 0)
+        valid_times = int_xs[valid_mask]
+
+        if len(valid_times) > 2:
+            best_s = valid_times[0]
+            best_e = valid_times[-1]
+
             
             # --- 算法升级：替换原有的 best_s += skip_front ---
             if skip_front > 0.0:
