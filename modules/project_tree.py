@@ -6,8 +6,11 @@ import parselmouth
 import numpy as np
 import math
 import matplotlib.pyplot as plt
+import logging
 from .data_utils import get_export_text_for_item
 from .ui_widgets import CTkReleaseButton
+
+logger = logging.getLogger(__name__)
 
 class ProjectTreePanel:
     def __init__(self, parent, icons, items_dict, app_state_params, on_item_selected_callback, on_clear_canvas_callback, tk_icons=None):
@@ -612,7 +615,9 @@ class ProjectTreePanel:
                     try:
                         item['snd'] = parselmouth.Sound(item['path'])
                         item['pitch'] = item['snd'].to_pitch()
-                    except Exception: continue
+                    except Exception as e:
+                        logger.error(f"Error loading sound or pitch for {item.get('path')}: {e}", exc_info=True)
+                        continue
                     
                 if item.get('start') is None or not item.get('snd'): continue
                 
@@ -739,7 +744,9 @@ class ProjectTreePanel:
                     try:
                         item['snd'] = parselmouth.Sound(item['path'])
                         item['pitch'] = item['snd'].to_pitch()
-                    except Exception: continue
+                    except Exception as e:
+                        logger.error(f"Error loading sound or pitch for {item.get('path')}: {e}", exc_info=True)
+                        continue
                 if item.get('start') is None or not item.get('snd'): continue
                 t_s, t_e = item['start'], item['end']
                 if t_e - t_s <= 0: continue
@@ -867,7 +874,9 @@ class ProjectTreePanel:
                             pitch_floor=self.app_state_params.get('pitch_floor', 75),
                             pitch_ceiling=self.app_state_params.get('pitch_ceiling', 600)
                         )
-                    except Exception: continue
+                    except Exception as e:
+                        logger.error(f"Error loading sound or pitch for {item.get('path')}: {e}", exc_info=True)
+                        continue
                 if item.get('start') is None or not item.get('snd') or not item.get('pitch'): continue
 
                 t_s, t_e = item['start'], item['end']

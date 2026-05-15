@@ -3,6 +3,14 @@ import os
 import time
 import tkinter as tk
 import customtkinter as ctk
+import logging
+
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 def show_splash_and_load():
     # 强制使用明亮主题，配合干净的排版
