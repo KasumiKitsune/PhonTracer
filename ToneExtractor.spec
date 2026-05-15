@@ -3,54 +3,35 @@ import os
 import sys
 import customtkinter
 
-# 动态获取 customtkinter 的安装路径，确保主题文件被包含
+# 1. 动态获取 customtkinter 的安装路径，确保主题和 json 文件被包含
 ctk_path = os.path.dirname(customtkinter.__file__)
 
-# 根据平台设置隐藏导入
+# 2. 隐式导入列表（PyInstaller 自动检测不到的模块）
 hidden_imports = [
     'parselmouth', 
     'PIL._tkinter_finder',
     'xlsxwriter',
     'scipy.interpolate',
     'scipy.signal',
-    'scipy.stats'
+    'scipy.stats',
+    'scipy.special._cdflib' # scipy 经常漏掉的底层库
 ]
+
 if sys.platform == 'win32':
     hidden_imports.append('windnd')
 
-# 显式排除不需要的大型库，防止环境污染导致包体积过大
+# 3. 显式排除列表（优化体积，防止环境污染）
 excluded_modules = [
-    'seaborn',
-    'pandas',
-    'torch',
-    'torchvision',
-    'torchaudio',
-    'whisper',
-    'matplotlib.tests',
-    'IPython',
-    'jupyter',
-    'notebook',
-    'sqlite3',
-    'numpy.f2py',
-    'tkinter.test',
-    'PIL.ImageQt',
-    'PIL.ImageTk' if sys.platform != 'win32' else '', # Windows 下有时需要，保留
-    'matplotlib.backends.backend_qt5agg',
-    'matplotlib.backends.backend_qt4agg',
-    'matplotlib.backends.backend_qtagg',
-    'matplotlib.backends.backend_wxagg',
-    'matplotlib.backends.backend_gtk3agg',
-    'matplotlib.backends.backend_gtk4agg',
+    'seaborn', 'pandas', 'torch', 'torchvision', 'torchaudio', 
+    'whisper', 'matplotlib.tests', 'IPython', 'jupyter', 
+    'notebook', 'sqlite3', 'numpy.f2py', 'tkinter.test',
+    'PIL.ImageQt', 'PIL.ImageTk' if sys.platform != 'win32' else ''
 ]
 
-# 根据平台选择图标
+# 4. 图标逻辑
 icon_file = 'assets/icon.ico'
 if sys.platform == 'darwin':
-    # 如果有 icns 文件则使用，否则 macOS 默认
-    if os.path.exists('assets/icon.icns'):
-        icon_file = 'assets/icon.icns'
-    else:
-        icon_file = None
+    icon_file = 'assets/icon.icns' if os.path.exists('assets/icon.icns') else None
 
 a = Analysis(
     ['main.py'],
@@ -66,10 +47,14 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[m for m in excluded_modules if m],
+    win_no_prefer_redirects=False,
+    win_private_assemblies=False,
+    cipher=None,
     noarchive=False,
-    optimize=0, # 降低优化等级，防止 numpy 因为文档字符串被删除而报错
+    optimize=0, # 关键：设置为 0 防止 numpy 等库的 docstring 被删导致 runtime error
 )
-pyz = PYZ(a.pure)
+
+pyz = PYZ(a.pure, a.zipped_data, cipher=None)
 
 exe = EXE(
     pyz,
@@ -80,9 +65,9 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False, 
-    upx=False, 
+    upx=False,          # 强制关闭 UPX
     upx_exclude=[],
-    console=False,
+    console=False,      # 如果需要调试，可改为 True 查看后台报错
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
@@ -90,12 +75,14 @@ exe = EXE(
     entitlements_file=None,
     icon=icon_file,
 )
+
 coll = COLLECT(
     exe,
     a.binaries,
+    a.zipfiles,
     a.datas,
     strip=False,
-    upx=False, 
+    upx=False,          # 强制关闭 UPX
     upx_exclude=[],
     name='ToneExtractor',
 )

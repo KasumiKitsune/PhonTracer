@@ -29,17 +29,19 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
+        pip install --upgrade pyinstaller
         pip install -r requirements.txt
 
     - name: Build with PyInstaller
       run: |
-        pyinstaller --noconfirm ToneExtractor.spec
+        pyinstaller --noconfirm --clean --noupx ToneExtractor.spec
 
     - name: Create Zip Archive (Windows)
       if: matrix.os == 'windows-latest'
       shell: pwsh
       run: |
-        Compress-Archive -Path dist/ToneExtractor/* -DestinationPath dist/ToneExtractor-Windows.zip
+        # 压缩整个文件夹，解压后会有一个主目录，防止乱码和丢失依赖
+        Compress-Archive -Path dist/ToneExtractor -DestinationPath dist/ToneExtractor-Windows.zip
 
     - name: Create Zip Archive (macOS)
       if: matrix.os == 'macos-latest'
