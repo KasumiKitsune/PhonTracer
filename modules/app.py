@@ -1052,6 +1052,7 @@ class PhoneticsApp:
                     gid = self.tree_panel.ensure_group(res['group'])
                     if not res.get('missing') and res.get('success'):
                         res['group'] = tasks[i]['group']
+                        res['label'] = tasks[i]['word']
                         display = f"{res['label']} ← {os.path.basename(res['path'])}" if match_mode == 'fuzzy' else res['label']
                         iid = f"batch_wl_{res['label']}_{id(res)}"
                         

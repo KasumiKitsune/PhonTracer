@@ -1,68 +1,50 @@
-# --- Python ---
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
+# ==========================================
+# PhonTracer .gitignore (Whitelist Approach)
+# ==========================================
+
+# 1. 默认忽略所有文件和文件夹
+*
+
+# 2. 允许 Git 遍历所有目录结构（否则无法到达深层文件）
+!*/
+
+# 3. 白名单：必须保留的核心根目录文件
+!.gitignore
+!README.md
+!requirements.txt
+!main.py
+!ToneExtractor.spec
+
+# 4. 白名单：核心代码与资源目录
+!modules/**
+!assets/**
+!icons/**
+!tests/**
+!.github/**
+
+# 5. [已移除 example/ 白名单]
+
+# 6. 强制排除：即使在白名单目录内也绝对不跟踪的东西
+**/__pycache__/
+**/*.py[cod]
+**/*.so
+**/*.log
+**/*.tmp
+**/*.bak
+.DS_Store
+desktop.ini
+
+# 7. 排除本地环境与构建产物
+.venv/
 env/
 venv/
-.venv/
-.cache
 .pytest_cache/
-.coverage
-*.egg-info/
-.eggs/
-
-# --- PyInstaller / Packaging ---
-# Usually, .spec files are tracked, but if you prefer to generate them, uncomment the line below.
-# ToneExtractor.spec
+.vscode/
+.idea/
 build/
 dist/
-
-# UPX
+dist_new/
+scratch/
 upx.exe
 upx.zip
 upx-*/
-
-# --- IDEs & Editors ---
-.vscode/
-.idea/
-*.swp
-*.swo
-.history/
-*.code-workspace
-
-# --- OS Specific ---
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-desktop.ini
-
-# --- Data & Temp ---
-archive/
-*.log
-*.tmp
-*.bak
-
-# --- Audio / Linguistic Data (Uncomment to ignore) ---
-# *.wav
-# *.mp3
-# *.TextGrid
-# *.csv
-# *.xlsx
-
-# --- Test & Stress Test Data ---
-example/stress_test/
-example/stress_test_merged_long.wav
-example/100/
-example/1000/
-example/*.wav
-generate_stress_test*.py
-merge_stress_test.py
-scratch/
-dist_new/
- 
