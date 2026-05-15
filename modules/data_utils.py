@@ -13,11 +13,11 @@ def parse_wordlist(raw_text: str) -> Tuple[List[Dict[str, Any]], List[str]]:
     for line in raw_text.split('\n'):
         line = line.strip()
         if not line: continue
-        if line.startswith('【') or line.startswith('[') or line.startswith('#'):
+        if line.startswith('【') or line.startswith('[') or line.startswith('［') or line.startswith('#'):
             if curr_items:
                 groups.append({"group": curr_group, "items": curr_items})
                 curr_items = []
-            curr_group = line.replace('【', '').replace('】', '').replace('[', '').replace(']', '').replace('#', '').strip()
+            curr_group = line.replace('【', '').replace('】', '').replace('[', '').replace(']', '').replace('［', '').replace('］', '').replace('#', '').strip()
         else:
             # 核心修改：支持一行多个字，通过空格、制表符、中英文逗号、顿号灵活拆分
             words = [w.strip() for w in re.split(r'[,\s\t，、]+', line) if w.strip()]

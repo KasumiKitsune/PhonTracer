@@ -334,7 +334,7 @@ class PhoneticsApp:
 
     def on_spectrogram_time_changed(self, item):
         self.tree_panel.update_preview()
-        for iid, it in self.items.items():
+        for iid, it in list(self.items.items()):
             if it is item:
                 self.tree_panel.update_item_icon(iid)
                 break
@@ -364,7 +364,7 @@ class PhoneticsApp:
                     self.spectrogram_panel.var_t_start.set(f"{mic_s:.3f}")
                     self.spectrogram_panel.var_t_end.set(f"{mic_e:.3f}")
                     self.spectrogram_panel.update_lines(mic_s, mic_e)
-                    self.tree_panel.update_preview()
+                    self.spectrogram_panel.update_ui_times()
                     self.stop_loading("识别完成")
                 self.root.after(0, update_ui)
             except Exception as e:
@@ -395,7 +395,7 @@ class PhoneticsApp:
                 if val != self.last_params['pts']:
                     self.last_params['pts'] = val
                     self.slider_pts.set(val)
-                    for iid in self.items.keys():
+                    for iid in list(self.items.keys()):
                         self.tree_panel.update_item_icon(iid)
                     self.tree_panel.update_preview()
             elif key == 'db':
@@ -474,7 +474,7 @@ class PhoneticsApp:
             if changed_algo: self.recalculate_all_audio()
             if new_pts != self.last_params['pts']:
                 self.last_params['pts'] = new_pts
-                for iid in self.items.keys():
+                for iid in list(self.items.keys()):
                     self.tree_panel.update_item_icon(iid)
                 self.tree_panel.update_preview()
         except ValueError: pass
@@ -557,7 +557,7 @@ class PhoneticsApp:
                     self.spectrogram_panel.update_ui_times()
                 
                 # 更新所有列表项的图标（刷新警告标志）
-                for iid in self.items.keys():
+                for iid in list(self.items.keys()):
                     self.tree_panel.update_item_icon(iid)
                     
                 self.tree_panel.update_preview()
@@ -817,6 +817,7 @@ class PhoneticsApp:
                             'start': res['mis'], 'end': res['mie'],
                             'raw_start': res.get('raw_s', res['mis']), 'raw_end': res.get('raw_e', res['mie'])
                         }
+                        self.tree_panel.update_item_icon(iid)
                     else:
                         iid = self.tree_panel.tree.insert(gid, tk.END, text=res['word'] + " (缺失)", tags=('item',))
                         self.items[iid] = {'label': res['word'], 'group': res['group'], 'snd': None, 'start': None, 'end': None}
@@ -909,6 +910,7 @@ class PhoneticsApp:
                         has_empty = res.get('has_empty_data', False)
                         img = self.tk_icons.get('warning', '') if has_empty else ''
                         self.tree_panel.tree.insert(gid, tk.END, iid=iid, text=res['label'], tags=('item',), image=img)
+                        self.tree_panel.update_item_icon(iid)
                 
                 self.set_status(f"批量并行提取完成 ({len(results)}/{total})")
                 self.stop_loading()
@@ -1009,6 +1011,7 @@ class PhoneticsApp:
                         self.tree_panel.tree.insert(gid, tk.END, iid=iid, text=display, tags=('item',), image=img)
                         
                         self.items[iid] = res
+                        self.tree_panel.update_item_icon(iid)
                         matched_count += 1
                     else:
                         suffix = " (未匹配)" if match_mode == 'fuzzy' else " (缺失)"
@@ -1042,6 +1045,51 @@ class PhoneticsApp:
         dlg.transient(self.root)  # 关键：设置为父窗口的临时窗口，使其保持在父窗口上方
         dlg.focus_set()           # 自动获取焦点
         
+        # 2. 文本输入区
+        ctk.CTkLabel(dlg, text="请粘贴文本或导入文件，组别前加【】或 #：\n示例格式：\n【阴平】\n八 扒 吧 (支持空格/逗号拆分多个字)", justify=tk.LEFT, text_color="#374151").pack(pady=(5, 5), anchor="w", padx=20)
+        
+        text_box = ctk.CTkTextbox(dlg, width=380, height=220, corner_radius=8, border_width=1, border_color="#D1D5DB")
+        text_box.pack(padx=20, pady=5, fill=tk.BOTH, expand=True)
+        
+        # 移除 font 参数以兼容 scaling
+        text_box.tag_config("group_title", foreground="#2563EB") 
+        text_box.tag_config("word_item", foreground="#10B981")
+
+        # 3. 实时统计栏
+        lbl_stats = ctk.CTkLabel(dlg, text="实时统计：已识别 0 个组别 | 0 个单字", text_color="#6B7280", font=("Microsoft YaHei", 12))
+        lbl_stats.pack(pady=(0, 10), padx=20, anchor="w")
+
+        def update_stats(event=None):
+            raw_text = text_box.get("1.0", tk.END)
+            groups, flat_words = parse_wordlist(raw_text)
+            color = "#10B981" if flat_words else "#6B7280"
+            lbl_stats.configure(text=f"实时统计：已识别 {len(groups)} 个组别 | {len(flat_words)} 个单字", text_color=color)
+            
+            text_box.tag_remove("group_title", "1.0", tk.END)
+            text_box.tag_remove("word_item", "1.0", tk.END)
+            
+            lines = raw_text.split('\n')
+            current_line_idx = 1
+            import re
+            for line in lines:
+                stripped = line.strip()
+                if not stripped:
+                    current_line_idx += 1
+                    continue
+                if stripped.startswith('【') or stripped.startswith('[') or stripped.startswith('［') or stripped.startswith('#'):
+                    text_box.tag_add("group_title", f"{current_line_idx}.0", f"{current_line_idx}.end")
+                else:
+                    words = [w for w in re.split(r'[\s,，、]+', stripped) if w]
+                    start_char = 0
+                    for w in words:
+                        idx = line.find(w, start_char)
+                        if idx != -1:
+                            text_box.tag_add("word_item", f"{current_line_idx}.{idx}", f"{current_line_idx}.{idx+len(w)}")
+                            start_char = idx + len(w)
+                current_line_idx += 1
+            
+        text_box.bind("<KeyRelease>", update_stats)
+
         # 1. 顶部工具栏 (导入文件 / 复制AI提示词)
         toolbar = ctk.CTkFrame(dlg, fg_color="transparent")
         toolbar.pack(fill=tk.X, padx=20, pady=(15, 5))
@@ -1061,7 +1109,7 @@ class PhoneticsApp:
             update_stats()
 
         def copy_prompt():
-            prompt = "请帮我把下面这段字表转换成特定格式：\n1. 每个组别名称用【】包裹并独占一行\n2. 组别下的字跟在组别名称下面，可以一行一个字，也可以用空格或逗号分隔\n3. 去除所有不相关的序号、拼音和多余的空行\n\n示例输出格式：\n【阴平】\n八 扒 吧\n【阳平】\n拔 跋\n\n以下是我的原始字表，请直接返回转换后的结果即可：\n\n[在此处粘贴你的字表]"
+            prompt = "请帮我把下面这段字表转换成特定格式：\n1. 每个组别名称用【】包裹并独占一行\n2. 组别下的字跟在组别名称下面，可以一行一个字，也可以用空格或逗号分隔\n3. 去除所有不相关的序号、拼音 and 多余的空行\n\n示例输出格式：\n【阴平】\n八 扒 吧\n【阳平】\n拔 跋\n\n以下是我的原始字表，请直接返回转换后的结果即可：\n\n[在此处粘贴你的字表]"
             self.root.clipboard_clear()
             self.root.clipboard_append(prompt)
             messagebox.showinfo("成功", "AI 整理提示词已复制！\n您可以前往 ChatGPT / 豆包 / DeepSeek 等平台粘贴使用。", parent=dlg)
@@ -1074,24 +1122,6 @@ class PhoneticsApp:
                                    width=150, height=28, corner_radius=14, fg_color="#F59E0B", text_color="white", 
                                    hover_color="#D97706", command=copy_prompt)
         btn_prompt.pack(side=tk.LEFT, padx=10)
-        
-        # 2. 文本输入区
-        ctk.CTkLabel(dlg, text="请粘贴文本或导入文件，组别前加【】或 #：\n示例格式：\n【阴平】\n八 扒 吧 (支持空格/逗号拆分多个字)", justify=tk.LEFT, text_color="#374151").pack(pady=(5, 5), anchor="w", padx=20)
-        
-        text_box = ctk.CTkTextbox(dlg, width=380, height=220, corner_radius=8, border_width=1, border_color="#D1D5DB")
-        text_box.pack(padx=20, pady=5, fill=tk.BOTH, expand=True)
-        
-        # 3. 实时统计栏
-        lbl_stats = ctk.CTkLabel(dlg, text="实时统计：已识别 0 个组别 | 0 个单字", text_color="#6B7280", font=("Microsoft YaHei", 12))
-        lbl_stats.pack(pady=(0, 10), padx=20, anchor="w")
-
-        def update_stats(event=None):
-            raw_text = text_box.get("1.0", tk.END)
-            groups, flat_words = parse_wordlist(raw_text)
-            color = "#10B981" if flat_words else "#6B7280"
-            lbl_stats.configure(text=f"实时统计：已识别 {len(groups)} 个组别 | {len(flat_words)} 个单字", text_color=color)
-            
-        text_box.bind("<KeyRelease>", update_stats)
         
         # 4. 匹配参数区
         match_mode_var = ctk.StringVar(value="fuzzy")

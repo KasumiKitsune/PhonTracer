@@ -25,6 +25,9 @@ class ProjectTreePanel:
         self.tree_drag_items = None
         self.last_hover = None
         
+        self.warning_group_id = None
+        self.warning_iids = {}
+        
         self.font_title = ctk.CTkFont(family="Microsoft YaHei", size=15, weight="bold")
         self.font_main = ctk.CTkFont(family="Microsoft YaHei", size=13)
         self.font_code = ctk.CTkFont(family="Consolas", size=13)
@@ -113,6 +116,8 @@ class ProjectTreePanel:
         self.group_nodes.clear()
         self.items.clear()
         self.current_iid = None
+        self.warning_group_id = None
+        self.warning_iids.clear()
         self.text_preview.configure(state='normal')
         self.text_preview.delete('1.0', tk.END)
         self.text_preview.configure(state='disabled')
@@ -182,6 +187,13 @@ class ProjectTreePanel:
             elif 'item' in self.tree.item(iid, 'tags'):
                 self.tree.item(iid, text=new_name)
                 self.items[iid]['label'] = new_name
+                if iid.startswith('warning_'):
+                    orig_iid = iid[8:]
+                    if self.tree.exists(orig_iid): self.tree.item(orig_iid, text=new_name)
+                else:
+                    if iid in self.warning_iids:
+                        w_iid = self.warning_iids[iid]
+                        if self.tree.exists(w_iid): self.tree.item(w_iid, text=new_name)
             
             self.update_preview()
             edit_entry.destroy()
@@ -225,6 +237,9 @@ class ProjectTreePanel:
                     group_name = self.tree.item(gid, 'text')
                     for child in self.tree.get_children(gid):
                         self.items.pop(child, None)
+                        if child in self.warning_iids:
+                            w_iid = self.warning_iids.pop(child)
+                            if self.tree.exists(w_iid): self.tree.delete(w_iid)
                         if self.current_iid == child:
                             self.current_iid = None
                             if self.on_clear_canvas: self.on_clear_canvas()
@@ -232,14 +247,29 @@ class ProjectTreePanel:
                     if group_name in self.project_groups: self.project_groups.remove(group_name)
                     self.group_nodes.pop(group_name, None)
                     
+        real_items_to_del = set()
         for iid in items_to_del:
+            if iid.startswith('warning_'):
+                real_items_to_del.add(iid[8:])
+            else:
+                real_items_to_del.add(iid)
+                
+        for iid in real_items_to_del:
             if self.tree.exists(iid):
                 self.items.pop(iid, None)
                 self.tree.delete(iid)
-                if self.current_iid == iid:
+                if iid in self.warning_iids:
+                    w_iid = self.warning_iids.pop(iid)
+                    if self.tree.exists(w_iid): self.tree.delete(w_iid)
+                if self.current_iid == iid or self.current_iid == f"warning_{iid}":
                     self.current_iid = None
                     if self.on_clear_canvas: self.on_clear_canvas()
                     
+        if self.warning_group_id and self.tree.exists(self.warning_group_id):
+            if not self.tree.get_children(self.warning_group_id):
+                self.tree.delete(self.warning_group_id)
+                self.warning_group_id = None
+                
         self.update_preview()
 
     def on_tree_drag_start(self, event): 
@@ -371,6 +401,23 @@ class ProjectTreePanel:
 
     def update_preview(self):
         self._apply_zebra_stripes()
+        if self.current_iid not in self.items:
+            # 如果是消失的警告项，尝试切回原项
+            if str(self.current_iid).startswith('warning_'):
+                orig_iid = self.current_iid[8:]
+                if orig_iid in self.items:
+                    self.current_iid = orig_iid
+                    # 尝试更新 Treeview 选中状态以保持视觉同步
+                    try: 
+                        if self.tree.exists(orig_iid):
+                            self.tree.selection_set(orig_iid)
+                            self.tree.see(orig_iid)
+                    except: pass
+                else:
+                    self.current_iid = None
+            else:
+                self.current_iid = None
+                
         if not self.current_iid:
             self.text_preview.configure(state='normal')
             self.text_preview.delete('1.0', tk.END)
@@ -396,6 +443,7 @@ class ProjectTreePanel:
             
         self.text_preview.configure(state='disabled')
     def update_item_icon(self, iid):
+        if str(iid).startswith('warning_'): return
         item = self.items.get(iid)
         if not item or item.get('start') is None: return
         has_empty = False
@@ -413,6 +461,31 @@ class ProjectTreePanel:
             self.tree.item(iid, image=img)
         except tk.TclError:
             pass
+
+        if has_empty:
+            if not self.warning_group_id or not self.tree.exists(self.warning_group_id):
+                self.warning_group_id = self.tree.insert("", 0, text="⚠️ 需要检查", open=True, tags=('group', 'warning_group'))
+            
+            if iid not in self.warning_iids:
+                w_iid = f"warning_{iid}"
+                self.tree.insert(self.warning_group_id, tk.END, iid=w_iid, text=item['label'], tags=('item',), image=img)
+                self.items[w_iid] = item
+                self.warning_iids[iid] = w_iid
+            else:
+                w_iid = self.warning_iids[iid]
+                if self.tree.exists(w_iid):
+                    self.tree.item(w_iid, text=item['label'], image=img)
+        else:
+            if iid in self.warning_iids:
+                w_iid = self.warning_iids.pop(iid)
+                if self.tree.exists(w_iid):
+                    self.tree.delete(w_iid)
+                self.items.pop(w_iid, None)
+                
+            if self.warning_group_id and self.tree.exists(self.warning_group_id):
+                if not self.tree.get_children(self.warning_group_id):
+                    self.tree.delete(self.warning_group_id)
+                    self.warning_group_id = None
 
     def export_project(self):
         if not self.items: return messagebox.showwarning("提示", "没有可导出的数据。")
