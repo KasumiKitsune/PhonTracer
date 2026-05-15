@@ -14,7 +14,7 @@ from PIL import Image
 # 导入拆分后的模块
 from .ui_widgets import ToolTip, CTkReleaseButton
 from .data_utils import parse_wordlist, fuzzy_match_word_to_path
-from .audio_core import core_microscopic_vowel_nucleus, batch_process_worker, macroscopic_vad, check_audio_segments
+from .audio_core import core_microscopic_vowel_nucleus, batch_process_worker, macroscopic_vad, check_audio_segments, long_process_worker, recalculate_bounds_fast
 from .visual_splitter import VisualSplitter
 from .spectrogram_panel import SpectrogramPanel
 from .project_tree import ProjectTreePanel
@@ -48,7 +48,7 @@ class PhoneticsApp:
         self.last_params = {
             'pts': 11,
             'db': 60.0,
-            'dur': 0.04,
+            'skip_front': 0.00,
             'pitch_floor': 75,
             'pitch_ceiling': 600
         }
@@ -254,16 +254,17 @@ class PhoneticsApp:
 
         row_dur = ctk.CTkFrame(card_params, fg_color="transparent")
         row_dur.pack(fill=tk.X, padx=15, pady=5)
-        lbl_dur = ctk.CTkLabel(row_dur, text=" 最短时长:", image=self.icons.get("duration"), compound="left", text_color="#374151", font=self.font_main)
+        lbl_dur = ctk.CTkLabel(row_dur, text=" 排除声母:", image=self.icons.get("duration"), compound="left", text_color="#374151", font=self.font_main)
         lbl_dur.pack(side=tk.LEFT)
-        self.slider_dur = ctk.CTkSlider(row_dur, from_=0.01, to=0.5, number_of_steps=49, width=100, height=16,
-                                        command=lambda v: self._on_slider_change(v, self.entry_min_dur, 'dur'))
-        self.slider_dur.set(self.last_params['dur'])
+        self.slider_dur = ctk.CTkSlider(row_dur, from_=0.00, to=0.15, number_of_steps=15, width=100, height=16,
+                                        command=lambda v: self._on_slider_change(v, self.entry_min_dur, 'skip_front'))
+        self.slider_dur.set(self.last_params['skip_front'])
         self.slider_dur.pack(side=tk.LEFT, padx=10)
-        self.var_min_dur = ctk.StringVar(value=str(self.last_params['dur']))
+        self.var_min_dur = ctk.StringVar(value=f"{self.last_params['skip_front']:.2f}")
         self.entry_min_dur = ctk.CTkEntry(row_dur, textvariable=self.var_min_dur, width=60, justify="center", corner_radius=20, height=26)
         self.entry_min_dur.pack(side=tk.RIGHT)
-        self.setup_entry_behavior(self.entry_min_dur, 'dur')
+        self.setup_entry_behavior(self.entry_min_dur, 'skip_front')
+        ToolTip(lbl_dur, "切除有效波形最前方的时长(秒)，用于排除声母(辅音)的干扰。")
 
         # Pitch 范围参数
         row_pitch = ctk.CTkFrame(card_params, fg_color="transparent")
@@ -278,7 +279,7 @@ class PhoneticsApp:
         self.entry_pitch_floor.insert(0, str(self.last_params['pitch_floor']))
         self.entry_pitch_floor.pack(side=tk.RIGHT)
         self.setup_entry_behavior(self.entry_pitch_floor, 'pitch_floor')
-        ToolTip(lbl_dur, "Praat pitch 分析的频率范围。\n男声建议 75~300，女声/儿童建议 100~500。")
+        ToolTip(row_pitch, "Praat pitch 分析的频率范围。\n男声建议 75~300，女声/儿童建议 100~500。")
         
         row_trim = ctk.CTkFrame(card_params, fg_color="transparent")
         row_trim.pack(fill=tk.X, padx=15, pady=(10, 15))
@@ -349,10 +350,12 @@ class PhoneticsApp:
         def run():
             try:
                 self.root.after(0, lambda: self.start_loading("正在智能识别..."))
-                mic_s, mic_e = self._microscopic_vowel_nucleus(snd, pitch, mac_s, mac_e)
+                mic_s, mic_e, raw_s, raw_e = self._microscopic_vowel_nucleus(snd, pitch, mac_s, mac_e)
                 def update_ui():
                     item['start'] = mic_s
                     item['end'] = mic_e
+                    item['raw_start'] = raw_s
+                    item['raw_end'] = raw_e
                     self.spectrogram_panel.var_t_start.set(f"{mic_s:.3f}")
                     self.spectrogram_panel.var_t_end.set(f"{mic_e:.3f}")
                     self.spectrogram_panel.update_lines(mic_s, mic_e)
@@ -396,10 +399,10 @@ class PhoneticsApp:
                     self.last_params['db'] = val
                     self.slider_db.set(val)
                     self.recalculate_all_audio()
-            elif key == 'dur':
+            elif key == 'skip_front':
                 val = float(self.entry_min_dur.get())
-                if val != self.last_params['dur']:
-                    self.last_params['dur'] = val
+                if val != self.last_params['skip_front']:
+                    self.last_params['skip_front'] = val
                     self.slider_dur.set(val)
                     self.recalculate_all_audio()
             elif key == 'pitch_floor':
@@ -441,7 +444,7 @@ class PhoneticsApp:
             entry.configure(border_color=["#979DA2", "#565B5E"], border_width=1)
             current_val = entry.get()
             if hasattr(entry, '_last_val') and current_val == entry._last_val: return
-            if param_key in ['pts', 'db', 'dur']: self.on_param_change()
+            if param_key in ['pts', 'db', 'skip_front']: self.on_param_change()
 
         entry.bind("<Enter>", on_enter)
         entry.bind("<Leave>", on_leave)
@@ -452,15 +455,15 @@ class PhoneticsApp:
     def on_param_change(self, event=None):
         try:
             new_db = float(self.var_drop_db.get())
-            new_dur = float(self.var_min_dur.get())
+            new_skip = float(self.var_min_dur.get())
             new_pts = int(self.entry_points.get())
             changed_algo = False
             
             if new_db != self.last_params['db']:
                 self.last_params['db'] = new_db
                 changed_algo = True
-            if new_dur != self.last_params['dur']:
-                self.last_params['dur'] = new_dur
+            if new_skip != self.last_params['skip_front']:
+                self.last_params['skip_front'] = new_skip
                 changed_algo = True
                 
             if changed_algo: self.recalculate_all_audio()
@@ -472,22 +475,76 @@ class PhoneticsApp:
         except ValueError: pass
 
     def on_trim_silence_toggle(self):
-        self.recalculate_all_audio()
+        self.recalculate_all_audio(only_trim_silence=True)
 
-    def recalculate_all_audio(self):
+    def recalculate_all_audio(self, only_trim_silence=False):
         if not self.items: return
         items_snapshot = list(self.items.items())
         total = len(items_snapshot)
 
         def run():
             self.root.after(0, lambda: self.start_loading("正在重新计算..."))
-            for i, (iid, item) in enumerate(items_snapshot):
-                if item.get('snd'):
-                    mac_s, mac_e = item['macro_start'], item['macro_end']
-                    mic_s, mic_e = self._microscopic_vowel_nucleus(item['snd'], item['pitch'], mac_s, mac_e)
-                    item['start'], item['end'] = mic_s, mic_e
-                if i % 5 == 0 or i == total - 1:
-                    self.root.after(0, lambda v=(i + 1) / total: self.set_progress(v))
+            trim_silence = self.switch_trim_silence.get()
+            
+            if only_trim_silence:
+                for i, (iid, item) in enumerate(items_snapshot):
+                    if item.get('snd') and 'raw_start' in item and 'raw_end' in item:
+                        mic_s, mic_e = recalculate_bounds_fast(
+                            item['snd'], item['pitch'], item['raw_start'], item['raw_end'], trim_silence
+                        )
+                        item['start'], item['end'] = mic_s, mic_e
+                    if i % 5 == 0 or i == total - 1:
+                        self.root.after(0, lambda v=(i + 1) / total: self.set_progress(v))
+            else:
+                tasks = []
+                params = {
+                    'db': self.last_params['db'], 
+                    'skip_front': self.last_params['skip_front'], 
+                    'pitch_floor': self.last_params['pitch_floor'], 
+                    'pitch_ceiling': self.last_params['pitch_ceiling']
+                }
+                
+                valid_items = []
+                for iid, item in items_snapshot:
+                    if item.get('snd'):
+                        snd = item['snd']
+                        mac_s, mac_e = item['macro_start'], item['macro_end']
+                        valid_ms = max(0, mac_s)
+                        valid_me = min(snd.get_total_duration(), mac_e)
+                        
+                        if valid_me > valid_ms:
+                            part = snd.extract_part(from_time=valid_ms, to_time=valid_me)
+                            tasks.append({
+                                'ms': mac_s, 'me': mac_e,
+                                'snd_values': part.values, 'snd_sf': part.sampling_frequency,
+                                'pitch_xs': item['pitch'].xs(), 'pitch_freqs': item['pitch'].selected_array['frequency']
+                            })
+                            valid_items.append(item)
+                
+                if tasks:
+                    with concurrent.futures.ProcessPoolExecutor(max_workers=min(os.cpu_count() or 4, 8)) as executor:
+                        futures = {}
+                        for idx, task in enumerate(tasks):
+                            f = executor.submit(
+                                long_process_worker,
+                                task['snd_values'], task['snd_sf'], task['pitch_xs'], task['pitch_freqs'],
+                                task['ms'], task['me'], params, trim_silence
+                            )
+                            futures[f] = idx
+                        
+                        completed = 0
+                        for future in concurrent.futures.as_completed(futures):
+                            idx = futures[future]
+                            res = future.result()
+                            if res.get('success'):
+                                valid_items[idx]['start'] = res['mis']
+                                valid_items[idx]['end'] = res['mie']
+                                valid_items[idx]['raw_start'] = res['raw_s']
+                                valid_items[idx]['raw_end'] = res['raw_e']
+                            
+                            completed += 1
+                            if completed % max(1, len(futures)//10) == 0 or completed == len(futures):
+                                self.root.after(0, lambda v=completed/len(futures): self.set_progress(v))
 
             def finalize():
                 if self.spectrogram_panel.current_item:
@@ -507,7 +564,7 @@ class PhoneticsApp:
     def _microscopic_vowel_nucleus(self, snd, global_pitch, t_min, t_max):
         return core_microscopic_vowel_nucleus(
             snd, global_pitch, t_min, t_max, 
-            self.last_params['db'], self.last_params['dur'], 
+            self.last_params['db'], self.last_params['skip_front'], 
             self.switch_trim_silence.get()
         )
 
@@ -615,11 +672,15 @@ class PhoneticsApp:
                     # 核心优化：如果该音频段没有被拖拽修改边界，且原来就有微观边界，直接继承！
                     if not seg.get('is_modified') and seg.get('old_id') and seg['old_id'] in old_micro_bounds:
                         item['start'], item['end'] = old_micro_bounds[seg['old_id']]
+                        if 'raw_start' in self.items[seg['old_id']]:
+                            item['raw_start'] = self.items[seg['old_id']]['raw_start']
+                            item['raw_end'] = self.items[seg['old_id']]['raw_end']
                     else:
-                        mic_s, mic_e = self._microscopic_vowel_nucleus(
+                        mic_s, mic_e, raw_s, raw_e = self._microscopic_vowel_nucleus(
                             item['snd'], item['pitch'], item['macro_start'], item['macro_end']
                         )
                         item['start'], item['end'] = mic_s, mic_e
+                        item['raw_start'], item['raw_end'] = raw_s, raw_e
                     
                     # 移除可能的 "(缺失)" 后缀
                     if item['label'].endswith(" (缺失)"):
@@ -672,39 +733,84 @@ class PhoneticsApp:
             self.current_macro_segments = macro_segments.copy()
             total = len(flat_words)
             results = []
+            
+            # 准备参数
+            params = {'db': self.last_params['db'], 'skip_front': self.last_params['skip_front'], 'pitch_floor': self.last_params['pitch_floor'], 'pitch_ceiling': self.last_params['pitch_ceiling']}
+            trim = self.switch_trim_silence.get()
+            pitch_xs = global_pitch.xs()
+            pitch_freqs = global_pitch.selected_array['frequency']
+            
+            # 构建任务数据
+            tasks = []
             word_idx = 0
             for grp in groups:
                 for word in grp['items']:
                     if word_idx < len(macro_segments):
                         ms, me = macro_segments[word_idx]
-                        mic_s, mic_e = self._microscopic_vowel_nucleus(snd, global_pitch, ms, me)
                         
-                        # 检查是否有空数据
-                        times = np.linspace(mic_s, mic_e, 11)
-                        has_empty = any(np.isnan(global_pitch.get_value_at_time(t)) or global_pitch.get_value_at_time(t) == 0 for t in times)
-                        
-                        results.append({
-                            'word': word, 'group': grp['group'], 'ms': ms, 'me': me,
-                            'mis': mic_s, 'mie': mic_e, 'missing': False, 'has_empty_data': has_empty
-                        })
+                        # 提前提取小段音频的数据和采样率
+                        # 为了避免边界问题，确保时间合理
+                        valid_ms = max(0, ms)
+                        valid_me = min(snd.get_total_duration(), me)
+                        if valid_me > valid_ms:
+                            part = snd.extract_part(from_time=valid_ms, to_time=valid_me)
+                            snd_values = part.values
+                            snd_sf = part.sampling_frequency
+                            
+                            tasks.append({
+                                'word': word, 'group': grp['group'], 'ms': ms, 'me': me,
+                                'snd_values': snd_values, 'snd_sf': snd_sf, 'missing': False
+                            })
+                        else:
+                            tasks.append({'word': word, 'group': grp['group'], 'missing': True})
                         word_idx += 1
                     else:
-                        results.append({'word': word, 'group': grp['group'], 'missing': True})
+                        tasks.append({'word': word, 'group': grp['group'], 'missing': True})
+            
+            # 多进程执行
+            with concurrent.futures.ProcessPoolExecutor(max_workers=min(os.cpu_count() or 4, 8)) as executor:
+                futures = {}
+                for idx, task in enumerate(tasks):
+                    if not task.get('missing'):
+                        f = executor.submit(
+                            long_process_worker,
+                            task['snd_values'], task['snd_sf'], pitch_xs, pitch_freqs,
+                            task['ms'], task['me'], params, trim
+                        )
+                        futures[f] = idx
+                
+                # 等待完成
+                completed_count = 0
+                for future in concurrent.futures.as_completed(futures):
+                    idx = futures[future]
+                    res = future.result()
+                    if res.get('success'):
+                        tasks[idx]['mis'] = res['mis']
+                        tasks[idx]['mie'] = res['mie']
+                        tasks[idx]['raw_s'] = res['raw_s']
+                        tasks[idx]['raw_e'] = res['raw_e']
+                        tasks[idx]['has_empty_data'] = res['has_empty_data']
+                    else:
+                        tasks[idx]['missing'] = True # fallback
                     
-                    if len(results) % 10 == 0 or len(results) == total:
-                        self.root.after(0, lambda v=len(results)/total: self.set_progress(v))
+                    completed_count += 1
+                    if completed_count % 10 == 0 or completed_count == len(futures):
+                        self.root.after(0, lambda v=completed_count/len(futures) if len(futures) else 1: self.set_progress(v))
+            
+            results = tasks
             
             def finalize():
                 for res in results:
                     gid = self.tree_panel.ensure_group(res['group'])
-                    if not res['missing']:
+                    if not res.get('missing'):
                         has_empty = res.get('has_empty_data', False)
                         img = self.tk_icons.get('warning', '') if has_empty else ''
                         iid = self.tree_panel.tree.insert(gid, tk.END, text=res['word'], tags=('item',), image=img)
                         self.items[iid] = {
                             'label': res['word'], 'group': res['group'], 'snd': snd, 'pitch': global_pitch,
                             'macro_start': res['ms'], 'macro_end': res['me'], 
-                            'start': res['mis'], 'end': res['mie']
+                            'start': res['mis'], 'end': res['mie'],
+                            'raw_start': res.get('raw_s', res['mis']), 'raw_end': res.get('raw_e', res['mie'])
                         }
                     else:
                         iid = self.tree_panel.tree.insert(gid, tk.END, text=res['word'] + " (缺失)", tags=('item',))
@@ -727,7 +833,7 @@ class PhoneticsApp:
 
     def start_background_batch_processing(self, paths):
         def run():
-            params = {'db': self.last_params['db'], 'dur': self.last_params['dur'], 'pitch_floor': self.last_params['pitch_floor'], 'pitch_ceiling': self.last_params['pitch_ceiling']}
+            params = {'db': self.last_params['db'], 'skip_front': self.last_params['skip_front'], 'pitch_floor': self.last_params['pitch_floor'], 'pitch_ceiling': self.last_params['pitch_ceiling']}
             trim = self.switch_trim_silence.get()
             paths_to_process = [p for p in paths if p not in self.audio_cache]
             if not paths_to_process:
@@ -760,7 +866,7 @@ class PhoneticsApp:
             self.root.after(0, self.tree_panel.clear_all)
             
             total = len(self.pending_batch_paths)
-            params = {'db': self.last_params['db'], 'dur': self.last_params['dur'], 'pitch_floor': self.last_params['pitch_floor'], 'pitch_ceiling': self.last_params['pitch_ceiling']}
+            params = {'db': self.last_params['db'], 'skip_front': self.last_params['skip_front'], 'pitch_floor': self.last_params['pitch_floor'], 'pitch_ceiling': self.last_params['pitch_ceiling']}
             trim = self.switch_trim_silence.get()
             
             results = []
@@ -850,7 +956,7 @@ class PhoneticsApp:
                             tasks.append({'word': word, 'group': group_name, 'missing': True})
 
             results = [None] * len(tasks)
-            params = {'db': self.last_params['db'], 'dur': self.last_params['dur'], 'pitch_floor': self.last_params['pitch_floor'], 'pitch_ceiling': self.last_params['pitch_ceiling']}
+            params = {'db': self.last_params['db'], 'skip_front': self.last_params['skip_front'], 'pitch_floor': self.last_params['pitch_floor'], 'pitch_ceiling': self.last_params['pitch_ceiling']}
             trim = self.switch_trim_silence.get()
             
             futures = {}
@@ -889,7 +995,7 @@ class PhoneticsApp:
                 matched_count = 0
                 for i, res in enumerate(results):
                     gid = self.tree_panel.ensure_group(res['group'])
-                    if not res['missing'] and res.get('success'):
+                    if not res.get('missing') and res.get('success'):
                         res['group'] = tasks[i]['group']
                         display = f"{res['label']} ← {os.path.basename(res['path'])}" if match_mode == 'fuzzy' else res['label']
                         iid = f"batch_wl_{res['label']}_{id(res)}"

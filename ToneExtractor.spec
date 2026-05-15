@@ -79,8 +79,9 @@ exe = EXE(
     name='ToneExtractor',
     debug=False,
     bootloader_ignore_signals=False,
-    strip=False, 
-    upx=False, # 关闭 UPX 压缩，保证稳定性
+    strip=True, 
+    upx=True, 
+    upx_exclude=['vcruntime140.dll', 'vcruntime140_1.dll', 'python311.dll', 'python3.dll', 'ucrtbase.dll'],
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -93,8 +94,8 @@ coll = COLLECT(
     exe,
     a.binaries,
     a.datas,
-    strip=False,
-    upx=False, # 关闭 UPX 压缩
-    upx_exclude=[],
+    strip=True,
+    upx=True, 
+    upx_exclude=['vcruntime140.dll', 'vcruntime140_1.dll', 'python311.dll', 'python3.dll', 'ucrtbase.dll'],
     name='ToneExtractor',
 )
