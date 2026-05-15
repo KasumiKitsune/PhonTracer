@@ -45,7 +45,7 @@ jobs:
       if: matrix.os == 'macos-latest'
       run: |
         cd dist
-        zip -r ToneExtractor-macOS.zip ToneExtractor/
+        zip -yr ToneExtractor-macOS.zip ToneExtractor.app/
 
     - name: Create Release and Upload Artifacts
       uses: softprops/action-gh-release@v2

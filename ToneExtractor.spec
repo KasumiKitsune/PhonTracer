@@ -99,3 +99,11 @@ coll = COLLECT(
     upx_exclude=['vcruntime140.dll', 'vcruntime140_1.dll', 'python311.dll', 'python3.dll', 'ucrtbase.dll'],
     name='ToneExtractor',
 )
+
+if sys.platform == 'darwin':
+    app = BUNDLE(
+        coll,
+        name='ToneExtractor.app',
+        icon=icon_file,
+        bundle_identifier='com.kasumikitsune.toneextractor',
+    )

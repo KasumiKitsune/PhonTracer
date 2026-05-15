@@ -4,6 +4,7 @@ import customtkinter as ctk
 import numpy as np
 import parselmouth
 import sounddevice as sd
+import platform
 from .ui_widgets import CTkReleaseButton
 
 class VisualSplitter(ctk.CTkToplevel):
@@ -135,6 +136,7 @@ class VisualSplitter(ctk.CTkToplevel):
         self.canvas.bind("<Motion>", self.on_hover)
         if self.mode in ('cut', 'review', 'edit'):
             self.canvas.bind("<Button-3>", self.on_right_click)
+            self.canvas.bind("<Button-2>", self.on_right_click)
             
         self.canvas.bind("<MouseWheel>", self.on_mousewheel)
         self.canvas.bind("<Control-MouseWheel>", self.on_ctrl_mousewheel)
@@ -151,10 +153,17 @@ class VisualSplitter(ctk.CTkToplevel):
         self.render_canvas()
 
     def on_mousewheel(self, event):
-        self.canvas.xview_scroll(int(-1*(event.delta/120)), "units")
+        if platform.system() == 'Darwin':
+            delta = event.delta
+        else:
+            delta = event.delta / 120
+        self.canvas.xview_scroll(int(-1 * delta), "units")
 
     def on_ctrl_mousewheel(self, event):
-        delta = event.delta / 120
+        if platform.system() == 'Darwin':
+            delta = event.delta
+        else:
+            delta = event.delta / 120
         new_zoom = self.px_per_sec * (1.2 if delta > 0 else 0.8)
         new_zoom = max(20, min(3000, new_zoom))
         self.px_per_sec = new_zoom
