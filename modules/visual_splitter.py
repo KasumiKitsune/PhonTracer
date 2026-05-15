@@ -67,11 +67,34 @@ class VisualSplitter(ctk.CTkToplevel):
         cw = self.canvas.winfo_width()
         if cw > 100:
             fit_scale = cw / self.duration
-            # 如果音频很短，fit_scale 会很大，我们限制一下最大值
-            # 同样如果很长，限制一下最小值
-            self.px_per_sec = max(20, min(2000, fit_scale))
+            
+            # 用户需求：给每一段设置最小初始宽度 (防止过窄)
+            min_px_per_sec = 20
+            if self.segments:
+                # 只计算有效段落的平均时长（排除段落之间的大段空白）
+                total_seg_time = sum([s['end'] - s['start'] for s in self.segments])
+                avg_seg_dur = total_seg_time / len(self.segments) if len(self.segments) > 0 else 0.5
+                if avg_seg_dur < 0.1: avg_seg_dur = 0.1
+                
+                # 设定每段初始平均宽度至少 100 像素，这样看起来更舒展
+                min_px_per_sec = 100 / avg_seg_dur
+            
+            # 取自适应宽度和段落最小宽度的较大者
+            self.px_per_sec = max(min_px_per_sec, fit_scale)
+            
+            # 档位化：对齐到最近的 25px 倍数
+            self.px_per_sec = round(self.px_per_sec / 25) * 25
+            
+            # 限制在 slider 的范围内
+            self.px_per_sec = max(25, min(2000, self.px_per_sec))
+            
             self.zoom_slider.set(self.px_per_sec)
+            self.update_zoom_label()
         self.render_canvas()
+
+    def update_zoom_label(self):
+        if hasattr(self, 'lbl_zoom'):
+            self.lbl_zoom.configure(text=f"缩放: {int(self.px_per_sec)}")
 
     def setup_ui(self):
         self.configure(fg_color="#F9FAFB")
@@ -114,8 +137,10 @@ class VisualSplitter(ctk.CTkToplevel):
         # 缩放控制
         zoom_frame = ctk.CTkFrame(bottom_frame, fg_color="transparent")
         zoom_frame.pack(side=tk.LEFT, padx=30, pady=15)
-        ctk.CTkLabel(zoom_frame, text="缩放:", font=("Microsoft YaHei", 13), text_color="#4B5563").pack(side=tk.LEFT, padx=5)
-        self.zoom_slider = ctk.CTkSlider(zoom_frame, from_=20, to=2000, command=self.on_zoom_change, button_color="#3B82F6", progress_color="#93C5FD")
+        self.lbl_zoom = ctk.CTkLabel(zoom_frame, text=f"缩放: {int(self.px_per_sec)}", font=("Microsoft YaHei", 13), text_color="#4B5563")
+        self.lbl_zoom.pack(side=tk.LEFT, padx=5)
+        # 档位制：from 25 to 2000，步长 25，共 79 步
+        self.zoom_slider = ctk.CTkSlider(zoom_frame, from_=25, to=2000, number_of_steps=79, command=self.on_zoom_change, button_color="#3B82F6", progress_color="#93C5FD")
         self.zoom_slider.set(self.px_per_sec)
         self.zoom_slider.pack(side=tk.LEFT)
 
@@ -149,8 +174,14 @@ class VisualSplitter(ctk.CTkToplevel):
         self.envelope_data = full_values[::step]
 
     def on_zoom_change(self, val):
-        self.px_per_sec = float(val)
-        self.render_canvas()
+        # 强制档位化
+        self.px_per_sec = round(float(val) / 25) * 25
+        self.update_zoom_label()
+        
+        # 使用防抖 (Debounce)，避免滑块拖动时高频重绘导致严重卡顿
+        if hasattr(self, '_zoom_timer'):
+            self.after_cancel(self._zoom_timer)
+        self._zoom_timer = self.after(50, self.render_canvas)
 
     def on_mousewheel(self, event):
         if platform.system() == 'Darwin':
@@ -165,9 +196,12 @@ class VisualSplitter(ctk.CTkToplevel):
         else:
             delta = event.delta / 120
         new_zoom = self.px_per_sec * (1.2 if delta > 0 else 0.8)
-        new_zoom = max(20, min(3000, new_zoom))
+        # 档位化
+        new_zoom = round(new_zoom / 25) * 25
+        new_zoom = max(25, min(2000, new_zoom))
         self.px_per_sec = new_zoom
         self.zoom_slider.set(new_zoom)
+        self.update_zoom_label()
         self.render_canvas()
 
     def render_canvas(self):
@@ -203,7 +237,14 @@ class VisualSplitter(ctk.CTkToplevel):
                 x = (i / n) * self.canvas_width
                 y = mid_y - (val * (self.canvas_height/2 - 30) * 0.9)
                 points.extend([x, y])
-            self.canvas.create_line(points, fill="#9CA3AF", width=1, tags="waveform")
+                
+            # 性能优化：当画布非常宽时，points 数组极其庞大，Tkinter 解析单条超长 line 会造成严重卡顿
+            # 将其切分成小段绘制，速度会快几个数量级
+            chunk_size = 8000 # 每次画 4000 个点 (x,y 占两项)
+            for i in range(0, len(points), chunk_size):
+                chunk = points[i:i+chunk_size+2] # overlap 1 个点确保连续不断开
+                if len(chunk) >= 4:
+                    self.canvas.create_line(chunk, fill="#9CA3AF", width=1, tags="waveform")
         
         # 4. 绘制时间轴刻度
         step_sec = 1 if self.px_per_sec > 50 else 5
