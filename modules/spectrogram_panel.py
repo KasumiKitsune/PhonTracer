@@ -195,8 +195,8 @@ class SpectrogramPanel:
         # 绘制绿色虚线光标和时间点
         if self.cursor_x is None:
             self.cursor_x = t_s
-        self.cursor_line = self.ax.axvline(self.cursor_x, color='#4ADE80', linestyle='--', linewidth=3, zorder=10)
-        self.cursor_text = self.ax.text(self.cursor_x, 5000, f"{self.cursor_x:.3f}", color='#166534', fontsize=11, ha='center', va='bottom', fontweight='bold', zorder=10)
+        self.cursor_line = self.ax.axvline(self.cursor_x, color='#1B5E20', linestyle='--', linewidth=1.5, zorder=10)
+        self.cursor_text = self.ax.text(self.cursor_x, 5000, f"{self.cursor_x:.3f}", color='#1B5E20', fontsize=11, ha='center', va='bottom', fontweight='bold', zorder=10)
 
         self.fig.tight_layout()
         self.canvas.draw()
@@ -236,6 +236,13 @@ class SpectrogramPanel:
                 closest = ('inner', i)
                 min_dist = abs(event.x - i_px)
         
+        # Check cursor line proximity
+        if self.cursor_x is not None:
+            c_px = self.ax.transData.transform((self.cursor_x, 0))[0]
+            if abs(event.x - c_px) < min_dist:
+                closest = 'cursor'
+                min_dist = abs(event.x - c_px)
+
         self.dragging = closest
         if closest == 'start':
             self.line_start.set_color('#047857') 
@@ -243,6 +250,9 @@ class SpectrogramPanel:
         elif closest == 'end':
             self.line_end.set_color('#047857') 
             self.line_end.set_linewidth(4)
+        elif closest == 'cursor':
+            self.cursor_line.set_color('#064E3B') # Darker green when dragging
+            self.cursor_line.set_linewidth(2.5)
         elif isinstance(closest, tuple):
             self.inner_lines[closest[1]].set_color('#1E3A8A')
             self.inner_lines[closest[1]].set_linewidth(3.5)
@@ -250,9 +260,12 @@ class SpectrogramPanel:
         if self.dragging:
             self.canvas.draw_idle()
         else:
-            # Clicked empty space: move cursor
+            # Clicked empty space: move cursor and start dragging it
             if event.xdata is not None:
                 self.cursor_x = event.xdata
+                self.dragging = 'cursor'
+                self.cursor_line.set_color('#064E3B')
+                self.cursor_line.set_linewidth(2.5)
                 self.update_cursor_graphics()
 
     def update_cursor_graphics(self):
@@ -284,6 +297,14 @@ class SpectrogramPanel:
             else:
                 self.line_end.set_linewidth(2); self.line_end.set_color('#EF4444')
                 
+            if self.cursor_x is not None:
+                c_px = self.ax.transData.transform((self.cursor_x, 0))[0]
+                if abs(event.x - c_px) < 15:
+                    self.cursor_line.set_linewidth(2.5); self.cursor_line.set_color('#065F46')
+                    is_hovering = True
+                else:
+                    self.cursor_line.set_linewidth(1.5); self.cursor_line.set_color('#1B5E20')
+
             for i, s_t in enumerate(splits):
                 i_px = self.ax.transData.transform((s_t, 0))[0]
                 if abs(event.x - i_px) < 15:
@@ -303,6 +324,10 @@ class SpectrogramPanel:
         elif self.dragging == 'end':
             min_limit = splits[-1] if splits else item['start']
             item['end'] = max(event.xdata, min_limit + 0.01)
+        elif self.dragging == 'cursor':
+            self.cursor_x = event.xdata
+            self.update_cursor_graphics()
+            return # update_cursor_graphics already calls draw_idle
         elif isinstance(self.dragging, tuple) and self.dragging[0] == 'inner':
             i = self.dragging[1]
             min_limit = item['start'] if i == 0 else splits[i - 1]
@@ -318,6 +343,9 @@ class SpectrogramPanel:
             self.line_end.set_color('#EF4444')
             self.line_start.set_linewidth(2)
             self.line_end.set_linewidth(2)
+            if self.cursor_line:
+                self.cursor_line.set_color('#1B5E20')
+                self.cursor_line.set_linewidth(1.5)
             for line in self.inner_lines:
                 line.set_color('#3B82F6')
                 line.set_linewidth(2)
@@ -429,6 +457,7 @@ class SpectrogramPanel:
             self.play_start_sys_time = time.time()
             self.play_start_audio_time = play_s
             self.play_end_audio_time = play_e
+            self.play_is_selection = (t_s <= play_s <= t_e) # Whether we are playing within the red lines
 
             self._playback_update_loop()
 
@@ -443,13 +472,18 @@ class SpectrogramPanel:
 
         if current_audio_time >= self.play_end_audio_time:
             self.is_playing = False
-            self.cursor_x = self.play_end_audio_time
+            # If playing in selection, return to start of selection (item['start'])
+            if getattr(self, 'play_is_selection', False):
+                self.cursor_x = self.current_item['start']
+            else:
+                self.cursor_x = self.play_end_audio_time
             self.update_cursor_graphics()
             return
 
         self.cursor_x = current_audio_time
         self.update_cursor_graphics()
-        self.canvas.get_tk_widget().after(50, self._playback_update_loop)
+        # Sync with common screen refresh rate (60Hz -> 16ms)
+        self.canvas.get_tk_widget().after(16, self._playback_update_loop)
 
     def apply_auto_detect(self):
         if self.on_auto_detect_callback:
