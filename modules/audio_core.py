@@ -2,18 +2,28 @@
 
 import numpy as np
 import os
+from typing import Tuple, List, Union, Dict, Any
+import parselmouth
+
 
 # 静音阈值：振幅 ≈ -50dB (10^(-50/20) ≈ 0.00316)
 SILENCE_AMPLITUDE_THRESHOLD = 10 ** (-50 / 20)
+VOP_BUFFER_SEC = 0.02
+VOP_WIN_LEN_SEC = 0.010
+VOP_HOP_LEN_SEC = 0.002
+VAD_TIME_STEP = 0.01
+VAD_MIN_DURATION = 0.1
+VAD_MERGE_THRESHOLD = 0.25
 
-def detect_vowel_onset(snd, rough_start, rough_end):
+
+def detect_vowel_onset(snd: parselmouth.Sound, rough_start: float, rough_end: float) -> float:
     """
     智能元音起始点 (VOP) 检测：
     基于 短时能量(STE)突变 + 过零率(ZCR) 惩罚
     取代机械的固定时长裁切。
     """
     # 前后加 20ms 缓冲提取波形，确保能算出一阶导数
-    buffer = 0.02  
+    buffer = VOP_BUFFER_SEC
     part_s = max(0, rough_start - buffer)
     part_e = min(snd.get_total_duration(), rough_end + buffer)
     
@@ -25,8 +35,8 @@ def detect_vowel_onset(snd, rough_start, rough_end):
     sr = part.sampling_frequency
     
     # 设定 10ms 窗口，2ms 步长（高分辨率时间轴）
-    win_len = int(0.010 * sr)  
-    hop_len = int(0.002 * sr)  
+    win_len = int(VOP_WIN_LEN_SEC * sr)
+    hop_len = int(VOP_HOP_LEN_SEC * sr)
     
     if len(vals) < win_len:
         return rough_start
@@ -81,9 +91,9 @@ def detect_vowel_onset(snd, rough_start, rough_end):
     return valid_times[best_idx]
 
 
-def macroscopic_vad(snd):
+def macroscopic_vad(snd: parselmouth.Sound) -> List[List[float]]:
     """长音频宏观静音检测分割"""
-    intensity = snd.to_intensity(time_step=0.01)
+    intensity = snd.to_intensity(time_step=VAD_TIME_STEP)
     vals = intensity.values[0]
     xs = intensity.xs()
     sorted_vals = np.sort(vals[~np.isnan(vals)])
@@ -103,12 +113,12 @@ def macroscopic_vad(snd):
     for s in segs:
         if not merged: merged.append(s)
         else:
-            if s[0] - merged[-1][1] < 0.25: merged[-1][1] = s[1]
+            if s[0] - merged[-1][1] < VAD_MERGE_THRESHOLD: merged[-1][1] = s[1]
             else: merged.append(s)
-    return [s for s in merged if s[1]-s[0] > 0.1]
+    return [s for s in merged if s[1]-s[0] > VAD_MIN_DURATION]
 
 
-def core_microscopic_vowel_nucleus(snd, global_pitch_or_arrays, t_min, t_max, drop_db, skip_front, trim_silence):
+def core_microscopic_vowel_nucleus(snd: parselmouth.Sound, global_pitch_or_arrays: Union[parselmouth.Pitch, Tuple[np.ndarray, np.ndarray]], t_min: float, t_max: float, drop_db: float, skip_front: float, trim_silence: bool) -> Tuple[float, float, float, float]:
     """微观韵母提取核心算法"""
     try:
         if isinstance(global_pitch_or_arrays, tuple):
@@ -170,7 +180,7 @@ def core_microscopic_vowel_nucleus(snd, global_pitch_or_arrays, t_min, t_max, dr
         return t_min, t_max, t_min, t_max
 
 
-def recalculate_bounds_fast(snd, global_pitch_or_arrays, temp_s, temp_e, trim_silence):
+def recalculate_bounds_fast(snd: parselmouth.Sound, global_pitch_or_arrays: Union[parselmouth.Pitch, Tuple[np.ndarray, np.ndarray]], temp_s: float, temp_e: float, trim_silence: bool) -> Tuple[float, float]:
     """仅重新计算静音裁切和基频收缩，不重新跑振幅分析"""
     try:
         if isinstance(global_pitch_or_arrays, tuple):
@@ -200,15 +210,13 @@ def recalculate_bounds_fast(snd, global_pitch_or_arrays, temp_s, temp_e, trim_si
         return temp_s, temp_e
 
 
-def check_audio_segments(path):
+def check_audio_segments(path: str) -> int:
     """在子进程中检查音频区段数量，避免主线程 GIL 冲突"""
-    import parselmouth
     snd = parselmouth.Sound(path)
     return len(macroscopic_vad(snd))
 
 
-def batch_process_worker(path, params, trim_silence):
-    import parselmouth
+def batch_process_worker(path: str, params: Dict[str, float], trim_silence: bool) -> Dict[str, Any]:
     try:
         snd = parselmouth.Sound(path)
         pitch = snd.to_pitch(pitch_floor=params.get('pitch_floor', 75), pitch_ceiling=params.get('pitch_ceiling', 600))
@@ -242,8 +250,7 @@ def batch_process_worker(path, params, trim_silence):
         return {'success': False, 'error': str(e), 'path': path}
 
 
-def long_process_worker(snd_values, snd_sf, pitch_xs, pitch_freqs, ms, me, params, trim_silence):
-    import parselmouth
+def long_process_worker(snd_values: np.ndarray, snd_sf: float, pitch_xs: np.ndarray, pitch_freqs: np.ndarray, ms: float, me: float, params: Dict[str, float], trim_silence: bool) -> Dict[str, Any]:
     try:
         snd_part = parselmouth.Sound(snd_values, sampling_frequency=snd_sf)
         shifted_xs = pitch_xs - ms
