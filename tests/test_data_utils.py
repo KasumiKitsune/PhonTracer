@@ -6,7 +6,7 @@ import sys
 sys.modules['numpy'] = MagicMock()
 sys.modules['parselmouth'] = MagicMock()
 
-from modules.data_utils import parse_wordlist
+from modules.data_utils import parse_wordlist, fuzzy_match_word_to_path
 
 def test_parse_wordlist_basic():
     raw_text = """
@@ -123,3 +123,49 @@ def test_parse_wordlist_only_headers():
     groups, flat_words = parse_wordlist(raw_text)
     assert len(groups) == 0
     assert flat_words == []
+
+def test_fuzzy_match_basic():
+    paths = ["path/to/apple.wav", "path/to/banana.wav"]
+    assert fuzzy_match_word_to_path("apple", paths) == 0
+    assert fuzzy_match_word_to_path("BANANA", paths) == 1
+    assert fuzzy_match_word_to_path("cherry", paths) is None
+
+def test_fuzzy_match_cleaning():
+    paths = ["path/to/apple_test.wav"]
+    # BOM and case
+    assert fuzzy_match_word_to_path("\ufeffAPPLE", paths) == 0
+
+    # NFC normalization
+    accented = "e\u0301" # é (NFD)
+    normalized = "\u00e9" # é (NFC)
+    paths_accented = [f"path/to/{normalized}.wav"]
+    assert fuzzy_match_word_to_path(accented, paths_accented) == 0
+
+    # Regex cleaning: [^\w\u4e00-\u9fa5]|_
+    paths_regex = ["path/to/word_with_extra!@#.wav"]
+    assert fuzzy_match_word_to_path("wordwithextra", paths_regex) == 0
+
+def test_fuzzy_match_substring():
+    paths = ["apple_pie.wav", "banana.wav"]
+    # word_clean in fname_clean
+    assert fuzzy_match_word_to_path("apple", paths) == 0
+    # fname_clean in word_clean
+    assert fuzzy_match_word_to_path("banana_extra", paths) == 1
+
+def test_fuzzy_match_ranking():
+    # Exact match vs Substring
+    paths = ["apple_pie.wav", "apple.wav"]
+    assert fuzzy_match_word_to_path("apple", paths) == 1 # 1 is exact, 0 is substring
+
+    # Used indices
+    paths = ["apple.wav", "apple.wav"]
+    assert fuzzy_match_word_to_path("apple", paths, used_indices=[0]) == 1
+
+    # Length difference
+    paths = ["apple_1.wav", "apple_123.wav"]
+    assert fuzzy_match_word_to_path("apple", paths) == 0 # apple_1 is closer in length
+
+def test_fuzzy_match_edge_cases():
+    assert fuzzy_match_word_to_path("", ["a.wav"]) is None
+    assert fuzzy_match_word_to_path("a", []) is None
+    assert fuzzy_match_word_to_path("   ", ["a.wav"]) is None
