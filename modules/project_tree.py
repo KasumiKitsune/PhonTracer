@@ -342,22 +342,32 @@ class ProjectTreePanel:
                 self.tree.item(self.last_hover, tags=tags)
             self.last_hover = None
 
+    def _get_all_items_by_group(self):
+        """Helper to collect all items in the tree, grouped by their project groups."""
+        structure = []
+        for grp_name in self.project_groups:
+            grp_node = self.group_nodes.get(grp_name)
+            if grp_node:
+                # Only include children that are actually in self.items
+                children = [c for c in self.tree.get_children(grp_node) if c in self.items]
+                structure.append((grp_name, children))
+        return structure
+
     def _get_item_index(self, target_iid):
         is_continuous = (self.num_rule_var.get() == "continuous")
+        if not is_continuous:
+            return self.tree.index(target_iid) + 1
+
         target_group = self.items[target_iid]['group']
-        idx = 1
-        if is_continuous:
-            for grp_name in self.project_groups:
-                grp_node = self.group_nodes[grp_name]
-                for child in self.tree.get_children(grp_node):
-                    if child == target_iid: return idx
-                    if child in self.items: idx += 1
-        else:
-            grp_node = self.group_nodes[target_group]
-            for child in self.tree.get_children(grp_node):
-                if child == target_iid: return idx
-                if child in self.items: idx += 1
-        return idx
+        idx = 0
+        for grp_name in self.project_groups:
+            if grp_name == target_group:
+                break
+            grp_node = self.group_nodes.get(grp_name)
+            if grp_node:
+                idx += len(self.tree.get_children(grp_node))
+
+        return idx + self.tree.index(target_iid) + 1
 
     def update_preview(self):
         self._apply_zebra_stripes()
@@ -407,24 +417,23 @@ class ProjectTreePanel:
     def export_project(self):
         if not self.items: return messagebox.showwarning("提示", "没有可导出的数据。")
         
+        tree_structure = self._get_all_items_by_group()
         empty_labels = []
         num_points = self.app_state_params['pts']
-        for grp_name in self.project_groups:
-            grp_node = self.group_nodes[grp_name]
-            for child in self.tree.get_children(grp_node):
-                if child in self.items:
-                    item = self.items[child]
-                    if item.get('start') is None: continue
-                    has_empty = False
-                    if (not item.get('snd') or not item.get('pitch')) and item.get('path'):
-                        if item.get('preview_f0'):
-                            has_empty = any(f == 0 for f in item['preview_f0'])
-                    else:
-                        if item.get('snd') and item.get('pitch'):
-                            times = np.linspace(item['start'], item['end'], num_points)
-                            has_empty = any(np.isnan(item['pitch'].get_value_at_time(t)) or item['pitch'].get_value_at_time(t) == 0 for t in times)
-                    if has_empty:
-                        empty_labels.append(f"[{grp_name}] {item['label']}")
+        for grp_name, children in tree_structure:
+            for child in children:
+                item = self.items[child]
+                if item.get('start') is None: continue
+                has_empty = False
+                if (not item.get('snd') or not item.get('pitch')) and item.get('path'):
+                    if item.get('preview_f0'):
+                        has_empty = any(f == 0 for f in item['preview_f0'])
+                else:
+                    if item.get('snd') and item.get('pitch'):
+                        times = np.linspace(item['start'], item['end'], num_points)
+                        has_empty = any(np.isnan(item['pitch'].get_value_at_time(t)) or item['pitch'].get_value_at_time(t) == 0 for t in times)
+                if has_empty:
+                    empty_labels.append(f"[{grp_name}] {item['label']}")
         
         if empty_labels:
             msg = "以下项目的基频数据包含 0 值（可能无法提取有效声调）：\n\n"
@@ -435,9 +444,9 @@ class ProjectTreePanel:
                 return
                 
         # 弹出导出选择菜单
-        self._show_export_menu()
+        self._show_export_menu(tree_structure)
 
-    def _show_export_menu(self):
+    def _show_export_menu(self, tree_structure=None):
         """弹出导出格式选择对话框"""
         dlg = ctk.CTkToplevel(self.parent)
         dlg.title("选择导出格式")
@@ -462,7 +471,7 @@ class ProjectTreePanel:
                 out_file = filedialog.asksaveasfilename(title="导出文本", defaultextension=".txt", initialfile="tone_export_data", filetypes=[("文本文件", "*.txt")])
                 if not out_file: return
                 try:
-                    self._export_txt(out_file)
+                    self._export_txt(out_file, tree_structure=tree_structure)
                     messagebox.showinfo("成功", f"数据已导出至:\n{out_file}")
                 except Exception as e: messagebox.showerror("错误", str(e))
             elif mode == 'xlsx':
@@ -470,21 +479,21 @@ class ProjectTreePanel:
                 if not out_file: return
                 try:
                     include_chart = messagebox.askyesno("导出设置", "是否在 Excel 中包含分析图表？\n(包含图表可能在部分旧版 Office 中打开较慢)", default=messagebox.NO)
-                    self._export_xlsx(out_file, include_chart=include_chart)
+                    self._export_xlsx(out_file, include_chart=include_chart, tree_structure=tree_structure)
                     messagebox.showinfo("成功", f"数据已导出至:\n{out_file}")
                 except Exception as e: messagebox.showerror("错误", str(e))
             elif mode == 'line_chart':
                 out_file = filedialog.asksaveasfilename(title="导出折线图", defaultextension=".png", initialfile="tone_line_chart", filetypes=[("PNG 图片", "*.png"), ("SVG 矢量图", "*.svg"), ("PDF 文档", "*.pdf")])
                 if not out_file: return
                 try:
-                    self._export_line_chart(out_file)
+                    self._export_line_chart(out_file, tree_structure=tree_structure)
                     messagebox.showinfo("成功", f"图表已导出至:\n{out_file}")
                 except Exception as e: messagebox.showerror("错误", str(e))
             elif mode == 'kde':
                 out_file = filedialog.asksaveasfilename(title="导出KDE热力图", defaultextension=".png", initialfile="tone_kde_heatmap", filetypes=[("PNG 图片", "*.png"), ("SVG 矢量图", "*.svg"), ("PDF 文档", "*.pdf")])
                 if not out_file: return
                 try:
-                    self._export_kde_heatmap(out_file)
+                    self._export_kde_heatmap(out_file, tree_structure=tree_structure)
                     messagebox.showinfo("成功", f"热力图已导出至:\n{out_file}")
                 except Exception as e: messagebox.showerror("错误", str(e))
         
@@ -493,7 +502,7 @@ class ProjectTreePanel:
         ctk.CTkButton(dlg, text="  📈  声调格局折线图", command=lambda: do_export('line_chart'), fg_color="#EFF6FF", text_color="#1E40AF", hover_color="#DBEAFE", **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
         ctk.CTkButton(dlg, text="  🔥  KDE 密度热力图", command=lambda: do_export('kde'), fg_color="#FFF7ED", text_color="#9A3412", hover_color="#FFEDD5", **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
 
-    def _export_xlsx(self, out_file, include_chart=False):
+    def _export_xlsx(self, out_file, include_chart=False, tree_structure=None):
         try:
             import xlsxwriter
         except ImportError:
@@ -518,11 +527,12 @@ class ProjectTreePanel:
         row_idx = 1
         raw_data = [] 
         
-        for grp_name in self.project_groups:
+        if tree_structure is None:
+            tree_structure = self._get_all_items_by_group()
+
+        for grp_name, children in tree_structure:
             if not is_continuous: global_idx = 1
-            grp_node = self.group_nodes[grp_name]
-            for child in self.tree.get_children(grp_node):
-                if child not in self.items: continue
+            for child in children:
                 item = self.items[child]
                 
                 if (not item.get('snd') or not item.get('pitch')) and item.get('path'):
@@ -625,30 +635,32 @@ class ProjectTreePanel:
         
         workbook.close()
 
-    def _export_txt(self, out_file):
+    def _export_txt(self, out_file, tree_structure=None):
         is_continuous = (self.num_rule_var.get() == "continuous")
+        if tree_structure is None:
+            tree_structure = self._get_all_items_by_group()
+
         with open(out_file, "w", encoding="utf-8") as f:
             global_idx = 1
-            for grp_name in self.project_groups:
+            for grp_name, children in tree_structure:
                 if not is_continuous: global_idx = 1
                 f.write(f"{grp_name}\n")
-                grp_node = self.group_nodes[grp_name]
-                for child in self.tree.get_children(grp_node):
-                    if child in self.items:
-                        item = self.items[child]
-                        if item['start'] is not None:
-                            txt_data = get_export_text_for_item(item, global_idx, self.app_state_params['pts'])
-                            f.write(txt_data)
-                            global_idx += 1
+                for child in children:
+                    item = self.items[child]
+                    if item['start'] is not None:
+                        txt_data = get_export_text_for_item(item, global_idx, self.app_state_params['pts'])
+                        f.write(txt_data)
+                        global_idx += 1
 
-    def _collect_group_avg_data(self):
+    def _collect_group_avg_data(self, tree_structure=None):
         """收集各组均值数据，返回 (group_name, t_values_list) 和 min/max_hz"""
         num_points = self.app_state_params['pts']
         raw_data = []
-        for grp_name in self.project_groups:
-            grp_node = self.group_nodes[grp_name]
-            for child in self.tree.get_children(grp_node):
-                if child not in self.items: continue
+        if tree_structure is None:
+            tree_structure = self._get_all_items_by_group()
+
+        for grp_name, children in tree_structure:
+            for child in children:
                 item = self.items[child]
                 if (not item.get('snd') or not item.get('pitch')) and item.get('path'):
                     try:
@@ -694,9 +706,9 @@ class ProjectTreePanel:
             result[k] = t_vals
         return result
 
-    def _export_line_chart(self, out_file):
+    def _export_line_chart(self, out_file, tree_structure=None):
         """导出声调格局折线图 (PNG/SVG/PDF)"""
-        data = self._collect_group_avg_data()
+        data = self._collect_group_avg_data(tree_structure=tree_structure)
         if not data: return messagebox.showwarning("提示", "没有有效数据可供绘图。")
 
         num_points = self.app_state_params['pts']
@@ -726,7 +738,7 @@ class ProjectTreePanel:
         fig.savefig(out_file, dpi=300, bbox_inches='tight')
         plt.close(fig)
 
-    def _export_kde_heatmap(self, out_file):
+    def _export_kde_heatmap(self, out_file, tree_structure=None):
         """导出 KDE 密度热力图：直接从音频提取高密度 F0，按组绘制 KDE"""
         from scipy.interpolate import interp1d
         from scipy.signal import savgol_filter
@@ -758,13 +770,15 @@ class ProjectTreePanel:
         # 收集全局 min/max F0 用于归一化
         all_raw_f0 = []
         
-        total_items = sum(len(self.tree.get_children(self.group_nodes[g])) for g in self.project_groups)
+        if tree_structure is None:
+            tree_structure = self._get_all_items_by_group()
+
+        total_items = sum(len(children) for grp_name, children in tree_structure)
         processed = 0
 
-        for grp_name in self.project_groups:
-            grp_node = self.group_nodes[grp_name]
+        for grp_name, children in tree_structure:
             group_contours[grp_name] = []
-            for child in self.tree.get_children(grp_node):
+            for child in children:
                 processed += 1
                 # 提高颗粒度：每处理一个就更新进度，且数据处理占总进度的 70%
                 pbar.set(0.7 * (processed / total_items))
