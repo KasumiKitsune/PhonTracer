@@ -12,7 +12,7 @@ from PIL import Image
 # 导入拆分后的模块
 from .ui_widgets import ToolTip, CTkReleaseButton
 from .data_utils import parse_wordlist, fuzzy_match_word_to_path
-from .audio_core import core_microscopic_vowel_nucleus, batch_process_worker, macroscopic_vad, check_audio_segments, long_process_worker, recalculate_bounds_fast
+from .audio_core import core_microscopic_vowel_nucleus, batch_process_worker, macroscopic_vad, check_audio_segments, long_process_worker, recalculate_bounds_fast, auto_split_inner_word
 from .visual_splitter import VisualSplitter
 from .spectrogram_panel import SpectrogramPanel
 from .project_tree import ProjectTreePanel
@@ -357,14 +357,22 @@ class PhoneticsApp:
             try:
                 self.root.after(0, lambda: self.start_loading("正在智能识别..."))
                 mic_s, mic_e, raw_s, raw_e = self._microscopic_vowel_nucleus(snd, pitch, mac_s, mac_e)
+                
+                label = item['label'].replace(" (缺失)", "")
+                if len(label) > 1:
+                    inner_splits = auto_split_inner_word(snd, mic_s, mic_e, len(label))
+                else:
+                    inner_splits = []
+                    
                 def update_ui():
                     item['start'] = mic_s
                     item['end'] = mic_e
                     item['raw_start'] = raw_s
                     item['raw_end'] = raw_e
+                    item['inner_splits'] = inner_splits
                     self.spectrogram_panel.var_t_start.set(f"{mic_s:.3f}")
                     self.spectrogram_panel.var_t_end.set(f"{mic_e:.3f}")
-                    self.spectrogram_panel.update_lines(mic_s, mic_e)
+                    self.spectrogram_panel.update_lines(mic_s, mic_e, inner_splits)
                     self.spectrogram_panel.update_ui_times()
                     self.stop_loading("识别完成")
                 self.root.after(0, update_ui)
@@ -511,7 +519,14 @@ class PhoneticsApp:
                         mic_s, mic_e = recalculate_bounds_fast(
                             item['snd'], item['pitch'], item['raw_start'], item['raw_end'], trim_silence
                         )
+                        # 等比例缩放内部蓝线
+                        old_s, old_e = item.get('start', mic_s), item.get('end', mic_e)
+                        if 'inner_splits' in item and item['inner_splits'] and old_e > old_s:
+                            ratio = (mic_e - mic_s) / (old_e - old_s)
+                            item['inner_splits'] = [mic_s + (s - old_s) * ratio for s in item['inner_splits']]
+                            
                         item['start'], item['end'] = mic_s, mic_e
+                        
                     if i % 5 == 0 or i == total - 1:
                         self.root.after(0, lambda v=(i + 1) / total: self.set_progress(v))
             else:
@@ -558,7 +573,8 @@ class PhoneticsApp:
                             tasks.append({
                                 'ms': mac_s, 'me': mac_e,
                                 'snd_values': part.values, 'snd_sf': part.sampling_frequency,
-                                'pitch_xs': p_xs[idx_start:idx_end], 'pitch_freqs': p_freqs[idx_start:idx_end]
+                                'pitch_xs': p_xs[idx_start:idx_end], 'pitch_freqs': p_freqs[idx_start:idx_end],
+                                'word_label': item['label'].replace(" (缺失)", "")
                             })
                             valid_items.append(item)
                 
@@ -569,7 +585,7 @@ class PhoneticsApp:
                             f = executor.submit(
                                 long_process_worker,
                                 task['snd_values'], task['snd_sf'], task['pitch_xs'], task['pitch_freqs'],
-                                task['ms'], task['me'], params, trim_silence
+                                task['ms'], task['me'], params, trim_silence, task['word_label']
                             )
                             futures[f] = idx
                         
@@ -582,6 +598,7 @@ class PhoneticsApp:
                                 valid_items[idx]['end'] = res['mie']
                                 valid_items[idx]['raw_start'] = res['raw_s']
                                 valid_items[idx]['raw_end'] = res['raw_e']
+                                valid_items[idx]['inner_splits'] = res.get('inner_splits', [])
                             
                             completed += 1
                             if completed % max(1, len(futures)//10) == 0 or completed == len(futures):
@@ -639,7 +656,8 @@ class PhoneticsApp:
                         'id': iid,
                         'label': item['label'],
                         'start': item['macro_start'], 
-                        'end': item['macro_end']
+                        'end': item['macro_end'],
+                        'inner_splits': item.get('inner_splits', [])
                     })
             existing_items.sort(key=lambda x: x['start'])
             
@@ -653,7 +671,8 @@ class PhoneticsApp:
                             'id': None,
                             'label': f"【未分配段】",
                             'start': ms,
-                            'end': me
+                            'end': me,
+                            'inner_splits': []
                         })
             
         if existing_items:
@@ -676,14 +695,14 @@ class PhoneticsApp:
 
     def on_visual_split_confirm(self, segments, is_update=False, deleted_count=0):
         if is_update:
-            # segments 包含了所有的有效段映射：{'id': new_iid, 'old_id': old_iid, 'start', 'end', 'is_modified'}
+            # segments 包含了所有的有效段映射：{'id': new_iid, 'old_id': old_iid, 'start', 'end', 'inner_splits', 'is_modified'}
             mapped_segs = {seg['id']: seg for seg in segments}
             
             # 备份旧的 micro 边界，以便在未修改宏观边界时重用（避免覆盖手动微调且节省算力）
             old_micro_bounds = {}
             for iid, item in self.items.items():
                 if item.get('start') is not None and item.get('end') is not None:
-                    old_micro_bounds[iid] = (item['start'], item['end'])
+                    old_micro_bounds[iid] = (item['start'], item['end'], item.get('inner_splits', []))
             
             # 1. 收集树中所有的 word items (保持顺序)
             all_iids = []
@@ -715,18 +734,33 @@ class PhoneticsApp:
                             )
                         item['pitch'] = global_pitch_cache
                     
-                    # 核心优化：如果该音频段没有被拖拽修改边界，且原来就有微观边界，直接继承！
+                    # 核心优化：如果没有被拖拽修改边界，且原来就有微观边界，直接继承！
                     if not seg.get('is_modified') and seg.get('old_id') and seg['old_id'] in old_micro_bounds:
-                        item['start'], item['end'] = old_micro_bounds[seg['old_id']]
+                        item['start'], item['end'], item['inner_splits'] = old_micro_bounds[seg['old_id']]
                         if 'raw_start' in self.items[seg['old_id']]:
                             item['raw_start'] = self.items[seg['old_id']]['raw_start']
                             item['raw_end'] = self.items[seg['old_id']]['raw_end']
                     else:
-                        mic_s, mic_e, raw_s, raw_e = self._microscopic_vowel_nucleus(
-                            item['snd'], item['pitch'], item['macro_start'], item['macro_end']
-                        )
-                        item['start'], item['end'] = mic_s, mic_e
-                        item['raw_start'], item['raw_end'] = raw_s, raw_e
+                        if seg.get('is_modified'):
+                            # 词语模式：如果用户在界面上明确改了红线蓝线，那用户的操作就是绝对真理！不跑自动识别覆盖。
+                            item['start'] = seg['start']
+                            item['end'] = seg['end']
+                            item['inner_splits'] = list(seg.get('inner_splits', []))
+                            item['raw_start'] = seg['start']
+                            item['raw_end'] = seg['end']
+                        else:
+                            # 纯新分配的自动识别段落，调用完整识别流
+                            mic_s, mic_e, raw_s, raw_e = self._microscopic_vowel_nucleus(
+                                item['snd'], item['pitch'], item['macro_start'], item['macro_end']
+                            )
+                            item['start'], item['end'] = mic_s, mic_e
+                            item['raw_start'], item['raw_end'] = raw_s, raw_e
+                            
+                            label = item['label'].replace(" (缺失)", "")
+                            if len(label) > 1:
+                                item['inner_splits'] = auto_split_inner_word(item['snd'], mic_s, mic_e, len(label))
+                            else:
+                                item['inner_splits'] = []
                     
                     # 移除可能的 "(缺失)" 后缀
                     if item['label'].endswith(" (缺失)"):
@@ -741,6 +775,7 @@ class PhoneticsApp:
                     item['macro_end'] = None
                     item['start'] = None
                     item['end'] = None
+                    item['inner_splits'] = []
                     
                     if not item['label'].endswith(" (缺失)"):
                         self.tree_panel.tree.item(iid, text=item['label'] + " (缺失)")
@@ -795,7 +830,6 @@ class PhoneticsApp:
                         ms, me = macro_segments[word_idx]
                         
                         # 提前提取小段音频的数据和采样率
-                        # 为了避免边界问题，确保时间合理
                         valid_ms = max(0, ms)
                         valid_me = min(snd.get_total_duration(), me)
                         if valid_me > valid_ms:
@@ -803,7 +837,7 @@ class PhoneticsApp:
                             snd_values = part.values
                             snd_sf = part.sampling_frequency
                             
-                            # 性能优化：切片 Pitch 数组，大幅减少进程间通信 (IPC) 的数据量
+                            # 性能优化：切片 Pitch 数组
                             idx_start = np.searchsorted(pitch_xs, valid_ms)
                             idx_end = np.searchsorted(pitch_xs, valid_me)
                             sliced_xs = pitch_xs[idx_start:idx_end]
@@ -829,7 +863,7 @@ class PhoneticsApp:
                         f = executor.submit(
                             long_process_worker,
                             task['snd_values'], task['snd_sf'], task['pitch_xs'], task['pitch_freqs'],
-                            task['ms'], task['me'], params, trim
+                            task['ms'], task['me'], params, trim, task['word']
                         )
                         futures[f] = idx
                 
@@ -843,6 +877,7 @@ class PhoneticsApp:
                         tasks[idx]['mie'] = res['mie']
                         tasks[idx]['raw_s'] = res['raw_s']
                         tasks[idx]['raw_e'] = res['raw_e']
+                        tasks[idx]['inner_splits'] = res.get('inner_splits', [])
                         tasks[idx]['has_empty_data'] = res['has_empty_data']
                     else:
                         tasks[idx]['missing'] = True # fallback
@@ -864,12 +899,13 @@ class PhoneticsApp:
                             'label': res['word'], 'group': res['group'], 'snd': snd, 'pitch': global_pitch,
                             'macro_start': res['ms'], 'macro_end': res['me'], 
                             'start': res['mis'], 'end': res['mie'],
+                            'inner_splits': res.get('inner_splits', []),
                             'raw_start': res.get('raw_s', res['mis']), 'raw_end': res.get('raw_e', res['mie'])
                         }
                         self.tree_panel.update_item_icon(iid)
                     else:
                         iid = self.tree_panel.tree.insert(gid, tk.END, text=res['word'] + " (缺失)", tags=('item',))
-                        self.items[iid] = {'label': res['word'], 'group': res['group'], 'snd': None, 'start': None, 'end': None}
+                        self.items[iid] = {'label': res['word'], 'group': res['group'], 'snd': None, 'start': None, 'end': None, 'inner_splits': []}
                 
                 self.stop_loading("长音频切分完成")
                 self.tree_panel.select_first_item()
@@ -1046,6 +1082,20 @@ class PhoneticsApp:
             
             executor.shutdown(wait=False)
 
+            # 在后台线程补全字表不匹配时的蓝线修复（因为基于Cache抓取的可能是错误的）
+            for i, res in enumerate(results):
+                if res and not res.get('missing') and res.get('success'):
+                    word = tasks[i]['word']
+                    cached_label = res.get('label', '')
+                    if len(word) > 1 and len(cached_label) != len(word):
+                        try:
+                            snd = parselmouth.Sound(res['path'])
+                            res['inner_splits'] = auto_split_inner_word(snd, res['start'], res['end'], len(word))
+                        except Exception:
+                            res['inner_splits'] = []
+                    elif len(word) <= 1:
+                        res['inner_splits'] = []
+
             def finalize():
                 matched_count = 0
                 for i, res in enumerate(results):
@@ -1067,7 +1117,7 @@ class PhoneticsApp:
                         suffix = " (未匹配)" if match_mode == 'fuzzy' else " (缺失)"
                         iid = f"missing_{res['label']}_{id(res)}"
                         self.tree_panel.tree.insert(gid, tk.END, iid=iid, text=res['label'] + suffix, tags=('item',))
-                        self.items[iid] = {'label': res['label'], 'group': res['group'], 'snd': None, 'start': None, 'end': None}
+                        self.items[iid] = {'label': res['label'], 'group': res['group'], 'snd': None, 'start': None, 'end': None, 'inner_splits': []}
                 
                 self.stop_loading(f"并行处理完成: {matched_count}/{total}")
                 self.tree_panel.select_first_item()
@@ -1076,7 +1126,6 @@ class PhoneticsApp:
         threading.Thread(target=run, daemon=True).start()
 
     def open_text_dialog(self, mode):
-        """完全重构后的文本导入对话框"""
         if mode == 'long' and not self.pending_long_snd: 
             return messagebox.showwarning("提示", "请先导入一条长音频。")
         if mode == 'batch' and not self.pending_batch_paths: 
@@ -1092,8 +1141,8 @@ class PhoneticsApp:
         y = (sh - h) // 2
         dlg.geometry(f"{w}x{h}+{x}+{y}")
         
-        dlg.transient(self.root)  # 关键：设置为父窗口的临时窗口，使其保持在父窗口上方
-        dlg.focus_set()           # 自动获取焦点
+        dlg.transient(self.root) 
+        dlg.focus_set()           
         
         # 2. 文本输入区
         ctk.CTkLabel(dlg, text="请粘贴文本或导入文件，组别前加【】或 #：\n示例格式：\n【阴平】\n八 扒 吧 (支持空格/逗号拆分多个字)", justify=tk.LEFT, text_color="#374151").pack(pady=(5, 5), anchor="w", padx=20)
@@ -1113,7 +1162,7 @@ class PhoneticsApp:
             raw_text = text_box.get("1.0", tk.END)
             groups, flat_words = parse_wordlist(raw_text)
             color = "#10B981" if flat_words else "#6B7280"
-            lbl_stats.configure(text=f"实时统计：已识别 {len(groups)} 个组别 | {len(flat_words)} 个单字", text_color=color)
+            lbl_stats.configure(text=f"实时统计：已识别 {len(groups)} 个组别 | {len(flat_words)} 个项", text_color=color)
             
             text_box.tag_remove("group_title", "1.0", tk.END)
             text_box.tag_remove("word_item", "1.0", tk.END)
@@ -1159,7 +1208,7 @@ class PhoneticsApp:
             update_stats()
 
         def copy_prompt():
-            prompt = "请帮我把下面这段字表转换成特定格式：\n1. 每个组别名称用【】包裹并独占一行\n2. 组别下的字跟在组别名称下面，可以一行一个字，也可以用空格或逗号分隔\n3. 去除所有不相关的序号、拼音 and 多余的空行\n\n示例输出格式：\n【阴平】\n八 扒 吧\n【阳平】\n拔 跋\n\n以下是我的原始字表，请直接返回转换后的结果即可：\n\n[在此处粘贴你的字表]"
+            prompt = "请帮我把下面这段字表转换成特定格式：\n1. 每个组别名称用【】包裹并独占一行\n2. 组别下的词/字跟在组别名称下面，可以一行一个，也可以用空格或逗号分隔\n3. 去除所有不相关的序号、拼音 and 多余的空行\n\n示例输出格式：\n【阴平】\n八 扒 吧\n【双音节】\n音频 视频\n\n以下是我的原始字表，请直接返回转换后的结果即可：\n\n[在此处粘贴你的字表]"
             self.root.clipboard_clear()
             self.root.clipboard_append(prompt)
             messagebox.showinfo("成功", "AI 整理提示词已复制！\n您可以前往 ChatGPT / 豆包 / DeepSeek 等平台粘贴使用。", parent=dlg)
@@ -1188,21 +1237,21 @@ class PhoneticsApp:
             groups, flat_words = parse_wordlist(raw_text)
             
             if not flat_words:
-                return messagebox.showwarning("提示", "未识别到任何单字，请检查文本格式。")
+                return messagebox.showwarning("提示", "未识别到任何数据项，请检查文本格式。")
                 
-            # --- 防呆设计：字数与音频数匹配预检 ---
+            # --- 防呆设计：数量与音频数匹配预检 ---
             if mode == 'batch':
                 audio_count = len(self.pending_batch_paths)
                 word_count = len(flat_words)
                 if audio_count != word_count:
-                    if not messagebox.askyesno("数量不匹配警告", f"检测到 {audio_count} 个独立音频文件，但字表内包含 {word_count} 个单字。\n\n数量不一致可能导致映射错位或部分缺失，是否继续强制提取？"):
+                    if not messagebox.askyesno("数量不匹配警告", f"检测到 {audio_count} 个独立音频文件，但字表内包含 {word_count} 个项。\n\n数量不一致可能导致映射错位或部分缺失，是否继续强制提取？"):
                         return
             elif mode == 'long':
                 if hasattr(self, 'manual_segments') and self.manual_segments:
                     seg_count = len(self.manual_segments)
                     word_count = len(flat_words)
                     if seg_count != word_count:
-                        if not messagebox.askyesno("数量不匹配警告", f"您刚才手动切分了 {seg_count} 个片段，但字表内包含 {word_count} 个单字。\n\n数量不一致将导致音频与文本错位，是否继续强制提取？"):
+                        if not messagebox.askyesno("数量不匹配警告", f"您刚才手动切分了 {seg_count} 个片段，但字表内包含 {word_count} 个项。\n\n数量不一致将导致音频与文本错位，是否继续强制提取？"):
                             return
                             
             dlg.destroy()

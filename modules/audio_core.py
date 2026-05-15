@@ -11,6 +11,7 @@ VOP_HOP_LEN_SEC = 0.002
 VAD_TIME_STEP = 0.01
 VAD_MIN_DURATION = 0.1
 VAD_MERGE_THRESHOLD = 0.25
+
 def detect_vowel_onset(snd: parselmouth.Sound, rough_start: float, rough_end: float) -> float:
     """
     智能元音起始点 (VOP) 检测：
@@ -239,6 +240,47 @@ def check_audio_segments(path: str) -> int:
     return len(macroscopic_vad(snd))
 
 
+def auto_split_inner_word(snd: parselmouth.Sound, t_min: float, t_max: float, word_len: int) -> List[float]:
+    """
+    词语模式内部子音节切分算法 (自动识别蓝线)：
+    基于平滑后的短时能量寻找谷底，作为字与字之间的切分点。如果失败自动退化为等比例划分。
+    """
+    n_splits = word_len - 1
+    if n_splits <= 0: return []
+    
+    # 兜底：等距离均分点
+    fallback_splits = [t_min + (t_max - t_min) * (i / word_len) for i in range(1, word_len)]
+    
+    if t_max - t_min < 0.1: # 小于 100ms 太短，不具备检测价值
+        return fallback_splits
+        
+    try:
+        part = snd.extract_part(from_time=t_min, to_time=t_max)
+        intensity = part.to_intensity(time_step=0.01)
+        vals = intensity.values[0]
+        xs = intensity.xs() + t_min
+        
+        # 平滑能量曲线
+        window = np.ones(5) / 5.0
+        if len(vals) < 5: return fallback_splits
+        smoothed = np.convolve(vals, window, mode='same')
+        
+        # 寻找能量谷底 (即负向能量的峰值)
+        import scipy.signal
+        valleys, _ = scipy.signal.find_peaks(-smoothed, distance=8) # 限制字与字最小跨度为约 80ms
+        
+        if len(valleys) >= n_splits:
+            # 优先选择能量最低的核心谷底
+            sorted_valleys = sorted(valleys, key=lambda idx: smoothed[idx])
+            best_valleys = sorted_valleys[:n_splits]
+            best_valleys.sort() # 按时间流重排
+            return [float(xs[v]) for v in best_valleys]
+    except Exception:
+        pass
+        
+    return fallback_splits
+
+
 def batch_process_worker(path: str, params: Dict[str, float], trim_silence: bool) -> Dict[str, Any]:
     try:
         snd = parselmouth.Sound(path)
@@ -256,6 +298,12 @@ def batch_process_worker(path: str, params: Dict[str, float], trim_silence: bool
         has_empty_data = any(f == 0.0 for f in preview_f0)
         
         name = os.path.splitext(os.path.basename(path))[0]
+        
+        # 检测是否进入词语模式，预初始化蓝线
+        inner_splits = []
+        if len(name) > 1:
+            inner_splits = auto_split_inner_word(snd, mic_s, mic_e, len(name))
+            
         return {
             'label': name,
             'path': path,
@@ -265,6 +313,7 @@ def batch_process_worker(path: str, params: Dict[str, float], trim_silence: bool
             'end': mic_e,
             'raw_start': raw_s,
             'raw_end': raw_e,
+            'inner_splits': inner_splits,
             'preview_f0': preview_f0,
             'success': True,
             'has_empty_data': has_empty_data
@@ -273,15 +322,22 @@ def batch_process_worker(path: str, params: Dict[str, float], trim_silence: bool
         return {'success': False, 'error': str(e), 'path': path}
 
 
-def long_process_worker(snd_values: np.ndarray, snd_sf: float, pitch_xs: np.ndarray, pitch_freqs: np.ndarray, ms: float, me: float, params: Dict[str, float], trim_silence: bool) -> Dict[str, Any]:
+def long_process_worker(snd_values: np.ndarray, snd_sf: float, pitch_xs: np.ndarray, pitch_freqs: np.ndarray, ms: float, me: float, params: Dict[str, float], trim_silence: bool, word_label: str = "") -> Dict[str, Any]:
     try:
         snd_part = parselmouth.Sound(snd_values, sampling_frequency=snd_sf)
         shifted_xs = pitch_xs - ms
         
+        # 提取微观红线边界
         mic_s, mic_e, raw_s, raw_e = core_microscopic_vowel_nucleus(
             snd_part, (shifted_xs, pitch_freqs), 0.0, snd_part.get_total_duration(), 
             params['db'], params['skip_front'], trim_silence
         )
+        
+        # 提取内部蓝线边界
+        inner_splits = []
+        if word_label and len(word_label) > 1:
+            splits = auto_split_inner_word(snd_part, mic_s, mic_e, len(word_label))
+            inner_splits = [t + ms for t in splits]  # 复原到全局时间轴
         
         mic_s += ms
         mic_e += ms
@@ -304,6 +360,7 @@ def long_process_worker(snd_values: np.ndarray, snd_sf: float, pitch_xs: np.ndar
             'ms': ms, 'me': me,
             'mis': mic_s, 'mie': mic_e,
             'raw_s': raw_s, 'raw_e': raw_e,
+            'inner_splits': inner_splits,
             'has_empty_data': has_empty_data,
             'success': True
         }
