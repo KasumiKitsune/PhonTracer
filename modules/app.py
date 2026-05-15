@@ -49,6 +49,15 @@ class PhoneticsApp:
             'pitch_floor': 75,
             'pitch_ceiling': 600
         }
+
+        # Shared ProcessPoolExecutor for performance optimization
+        max_workers = min(os.cpu_count() or 4, 8)
+        self.executor = concurrent.futures.ProcessPoolExecutor(max_workers=max_workers)
+
+        def on_closing():
+            self.executor.shutdown(wait=False)
+            self.root.destroy()
+        self.root.protocol("WM_DELETE_WINDOW", on_closing)
         
         self.font_title = ctk.CTkFont(family="Microsoft YaHei", size=15, weight="bold")
         self.font_main = ctk.CTkFont(family="Microsoft YaHei", size=13)
@@ -89,10 +98,9 @@ class PhoneticsApp:
             self.start_loading("正在分析音频区段...")
             def check_audio():
                 try:
-                    # 在子进程中运行 parselmouth，避免 C 扩展与主线程 GIL 冲突
-                    with concurrent.futures.ProcessPoolExecutor(max_workers=1) as executor:
-                        future = executor.submit(check_audio_segments, path)
-                        seg_count = future.result()
+                    # 使用全局线程池运行 parselmouth
+                    future = self.executor.submit(check_audio_segments, path)
+                    seg_count = future.result()
                     def update_ui():
                         self.stop_loading()
                         if seg_count <= 1:
@@ -840,16 +848,15 @@ class PhoneticsApp:
             total = len(paths_to_process)
             self.root.after(0, lambda: self.start_loading(f"正在后台预分析 {total} 个音频..."))
             
-            with concurrent.futures.ProcessPoolExecutor(max_workers=min(os.cpu_count() or 4, 8)) as executor:
-                futures = {executor.submit(batch_process_worker, p, params, trim): p for p in paths_to_process}
-                for i, future in enumerate(concurrent.futures.as_completed(futures)):
-                    p = futures[future]
-                    try:
-                        self.audio_cache[p] = future.result()
-                    except Exception as e:
-                        self.audio_cache[p] = {'success': False, 'error': str(e), 'path': p}
-                    
-                    self.root.after(0, lambda v=(i+1)/total: self.set_progress(v))
+            futures = {self.executor.submit(batch_process_worker, p, params, trim): p for p in paths_to_process}
+            for i, future in enumerate(concurrent.futures.as_completed(futures)):
+                p = futures[future]
+                try:
+                    self.audio_cache[p] = future.result()
+                except Exception as e:
+                    self.audio_cache[p] = {'success': False, 'error': str(e), 'path': p}
+                
+                self.root.after(0, lambda v=(i+1)/total: self.set_progress(v))
             
             self.root.after(0, lambda: self.stop_loading("后台分析完成"))
         threading.Thread(target=run, daemon=True).start()

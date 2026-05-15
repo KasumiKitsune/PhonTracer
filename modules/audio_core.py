@@ -1,10 +1,7 @@
-
-
 import numpy as np
 import os
 from typing import Tuple, List, Union, Dict, Any
 import parselmouth
-
 
 # 静音阈值：振幅 ≈ -50dB (10^(-50/20) ≈ 0.00316)
 SILENCE_AMPLITUDE_THRESHOLD = 10 ** (-50 / 20)
@@ -14,8 +11,6 @@ VOP_HOP_LEN_SEC = 0.002
 VAD_TIME_STEP = 0.01
 VAD_MIN_DURATION = 0.1
 VAD_MERGE_THRESHOLD = 0.25
-
-
 def detect_vowel_onset(snd: parselmouth.Sound, rough_start: float, rough_end: float) -> float:
     """
     智能元音起始点 (VOP) 检测：

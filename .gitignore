@@ -7,9 +7,6 @@ __pycache__/
 env/
 venv/
 .venv/
-pip-log.txt
-pip-delete-this-directory.txt
-.toast
 .cache
 .pytest_cache/
 .coverage
@@ -58,10 +55,11 @@ archive/
 # *.csv
 # *.xlsx
 
-# --- Test & Scratch ---
-merged_test.wav
-wordlist_test.txt
-ai_studio_code/
+# --- Test & Stress Test Data ---
+example/stress_test/
+example/stress_test_merged_long.wav
+generate_stress_test*.py
+merge_stress_test.py
 scratch/
 dist_new/
  
