@@ -6,6 +6,7 @@ import parselmouth
 import os
 import threading
 import concurrent.futures
+import numpy as np
 from PIL import Image
 
 # 导入拆分后的模块
@@ -414,10 +415,12 @@ class PhoneticsApp:
                 val = int(self.entry_pitch_floor.get())
                 if val != self.last_params['pitch_floor']:
                     self.last_params['pitch_floor'] = val
+                    self.recalculate_all_audio(recompute_pitch=True)
             elif key == 'pitch_ceiling':
                 val = int(self.entry_pitch_ceiling.get())
                 if val != self.last_params['pitch_ceiling']:
                     self.last_params['pitch_ceiling'] = val
+                    self.recalculate_all_audio(recompute_pitch=True)
         except Exception: pass
 
     def set_status(self, text, color="#10B981", icon_key="status_success"):
@@ -471,7 +474,18 @@ class PhoneticsApp:
                 self.last_params['skip_front'] = new_skip
                 changed_algo = True
                 
-            if changed_algo: self.recalculate_all_audio()
+            recompute_pitch = False
+            new_floor = int(self.entry_pitch_floor.get())
+            new_ceiling = int(self.entry_pitch_ceiling.get())
+            if new_floor != self.last_params['pitch_floor']:
+                self.last_params['pitch_floor'] = new_floor
+                recompute_pitch = True
+            if new_ceiling != self.last_params['pitch_ceiling']:
+                self.last_params['pitch_ceiling'] = new_ceiling
+                recompute_pitch = True
+                
+            if changed_algo or recompute_pitch: 
+                self.recalculate_all_audio(recompute_pitch=recompute_pitch)
             if new_pts != self.last_params['pts']:
                 self.last_params['pts'] = new_pts
                 for iid in list(self.items.keys()):
@@ -482,7 +496,7 @@ class PhoneticsApp:
     def on_trim_silence_toggle(self):
         self.recalculate_all_audio(only_trim_silence=True)
 
-    def recalculate_all_audio(self, only_trim_silence=False):
+    def recalculate_all_audio(self, only_trim_silence=False, recompute_pitch=False):
         if not self.items: return
         items_snapshot = list(self.items.items())
         total = len(items_snapshot)
@@ -510,19 +524,41 @@ class PhoneticsApp:
                 }
                 
                 valid_items = []
+                recomputed_pitches = {}
                 for iid, item in items_snapshot:
                     if item.get('snd'):
                         snd = item['snd']
+                        snd_id = id(snd)
+                        
+                        # 如果修改了 Pitch Floor/Ceiling，必须先重新计算 Pitch 对象
+                        # 性能优化：按 snd 实例缓存 Pitch，避免长音频模式下被重复计算上千次
+                        if recompute_pitch:
+                            try:
+                                if snd_id not in recomputed_pitches:
+                                    recomputed_pitches[snd_id] = snd.to_pitch(
+                                        pitch_floor=self.last_params['pitch_floor'],
+                                        pitch_ceiling=self.last_params['pitch_ceiling']
+                                    )
+                                item['pitch'] = recomputed_pitches[snd_id]
+                            except Exception: pass
+                        
                         mac_s, mac_e = item['macro_start'], item['macro_end']
                         valid_ms = max(0, mac_s)
                         valid_me = min(snd.get_total_duration(), mac_e)
                         
                         if valid_me > valid_ms:
                             part = snd.extract_part(from_time=valid_ms, to_time=valid_me)
+                            
+                            # 性能优化：切片 Pitch 数组，大幅减少 IPC 数据量
+                            p_xs = item['pitch'].xs()
+                            p_freqs = item['pitch'].selected_array['frequency']
+                            idx_start = np.searchsorted(p_xs, valid_ms)
+                            idx_end = np.searchsorted(p_xs, valid_me)
+                            
                             tasks.append({
                                 'ms': mac_s, 'me': mac_e,
                                 'snd_values': part.values, 'snd_sf': part.sampling_frequency,
-                                'pitch_xs': item['pitch'].xs(), 'pitch_freqs': item['pitch'].selected_array['frequency']
+                                'pitch_xs': p_xs[idx_start:idx_end], 'pitch_freqs': p_freqs[idx_start:idx_end]
                             })
                             valid_items.append(item)
                 
@@ -657,6 +693,9 @@ class PhoneticsApp:
                     if child in self.items:
                         all_iids.append(child)
             
+            # 提前准备好全局 Pitch，避免在循环中重复计算耗时巨大
+            global_pitch_cache = None
+            
             # 2. 应用映射
             for iid in all_iids:
                 item = self.items[iid]
@@ -666,13 +705,15 @@ class PhoneticsApp:
                     item['macro_start'] = seg['start']
                     item['macro_end'] = seg['end']
                     
-                    # 恢复 snd 和 pitch（如果之前是缺失状态，需要从 pending_long_snd 获取）
+                    # 恢复 snd 和 pitch
                     if not item.get('snd'):
                         item['snd'] = self.pending_long_snd
-                        item['pitch'] = item['snd'].to_pitch(
-                            pitch_floor=self.last_params['pitch_floor'], 
-                            pitch_ceiling=self.last_params['pitch_ceiling']
-                        )
+                        if global_pitch_cache is None:
+                            global_pitch_cache = self.pending_long_snd.to_pitch(
+                                pitch_floor=self.last_params['pitch_floor'], 
+                                pitch_ceiling=self.last_params['pitch_ceiling']
+                            )
+                        item['pitch'] = global_pitch_cache
                     
                     # 核心优化：如果该音频段没有被拖拽修改边界，且原来就有微观边界，直接继承！
                     if not seg.get('is_modified') and seg.get('old_id') and seg['old_id'] in old_micro_bounds:
@@ -762,9 +803,17 @@ class PhoneticsApp:
                             snd_values = part.values
                             snd_sf = part.sampling_frequency
                             
+                            # 性能优化：切片 Pitch 数组，大幅减少进程间通信 (IPC) 的数据量
+                            idx_start = np.searchsorted(pitch_xs, valid_ms)
+                            idx_end = np.searchsorted(pitch_xs, valid_me)
+                            sliced_xs = pitch_xs[idx_start:idx_end]
+                            sliced_freqs = pitch_freqs[idx_start:idx_end]
+                            
                             tasks.append({
                                 'word': word, 'group': grp['group'], 'ms': ms, 'me': me,
-                                'snd_values': snd_values, 'snd_sf': snd_sf, 'missing': False
+                                'snd_values': snd_values, 'snd_sf': snd_sf, 
+                                'pitch_xs': sliced_xs, 'pitch_freqs': sliced_freqs,
+                                'missing': False
                             })
                         else:
                             tasks.append({'word': word, 'group': grp['group'], 'missing': True})
@@ -779,7 +828,7 @@ class PhoneticsApp:
                     if not task.get('missing'):
                         f = executor.submit(
                             long_process_worker,
-                            task['snd_values'], task['snd_sf'], pitch_xs, pitch_freqs,
+                            task['snd_values'], task['snd_sf'], task['pitch_xs'], task['pitch_freqs'],
                             task['ms'], task['me'], params, trim
                         )
                         futures[f] = idx

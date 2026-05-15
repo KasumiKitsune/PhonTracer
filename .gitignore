@@ -58,6 +58,9 @@ archive/
 # --- Test & Stress Test Data ---
 example/stress_test/
 example/stress_test_merged_long.wav
+example/100/
+example/1000/
+example/*.wav
 generate_stress_test*.py
 merge_stress_test.py
 scratch/
