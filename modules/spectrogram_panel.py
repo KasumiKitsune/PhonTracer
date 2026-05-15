@@ -26,6 +26,16 @@ class SpectrogramPanel:
         self.char_texts = []
         self.font_title = ctk.CTkFont(family="Microsoft YaHei", size=15, weight="bold")
         
+        # Cursor and playback state
+        self.is_playing = False
+        self.play_start_sys_time = 0
+        self.play_start_audio_time = 0
+        self.play_end_audio_time = 0
+        self.cursor_x = None
+        self.cursor_line = None
+        self.cursor_text = None
+        self._playback_job = None
+
         self.setup_ui()
         
     def setup_ui(self):
@@ -106,6 +116,7 @@ class SpectrogramPanel:
         self.var_t_start.set(f"{t_start:.3f}" if t_start is not None else "0.000")
         self.var_t_end.set(f"{t_end:.3f}" if t_end is not None else "0.000")
         
+        self.cursor_x = t_start # Reset cursor position when loading new item
         self.plot_item_spectrogram()
 
     def plot_item_spectrogram(self):
@@ -117,6 +128,8 @@ class SpectrogramPanel:
         self.ax2.clear()
         self.inner_lines.clear()
         self.char_texts.clear()
+        self.cursor_line = None
+        self.cursor_text = None
         
         snd = item['snd']
         t_s, t_e = item['start'], item['end']
@@ -179,12 +192,29 @@ class SpectrogramPanel:
                 txt = self.ax.text(cx, 4800, label[i], color='#111827', fontsize=12, ha='center', va='top', fontweight='bold', bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.7))
                 self.char_texts.append(txt)
         
+        # 绘制绿色虚线光标和时间点
+        if self.cursor_x is None:
+            self.cursor_x = t_s
+        self.cursor_line = self.ax.axvline(self.cursor_x, color='#4ADE80', linestyle='--', linewidth=3, zorder=10)
+        self.cursor_text = self.ax.text(self.cursor_x, 5000, f"{self.cursor_x:.3f}", color='#166534', fontsize=11, ha='center', va='bottom', fontweight='bold', zorder=10)
+
         self.fig.tight_layout()
         self.canvas.draw()
 
     def on_press(self, event):
         if not self.ax or not self.ax2 or not self.current_item: return
         if event.inaxes not in [self.ax, self.ax2] or event.button != 1: return
+
+        # Click stops playback and leaves cursor exactly where it was
+        if self.is_playing:
+            try:
+                import sounddevice as sd
+                sd.stop()
+            except Exception:
+                pass
+            self.is_playing = False
+            return
+
         item = self.current_item
         
         closest = None
@@ -217,7 +247,20 @@ class SpectrogramPanel:
             self.inner_lines[closest[1]].set_color('#1E3A8A')
             self.inner_lines[closest[1]].set_linewidth(3.5)
             
-        if self.dragging: self.canvas.draw_idle()
+        if self.dragging:
+            self.canvas.draw_idle()
+        else:
+            # Clicked empty space: move cursor
+            if event.xdata is not None:
+                self.cursor_x = event.xdata
+                self.update_cursor_graphics()
+
+    def update_cursor_graphics(self):
+        if not self.cursor_line or not self.cursor_text: return
+        self.cursor_line.set_xdata([self.cursor_x, self.cursor_x])
+        self.cursor_text.set_position((self.cursor_x, 5000))
+        self.cursor_text.set_text(f"{self.cursor_x:.3f}")
+        self.canvas.draw_idle()
 
     def on_motion(self, event):
         if not self.ax or not self.current_item or event.xdata is None: return
@@ -343,11 +386,70 @@ class SpectrogramPanel:
             try: item['snd'] = parselmouth.Sound(item['path'])
             except Exception: return
         if not item.get('snd'): return
+
+        snd = item['snd']
+
+        # Stop existing playback
+        if self.is_playing:
+            try:
+                import sounddevice as sd
+                sd.stop()
+            except Exception:
+                pass
+
         try:
-            part = item['snd'].extract_part(from_time=item['start'], to_time=item['end'])
+            t_s, t_e = item['start'], item['end']
+            total_duration = snd.get_total_duration()
+
+            if self.cursor_x is None:
+                self.cursor_x = t_s
+
+            # If cursor is inside boundaries
+            if t_s <= self.cursor_x <= t_e:
+                play_s = self.cursor_x
+                play_e = t_e
+            else:
+                # Outside boundaries
+                play_s = 0.0
+                play_e = total_duration
+                self.cursor_x = 0.0
+                self.update_cursor_graphics()
+
+            if play_e <= play_s:
+                return
+
+            part = snd.extract_part(from_time=play_s, to_time=play_e)
             audio_data = np.ascontiguousarray(part.values.T, dtype=np.float32)
+
+            import sounddevice as sd
             sd.play(audio_data, samplerate=int(part.sampling_frequency))
-        except Exception as e: messagebox.showerror("错误", f"播放失败: {str(e)}")
+
+            import time
+            self.is_playing = True
+            self.play_start_sys_time = time.time()
+            self.play_start_audio_time = play_s
+            self.play_end_audio_time = play_e
+
+            self._playback_update_loop()
+
+        except Exception as e:
+            messagebox.showerror("错误", f"播放失败: {str(e)}")
+
+    def _playback_update_loop(self):
+        if not self.is_playing: return
+        import time
+        elapsed = time.time() - self.play_start_sys_time
+        current_audio_time = self.play_start_audio_time + elapsed
+
+        if current_audio_time >= self.play_end_audio_time:
+            self.is_playing = False
+            self.cursor_x = self.play_end_audio_time
+            self.update_cursor_graphics()
+            return
+
+        self.cursor_x = current_audio_time
+        self.update_cursor_graphics()
+        self.canvas.get_tk_widget().after(50, self._playback_update_loop)
 
     def apply_auto_detect(self):
         if self.on_auto_detect_callback:

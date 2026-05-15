@@ -667,7 +667,9 @@ class ProjectTreePanel:
                     try:
                         item['snd'] = parselmouth.Sound(item['path'])
                         item['pitch'] = item['snd'].to_pitch()
-                    except Exception: continue
+                    except Exception as e:
+                        logger.error(f"Error loading sound or pitch for {item['path']}: {e}", exc_info=True)
+                        continue
                     
                 total_dur, syl_data = self._extract_syl_data(item, num_points)
                 if total_dur <= 0: continue
