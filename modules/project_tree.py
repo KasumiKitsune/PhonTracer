@@ -75,8 +75,8 @@ class ProjectTreePanel:
         self.tree.bind('<ButtonPress-1>', self.on_tree_drag_start, add='+')
         self.tree.bind('<B1-Motion>', self.on_tree_drag_motion, add='+')
         self.tree.bind('<ButtonRelease-1>', self.on_tree_drag_release, add='+')
-        self.tree.bind('<<TreeviewOpen>>', lambda e: self.parent.after(10, self._apply_zebra_stripes))
-        self.tree.bind('<<TreeviewClose>>', lambda e: self.parent.after(10, self._apply_zebra_stripes))
+        self.tree.bind('<<TreeviewOpen>>', self._debounce_zebra_stripes)
+        self.tree.bind('<<TreeviewClose>>', self._debounce_zebra_stripes)
 
         frame_rule = ctk.CTkFrame(right_sidebar, fg_color="white", corner_radius=10)
         frame_rule.pack(fill=tk.X, pady=5)
@@ -93,6 +93,11 @@ class ProjectTreePanel:
         self.text_preview = ctk.CTkTextbox(frame_preview, font=self.font_code, corner_radius=8, fg_color="#F9FAFB", text_color="#1F2937", border_width=1, border_color="#E5E7EB")
         self.text_preview.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
         self.text_preview.configure(state='disabled')
+
+    def _debounce_zebra_stripes(self, event=None):
+        if hasattr(self, '_zebra_timer') and self._zebra_timer:
+            self.parent.after_cancel(self._zebra_timer)
+        self._zebra_timer = self.parent.after(50, self._apply_zebra_stripes)
 
     def _apply_zebra_stripes(self):
         def get_visible_items(node=""):
@@ -146,6 +151,7 @@ class ProjectTreePanel:
         
         self.tree.see(gid)
         self.tree.selection_set(gid)
+        self._debounce_zebra_stripes()
         self.parent.after(50, lambda: self.start_inline_edit(gid))
 
     def start_inline_edit(self, iid):
@@ -191,6 +197,7 @@ class ProjectTreePanel:
                         if self.tree.exists(w_iid): self.tree.item(w_iid, text=new_name)
             
             self.update_preview()
+            self._debounce_zebra_stripes()
             edit_entry.destroy()
 
         edit_entry.bind("<Return>", save_edit)
@@ -266,6 +273,7 @@ class ProjectTreePanel:
                 self.warning_group_id = None
                 
         self.update_preview()
+        self._debounce_zebra_stripes()
 
     def on_tree_drag_start(self, event): 
         self._drag_start_pos = (event.x, event.y)
@@ -337,6 +345,7 @@ class ProjectTreePanel:
                     self.tree.move(drag_item, parent_grp, target_idx)
                     self.items[drag_item]['group'] = group_name
                 self.update_preview()
+                self._debounce_zebra_stripes()
         self.tree_drag_items = None
 
     def on_tree_hover(self, event):
@@ -386,7 +395,6 @@ class ProjectTreePanel:
         return idx + self.tree.index(target_iid) + 1
 
     def update_preview(self):
-        self._apply_zebra_stripes()
         if self.current_iid not in self.items:
             if str(self.current_iid).startswith('warning_'):
                 orig_iid = self.current_iid[8:]
@@ -509,6 +517,7 @@ class ProjectTreePanel:
                 if not self.tree.get_children(self.warning_group_id):
                     self.tree.delete(self.warning_group_id)
                     self.warning_group_id = None
+        self._debounce_zebra_stripes()
 
     def export_project(self):
         if not self.items: return messagebox.showwarning("提示", "没有可导出的数据。")
