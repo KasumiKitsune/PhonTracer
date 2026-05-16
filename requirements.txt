@@ -2,7 +2,7 @@ praat-parselmouth
 numpy
 sounddevice
 matplotlib
-customtkinter
+flet
 pyinstaller
 Pillow
 windnd; sys_platform == 'win32'
