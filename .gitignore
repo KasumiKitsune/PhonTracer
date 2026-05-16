@@ -13,7 +13,9 @@
 !README.md
 !requirements.txt
 !main.py
+!audio_toolkit.py
 !ToneExtractor.spec
+!ToneExtractor_Suite.spec
 
 # 4. 白名单：核心代码与资源目录
 !modules/**
