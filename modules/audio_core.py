@@ -158,7 +158,10 @@ def core_microscopic_vowel_nucleus(snd: parselmouth.Sound, global_pitch_or_array
         # int_xs 是相对于截取片段的时间 (0 到 duration)
         # 将其转换为绝对时间进行基频查找
         abs_int_xs = t_min + int_xs
-        valid_freqs_interp = np.interp(abs_int_xs, xs, freqs, left=0, right=0)
+        if len(xs) >= 2:
+            valid_freqs_interp = np.interp(abs_int_xs, xs, freqs, left=0, right=0)
+        else:
+            valid_freqs_interp = np.zeros_like(abs_int_xs)
 
         # 2. 有效点条件：强度 > thresh 且 对应时间点附近有基频 (freq > 0)
         valid_mask = (int_vals > thresh) & (valid_freqs_interp > 0)
