@@ -112,8 +112,17 @@ def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: 
             else:
                 continue
             
-            # 核心优化：智能收缩！在蓝线围栏内，自动剔除两侧的无声声母/静音Gap，寻找真实韵母边界
-            valid_idx = np.where((p_xs >= c_start) & (p_xs <= c_end) & (p_freqs > 0))[0]
+            # 独立音频提取基频：避免全局连读造成的 Viterbi octave jump
+            try:
+                if c_end - c_start <= 0.01: continue
+                c_snd = item['snd'].extract_part(from_time=c_start, to_time=c_end)
+                c_pitch = c_snd.to_pitch_ac(time_step=None, pitch_floor=75.0, pitch_ceiling=600.0, voicing_threshold=0.25, octave_jump_cost=0.9)
+                p_xs = c_pitch.xs() + c_start
+                p_freqs = c_pitch.selected_array['frequency']
+            except Exception:
+                continue
+            
+            valid_idx = np.where(p_freqs > 0)[0]
             if len(valid_idx) >= 2:
                 v_start, v_end = p_xs[valid_idx[0]], p_xs[valid_idx[-1]]
                 seg_xs = p_xs[valid_idx]

@@ -384,9 +384,16 @@ class PhoneticsApp:
                     item['raw_start'] = raw_s
                     item['raw_end'] = raw_e
                     item['inner_splits'] = inner_splits
+                    
+                    if len(label) > 1:
+                        from modules.audio_core import auto_split_to_chars_bounds
+                        item['chars_bounds'] = auto_split_to_chars_bounds(snd, mic_s, mic_e, inner_splits, len(label), self.last_params)
+                    else:
+                        item['chars_bounds'] = []
+
                     self.spectrogram_panel.var_t_start.set(f"{mic_s:.3f}")
                     self.spectrogram_panel.var_t_end.set(f"{mic_e:.3f}")
-                    self.spectrogram_panel.update_lines(mic_s, mic_e, inner_splits)
+                    self.spectrogram_panel.plot_item_spectrogram()
                     self.spectrogram_panel.update_ui_times()
                     self.stop_loading("识别完成")
                 self.root.after(0, update_ui)
@@ -744,6 +751,8 @@ class PhoneticsApp:
                         if 'inner_splits' in item and item['inner_splits'] and old_e > old_s:
                             ratio = (mic_e - mic_s) / (old_e - old_s)
                             item['inner_splits'] = [mic_s + (s - old_s) * ratio for s in item['inner_splits']]
+                            if 'chars_bounds' in item and item['chars_bounds']:
+                                item['chars_bounds'] = [[mic_s + (c[0] - old_s) * ratio, mic_s + (c[1] - old_s) * ratio] for c in item['chars_bounds']]
                         item['start'], item['end'] = mic_s, mic_e
                     else:
                         mic_s, mic_e, raw_s, raw_e = self._microscopic_vowel_nucleus(
@@ -755,8 +764,11 @@ class PhoneticsApp:
                         label = item['label'].replace(" (缺失)", "")
                         if len(label) > 1:
                             item['inner_splits'] = auto_split_inner_word(item['snd'], mic_s, mic_e, len(label))
+                            from modules.audio_core import auto_split_to_chars_bounds
+                            item['chars_bounds'] = auto_split_to_chars_bounds(item['snd'], mic_s, mic_e, item['inner_splits'], len(label), self.last_params)
                         else:
                             item['inner_splits'] = []
+                            item['chars_bounds'] = []
                             
                 # 重新生成 11 点预览数据用于警告图标状态更新
                 if item.get('snd') and item.get('pitch'):
@@ -865,7 +877,7 @@ class PhoneticsApp:
             old_micro_bounds = {}
             for iid, item in self.items.items():
                 if item.get('start') is not None and item.get('end') is not None:
-                    old_micro_bounds[iid] = (item['start'], item['end'], item.get('inner_splits', []))
+                    old_micro_bounds[iid] = (item['start'], item['end'], item.get('inner_splits', []), item.get('chars_bounds', []))
             
             # 1. 收集树中所有的 word items (保持顺序)
             all_iids = []
@@ -899,7 +911,7 @@ class PhoneticsApp:
                     
                     # 核心优化：如果没有被拖拽修改边界，且原来就有微观边界，直接继承！
                     if not seg.get('is_modified') and seg.get('old_id') and seg['old_id'] in old_micro_bounds:
-                        item['start'], item['end'], item['inner_splits'] = old_micro_bounds[seg['old_id']]
+                        item['start'], item['end'], item['inner_splits'], item['chars_bounds'] = old_micro_bounds[seg['old_id']]
                         if 'raw_start' in self.items[seg['old_id']]:
                             item['raw_start'] = self.items[seg['old_id']]['raw_start']
                             item['raw_end'] = self.items[seg['old_id']]['raw_end']
@@ -909,6 +921,8 @@ class PhoneticsApp:
                             item['start'] = seg['start']
                             item['end'] = seg['end']
                             item['inner_splits'] = list(seg.get('inner_splits', []))
+                            if 'chars_bounds' in seg:
+                                item['chars_bounds'] = [list(c) for c in seg['chars_bounds']]
                             item['raw_start'] = seg['start']
                             item['raw_end'] = seg['end']
                         else:
@@ -922,8 +936,11 @@ class PhoneticsApp:
                             label = item['label'].replace(" (缺失)", "")
                             if len(label) > 1:
                                 item['inner_splits'] = auto_split_inner_word(item['snd'], mic_s, mic_e, len(label))
+                                from modules.audio_core import auto_split_to_chars_bounds
+                                item['chars_bounds'] = auto_split_to_chars_bounds(item['snd'], mic_s, mic_e, item['inner_splits'], len(label), self.last_params)
                             else:
                                 item['inner_splits'] = []
+                                item['chars_bounds'] = []
                     
                     # 移除可能的 "(缺失)" 后缀
                     if item['label'].endswith(" (缺失)"):
@@ -1041,6 +1058,7 @@ class PhoneticsApp:
                         tasks[idx]['raw_s'] = res['raw_s']
                         tasks[idx]['raw_e'] = res['raw_e']
                         tasks[idx]['inner_splits'] = res.get('inner_splits', [])
+                        if 'chars_bounds' in res: tasks[idx]['chars_bounds'] = res['chars_bounds']
                         tasks[idx]['has_empty_data'] = res['has_empty_data']
                     else:
                         tasks[idx]['missing'] = True # fallback
@@ -1063,6 +1081,7 @@ class PhoneticsApp:
                             'macro_start': res['ms'], 'macro_end': res['me'], 
                             'start': res['mis'], 'end': res['mie'],
                             'inner_splits': res.get('inner_splits', []),
+                            'chars_bounds': res.get('chars_bounds', []),
                             'raw_start': res.get('raw_s', res['mis']), 'raw_end': res.get('raw_e', res['mie'])
                         }
                         self.tree_panel.update_item_icon(iid)
@@ -1254,10 +1273,14 @@ class PhoneticsApp:
                         try:
                             snd = parselmouth.Sound(res['path'])
                             res['inner_splits'] = auto_split_inner_word(snd, res['start'], res['end'], len(word))
+                            from modules.audio_core import auto_split_to_chars_bounds
+                            res['chars_bounds'] = auto_split_to_chars_bounds(snd, res['start'], res['end'], res['inner_splits'], len(word), self.last_params)
                         except Exception:
                             res['inner_splits'] = []
+                            res['chars_bounds'] = []
                     elif len(word) <= 1:
                         res['inner_splits'] = []
+                        res['chars_bounds'] = []
 
             def finalize():
                 matched_count = 0

@@ -1,10 +1,6 @@
 import sys
-from unittest.mock import MagicMock
 import numpy as np
 import pytest
-
-# Mock modules
-sys.modules['parselmouth'] = MagicMock()
 import parselmouth
 
 from modules.data_utils import get_export_text_for_item
@@ -26,8 +22,19 @@ class MockSound:
         self.duration = duration
     def get_total_duration(self):
         return self.duration
-    def extract_part(self, *args, **kwargs):
+    def extract_part(self, from_time=0.0, to_time=1.0, *args, **kwargs):
+        if hasattr(self, 'mock_pitch'):
+            orig_xs = self.mock_pitch.xs()
+            orig_freqs = self.mock_pitch.selected_array['frequency']
+            mask = (orig_xs >= from_time) & (orig_xs <= to_time)
+            new_freqs = orig_freqs[mask] if any(mask) else np.zeros(10)
+            new_xs = orig_xs[mask] - from_time if any(mask) else np.linspace(0, 0.1, 10)
+            new_sound = MockSound(duration=to_time - from_time)
+            new_sound.mock_pitch = MockPitch(new_freqs, xs_array=new_xs)
+            return new_sound
         return self
+    def to_pitch_ac(self, *args, **kwargs):
+        return getattr(self, 'mock_pitch', MockPitch(np.ones(100) * 150.0))
     def to_intensity(self, *args, **kwargs):
         class MockIntensity:
             def __init__(self):
@@ -79,6 +86,7 @@ def test_word_mode_missing_f0():
     pitch = MockPitch(freqs)
 
     item = {'start': 0.1, 'end': 0.9, 'label': 'AB', 'inner_splits': [0.5], 'snd': MockSound(), 'pitch': pitch}
+    item['snd'].mock_pitch = pitch
     result = get_export_text_for_item(item, 1, 11)
 
     # In word mode, missing F0 for a character simply skips that character
@@ -90,6 +98,7 @@ def test_word_mode_partial_missing_f0():
     pitch = MockPitch(freqs)
 
     item = {'start': 0.1, 'end': 0.9, 'label': 'AB', 'inner_splits': [0.5], 'snd': MockSound(), 'pitch': pitch}
+    item['snd'].mock_pitch = pitch
     result = get_export_text_for_item(item, 1, 11)
 
     # Should include A but not B

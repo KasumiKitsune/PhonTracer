@@ -1,10 +1,6 @@
 import sys
-from unittest.mock import MagicMock
 import numpy as np
 import pytest
-
-# Mock modules
-sys.modules['parselmouth'] = MagicMock()
 import parselmouth
 
 from modules.data_utils import get_export_text_for_item

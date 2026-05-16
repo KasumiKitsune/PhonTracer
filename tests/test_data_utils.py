@@ -1,10 +1,7 @@
 import pytest
-from unittest.mock import MagicMock
 import sys
-
-# Mocking modules that might not be present in the environment
-sys.modules['numpy'] = MagicMock()
-sys.modules['parselmouth'] = MagicMock()
+import numpy as np
+import parselmouth
 
 from modules.data_utils import parse_wordlist, fuzzy_match_word_to_path
 

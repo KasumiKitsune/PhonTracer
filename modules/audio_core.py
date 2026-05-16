@@ -283,6 +283,32 @@ def auto_split_inner_word(snd: parselmouth.Sound, t_min: float, t_max: float, wo
         
     return fallback_splits
 
+def auto_split_to_chars_bounds(snd: parselmouth.Sound, mic_s: float, mic_e: float, inner_splits: List[float], label_len: int, params: Dict[str, float]) -> List[List[float]]:
+    splits = [mic_s] + [s for s in inner_splits if mic_s < s < mic_e] + [mic_e]
+    if len(splits) != label_len + 1:
+        splits = np.linspace(mic_s, mic_e, label_len + 1).tolist()
+    
+    chars_bounds = []
+    for i in range(len(splits) - 1):
+        c_s, c_e = splits[i], splits[i+1]
+        try:
+            if c_e - c_s > 0.01:
+                c_snd = snd.extract_part(from_time=c_s, to_time=c_e)
+                c_pitch = c_snd.to_pitch_ac(time_step=None, pitch_floor=params.get('pitch_floor', 75), pitch_ceiling=params.get('pitch_ceiling', 600), voicing_threshold=0.25, octave_jump_cost=0.9)
+                p_xs = c_pitch.xs() + c_s
+                p_freqs = c_pitch.selected_array['frequency']
+                valid_idx = np.where(p_freqs > 0)[0]
+                if len(valid_idx) >= 2:
+                    v_start, v_end = p_xs[valid_idx[0]], p_xs[valid_idx[-1]]
+                    chars_bounds.append([v_start, v_end])
+                else:
+                    chars_bounds.append([c_s, c_e])
+            else:
+                chars_bounds.append([c_s, c_e])
+        except Exception:
+            chars_bounds.append([c_s, c_e])
+    return chars_bounds
+
 
 def batch_process_worker(path: str, params: Dict[str, float], trim_silence: bool) -> Dict[str, Any]:
     try:
@@ -304,8 +330,10 @@ def batch_process_worker(path: str, params: Dict[str, float], trim_silence: bool
         
         # 检测是否进入词语模式，预初始化蓝线
         inner_splits = []
+        chars_bounds = []
         if len(name) > 1:
             inner_splits = auto_split_inner_word(snd, mic_s, mic_e, len(name))
+            chars_bounds = auto_split_to_chars_bounds(snd, mic_s, mic_e, inner_splits, len(name), params)
             
         return {
             'label': name,
@@ -317,6 +345,7 @@ def batch_process_worker(path: str, params: Dict[str, float], trim_silence: bool
             'raw_start': raw_s,
             'raw_end': raw_e,
             'inner_splits': inner_splits,
+            'chars_bounds': chars_bounds,
             'preview_f0': preview_f0,
             'success': True,
             'has_empty_data': has_empty_data
@@ -338,8 +367,11 @@ def long_process_worker(snd_values: np.ndarray, snd_sf: float, pitch_xs: np.ndar
         
         # 提取内部蓝线边界
         inner_splits = []
+        chars_bounds = []
         if word_label and len(word_label) > 1:
             splits = auto_split_inner_word(snd_part, mic_s, mic_e, len(word_label))
+            local_chars_bounds = auto_split_to_chars_bounds(snd_part, mic_s, mic_e, splits, len(word_label), params)
+            chars_bounds = [[s + ms, e + ms] for s, e in local_chars_bounds]
             inner_splits = [t + ms for t in splits]  # 复原到全局时间轴
         
         mic_s += ms
@@ -364,6 +396,7 @@ def long_process_worker(snd_values: np.ndarray, snd_sf: float, pitch_xs: np.ndar
             'mis': mic_s, 'mie': mic_e,
             'raw_s': raw_s, 'raw_e': raw_e,
             'inner_splits': inner_splits,
+            'chars_bounds': chars_bounds,
             'has_empty_data': has_empty_data,
             'success': True
         }

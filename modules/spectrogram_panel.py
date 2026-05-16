@@ -210,7 +210,6 @@ class SpectrogramPanel:
         else:
             p_xs = np.array([])
             p_vals = np.array([])
-            
         self.ax2.plot(p_xs, p_vals, '-o', markersize=4, linewidth=1.5, color='#3B82F6', zorder=5)
         
         self.ax.set_ylim([0, 5000])
@@ -371,7 +370,7 @@ class SpectrogramPanel:
                 self.cursor_line.set_color('#1B5E20')
                 self.cursor_line.set_linewidth(1.5)
                 
-            self.update_lines()
+            self.plot_item_spectrogram()
             self.update_ui_times()
             self.canvas.get_tk_widget().config(cursor="arrow")
 
@@ -426,7 +425,7 @@ class SpectrogramPanel:
                 item['start'] = new_s
                 item['end'] = new_e
                 
-            self.update_lines()
+            self.plot_item_spectrogram()
             self.update_ui_times()
         except ValueError: 
             messagebox.showerror("错误", "请输入有效的数字")

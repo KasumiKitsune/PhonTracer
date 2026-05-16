@@ -2,22 +2,18 @@ import pytest
 from unittest.mock import MagicMock, patch
 import logging
 import sys
+import numpy as np
+import parselmouth
 
-# Mock all dependencies that might be missing in the environment
+# Mock UI dependencies for non-GUI test environment
 sys.modules['tkinter'] = MagicMock()
 sys.modules['tkinter.ttk'] = MagicMock()
 sys.modules['tkinter.messagebox'] = MagicMock()
 sys.modules['tkinter.filedialog'] = MagicMock()
 sys.modules['customtkinter'] = MagicMock()
-sys.modules['parselmouth'] = MagicMock()
 sys.modules['xlsxwriter'] = MagicMock()
-sys.modules['numpy'] = MagicMock()
 sys.modules['matplotlib'] = MagicMock()
 sys.modules['matplotlib.pyplot'] = MagicMock()
-sys.modules['scipy'] = MagicMock()
-sys.modules['scipy.interpolate'] = MagicMock()
-sys.modules['scipy.signal'] = MagicMock()
-sys.modules['scipy.stats'] = MagicMock()
 
 from modules.project_tree import ProjectTreePanel
 
