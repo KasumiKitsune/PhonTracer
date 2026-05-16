@@ -87,7 +87,7 @@ def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: 
         else:
             try:
                 item['snd'] = parselmouth.Sound(item['path'])
-                item['pitch'] = item['snd'].to_pitch()
+                item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=75.0, pitch_ceiling=600.0, voicing_threshold=0.25, octave_jump_cost=0.9)
             except Exception: return ""
 
     if duration <= 0 or not item.get('snd'): return ""

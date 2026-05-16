@@ -284,7 +284,7 @@ def auto_split_inner_word(snd: parselmouth.Sound, t_min: float, t_max: float, wo
 def batch_process_worker(path: str, params: Dict[str, float], trim_silence: bool) -> Dict[str, Any]:
     try:
         snd = parselmouth.Sound(path)
-        pitch = snd.to_pitch(pitch_floor=params.get('pitch_floor', 75), pitch_ceiling=params.get('pitch_ceiling', 600))
+        pitch = snd.to_pitch_ac(time_step=None, pitch_floor=params.get('pitch_floor', 75), pitch_ceiling=params.get('pitch_ceiling', 600), voicing_threshold=0.25, octave_jump_cost=0.9)
         mac_s, mac_e = 0.0, snd.get_total_duration()
         
         mic_s, mic_e, raw_s, raw_e = core_microscopic_vowel_nucleus(

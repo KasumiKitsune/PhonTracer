@@ -672,7 +672,7 @@ class ProjectTreePanel:
                 if (not item.get('snd') or not item.get('pitch')) and item.get('path'):
                     try:
                         item['snd'] = parselmouth.Sound(item['path'])
-                        item['pitch'] = item['snd'].to_pitch()
+                        item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=self.app_state_params.get('pitch_floor', 75), pitch_ceiling=self.app_state_params.get('pitch_ceiling', 600), voicing_threshold=0.25, octave_jump_cost=0.9)
                     except Exception as e:
                         logger.error(f"Error loading sound or pitch for {item['path']}: {e}", exc_info=True)
                         continue
@@ -794,7 +794,7 @@ class ProjectTreePanel:
                 if (not item.get('snd') or not item.get('pitch')) and item.get('path'):
                     try:
                         item['snd'] = parselmouth.Sound(item['path'])
-                        item['pitch'] = item['snd'].to_pitch()
+                        item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=self.app_state_params.get('pitch_floor', 75), pitch_ceiling=self.app_state_params.get('pitch_ceiling', 600), voicing_threshold=0.25, octave_jump_cost=0.9)
                     except Exception: continue
                 total_dur, syl_data = self._extract_syl_data(item, num_points)
                 if total_dur <= 0: continue
@@ -927,7 +927,7 @@ class ProjectTreePanel:
                 if (not item.get('snd') or not item.get('pitch')) and item.get('path'):
                     try:
                         item['snd'] = parselmouth.Sound(item['path'])
-                        item['pitch'] = item['snd'].to_pitch(pitch_floor=self.app_state_params.get('pitch_floor', 75), pitch_ceiling=self.app_state_params.get('pitch_ceiling', 600))
+                        item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=self.app_state_params.get('pitch_floor', 75), pitch_ceiling=self.app_state_params.get('pitch_ceiling', 600), voicing_threshold=0.25, octave_jump_cost=0.9)
                     except Exception: continue
                 if item.get('start') is None or not item.get('snd') or not item.get('pitch'): continue
 

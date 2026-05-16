@@ -326,7 +326,7 @@ class PhoneticsApp:
             self.root.update_idletasks()
             try:
                 item['snd'] = parselmouth.Sound(item['path'])
-                item['pitch'] = item['snd'].to_pitch(pitch_floor=self.last_params['pitch_floor'], pitch_ceiling=self.last_params['pitch_ceiling'])
+                item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=self.last_params['pitch_floor'], pitch_ceiling=self.last_params['pitch_ceiling'], voicing_threshold=0.25, octave_jump_cost=0.9)
                 self.set_status("就绪", "#10B981", "status_success")
             except Exception as e:
                 self.set_status(f"加载失败: {str(e)}", "#EF4444", "status_error")
@@ -550,7 +550,7 @@ class PhoneticsApp:
                         if recompute_pitch:
                             try:
                                 if snd_id not in recomputed_pitches:
-                                    recomputed_pitches[snd_id] = snd.to_pitch(
+                                    recomputed_pitches[snd_id] = snd.to_pitch_ac(time_step=None, voicing_threshold=0.25, octave_jump_cost=0.9,
                                         pitch_floor=self.last_params['pitch_floor'],
                                         pitch_ceiling=self.last_params['pitch_ceiling']
                                     )
@@ -728,7 +728,7 @@ class PhoneticsApp:
                     if not item.get('snd'):
                         item['snd'] = self.pending_long_snd
                         if global_pitch_cache is None:
-                            global_pitch_cache = self.pending_long_snd.to_pitch(
+                            global_pitch_cache = self.pending_long_snd.to_pitch_ac(time_step=None, voicing_threshold=0.25, octave_jump_cost=0.9,
                                 pitch_floor=self.last_params['pitch_floor'], 
                                 pitch_ceiling=self.last_params['pitch_ceiling']
                             )
@@ -804,7 +804,7 @@ class PhoneticsApp:
             self.root.after(0, self.tree_panel.clear_all)
             
             snd = self.pending_long_snd
-            global_pitch = snd.to_pitch(pitch_floor=self.last_params['pitch_floor'], pitch_ceiling=self.last_params['pitch_ceiling'])
+            global_pitch = snd.to_pitch_ac(time_step=None, pitch_floor=self.last_params['pitch_floor'], pitch_ceiling=self.last_params['pitch_ceiling'], voicing_threshold=0.25, octave_jump_cost=0.9)
             
             if hasattr(self, 'manual_segments') and self.manual_segments:
                 macro_segments = self.manual_segments
