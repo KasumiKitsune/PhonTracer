@@ -404,9 +404,26 @@ class PhoneticsApp:
                 if val != self.last_params['pts']:
                     self.last_params['pts'] = val
                     self.slider_pts.set(val)
-                    for iid in list(self.items.keys()):
-                        self.tree_panel.update_item_icon(iid)
-                    self.tree_panel.update_preview()
+
+                    def update_icons_bg():
+                        self.root.after(0, lambda: self.start_loading("正在重新检测图标..."))
+                        keys = list(self.items.keys())
+
+                        def update_batch(start_idx):
+                            end_idx = min(start_idx + 10, len(keys))
+                            for iid in keys[start_idx:end_idx]:
+                                self.tree_panel.update_item_icon(iid)
+
+                            self.set_progress(end_idx / max(1, len(keys)))
+
+                            if end_idx < len(keys):
+                                self.root.after(5, lambda: update_batch(end_idx))
+                            else:
+                                self.tree_panel.update_preview()
+                                self.stop_loading()
+
+                        self.root.after(10, lambda: update_batch(0))
+                    update_icons_bg()
             elif key == 'db':
                 val = float(self.entry_drop_db.get())
                 if val != self.last_params['db']:
@@ -579,7 +596,8 @@ class PhoneticsApp:
                             valid_items.append(item)
                 
                 if tasks:
-                    with concurrent.futures.ProcessPoolExecutor(max_workers=min(os.cpu_count() or 4, 8)) as executor:
+                    # 使用 ThreadPoolExecutor 代替 ProcessPoolExecutor 避免大量序列化开销
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=min(os.cpu_count() or 4, 8)) as executor:
                         futures = {}
                         for idx, task in enumerate(tasks):
                             f = executor.submit(
