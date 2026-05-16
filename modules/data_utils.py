@@ -119,15 +119,21 @@ def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: 
             
             times = np.linspace(v_start, v_end, num_points)
             output += f"{real_index}_{i+1}.{char} ({label})\n{c_dur:.3f}\n"
+            
+            from parselmouth.praat import call
+            interp_pitch = call(pitch, "Interpolate")
             for t in times:
-                f0 = pitch.get_value_at_time(t)
+                f0 = interp_pitch.get_value_at_time(t)
                 f0_str = "0.000000" if np.isnan(f0) else f"{f0:.6f}"
                 output += f"{t:.6f}   {f0_str}\n"
     else:
         times = np.linspace(t_s, t_e, num_points)
         output += f"{real_index}.{label}\n{duration:.3f}\n"
+        
+        from parselmouth.praat import call
+        interp_pitch = call(item['pitch'], "Interpolate")
         for t in times:
-            f0 = item['pitch'].get_value_at_time(t)
+            f0 = interp_pitch.get_value_at_time(t)
             f0_str = "0.000000" if np.isnan(f0) else f"{f0:.6f}"
             output += f"{t:.6f}   {f0_str}\n"
             

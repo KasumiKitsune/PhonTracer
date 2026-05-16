@@ -161,11 +161,29 @@ class SpectrogramPanel:
         
         self.ax.pcolormesh(X, Y, sg_db, vmin=sg_db.max()-50, vmax=sg_db.max(), cmap='Greys')
         
-        pitch = part.to_pitch()
-        p_xs = pitch.xs() + view_s
-        p_vals = pitch.selected_array['frequency']
-        p_vals[p_vals == 0] = np.nan
-        self.ax2.plot(p_xs, p_vals, 'o', markersize=4, color='#3B82F6', zorder=5)
+        global_pitch = item.get('pitch')
+        if global_pitch:
+            p_xs = global_pitch.xs()
+            p_freqs = global_pitch.selected_array['frequency']
+            # 取当前视图区间内的基频点
+            mask = (p_xs >= view_s) & (p_xs <= view_e)
+            p_xs = p_xs[mask]
+            p_vals = p_freqs[mask].copy()
+            p_vals[p_vals == 0] = np.nan
+            
+            # 对较短的间隙（<0.15秒）进行插值连接，避免字内（如“讲”、“览”）出现断层，同时保留字间较长的真实停顿
+            valid_mask = ~np.isnan(p_vals)
+            if np.any(valid_mask):
+                valid_idx = np.where(valid_mask)[0]
+                for i in range(len(valid_idx) - 1):
+                    s, e = valid_idx[i], valid_idx[i+1]
+                    if e - s > 1 and (p_xs[e] - p_xs[s]) <= 0.15:
+                        p_vals[s+1:e] = np.interp(p_xs[s+1:e], [p_xs[s], p_xs[e]], [p_vals[s], p_vals[e]])
+        else:
+            p_xs = np.array([])
+            p_vals = np.array([])
+            
+        self.ax2.plot(p_xs, p_vals, '-o', markersize=4, linewidth=1.5, color='#3B82F6', zorder=5)
         
         self.ax.set_ylim([0, 5000])
         self.ax.set_xlim([view_s, view_e])

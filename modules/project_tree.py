@@ -465,8 +465,10 @@ class ProjectTreePanel:
             if v_e <= v_s: continue
                 
             times = np.linspace(v_s, v_e, num_points)
+            from parselmouth.praat import call
+            interp_pitch = call(pitch, "Interpolate")
             for t in times:
-                hz = pitch.get_value_at_time(t)
+                hz = interp_pitch.get_value_at_time(t)
                 if np.isnan(hz) or hz <= 0:
                     return True
         return False
@@ -621,7 +623,9 @@ class ProjectTreePanel:
                 continue
                 
             times = np.linspace(v_s, v_e, num_points)
-            f0s = [pitch.get_value_at_time(t) for t in times]
+            from parselmouth.praat import call
+            interp_pitch = call(pitch, "Interpolate")
+            f0s = [interp_pitch.get_value_at_time(t) for t in times]
             syl_data.append((dur, f0s))
             
         return t_e - t_s, syl_data
