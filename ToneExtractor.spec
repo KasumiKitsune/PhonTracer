@@ -25,7 +25,21 @@ excluded_modules = [
     'seaborn', 'pandas', 'torch', 'torchvision', 'torchaudio', 
     'whisper', 'matplotlib.tests', 'IPython', 'jupyter', 
     'notebook', 'sqlite3', 'numpy.f2py', 'tkinter.test',
-    'PIL.ImageQt', 'PIL.ImageTk' if sys.platform != 'win32' else ''
+    'PIL.ImageQt', 'PIL.ImageTk' if sys.platform != 'win32' else '',
+    # Aggressive exclusions
+    'matplotlib.backends.backend_qt5agg', 'matplotlib.backends.backend_qt5',
+    'matplotlib.backends.backend_qt', 'matplotlib.backends.backend_webagg',
+    'matplotlib.backends.backend_webagg_core', 'matplotlib.backends.backend_wxagg',
+    'matplotlib.backends.backend_wx', 'matplotlib.backends.backend_cairo',
+    'matplotlib.backends.backend_gtk3agg', 'matplotlib.backends.backend_gtk3',
+    'matplotlib.backends.backend_gtk4agg', 'matplotlib.backends.backend_gtk4',
+    'matplotlib.backends.backend_macosx', 'matplotlib.backends.backend_nbagg',
+    'matplotlib.backends.backend_pgf', 'matplotlib.backends.backend_ps',
+    'matplotlib.backends.backend_svg', 'matplotlib.backends.backend_template',
+    'matplotlib.backends.qt_compat',
+    'PyQt5', 'PyQt6', 'PySide2', 'PySide6', 'wx',
+    'pydoc', 'xmlrpc', 'http.server', 'urllib.request',
+    'email', 'html', 'multiprocessing.dummy'
 ]
 
 # 4. 图标逻辑
@@ -65,7 +79,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False, 
-    upx=False,          # 强制关闭 UPX
+    upx=True,           # 强制开启 UPX
     upx_exclude=[],
     console=False,      # 如果需要调试，可改为 True 查看后台报错
     disable_windowed_traceback=False,
@@ -82,7 +96,7 @@ coll = COLLECT(
     a.zipfiles,
     a.datas,
     strip=False,
-    upx=False,          # 强制关闭 UPX
+    upx=True,           # 强制开启 UPX
     upx_exclude=[],
     name='ToneExtractor',
 )

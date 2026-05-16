@@ -17,7 +17,22 @@ if sys.platform == 'win32':
 excluded_modules = [
     'seaborn', 'pandas', 'torch', 'torchvision', 'torchaudio', 
     'whisper', 'matplotlib.tests', 'IPython', 'jupyter', 
-    'notebook', 'sqlite3'
+    'notebook', 'sqlite3', 'numpy.f2py', 'tkinter.test',
+    'PIL.ImageQt', 'PIL.ImageTk' if sys.platform != 'win32' else '',
+    # Aggressive exclusions
+    'matplotlib.backends.backend_qt5agg', 'matplotlib.backends.backend_qt5',
+    'matplotlib.backends.backend_qt', 'matplotlib.backends.backend_webagg',
+    'matplotlib.backends.backend_webagg_core', 'matplotlib.backends.backend_wxagg',
+    'matplotlib.backends.backend_wx', 'matplotlib.backends.backend_cairo',
+    'matplotlib.backends.backend_gtk3agg', 'matplotlib.backends.backend_gtk3',
+    'matplotlib.backends.backend_gtk4agg', 'matplotlib.backends.backend_gtk4',
+    'matplotlib.backends.backend_macosx', 'matplotlib.backends.backend_nbagg',
+    'matplotlib.backends.backend_pgf', 'matplotlib.backends.backend_ps',
+    'matplotlib.backends.backend_svg', 'matplotlib.backends.backend_template',
+    'matplotlib.backends.qt_compat',
+    'PyQt5', 'PyQt6', 'PySide2', 'PySide6', 'wx',
+    'pydoc', 'xmlrpc', 'http.server', 'urllib.request',
+    'email', 'html', 'multiprocessing.dummy'
 ]
 
 # --- 1. 分析主程序 ---
@@ -71,7 +86,7 @@ exe1 = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=False,
+    upx=True,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -91,7 +106,7 @@ exe2 = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=False,
+    upx=True,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -112,7 +127,7 @@ coll = COLLECT(
     b.zipfiles,
     b.datas,
     strip=False,
-    upx=False,
+    upx=True,
     upx_exclude=[],
     name='PhonTracer_Suite',
 )
