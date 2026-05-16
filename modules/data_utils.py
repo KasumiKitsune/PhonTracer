@@ -126,6 +126,9 @@ def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: 
             f0_sampled = np.interp(times, seg_xs, seg_ys)
             
             for t, f0 in zip(times, f0_sampled):
+                # 修正：如果插值点距离真实基频点过远（跨越了静音区，如>25ms），强制归零，避免产生假数据桥接
+                if np.min(np.abs(seg_xs - t)) > 0.025:
+                    f0 = 0.0
                 f0_str = f"{f0:.6f}" if f0 > 0 else "0.000000"
                 output += f"{t:.6f}   {f0_str}\n"
     else:
@@ -146,6 +149,8 @@ def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: 
             f0_sampled = np.interp(times, seg_xs, seg_ys)
             
             for t, f0 in zip(times, f0_sampled):
+                if np.min(np.abs(seg_xs - t)) > 0.025:
+                    f0 = 0.0
                 f0_str = f"{f0:.6f}" if f0 > 0 else "0.000000"
                 output += f"{t:.6f}   {f0_str}\n"
         else:

@@ -459,17 +459,17 @@ class ProjectTreePanel:
             valid_idx = np.where((p_xs >= c_s) & (p_xs <= c_e) & (p_freqs > 0))[0]
             if len(valid_idx) >= 2:
                 v_s, v_e = p_xs[valid_idx[0]], p_xs[valid_idx[-1]]
+                seg_xs = p_xs[valid_idx]
+                seg_ys = p_freqs[valid_idx]
             else:
-                v_s, v_e = c_s, c_e
+                return True
                 
-            if v_e <= v_s: continue
+            if v_e <= v_s: return True
                 
             times = np.linspace(v_s, v_e, num_points)
-            from parselmouth.praat import call
-            interp_pitch = call(pitch, "Interpolate")
-            for t in times:
-                hz = interp_pitch.get_value_at_time(t)
-                if np.isnan(hz) or hz <= 0:
+            f0s = np.interp(times, seg_xs, seg_ys)
+            for t, hz in zip(times, f0s):
+                if np.min(np.abs(seg_xs - t)) > 0.025 or np.isnan(hz) or hz <= 0:
                     return True
         return False
 
@@ -628,6 +628,10 @@ class ProjectTreePanel:
             times = np.linspace(v_s, v_e, num_points)
             # 修复点：改用 numpy 局部插值，杜绝抓取界外的清辅音假象
             f0s = np.interp(times, seg_xs, seg_ys).tolist()
+            # 修正：跨越静音区（>25ms）时强制归零，避免产生假数据桥接
+            for j, t in enumerate(times):
+                if np.min(np.abs(seg_xs - t)) > 0.025:
+                    f0s[j] = 0.0
             syl_data.append((dur, f0s))
             
         return t_e - t_s, syl_data
