@@ -593,6 +593,12 @@ class AudioToolkitApp(ctk.CTk):
                 self.icons[key] = ctk.CTkImage(light_image=img, dark_image=img, size=(20, 20))
             else:
                 self.icons[key] = None
+        
+        # 加载软件 Logo
+        logo_path = os.path.join(os.path.dirname(__file__), "assets", "tool_icon.png")
+        if os.path.exists(logo_path):
+            img = Image.open(logo_path)
+            self.icons["logo"] = ctk.CTkImage(light_image=img, dark_image=img, size=(32, 32))
 
     def setup_ui(self):
         self.btn_kwargs = {"text_color": "white", "corner_radius": 20, "height": 38, "font": self.font_main}
@@ -605,7 +611,9 @@ class AudioToolkitApp(ctk.CTk):
                         rowheight=35,
                         background="#FFFFFF",
                         fieldbackground="#FFFFFF",
-                        foreground="#1F2937")
+                        foreground="#1F2937",
+                        borderwidth=0,
+                        relief="flat")
         style.configure("Treeview.Heading", 
                         font=("Microsoft YaHei", 12, "bold"),
                         background="#F3F4F6",
@@ -614,12 +622,16 @@ class AudioToolkitApp(ctk.CTk):
         
         header_frame = ctk.CTkFrame(self, fg_color="white", corner_radius=0, height=60)
         header_frame.pack(fill=tk.X, side=tk.TOP)
-        ctk.CTkLabel(header_frame, text="PhonTracer 配套音频工具", font=ctk.CTkFont(family="Microsoft YaHei", size=20, weight="bold"), text_color="#1F2937").pack(side=tk.LEFT, padx=20, pady=15)
+        
+        if self.icons.get("logo"):
+            ctk.CTkLabel(header_frame, text="", image=self.icons.get("logo")).pack(side=tk.LEFT, padx=(20, 0), pady=10)
+            
+        ctk.CTkLabel(header_frame, text="PhonTracer 配套音频工具", font=ctk.CTkFont(family="Microsoft YaHei", size=20, weight="bold"), text_color="#1F2937").pack(side=tk.LEFT, padx=15, pady=15)
         
         self.lbl_status = ctk.CTkLabel(header_frame, text="就绪", text_color="#10B981", font=self.font_main)
         self.lbl_status.pack(side=tk.RIGHT, padx=20)
 
-        self.tabview = ctk.CTkTabview(self, corner_radius=12, fg_color="white", segmented_button_selected_color="#60A5FA")
+        self.tabview = ctk.CTkTabview(self, corner_radius=12, fg_color="white", segmented_button_selected_color="#60A5FA", segmented_button_fg_color="white")
         self.tabview.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
         
         self.tab_merge = self.tabview.add("多音频合并 (拼长音)")
@@ -635,19 +647,22 @@ class AudioToolkitApp(ctk.CTk):
         left_panel = ctk.CTkFrame(self.tab_merge, fg_color="transparent")
         left_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(10, 5), pady=10)
         
-        CTkReleaseButton(left_panel, text=" ＋ 添加音频文件", image=self.icons.get("plus"), compound="left", command=self.add_merge_files, **self.btn_kwargs).pack(fill=tk.X, pady=(0, 10))
+        CTkReleaseButton(left_panel, text=" 添加音频文件", image=self.icons.get("plus"), compound="left", command=self.add_merge_files, **self.btn_kwargs).pack(fill=tk.X, pady=(0, 10))
         
-        tree_container = ctk.CTkFrame(left_panel, fg_color="transparent")
+        tree_container = ctk.CTkFrame(left_panel, fg_color="white", corner_radius=8, border_width=1, border_color="#D1D5DB")
         tree_container.pack(fill=tk.BOTH, expand=True)
         
-        self.tree_merge = ttk.Treeview(tree_container, columns=("Path",), show="headings", height=15)
-        self.tree_merge.heading("Path", text="待合并的音频文件路径 (可鼠标拖拽调整顺序)")
+        self.tree_merge = ttk.Treeview(tree_container, columns=("FullPath", "DisplayPath"), show="headings", height=15)
+        self.tree_merge.heading("DisplayPath", text="待合并的音频文件路径 (可鼠标拖拽调整顺序)")
+        self.tree_merge.column("FullPath", width=0, stretch=tk.NO) # 隐藏全路径列
+        self.tree_merge.configure(displaycolumns=("DisplayPath",))
+        self.tree_merge.configure(style="Treeview", takefocus=False)
         
         self.merge_scroll = ctk.CTkScrollbar(tree_container, orientation="vertical", command=self.tree_merge.yview)
         self.tree_merge.configure(yscrollcommand=self.merge_scroll.set)
         
-        self.merge_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-        self.tree_merge.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.merge_scroll.pack(side=tk.RIGHT, fill=tk.Y, padx=1, pady=1)
+        self.tree_merge.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(1, 0), pady=1)
         self.tree_merge.bind('<BackSpace>', self.remove_merge_file)
         self.tree_merge.bind('<Delete>', self.remove_merge_file)
         
@@ -718,8 +733,7 @@ class AudioToolkitApp(ctk.CTk):
 
         CTkReleaseButton(right_panel, text=" 一键匹配 (字表与音频)", image=self.icons.get("check"), compound="left", fg_color="#F59E0B", hover_color="#D97706", command=self.match_segments_to_wordlist, **self.btn_kwargs).pack(side=tk.TOP, fill=tk.X, padx=15, pady=(10, 15))
         
-        CTkReleaseButton(right_panel, text=" 拆分并发送到主程序", image=self.icons.get("tab_batch"), compound="left", fg_color="#3B82F6", hover_color="#2563EB", command=lambda: self.process_split(send_to_main=True), **self.btn_kwargs).pack(side=tk.BOTTOM, fill=tk.X, padx=15, pady=15)
-        CTkReleaseButton(right_panel, text=" 仅拆分保存到目录", image=self.icons.get("save"), compound="left", fg_color="#10B981", hover_color="#059669", command=lambda: self.process_split(send_to_main=False), **self.btn_kwargs).pack(side=tk.BOTTOM, fill=tk.X, padx=15, pady=(0, 5))
+        CTkReleaseButton(right_panel, text=" 仅拆分保存到目录", image=self.icons.get("save"), compound="left", fg_color="#10B981", hover_color="#059669", command=lambda: self.process_split(send_to_main=False), **self.btn_kwargs).pack(side=tk.BOTTOM, fill=tk.X, padx=15, pady=15)
 
     # ==========================
     # 交互回调与工具函数
@@ -735,7 +749,9 @@ class AudioToolkitApp(ctk.CTk):
             for p in audio_paths:
                 if p not in self.merge_files:
                     self.merge_files.append(p)
-                    self.tree_merge.insert("", tk.END, values=(p,))
+                    # 计算显示路径：上级目录 + 文件名
+                    display_p = "/".join(p.replace("\\", "/").split("/")[-2:])
+                    self.tree_merge.insert("", tk.END, values=(p, display_p))
         else:
             self.split_source = audio_paths[0]
             self.lbl_split_source.configure(text=os.path.basename(audio_paths[0]))
@@ -746,13 +762,14 @@ class AudioToolkitApp(ctk.CTk):
         for f in files:
             if f not in self.merge_files:
                 self.merge_files.append(f)
-                self.tree_merge.insert("", tk.END, values=(f,))
+                display_f = "/".join(f.replace("\\", "/").split("/")[-2:])
+                self.tree_merge.insert("", tk.END, values=(f, display_f))
 
     def remove_merge_file(self, event=None):
         selected = self.tree_merge.selection()
         for item in selected:
-            val = self.tree_merge.item(item, 'values')[0]
-            if val in self.merge_files: self.merge_files.remove(val)
+            full_path = self.tree_merge.item(item, 'values')[0]
+            if full_path in self.merge_files: self.merge_files.remove(full_path)
             self.tree_merge.delete(item)
 
     def clear_merge_list(self):
@@ -799,6 +816,7 @@ class AudioToolkitApp(ctk.CTk):
             del self._dragged_item
 
     def sync_merge_files_from_tree(self):
+        """当用户通过拖拽改变顺序后，同步后台的 merge_files 列表"""
         new_list = []
         for child in self.tree_merge.get_children():
             path = self.tree_merge.item(child, 'values')[0]

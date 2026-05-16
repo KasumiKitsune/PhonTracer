@@ -180,15 +180,21 @@ class PhoneticsApp:
             self.icons["brand_logo"] = ctk.CTkImage(light_image=img, dark_image=img, size=(target_w, target_h))
 
     def setup_ui(self):
-        left_scrollable = ctk.CTkScrollableFrame(self.root, width=320, fg_color="transparent")
-        left_scrollable.pack(side=tk.LEFT, fill=tk.Y, padx=10, pady=10)
+        # --- Sidebar Container ---
+        sidebar_frame = ctk.CTkFrame(self.root, width=320, fg_color="transparent")
+        sidebar_frame.pack(side=tk.LEFT, fill=tk.Y, padx=10, pady=(10, 5))
+        
+        # --- Header (Fixed at top) ---
+        header_frame = ctk.CTkFrame(sidebar_frame, fg_color="transparent")
+        header_frame.pack(side=tk.TOP, fill=tk.X, pady=(5, 10))
+
+        left_scrollable = ctk.CTkScrollableFrame(sidebar_frame, width=320, fg_color="transparent")
+        left_scrollable.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         self._make_scrollable_auto(left_scrollable)
+
         btn_kwargs_primary = {"corner_radius": 20, "height": 38, "font": self.font_main}
         btn_kwargs_secondary = {"corner_radius": 20, "height": 38, "font": self.font_main, 
                                 "fg_color": "#E5E7EB", "text_color": "#1F2937", "hover_color": "#D1D5DB"}
-        
-        header_frame = ctk.CTkFrame(left_scrollable, fg_color="transparent")
-        header_frame.pack(fill=tk.X, pady=(10, 20))
         
         if self.icons.get("brand_logo"):
             logo_lbl = ctk.CTkLabel(header_frame, text="", image=self.icons.get("brand_logo"))
@@ -299,11 +305,11 @@ class PhoneticsApp:
         self.switch_trim_silence.select() 
         ToolTip(self.switch_trim_silence, "开启后将在图表上自动忽略首尾低于 -50dB 的绝对静音区域，\n让有效波形占满屏幕。")
 
-        # 全局应用按钮
-        self.btn_apply_all = CTkReleaseButton(left_scrollable, text="  全局应用", image=self.icons.get("check_white"), compound="left", 
+        # 全局应用按钮 (固定在底部)
+        self.btn_apply_all = CTkReleaseButton(sidebar_frame, text="  全局应用", image=self.icons.get("check_white"), compound="left", 
                                               command=self.recalculate_all_audio, corner_radius=20, height=44, font=self.font_title,
                                               fg_color="#3B82F6", hover_color="#2563EB")
-        self.btn_apply_all.pack(fill=tk.X, pady=(10, 20))
+        self.btn_apply_all.pack(fill=tk.X, pady=(10, 5))
 
         # 实例化右侧树状面板 (先于中间面板初始化以确保正确的 pack 顺序)
         self.tree_panel = ProjectTreePanel(
