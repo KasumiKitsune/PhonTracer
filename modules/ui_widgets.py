@@ -73,3 +73,16 @@ class ToolTip:
         self.tipwindow = None
         if tw:
             tw.destroy()
+
+class AutoScrollbar(ctk.CTkScrollbar):
+    """
+    仅在内容溢出（需要滚动）时才显示的滚动条。
+    """
+    def set(self, low, high):
+        if float(low) <= 0.0 and float(high) >= 1.0:
+            if self.winfo_ismapped():
+                self.grid_remove()
+        else:
+            if not self.winfo_ismapped():
+                self.grid()
+        super().set(low, high)

@@ -8,7 +8,7 @@ import math
 import matplotlib.pyplot as plt
 import logging
 from .data_utils import get_export_text_for_item
-from .ui_widgets import CTkReleaseButton
+from .ui_widgets import ToolTip, CTkReleaseButton, AutoScrollbar
 
 logger = logging.getLogger(__name__)
 
@@ -53,11 +53,15 @@ class ProjectTreePanel:
         
         tree_container = ctk.CTkFrame(frame_list, fg_color="transparent")
         tree_container.pack(fill=tk.BOTH, expand=True, padx=15, pady=(5, 10))
+        tree_container.grid_columnconfigure(0, weight=1)
+        tree_container.grid_rowconfigure(0, weight=1)
+        
         self.tree = ttk.Treeview(tree_container, show='tree', selectmode='extended')
-        scroll_tree = ctk.CTkScrollbar(tree_container, command=self.tree.yview)
+        scroll_tree = AutoScrollbar(tree_container, command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll_tree.set)
-        scroll_tree.pack(side=tk.RIGHT, fill=tk.Y, padx=(5, 0))
-        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        scroll_tree.grid(row=0, column=1, sticky="ns", padx=(5, 0))
         
         self.drag_indicator = tk.Frame(self.tree, height=2, bg="#3B82F6") 
         self.tree.tag_configure('hover', background='#F3F4F6')
@@ -435,15 +439,20 @@ class ProjectTreePanel:
 
     def _check_item_has_empty_data(self, item):
         """精准检测子音节区间的11点中是否含有0/NaN值（已应用智能边界收缩防误报）"""
-        num_points = self.app_state_params['pts']
+        if not item or item.get('start') is None: return False
         
-        if (not item.get('snd') or not item.get('pitch')) and item.get('path'):
-            if item.get('preview_f0'):
-                return any(f == 0 for f in item['preview_f0'])
-            return False
+        # 优先使用显式的 has_empty_data 标记
+        if 'has_empty_data' in item:
+            return item['has_empty_data']
+            
+        # 兜底逻辑：如果存在 preview_f0 列表
+        if item.get('preview_f0'):
+            return any(hz == 0 for hz in item['preview_f0'])
             
         if item.get('start') is None or not item.get('snd') or not item.get('pitch'):
             return False
+            
+        num_points = int(self.app_state_params.get('pts', 10))
             
         t_s, t_e = item['start'], item['end']
         label = item.get('label', '')

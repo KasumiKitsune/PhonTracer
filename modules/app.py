@@ -22,6 +22,7 @@ class PhoneticsApp:
         self.root = root
         self.root.title("PhonTracer - 声调提取与分析工具")
         self.root.geometry("1200x700")
+        self.root.minsize(1100, 650)
         self.root.configure(fg_color="#F3F4F6") 
         
         # 设置窗口图标
@@ -145,7 +146,7 @@ class PhoneticsApp:
             "status_error": "status_error.png",
             "warning": "warning.png",
             "import": "import_file.png", "ai_prompt": "ai_prompt.png", "copy": "copy_icon.png",
-            "import_white": "import_white.png", "copy_white": "copy_white.png"
+            "import_white": "import_white.png", "copy_white": "copy_white.png", "check_white": "check_white.png"
         }
         from PIL import ImageTk
         self.tk_icons = {}
@@ -181,6 +182,7 @@ class PhoneticsApp:
     def setup_ui(self):
         left_scrollable = ctk.CTkScrollableFrame(self.root, width=320, fg_color="transparent")
         left_scrollable.pack(side=tk.LEFT, fill=tk.Y, padx=10, pady=10)
+        self._make_scrollable_auto(left_scrollable)
         btn_kwargs_primary = {"corner_radius": 20, "height": 38, "font": self.font_main}
         btn_kwargs_secondary = {"corner_radius": 20, "height": 38, "font": self.font_main, 
                                 "fg_color": "#E5E7EB", "text_color": "#1F2937", "hover_color": "#D1D5DB"}
@@ -297,17 +299,13 @@ class PhoneticsApp:
         self.switch_trim_silence.select() 
         ToolTip(self.switch_trim_silence, "开启后将在图表上自动忽略首尾低于 -50dB 的绝对静音区域，\n让有效波形占满屏幕。")
 
-        # 实例化中间画布面板
-        self.spectrogram_panel = SpectrogramPanel(
-            parent=self.root, 
-            icons=self.icons,
-            on_time_changed_callback=self.on_spectrogram_time_changed,
-            on_auto_detect_callback=self.on_spectrogram_auto_detect,
-            on_export_callback=self.on_export_callback
-        )
-        self.spectrogram_panel.switch_trim_silence = self.switch_trim_silence
-        
-        # 实例化右侧树状面板
+        # 全局应用按钮
+        self.btn_apply_all = CTkReleaseButton(left_scrollable, text="  全局应用", image=self.icons.get("check_white"), compound="left", 
+                                              command=self.recalculate_all_audio, corner_radius=20, height=44, font=self.font_title,
+                                              fg_color="#3B82F6", hover_color="#2563EB")
+        self.btn_apply_all.pack(fill=tk.X, pady=(10, 20))
+
+        # 实例化右侧树状面板 (先于中间面板初始化以确保正确的 pack 顺序)
         self.tree_panel = ProjectTreePanel(
             parent=self.root,
             icons=self.icons,
@@ -317,6 +315,16 @@ class PhoneticsApp:
             on_item_selected_callback=self.on_tree_item_selected,
             on_clear_canvas_callback=self.on_clear_canvas_callback
         )
+
+        # 实例化中间画布面板 (最后初始化并 expand=True 以占据剩余空间)
+        self.spectrogram_panel = SpectrogramPanel(
+            parent=self.root, 
+            icons=self.icons,
+            on_time_changed_callback=self.on_spectrogram_time_changed,
+            on_auto_detect_callback=self.on_spectrogram_auto_detect,
+            on_export_callback=self.on_export_callback
+        )
+        self.spectrogram_panel.switch_trim_silence = self.switch_trim_silence
 
     # --- 交互回调 ---
     def on_tree_item_selected(self, iid):
@@ -429,23 +437,23 @@ class PhoneticsApp:
                 if val != self.last_params['db']:
                     self.last_params['db'] = val
                     self.slider_db.set(val)
-                    self.recalculate_all_audio()
+                    self.recalculate_current_item()
             elif key == 'skip_front':
                 val = float(self.entry_min_dur.get())
                 if val != self.last_params['skip_front']:
                     self.last_params['skip_front'] = val
                     self.slider_dur.set(val)
-                    self.recalculate_all_audio()
+                    self.recalculate_current_item()
             elif key == 'pitch_floor':
                 val = int(self.entry_pitch_floor.get())
                 if val != self.last_params['pitch_floor']:
                     self.last_params['pitch_floor'] = val
-                    self.recalculate_all_audio(recompute_pitch=True)
+                    self.recalculate_current_item(recompute_pitch=True)
             elif key == 'pitch_ceiling':
                 val = int(self.entry_pitch_ceiling.get())
                 if val != self.last_params['pitch_ceiling']:
                     self.last_params['pitch_ceiling'] = val
-                    self.recalculate_all_audio(recompute_pitch=True)
+                    self.recalculate_current_item(recompute_pitch=True)
         except Exception: pass
 
     def set_status(self, text, color="#10B981", icon_key="status_success"):
@@ -464,6 +472,27 @@ class PhoneticsApp:
         self.set_progress(1.0)
         self.set_status(text, "#10B981", "status_success")
         self.root.after(1500, lambda: self.progress_bar.pack_forget())
+
+    def _make_scrollable_auto(self, scrollable_frame):
+        """
+        使 CTkScrollableFrame 的滚动条仅在内容溢出时显示。
+        """
+        scrollbar = scrollable_frame._scrollbar
+        orig_set = scrollbar.set
+        
+        def auto_set(low, high):
+            # 使用更严谨的判断，并加入 update 以防止布局死循环
+            if float(low) <= 0.0 and float(high) >= 1.0:
+                if scrollbar.winfo_ismapped():
+                    scrollbar.grid_remove()
+            else:
+                if not scrollbar.winfo_ismapped():
+                    scrollbar.grid()
+            orig_set(low, high)
+            
+        scrollbar.set = auto_set
+        # 初始检查一次
+        self.root.after(100, lambda: scrollbar.set(*scrollbar.get()))
 
     def setup_entry_behavior(self, entry, param_key):
         def on_enter(e): entry.configure(border_color="#3B82F6", border_width=2)
@@ -510,7 +539,7 @@ class PhoneticsApp:
                 recompute_pitch = True
                 
             if changed_algo or recompute_pitch: 
-                self.recalculate_all_audio(recompute_pitch=recompute_pitch)
+                self.recalculate_current_item(recompute_pitch=recompute_pitch)
             if new_pts != self.last_params['pts']:
                 self.last_params['pts'] = new_pts
                 for iid in list(self.items.keys()):
@@ -519,7 +548,7 @@ class PhoneticsApp:
         except ValueError: pass
 
     def on_trim_silence_toggle(self):
-        self.recalculate_all_audio(only_trim_silence=True)
+        self.recalculate_current_item(only_trim_silence=True)
 
     def recalculate_all_audio(self, only_trim_silence=False, recompute_pitch=False):
         if not self.items: return
@@ -594,29 +623,61 @@ class PhoneticsApp:
                                 'word_label': item['label'].replace(" (缺失)", "")
                             })
                             valid_items.append(item)
+                    elif item.get('path'):
+                        # 独立音频模式：直接记录路径，后续使用多进程批处理
+                        tasks.append({
+                            'path': item['path'],
+                            'word_label': item['label'].replace(" (缺失)", ""),
+                            'type': 'batch'
+                        })
+                        valid_items.append(item)
                 
                 if tasks:
-                    # 使用 ThreadPoolExecutor 代替 ProcessPoolExecutor 避免大量序列化开销
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=min(os.cpu_count() or 4, 8)) as executor:
+                    # 使用 ProcessPoolExecutor 进行 CPU 密集型任务
+                    with concurrent.futures.ProcessPoolExecutor(max_workers=min(os.cpu_count() or 4, 8)) as executor:
                         futures = {}
                         for idx, task in enumerate(tasks):
-                            f = executor.submit(
-                                long_process_worker,
-                                task['snd_values'], task['snd_sf'], task['pitch_xs'], task['pitch_freqs'],
-                                task['ms'], task['me'], params, trim_silence, task['word_label']
-                            )
+                            if task.get('type') == 'batch':
+                                # 独立音频：重新运行 batch_process_worker
+                                f = executor.submit(batch_process_worker, task['path'], params, trim_silence)
+                            else:
+                                # 长音频：重新运行 long_process_worker
+                                f = executor.submit(
+                                    long_process_worker,
+                                    task['snd_values'], task['snd_sf'], task['pitch_xs'], task['pitch_freqs'],
+                                    task['ms'], task['me'], params, trim_silence, task['word_label']
+                                )
                             futures[f] = idx
                         
                         completed = 0
                         for future in concurrent.futures.as_completed(futures):
                             idx = futures[future]
-                            res = future.result()
-                            if res.get('success'):
-                                valid_items[idx]['start'] = res['mis']
-                                valid_items[idx]['end'] = res['mie']
-                                valid_items[idx]['raw_start'] = res['raw_s']
-                                valid_items[idx]['raw_end'] = res['raw_e']
-                                valid_items[idx]['inner_splits'] = res.get('inner_splits', [])
+                            try:
+                                res = future.result()
+                                if res.get('success'):
+                                    target_item = valid_items[idx]
+                                    if tasks[idx].get('type') == 'batch':
+                                        # 合并独立音频处理结果
+                                        target_item['start'] = res['start']
+                                        target_item['end'] = res['end']
+                                        target_item['raw_start'] = res['raw_start']
+                                        target_item['raw_end'] = res['raw_end']
+                                        target_item['inner_splits'] = res.get('inner_splits', [])
+                                        target_item['has_empty_data'] = res.get('has_empty_data', False)
+                                        target_item['preview_f0'] = res.get('preview_f0', [])
+                                        # 如果是独立音频，还需要把 Cache 也更新了，防止下次加载又是旧的
+                                        if target_item.get('path'):
+                                            self.audio_cache[target_item['path']] = res
+                                    else:
+                                        # 合并长音频处理结果
+                                        target_item['start'] = res['mis']
+                                        target_item['end'] = res['mie']
+                                        target_item['raw_start'] = res['raw_s']
+                                        target_item['raw_end'] = res['raw_e']
+                                        target_item['inner_splits'] = res.get('inner_splits', [])
+                                        target_item['has_empty_data'] = res.get('has_empty_data', False)
+                                        target_item['preview_f0'] = res.get('preview_f0', [])
+                            except Exception: pass
                             
                             completed += 1
                             if completed % max(1, len(futures)//10) == 0 or completed == len(futures):
@@ -635,6 +696,84 @@ class PhoneticsApp:
                 self.stop_loading("全局参数已应用")
 
             self.root.after(0, finalize)
+        threading.Thread(target=run, daemon=True).start()
+
+    def recalculate_current_item(self, only_trim_silence=False, recompute_pitch=False):
+        """仅针对当前正在编辑的项重新计算参数（暂不影响全局）"""
+        item = self.spectrogram_panel.current_item
+        if not item: return
+        
+        def run():
+            try:
+                self.root.after(0, lambda: self.set_status("正在更新当前项...", "#3B82F6", "status_loading"))
+                
+                # 如果是独立音频模式且没有加载 Sound 对象
+                if not item.get('snd') and item.get('path'):
+                    item['snd'] = parselmouth.Sound(item['path'])
+                    # 总是为单项重新生成 pitch 确保准确性
+                    item['pitch'] = item['snd'].to_pitch_ac(
+                        time_step=None, voicing_threshold=0.25, octave_jump_cost=0.9,
+                        pitch_floor=self.last_params['pitch_floor'],
+                        pitch_ceiling=self.last_params['pitch_ceiling']
+                    )
+                    # 独立音频的宏观边界就是全文
+                    item['macro_start'] = 0.0
+                    item['macro_end'] = item['snd'].get_total_duration()
+
+                # 如果修改了 Pitch Floor/Ceiling，重新计算该项的 Pitch
+                if recompute_pitch and item.get('snd'):
+                    item['pitch'] = item['snd'].to_pitch_ac(
+                        time_step=None, voicing_threshold=0.25, octave_jump_cost=0.9,
+                        pitch_floor=self.last_params['pitch_floor'],
+                        pitch_ceiling=self.last_params['pitch_ceiling']
+                    )
+                    
+                if item.get('snd') and 'macro_start' in item and 'macro_end' in item:
+                    if only_trim_silence:
+                        mic_s, mic_e = recalculate_bounds_fast(
+                            item['snd'], item['pitch'], item['raw_start'], item['raw_end'], self.switch_trim_silence.get()
+                        )
+                        # 等比例缩放内部蓝线
+                        old_s, old_e = item.get('start', mic_s), item.get('end', mic_e)
+                        if 'inner_splits' in item and item['inner_splits'] and old_e > old_s:
+                            ratio = (mic_e - mic_s) / (old_e - old_s)
+                            item['inner_splits'] = [mic_s + (s - old_s) * ratio for s in item['inner_splits']]
+                        item['start'], item['end'] = mic_s, mic_e
+                    else:
+                        mic_s, mic_e, raw_s, raw_e = self._microscopic_vowel_nucleus(
+                            item['snd'], item['pitch'], item['macro_start'], item['macro_end']
+                        )
+                        item['start'], item['end'] = mic_s, mic_e
+                        item['raw_start'], item['raw_end'] = raw_s, raw_e
+                        
+                        label = item['label'].replace(" (缺失)", "")
+                        if len(label) > 1:
+                            item['inner_splits'] = auto_split_inner_word(item['snd'], mic_s, mic_e, len(label))
+                        else:
+                            item['inner_splits'] = []
+                            
+                # 重新生成 11 点预览数据用于警告图标状态更新
+                if item.get('snd') and item.get('pitch'):
+                    preview_times = np.linspace(item['start'], item['end'], 11)
+                    preview_f0 = [item['pitch'].get_value_at_time(t) for t in preview_times]
+                    item['preview_f0'] = [0.0 if (np.isnan(hz) or hz <= 0) else hz for hz in preview_f0]
+                    item['has_empty_data'] = any(f == 0.0 for f in item['preview_f0'])
+                            
+                def finalize():
+                    self.spectrogram_panel.plot_item_spectrogram()
+                    self.spectrogram_panel.update_ui_times()
+                    # 更新树图标（警告标志）
+                    for iid, it in list(self.items.items()):
+                        if it is item:
+                            self.tree_panel.update_item_icon(iid)
+                            break
+                    self.tree_panel.update_preview()
+                    self.set_status("当前项已更新", "#10B981", "status_success")
+                    
+                self.root.after(0, finalize)
+            except Exception as e:
+                self.root.after(0, lambda: self.set_status(f"更新失败: {str(e)}", "#EF4444", "status_error"))
+                
         threading.Thread(target=run, daemon=True).start()
 
     def _microscopic_vowel_nucleus(self, snd, global_pitch, t_min, t_max):
