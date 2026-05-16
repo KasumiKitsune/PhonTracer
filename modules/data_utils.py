@@ -111,8 +111,10 @@ def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: 
             valid_idx = np.where((p_xs >= c_start) & (p_xs <= c_end) & (p_freqs > 0))[0]
             if len(valid_idx) >= 2:
                 v_start, v_end = p_xs[valid_idx[0]], p_xs[valid_idx[-1]]
+                seg_xs = p_xs[valid_idx]
+                seg_ys = p_freqs[valid_idx]
             else:
-                v_start, v_end = c_start, c_end
+                continue # 没有有效基频，跳过该字
                 
             c_dur = v_end - v_start
             if c_dur <= 0: continue
@@ -120,21 +122,35 @@ def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: 
             times = np.linspace(v_start, v_end, num_points)
             output += f"{real_index}_{i+1}.{char} ({label})\n{c_dur:.3f}\n"
             
-            from parselmouth.praat import call
-            interp_pitch = call(pitch, "Interpolate")
-            for t in times:
-                f0 = interp_pitch.get_value_at_time(t)
-                f0_str = "0.000000" if np.isnan(f0) else f"{f0:.6f}"
+            # 修复点：抛弃 Praat 全局 Interpolate，使用 numpy 仅针对当前字的真实基频点进行内部插值
+            f0_sampled = np.interp(times, seg_xs, seg_ys)
+            
+            for t, f0 in zip(times, f0_sampled):
+                f0_str = f"{f0:.6f}" if f0 > 0 else "0.000000"
                 output += f"{t:.6f}   {f0_str}\n"
     else:
-        times = np.linspace(t_s, t_e, num_points)
-        output += f"{real_index}.{label}\n{duration:.3f}\n"
+        # 单字模式同样应用此逻辑
+        pitch = item['pitch']
+        p_xs = pitch.xs()
+        p_freqs = pitch.selected_array['frequency']
         
-        from parselmouth.praat import call
-        interp_pitch = call(item['pitch'], "Interpolate")
-        for t in times:
-            f0 = interp_pitch.get_value_at_time(t)
-            f0_str = "0.000000" if np.isnan(f0) else f"{f0:.6f}"
-            output += f"{t:.6f}   {f0_str}\n"
+        valid_idx = np.where((p_xs >= t_s) & (p_xs <= t_e) & (p_freqs > 0))[0]
+        if len(valid_idx) >= 2:
+            v_start, v_end = p_xs[valid_idx[0]], p_xs[valid_idx[-1]]
+            seg_xs = p_xs[valid_idx]
+            seg_ys = p_freqs[valid_idx]
+            duration = v_end - v_start
+            
+            output += f"{real_index}.{label}\n{duration:.3f}\n"
+            times = np.linspace(v_start, v_end, num_points)
+            f0_sampled = np.interp(times, seg_xs, seg_ys)
+            
+            for t, f0 in zip(times, f0_sampled):
+                f0_str = f"{f0:.6f}" if f0 > 0 else "0.000000"
+                output += f"{t:.6f}   {f0_str}\n"
+        else:
+            output += f"{real_index}.{label}\n0.000\n"
+            for _ in range(num_points):
+                output += f"0.000000   0.000000\n"
             
     return output

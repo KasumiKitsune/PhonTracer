@@ -614,8 +614,11 @@ class ProjectTreePanel:
             valid_idx = np.where((p_xs >= c_s) & (p_xs <= c_e) & (p_freqs > 0))[0]
             if len(valid_idx) >= 2:
                 v_s, v_e = p_xs[valid_idx[0]], p_xs[valid_idx[-1]]
+                seg_xs = p_xs[valid_idx]     # 取出该字的真实时间轴
+                seg_ys = p_freqs[valid_idx]  # 取出该字的真实F0值
             else:
-                v_s, v_e = c_s, c_e
+                syl_data.append((0.0, [0.0]*num_points))
+                continue
                 
             dur = v_e - v_s
             if dur <= 0:
@@ -623,9 +626,8 @@ class ProjectTreePanel:
                 continue
                 
             times = np.linspace(v_s, v_e, num_points)
-            from parselmouth.praat import call
-            interp_pitch = call(pitch, "Interpolate")
-            f0s = [interp_pitch.get_value_at_time(t) for t in times]
+            # 修复点：改用 numpy 局部插值，杜绝抓取界外的清辅音假象
+            f0s = np.interp(times, seg_xs, seg_ys).tolist()
             syl_data.append((dur, f0s))
             
         return t_e - t_s, syl_data
