@@ -94,9 +94,12 @@ def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: 
     
     output = ""
     if is_word_mode:
-        splits = [t_s] + [s for s in inner_splits if t_s < s < t_e] + [t_e]
-        if len(splits) != len(label) + 1:
-            splits = np.linspace(t_s, t_e, len(label) + 1).tolist()
+        chars_bounds = item.get('chars_bounds', [])
+        if not chars_bounds:
+            splits = [t_s] + [s for s in inner_splits if t_s < s < t_e] + [t_e]
+            if len(splits) != len(label) + 1:
+                splits = np.linspace(t_s, t_e, len(label) + 1).tolist()
+            chars_bounds = [(splits[j], splits[j+1]) for j in range(len(splits)-1)]
             
         pitch = item['pitch']
         p_xs = pitch.xs()
@@ -104,8 +107,10 @@ def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: 
             
         for i in range(len(label)):
             char = label[i]
-            c_start = splits[i]
-            c_end = splits[i+1]
+            if i < len(chars_bounds):
+                c_start, c_end = chars_bounds[i]
+            else:
+                continue
             
             # 核心优化：智能收缩！在蓝线围栏内，自动剔除两侧的无声声母/静音Gap，寻找真实韵母边界
             valid_idx = np.where((p_xs >= c_start) & (p_xs <= c_end) & (p_freqs > 0))[0]
