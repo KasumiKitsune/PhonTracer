@@ -48,3 +48,4 @@ scratch/
 upx.exe
 upx.zip
 upx-*/
+!cli.py
