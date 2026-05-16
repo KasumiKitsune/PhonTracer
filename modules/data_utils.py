@@ -123,14 +123,17 @@ def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: 
             output += f"{real_index}_{i+1}.{char} ({label})\n{c_dur:.3f}\n"
             
             # 修复点：抛弃 Praat 全局 Interpolate，使用 numpy 仅针对当前字的真实基频点进行内部插值
-            f0_sampled = np.interp(times, seg_xs, seg_ys)
-            
-            for t, f0 in zip(times, f0_sampled):
-                # 修正：如果插值点距离真实基频点过远（跨越了静音区，如>25ms），强制归零，避免产生假数据桥接
-                if np.min(np.abs(seg_xs - t)) > 0.025:
-                    f0 = 0.0
-                f0_str = f"{f0:.6f}" if f0 > 0 else "0.000000"
-                output += f"{t:.6f}   {f0_str}\n"
+            if len(seg_xs) >= 2:
+                f0_sampled = np.interp(times, seg_xs, seg_ys)
+                for t, f0 in zip(times, f0_sampled):
+                    # 修正：如果插值点距离真实基频点过远（跨越了静音区，如>25ms），强制归零，避免产生假数据桥接
+                    if np.min(np.abs(seg_xs - t)) > 0.025:
+                        f0 = 0.0
+                    f0_str = f"{f0:.6f}" if f0 > 0 else "0.000000"
+                    output += f"{t:.6f}   {f0_str}\n"
+            else:
+                for t in times:
+                    output += f"{t:.6f}   0.000000\n"
     else:
         # 单字模式同样应用此逻辑
         pitch = item['pitch']
@@ -146,16 +149,20 @@ def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: 
             
             output += f"{real_index}.{label}\n{duration:.3f}\n"
             times = np.linspace(v_start, v_end, num_points)
-            f0_sampled = np.interp(times, seg_xs, seg_ys)
-            
-            for t, f0 in zip(times, f0_sampled):
-                if np.min(np.abs(seg_xs - t)) > 0.025:
-                    f0 = 0.0
-                f0_str = f"{f0:.6f}" if f0 > 0 else "0.000000"
-                output += f"{t:.6f}   {f0_str}\n"
+            if len(seg_xs) >= 2:
+                f0_sampled = np.interp(times, seg_xs, seg_ys)
+                for t, f0 in zip(times, f0_sampled):
+                    if np.min(np.abs(seg_xs - t)) > 0.025:
+                        f0 = 0.0
+                    f0_str = f"{f0:.6f}" if f0 > 0 else "0.000000"
+                    output += f"{t:.6f}   {f0_str}\n"
+            else:
+                for t in times:
+                    output += f"{t:.6f}   0.000000\n"
         else:
             output += f"{real_index}.{label}\n0.000\n"
-            for _ in range(num_points):
-                output += f"0.000000   0.000000\n"
+            times = np.linspace(t_s, t_e, num_points)
+            for t in times:
+                output += f"{t:.6f}   0.000000\n"
             
     return output

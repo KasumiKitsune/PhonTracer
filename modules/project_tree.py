@@ -645,12 +645,15 @@ class ProjectTreePanel:
                 
             times = np.linspace(v_s, v_e, num_points)
             # 修复点：改用 numpy 局部插值，杜绝抓取界外的清辅音假象
-            f0s = np.interp(times, seg_xs, seg_ys).tolist()
-            # 修正：跨越静音区（>25ms）时强制归零，避免产生假数据桥接
-            for j, t in enumerate(times):
-                if np.min(np.abs(seg_xs - t)) > 0.025:
-                    f0s[j] = 0.0
-            syl_data.append((dur, f0s))
+            if len(seg_xs) >= 2:
+                f0s = np.interp(times, seg_xs, seg_ys).tolist()
+                # 修正：跨越静音区（>25ms）时强制归零，避免产生假数据桥接
+                for j, t in enumerate(times):
+                    if np.min(np.abs(seg_xs - t)) > 0.025:
+                        f0s[j] = 0.0
+                syl_data.append((dur, f0s))
+            else:
+                syl_data.append((dur, [0.0]*num_points))
             
         return t_e - t_s, syl_data
 
