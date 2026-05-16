@@ -1158,58 +1158,14 @@ class PhoneticsApp:
         x = (sw - w) // 2
         y = (sh - h) // 2
         dlg.geometry(f"{w}x{h}+{x}+{y}")
+        dlg.configure(fg_color="#f3f4f6")
         
         dlg.transient(self.root) 
         dlg.focus_set()           
         
-        # 2. 文本输入区
-        ctk.CTkLabel(dlg, text="请粘贴文本或导入文件，组别前加【】或 #：\n示例格式：\n【阴平】\n八 扒 吧 (支持空格/逗号拆分多个字)", justify=tk.LEFT, text_color="#374151").pack(pady=(5, 5), anchor="w", padx=20)
-        
-        text_box = ctk.CTkTextbox(dlg, width=380, height=220, corner_radius=8, border_width=1, border_color="#D1D5DB")
-        text_box.pack(padx=20, pady=5, fill=tk.BOTH, expand=True)
-        
-        # 移除 font 参数以兼容 scaling
-        text_box.tag_config("group_title", foreground="#2563EB") 
-        text_box.tag_config("word_item", foreground="#10B981")
-
-        # 3. 实时统计栏
-        lbl_stats = ctk.CTkLabel(dlg, text="实时统计：已识别 0 个组别 | 0 个单字", text_color="#6B7280", font=("Microsoft YaHei", 12))
-        lbl_stats.pack(pady=(0, 10), padx=20, anchor="w")
-
-        def update_stats(event=None):
-            raw_text = text_box.get("1.0", tk.END)
-            groups, flat_words = parse_wordlist(raw_text)
-            color = "#10B981" if flat_words else "#6B7280"
-            lbl_stats.configure(text=f"实时统计：已识别 {len(groups)} 个组别 | {len(flat_words)} 个项", text_color=color)
-            
-            text_box.tag_remove("group_title", "1.0", tk.END)
-            text_box.tag_remove("word_item", "1.0", tk.END)
-            
-            lines = raw_text.split('\n')
-            current_line_idx = 1
-            import re
-            for line in lines:
-                stripped = line.strip()
-                if not stripped:
-                    current_line_idx += 1
-                    continue
-                if stripped.startswith('【') or stripped.startswith('[') or stripped.startswith('［') or stripped.startswith('#'):
-                    text_box.tag_add("group_title", f"{current_line_idx}.0", f"{current_line_idx}.end")
-                else:
-                    words = [w for w in re.split(r'[\s,，、]+', stripped) if w]
-                    start_char = 0
-                    for w in words:
-                        idx = line.find(w, start_char)
-                        if idx != -1:
-                            text_box.tag_add("word_item", f"{current_line_idx}.{idx}", f"{current_line_idx}.{idx+len(w)}")
-                            start_char = idx + len(w)
-                current_line_idx += 1
-            
-        text_box.bind("<KeyRelease>", update_stats)
-
         # 1. 顶部工具栏 (导入文件 / 复制AI提示词)
         toolbar = ctk.CTkFrame(dlg, fg_color="transparent")
-        toolbar.pack(fill=tk.X, padx=20, pady=(15, 5))
+        toolbar.pack(fill=tk.X, padx=20, pady=(15, 0))
         
         def load_txt():
             path = filedialog.askopenfilename(filetypes=[("Text/CSV Files", "*.txt *.csv"), ("All Files", "*.*")])
@@ -1239,6 +1195,71 @@ class PhoneticsApp:
                                    width=150, height=28, corner_radius=14, fg_color="#F59E0B", text_color="white", 
                                    hover_color="#D97706", command=copy_prompt)
         btn_prompt.pack(side=tk.LEFT, padx=10)
+
+        # 2. 文本输入区
+        # 创建一个容器来包裹 Textbox 和 浮动占位符
+        text_frame = ctk.CTkFrame(dlg, fg_color="transparent")
+        text_frame.pack(padx=20, pady=(10, 5), fill=tk.BOTH, expand=True)
+
+        text_box = ctk.CTkTextbox(text_frame, width=380, height=220, corner_radius=8, border_width=1, border_color="#D1D5DB")
+        text_box.pack(fill=tk.BOTH, expand=True)
+        
+        placeholder_text = "请在此处粘贴字表文本，或点击下方按钮导入文件。\n\n格式规范：\n1. 组别名称：使用 【】、[] 或 # 开头（如：【一组】）。\n2. 字/词项：组别下方的行即为字词，支持空格、逗号、分号或 Tab 分隔。\n3. 匹配逻辑：程序将按此处的顺序依次匹配音频区段。\n\n示例格式：\n【一组】\n妈 麻 马 骂\n#双音节\n音频, 视频, 提取\n[三字项]\n录音笔；笔记本；打字机"
+
+        # 创建浮动占位符标签
+        placeholder_label = ctk.CTkLabel(text_box, text=placeholder_text, text_color="#9CA3AF", 
+                                         justify=tk.LEFT, font=("Microsoft YaHei", 12), anchor="nw")
+        placeholder_label.place(x=10, y=10)
+        
+        # 点击占位符时聚焦输入框
+        placeholder_label.bind("<Button-1>", lambda e: text_box.focus_set())
+
+        # 3. 实时统计栏
+        lbl_stats = ctk.CTkLabel(dlg, text="实时统计：已识别 0 个组别 | 0 个项", text_color="#6B7280", font=("Microsoft YaHei", 12))
+        lbl_stats.pack(pady=(0, 10), padx=20, anchor="w")
+
+        def update_stats(event=None):
+            raw_text = text_box.get("1.0", tk.END)
+            groups, flat_words = parse_wordlist(raw_text)
+            color = "#10B981" if flat_words else "#6B7280"
+            lbl_stats.configure(text=f"实时统计：已识别 {len(groups)} 个组别 | {len(flat_words)} 个项", text_color=color)
+            
+            text_box.tag_remove("group_title", "1.0", tk.END)
+            text_box.tag_remove("word_item", "1.0", tk.END)
+
+            # 控制浮动占位符的显示/隐藏
+            if not raw_text.strip():
+                placeholder_label.place(x=10, y=10)
+                lbl_stats.configure(text="实时统计：待输入...", text_color="#6B7280")
+                return
+            else:
+                placeholder_label.place_forget()
+
+            text_box.tag_config("group_title", foreground="#2563EB") 
+            text_box.tag_config("word_item", foreground="#10B981")
+            
+            lines = raw_text.split('\n')
+            current_line_idx = 1
+            import re
+            for line in lines:
+                stripped = line.strip()
+                if not stripped:
+                    current_line_idx += 1
+                    continue
+                if stripped.startswith('【') or stripped.startswith('[') or stripped.startswith('［') or stripped.startswith('#'):
+                    text_box.tag_add("group_title", f"{current_line_idx}.0", f"{current_line_idx}.end")
+                else:
+                    words = [w for w in re.split(r'[\s,，、]+', stripped) if w]
+                    start_char = 0
+                    for w in words:
+                        idx = line.find(w, start_char)
+                        if idx != -1:
+                            text_box.tag_add("word_item", f"{current_line_idx}.{idx}", f"{current_line_idx}.{idx+len(w)}")
+                            start_char = idx + len(w)
+                current_line_idx += 1
+            
+        text_box.bind("<KeyRelease>", update_stats)
+
         
         # 4. 匹配参数区
         match_mode_var = ctk.StringVar(value="fuzzy")
@@ -1276,7 +1297,7 @@ class PhoneticsApp:
             if mode == 'long': self.process_long_with_wordlist(raw_text)
             else: self.process_batch_with_wordlist(raw_text, match_mode=match_mode_var.get())
             
-        CTkReleaseButton(dlg, text="开始匹配提取", command=process, corner_radius=20, height=40, font=self.font_main).pack(pady=15)
+        CTkReleaseButton(dlg, text="开始匹配提取", command=process, corner_radius=20, height=40, font=self.font_main).pack(pady=15, anchor="e", padx=20)
         
         # 初始触发一次统计
         update_stats()
