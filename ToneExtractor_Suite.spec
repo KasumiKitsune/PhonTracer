@@ -17,7 +17,7 @@ if sys.platform == 'win32':
 excluded_modules = [
     'seaborn', 'pandas', 'torch', 'torchvision', 'torchaudio', 
     'whisper', 'matplotlib.tests', 'IPython', 'jupyter', 
-    'notebook', 'sqlite3', 'numpy.f2py'
+    'notebook', 'sqlite3'
 ]
 
 # --- 1. 分析主程序 ---
