@@ -116,3 +116,14 @@ coll = COLLECT(
     upx_exclude=[],
     name='PhonTracer_Suite',
 )
+
+if sys.platform == 'darwin':
+    # 为主程序创建 .app
+    app1 = BUNDLE(
+        coll,
+        name='PhonTracer.app',
+        icon='assets/icon.icns',
+        bundle_identifier='com.kasumikitsune.phonetracer',
+    )
+    # 为工具箱创建 .app (通常 macOS 上如果是套件，用户会更习惯在同一个目录下看到两个 app)
+    # 注意：这里我们简单处理，Actions 最终会打包整个 Suite 文件夹

@@ -34,28 +34,29 @@ jobs:
 
     - name: Build with PyInstaller
       run: |
-        pyinstaller --noconfirm --clean ToneExtractor.spec
+        pyinstaller --noconfirm --clean ToneExtractor_Suite.spec
 
     - name: Create Zip Archive (Windows)
       if: matrix.os == 'windows-latest'
       shell: pwsh
       run: |
-        # 压缩整个文件夹，解压后会有一个主目录，防止乱码和丢失依赖
-        Compress-Archive -Path dist/ToneExtractor -DestinationPath dist/ToneExtractor-Windows.zip
+        # 压缩整个套件文件夹
+        Compress-Archive -Path dist/PhonTracer_Suite -DestinationPath dist/PhonTracer_Suite-Windows.zip
 
     - name: Create Zip Archive (macOS)
       if: matrix.os == 'macos-latest'
       run: |
         cd dist
-        zip -yr ToneExtractor-macOS.zip ToneExtractor.app/
+        # macOS 下压缩整个 Suite 文件夹（包含 .app）
+        zip -yr PhonTracer_Suite-macOS.zip PhonTracer_Suite/
 
     - name: Create Release and Upload Artifacts
       uses: softprops/action-gh-release@v2
       if: startsWith(github.ref, 'refs/tags/')
       with:
         files: |
-          dist/ToneExtractor-Windows.zip
-          dist/ToneExtractor-macOS.zip
+          dist/PhonTracer_Suite-Windows.zip
+          dist/PhonTracer_Suite-macOS.zip
         name: ToneExtractor ${{ github.ref_name }}
         body: |
           ### 🚀 自动化发布
@@ -69,7 +70,7 @@ jobs:
       if: "!startsWith(github.ref, 'refs/tags/')"
       uses: actions/upload-artifact@v4
       with:
-        name: ToneExtractor-${{ matrix.os }}
+        name: PhonTracer-Suite-${{ matrix.os }}
         path: |
-          dist/ToneExtractor-Windows.zip
-          dist/ToneExtractor-macOS.zip
+          dist/PhonTracer_Suite-Windows.zip
+          dist/PhonTracer_Suite-macOS.zip
