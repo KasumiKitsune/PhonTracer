@@ -58,24 +58,28 @@ b = Analysis(
     optimize=0,
 )
 
-# --- 3. 分析命令行工具 ---
-c = Analysis(
-    ['cli.py'],
-    pathex=['.'],
-    binaries=[],
-    datas=[],  # CLI 不需要 GUI 资源
-    hiddenimports=hidden_imports,
-    excludes=excluded_modules + ['customtkinter', 'PIL', 'tkinter'], # CLI 完全排除 GUI 库，超强瘦身！
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
-    cipher=None,
-    noarchive=False,
-    optimize=0,
-)
+is_win = (sys.platform == 'win32')
+
+# --- 3. 分析命令行工具 (仅在 Windows 上执行，macOS 无需打包 CLI) ---
+if is_win:
+    c = Analysis(
+        ['cli.py'],
+        pathex=['.'],
+        binaries=[],
+        datas=[],  # CLI 不需要 GUI 资源
+        hiddenimports=hidden_imports,
+        excludes=excluded_modules + ['customtkinter', 'PIL', 'tkinter'], # CLI 完全排除 GUI 库，超强瘦身！
+        win_no_prefer_redirects=False,
+        win_private_assemblies=False,
+        cipher=None,
+        noarchive=False,
+        optimize=0,
+    )
 
 pyz_a = PYZ(a.pure, a.zipped_data, cipher=None)
 pyz_b = PYZ(b.pure, b.zipped_data, cipher=None)
-pyz_c = PYZ(c.pure, c.zipped_data, cipher=None)
+if is_win:
+    pyz_c = PYZ(c.pure, c.zipped_data, cipher=None)
 
 # --- 3. 定义主程序 EXE ---
 exe1 = EXE(
@@ -118,44 +122,61 @@ exe2 = EXE(
 )
 
 # --- 5. 定义命令行工具 EXE ---
-exe3 = EXE(
-    pyz_c,
-    c.scripts,
-    [],
-    exclude_binaries=True,
-    name='PhonTracerCLI',
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=False,
-    console=True,  # 命令行工具必须开启终端显示
-    disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-    icon='assets/cli.ico',
-)
+if is_win:
+    exe3 = EXE(
+        pyz_c,
+        c.scripts,
+        [],
+        exclude_binaries=True,
+        name='PhonTracerCLI',
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=False,
+        console=True,  # 命令行工具必须开启终端显示
+        disable_windowed_traceback=False,
+        argv_emulation=False,
+        target_arch=None,
+        codesign_identity=None,
+        entitlements_file=None,
+        icon='assets/cli.ico',
+    )
 
 # --- 6. 统一收集到同一个目录 ---
-coll = COLLECT(
-    exe1,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    exe2,
-    b.binaries,
-    b.zipfiles,
-    b.datas,
-    exe3,
-    c.binaries,
-    c.zipfiles,
-    c.datas,
-    strip=False,
-    upx=False,
-    upx_exclude=[],
-    name='PhonTracer_Suite',
-)
+if is_win:
+    coll = COLLECT(
+        exe1,
+        a.binaries,
+        a.zipfiles,
+        a.datas,
+        exe2,
+        b.binaries,
+        b.zipfiles,
+        b.datas,
+        exe3,
+        c.binaries,
+        c.zipfiles,
+        c.datas,
+        strip=False,
+        upx=False,
+        upx_exclude=[],
+        name='PhonTracer_Suite',
+    )
+else:
+    coll = COLLECT(
+        exe1,
+        a.binaries,
+        a.zipfiles,
+        a.datas,
+        exe2,
+        b.binaries,
+        b.zipfiles,
+        b.datas,
+        strip=False,
+        upx=False,
+        upx_exclude=[],
+        name='PhonTracer_Suite',
+    )
 
 if sys.platform == 'darwin':
     # 为主程序创建 .app
