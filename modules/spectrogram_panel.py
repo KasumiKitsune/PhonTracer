@@ -279,12 +279,15 @@ class SpectrogramPanel:
         self.dragging = closest
         if isinstance(closest, tuple):
             bound_type, idx = closest
+            boundary_time = chars_bounds[idx][0] if bound_type == 'start' else chars_bounds[idx][1]
+            self.cursor_x = boundary_time
             if bound_type == 'start':
                 self.bound_lines[idx][0].set_color('#047857')
                 self.bound_lines[idx][0].set_linewidth(4)
             elif bound_type == 'end':
                 self.bound_lines[idx][1].set_color('#047857')
                 self.bound_lines[idx][1].set_linewidth(4)
+            self.update_cursor_graphics()
         elif closest == 'cursor':
             self.cursor_line.set_color('#064E3B')
             self.cursor_line.set_linewidth(2.5)
@@ -345,12 +348,20 @@ class SpectrogramPanel:
             bound_type, idx = self.dragging
             if bound_type == 'start':
                 chars_bounds[idx][0] = min(event.xdata, chars_bounds[idx][1] - 0.01)
+                self.cursor_x = chars_bounds[idx][0]
             elif bound_type == 'end':
                 chars_bounds[idx][1] = max(event.xdata, chars_bounds[idx][0] + 0.01)
+                self.cursor_x = chars_bounds[idx][1]
 
             if chars_bounds:
                 item['start'] = chars_bounds[0][0]
                 item['end'] = chars_bounds[-1][1]
+
+            # Update the cursor line and text coordinates in real-time
+            if self.cursor_line and self.cursor_text:
+                self.cursor_line.set_xdata([self.cursor_x, self.cursor_x])
+                self.cursor_text.set_position((self.cursor_x, 5000))
+                self.cursor_text.set_text(f"{self.cursor_x:.3f}")
         elif self.dragging == 'cursor':
             self.cursor_x = event.xdata
             self.update_cursor_graphics()
@@ -467,10 +478,17 @@ class SpectrogramPanel:
                     break
 
             if play_s is None:
-                play_s = 0.0
-                play_e = total_duration
-                self.cursor_x = 0.0
-                self.update_cursor_graphics()
+                # If cursor is within the current segment, play from the cursor to the end of the segment.
+                # Otherwise, play the entire current segment from its start.
+                if item['start'] <= self.cursor_x < item['end'] - 0.01:
+                    play_s = self.cursor_x
+                else:
+                    play_s = item['start']
+                    self.cursor_x = item['start']
+                    self.update_cursor_graphics()
+                play_e = item['end']
+                self.play_is_selection = True
+                self.play_selection_start = play_s
 
             if play_e <= play_s:
                 return
