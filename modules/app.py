@@ -8,6 +8,7 @@ import threading
 import concurrent.futures
 import numpy as np
 from PIL import Image
+import queue
 
 # 导入拆分后的模块
 from .ui_widgets import ToolTip, CTkReleaseButton
@@ -37,6 +38,10 @@ class PhoneticsApp:
         
         self.pending_long_snd = None 
         self.pending_batch_paths = []
+        
+        # === 初始化安全队列以处理拖拽事件，防止 windnd 的 C++ 回调直接操作 Tkinter 引引发 GIL 崩溃 ===
+        self.drop_queue = queue.Queue()
+        self.root.after(100, self._check_drop_queue)
         
         # 全局数据源 (Source of Truth)
         self.items = {}
@@ -77,9 +82,23 @@ class PhoneticsApp:
         
         # 处理初始传入的文件（例如“打开方式”或拖动到图标）
         if initial_files:
-            self.root.after(100, lambda: self.on_files_dropped(initial_files))
+            self.root.after(1500, lambda: self.on_files_dropped(initial_files))
+
+    def _check_drop_queue(self):
+        try:
+            # 安全地将拖入的文件拿到主线程标准事件流中
+            while True:
+                files = self.drop_queue.get_nowait()
+                self._process_dropped_files(files)
+        except queue.Empty:
+            pass
+        self.root.after(100, self._check_drop_queue)
 
     def on_files_dropped(self, files):
+        # 仅将文件压入队列，彻底不涉及 Tkinter UI 的 Tcl 调用
+        self.drop_queue.put(files)
+
+    def _process_dropped_files(self, files):
         decoded_paths = []
         for f in files:
             if isinstance(f, bytes):
@@ -90,7 +109,8 @@ class PhoneticsApp:
                 
         audio_paths = [p for p in decoded_paths if p.lower().endswith(('.wav', '.mp3'))]
         if not audio_paths:
-            return messagebox.showwarning("提示", "拖入的文件中没有支持的音频文件 (.wav, .mp3)")
+            messagebox.showwarning("提示", "拖入的文件中没有支持的音频文件 (.wav, .mp3)")
+            return
             
         self.handle_input_files(audio_paths)
 
@@ -103,6 +123,12 @@ class PhoneticsApp:
                     # 使用全局线程池运行 parselmouth
                     future = self.executor.submit(check_audio_segments, path)
                     seg_count = future.result()
+                    
+                    # 避免在主线程加载 Sound，如果在后台加载可以防止卡顿和可能的 GIL 崩溃
+                    snd = None
+                    if seg_count > 1:
+                        snd = parselmouth.Sound(path)
+                        
                     def update_ui():
                         self.stop_loading()
                         if seg_count <= 1:
@@ -112,7 +138,7 @@ class PhoneticsApp:
                             self.lbl_status.configure(text="独立音频就绪", text_color="#10B981")
                         else:
                             self.tabview.set("单条长音频")
-                            self.pending_long_snd = parselmouth.Sound(path)
+                            self.pending_long_snd = snd
                             self.lbl_long_file.configure(text=os.path.basename(path) + " (从拖拽)", text_color="#2563EB")
                             self.lbl_status.configure(text="长音频就绪", text_color="#10B981")
                     self.root.after(0, update_ui)
@@ -932,8 +958,18 @@ class PhoneticsApp:
                             item['start'] = seg['start']
                             item['end'] = seg['end']
                             item['inner_splits'] = list(seg.get('inner_splits', []))
-                            if 'chars_bounds' in seg:
-                                item['chars_bounds'] = [list(c) for c in seg['chars_bounds']]
+                            
+                            # 重新计算独立的字符边界 chars_bounds，确保跟蓝线位置同步！
+                            label = item['label'].replace(" (缺失)", "")
+                            if len(label) > 1:
+                                from modules.audio_core import auto_split_to_chars_bounds
+                                item['chars_bounds'] = auto_split_to_chars_bounds(
+                                    item['snd'], item['start'], item['end'],
+                                    item['inner_splits'], len(label), self.last_params
+                                )
+                            else:
+                                item['chars_bounds'] = [[item['start'], item['end']]]
+                                
                             item['raw_start'] = seg['start']
                             item['raw_end'] = seg['end']
                         else:

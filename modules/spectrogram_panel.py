@@ -103,7 +103,8 @@ class SpectrogramPanel:
         self.current_item = None
         self.ax.clear()
         self.ax2.clear()
-        self.inner_lines.clear()
+        self.bound_lines.clear()
+        self.span_fills.clear()
         self.char_texts.clear()
         self.canvas.draw()
         self.var_t_start.set("0.000")

@@ -448,19 +448,23 @@ class ProjectTreePanel:
             label = item.get('label', '')
             inner_splits = item.get('inner_splits', [])
             
-            splits = [t_s] + [s for s in inner_splits if t_s < s < t_e] + [t_e]
-            if len(label) > 1 and len(splits) != len(label) + 1:
-                splits = np.linspace(t_s, t_e, len(label) + 1).tolist()
-            elif len(label) <= 1:
-                splits = [t_s, t_e]
+            chars_bounds = item.get('chars_bounds', [])
+            if chars_bounds and len(chars_bounds) == len(label):
+                bounds = chars_bounds
+            else:
+                splits = [t_s] + [s for s in inner_splits if t_s < s < t_e] + [t_e]
+                if len(label) > 1 and len(splits) != len(label) + 1:
+                    splits = np.linspace(t_s, t_e, len(label) + 1).tolist()
+                elif len(label) <= 1:
+                    splits = [t_s, t_e]
+                bounds = [[splits[i], splits[i+1]] for i in range(len(splits)-1)]
                 
             pitch = item['pitch']
             p_xs = pitch.xs()
             p_freqs = pitch.selected_array['frequency']
             
             has_empty = False
-            for i in range(len(splits) - 1):
-                c_s, c_e = splits[i], splits[i+1]
+            for c_s, c_e in bounds:
                 if c_e <= c_s: continue
                 
                 # 智能收缩围栏，过滤Gap
@@ -623,15 +627,19 @@ class ProjectTreePanel:
         p_xs = pitch.xs()
         p_freqs = pitch.selected_array['frequency']
         
-        splits = [t_s] + [s for s in inner_splits if t_s < s < t_e] + [t_e]
-        if len(label) > 1 and len(splits) != len(label) + 1:
-            splits = np.linspace(t_s, t_e, len(label) + 1).tolist()
-        elif len(label) <= 1:
-            splits = [t_s, t_e]
+        chars_bounds = item.get('chars_bounds', [])
+        if chars_bounds and len(chars_bounds) == len(label):
+            bounds = chars_bounds
+        else:
+            splits = [t_s] + [s for s in inner_splits if t_s < s < t_e] + [t_e]
+            if len(label) > 1 and len(splits) != len(label) + 1:
+                splits = np.linspace(t_s, t_e, len(label) + 1).tolist()
+            elif len(label) <= 1:
+                splits = [t_s, t_e]
+            bounds = [[splits[i], splits[i+1]] for i in range(len(splits)-1)]
             
         syl_data = []
-        for i in range(len(splits) - 1):
-            c_s, c_e = splits[i], splits[i+1]
+        for c_s, c_e in bounds:
             if c_e <= c_s:
                 syl_data.append((0.0, [0.0]*num_points))
                 continue
