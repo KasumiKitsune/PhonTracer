@@ -391,7 +391,7 @@ class PhoneticsApp:
                         from modules.audio_core import auto_split_to_chars_bounds
                         item['chars_bounds'] = auto_split_to_chars_bounds(snd, mic_s, mic_e, inner_splits, len(label), self.last_params)
                     else:
-                        item['chars_bounds'] = []
+                        item['chars_bounds'] = [[mic_s, mic_e]]
 
                     self.spectrogram_panel.var_t_start.set(f"{mic_s:.3f}")
                     self.spectrogram_panel.var_t_end.set(f"{mic_e:.3f}")
@@ -770,7 +770,7 @@ class PhoneticsApp:
                             item['chars_bounds'] = auto_split_to_chars_bounds(item['snd'], mic_s, mic_e, item['inner_splits'], len(label), self.last_params)
                         else:
                             item['inner_splits'] = []
-                            item['chars_bounds'] = []
+                            item['chars_bounds'] = [[mic_s, mic_e]]
                             
                 # 重新生成 11 点预览数据用于警告图标状态更新
                 if item.get('snd') and item.get('pitch'):
@@ -942,7 +942,7 @@ class PhoneticsApp:
                                 item['chars_bounds'] = auto_split_to_chars_bounds(item['snd'], mic_s, mic_e, item['inner_splits'], len(label), self.last_params)
                             else:
                                 item['inner_splits'] = []
-                                item['chars_bounds'] = []
+                                item['chars_bounds'] = [[mic_s, mic_e]]
                     
                     # 移除可能的 "(缺失)" 后缀
                     if item['label'].endswith(" (缺失)"):
@@ -1279,10 +1279,10 @@ class PhoneticsApp:
                             res['chars_bounds'] = auto_split_to_chars_bounds(snd, res['start'], res['end'], res['inner_splits'], len(word), self.last_params)
                         except Exception:
                             res['inner_splits'] = []
-                            res['chars_bounds'] = []
+                            res['chars_bounds'] = [[res['start'], res['end']]]
                     elif len(word) <= 1:
                         res['inner_splits'] = []
-                        res['chars_bounds'] = []
+                        res['chars_bounds'] = [[res['start'], res['end']]]
 
             def finalize():
                 matched_count = 0
