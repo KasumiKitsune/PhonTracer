@@ -58,8 +58,24 @@ b = Analysis(
     optimize=0,
 )
 
+# --- 3. 分析命令行工具 ---
+c = Analysis(
+    ['cli.py'],
+    pathex=['.'],
+    binaries=[],
+    datas=[],  # CLI 不需要 GUI 资源
+    hiddenimports=hidden_imports,
+    excludes=excluded_modules + ['customtkinter', 'PIL', 'tkinter'], # CLI 完全排除 GUI 库，超强瘦身！
+    win_no_prefer_redirects=False,
+    win_private_assemblies=False,
+    cipher=None,
+    noarchive=False,
+    optimize=0,
+)
+
 pyz_a = PYZ(a.pure, a.zipped_data, cipher=None)
 pyz_b = PYZ(b.pure, b.zipped_data, cipher=None)
+pyz_c = PYZ(c.pure, c.zipped_data, cipher=None)
 
 # --- 3. 定义主程序 EXE ---
 exe1 = EXE(
@@ -101,7 +117,26 @@ exe2 = EXE(
     icon='assets/tool_icon.ico',
 )
 
-# --- 5. 统一收集到同一个目录 ---
+# --- 5. 定义命令行工具 EXE ---
+exe3 = EXE(
+    pyz_c,
+    c.scripts,
+    [],
+    exclude_binaries=True,
+    name='PhonTracerCLI',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=False,
+    console=True,  # 命令行工具必须开启终端显示
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+)
+
+# --- 6. 统一收集到同一个目录 ---
 coll = COLLECT(
     exe1,
     a.binaries,
@@ -111,6 +146,10 @@ coll = COLLECT(
     b.binaries,
     b.zipfiles,
     b.datas,
+    exe3,
+    c.binaries,
+    c.zipfiles,
+    c.datas,
     strip=False,
     upx=False,
     upx_exclude=[],
