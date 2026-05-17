@@ -108,7 +108,7 @@ def parse_wordlist(raw_text: str):
 class VisualSplitter(ctk.CTkToplevel):
     def __init__(self, master, snd, icons, callback, existing_items=None, vad_segments=None, **kwargs):
         super().__init__(master)
-        self.title("音频段落编辑")
+        self.title("段落编辑器")
         
         w, h = 950, 550
         sw = self.winfo_screenwidth()
@@ -693,7 +693,7 @@ class AudioToolkitApp(ctk.CTk):
         self.btn_sel_source = ctk.CTkButton(top_panel, text=" 选择长音频源", image=self.icons.get("audio"), compound="left", width=160, command=self.select_split_source, **self.btn_kwargs)
         self.btn_sel_source.pack(side=tk.LEFT, padx=(0, 10))
         
-        self.btn_edit_segments = CTkReleaseButton(top_panel, text=" 音频段落编辑", image=self.icons.get("eye"), compound="left", width=160, fg_color="#F59E0B", hover_color="#D97706", command=self.open_visual_splitter, **self.btn_kwargs)
+        self.btn_edit_segments = CTkReleaseButton(top_panel, text=" 段落编辑器", image=self.icons.get("eye"), compound="left", width=160, fg_color="#F59E0B", hover_color="#D97706", command=self.open_visual_splitter, **self.btn_kwargs)
         self.btn_edit_segments.pack(side=tk.LEFT, padx=(0, 10))
         
         self.lbl_split_source = ctk.CTkLabel(top_panel, text="未选择", text_color="#6B7280", font=self.font_main)

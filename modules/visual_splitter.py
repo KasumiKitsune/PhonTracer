@@ -10,7 +10,7 @@ from .ui_widgets import CTkReleaseButton
 class VisualSplitter(ctk.CTkToplevel):
     def __init__(self, master, snd, icons, callback, existing_items=None, vad_segments=None):
         super().__init__(master)
-        self.title("音频段落编辑")
+        self.title("段落编辑器")
         
         w, h = 950, 550
         # 居中计算
