@@ -51,3 +51,6 @@ scratch/
 upx.exe
 upx.zip
 upx-*/
+
+# 8. 绝对排除实验文件夹
+Test/

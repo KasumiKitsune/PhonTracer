@@ -8,11 +8,33 @@ import concurrent.futures
 from collections import OrderedDict
 import json
 
+# Override json.dumps to output raw UTF-8 Chinese characters rather than Unicode escape sequences (\uXXXX)
+_orig_dumps = json.dumps
+def dumps_utf8(*args, **kwargs):
+    if 'ensure_ascii' not in kwargs:
+        kwargs['ensure_ascii'] = False
+    return _orig_dumps(*args, **kwargs)
+json.dumps = dumps_utf8
+
 # Modify sys.path if necessary
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from modules.audio_core import macroscopic_vad, core_microscopic_vowel_nucleus, auto_split_inner_word, auto_split_to_chars_bounds, batch_process_worker, recalculate_bounds_fast
 from modules.data_utils import parse_wordlist, fuzzy_match_word_to_path, get_export_text_for_item
+
+class LoggerOut:
+    def __init__(self, original_stdout, log_file):
+        self.original_stdout = original_stdout
+        self.log_file = log_file
+
+    def write(self, message):
+        self.original_stdout.write(message)
+        self.log_file.write(message)
+        self.log_file.flush()
+
+    def flush(self):
+        self.original_stdout.flush()
+        self.log_file.flush()
 
 class PhonTracerCLI(cmd.Cmd):
     intro = """PhonTracer CLI - AI Agent Mode
@@ -46,6 +68,14 @@ Rules:
         self.audio_cache = {}
 
         self.executor = concurrent.futures.ProcessPoolExecutor(max_workers=min(os.cpu_count() or 4, 8))
+        self.log_file = None
+        self.original_stdout = sys.stdout
+
+    def precmd(self, line):
+        if self.log_file:
+            self.log_file.write(f"> {line}\n")
+            self.log_file.flush()
+        return line
 
     def _check_item_has_empty_data(self, item):
         """Returns True if the item contains a 0Hz pitch in the 11-point preview."""
@@ -491,9 +521,11 @@ Rules:
         """
         Export data to various formats.
         Usage: export <format> <output_file> [rule]
-        Formats: txt, xlsx, line_chart, kde
-        Rule: continuous (default) or per_group
+        Formats: txt, xlsx, line_chart, kde, wav, merged_wav
+        Rule: continuous (default) or per_group (For 'wav' and 'merged_wav', rule can also be buffer_sec or gap_sec like 0.5)
         Example: export xlsx output.xlsx continuous
+        Example: export wav scratch/output_dir 0.1
+        Example: export merged_wav scratch/merged.wav 0.5
         """
         args = shlex.split(arg)
         if len(args) < 2:
@@ -523,6 +555,10 @@ Rules:
                 self._export_line_chart(out_file, structure)
             elif fmt == 'kde':
                 self._export_kde_heatmap(out_file, structure)
+            elif fmt == 'wav':
+                self._export_wav(out_file, structure, rule)
+            elif fmt == 'merged_wav':
+                self._export_merged_wav(out_file, structure, rule)
             else:
                 print(f'{{"success": False, "error": "Unknown format: {fmt}"}}')
                 return
@@ -531,6 +567,94 @@ Rules:
             print(json.dumps({"success": False, "error": str(e)}))
 
     # --- Export Implementation Helpers (Abstracted from GUI) ---
+    def _export_merged_wav(self, out_file, structure, rule):
+        import numpy as np
+
+        if self.mode != 'batch':
+            raise Exception("merged_wav export is only supported for batch audio mode")
+
+        gap_sec = 0.5
+        try:
+            if rule and rule not in ('continuous', 'per_group'):
+                gap_sec = float(rule)
+        except ValueError:
+            pass
+
+        target_sr = 44100
+        all_vals = []
+        gap_samples = int(target_sr * gap_sec)
+        gap_array = np.zeros(gap_samples)
+
+        for grp_name, children in structure:
+            for child in children:
+                item = self.items[child]
+                if item.get('missing') or not item.get('success', True) or not item.get('path'):
+                    continue
+                
+                try:
+                    snd = parselmouth.Sound(item['path'])
+                    if snd.sampling_frequency != target_sr:
+                        snd = snd.resample(target_sr)
+                    all_vals.append(snd.values[0])
+                    all_vals.append(gap_array)
+                except Exception:
+                    continue
+
+        if not all_vals:
+            raise Exception("No valid audio files found to merge")
+
+        merged_vals = np.concatenate(all_vals[:-1])
+        merged_snd = parselmouth.Sound(np.array([merged_vals]), sampling_frequency=target_sr)
+        merged_snd.save(out_file, "WAV")
+
+    def _export_wav(self, out_dir, structure, rule):
+        import re
+        if self.mode != 'long' or not self.long_snd:
+            raise Exception("WAV export is only supported for long audio mode")
+
+        if not os.path.exists(out_dir):
+            os.makedirs(out_dir, exist_ok=True)
+
+        buffer_sec = 0.1
+        try:
+            if rule and rule not in ('continuous', 'per_group'):
+                buffer_sec = float(rule)
+        except ValueError:
+            pass
+
+        snd = self.long_snd
+        do_trim = self.params.get('trim_silence', True)
+        
+        global_idx = 1
+        for grp_name, children in structure:
+            for child in children:
+                item = self.items[child]
+                if item.get('missing') or not item.get('success', True): continue
+                if 'macro_start' not in item or 'macro_end' not in item: continue
+
+                s, e = item['macro_start'], item['macro_end']
+                word = item['label']
+
+                if do_trim:
+                    part = snd.extract_part(from_time=s, to_time=e)
+                    vals = part.values[0]
+                    xs = part.xs()
+                    threshold = 10 ** (-50 / 20)
+                    valid_idx = np.where(np.abs(vals) > threshold)[0]
+                    if len(valid_idx) > 0:
+                        s = s + xs[valid_idx[0]]
+                        e = s + xs[valid_idx[-1]]
+
+                s = max(0, s - buffer_sec)
+                e = min(snd.get_total_duration(), e + buffer_sec)
+
+                if e > s:
+                    extract = snd.extract_part(from_time=s, to_time=e)
+                    safe_word = re.sub(r'[\\/*?:"<>|]', "", word)
+                    out_file = os.path.join(out_dir, f"{str(global_idx).zfill(3)}_{safe_word}.wav")
+                    extract.save(out_file, "WAV")
+                    global_idx += 1
+
     def _export_txt(self, out_file, structure, rule):
         is_continuous = (rule == "continuous")
         with open(out_file, "w", encoding="utf-8") as f:
@@ -541,7 +665,7 @@ Rules:
                 for child in children:
                     item = self.items[child]
                     if item.get('start') is not None:
-                        txt_data = get_export_text_for_item(item, global_idx, self.params['pts'])
+                        txt_data = get_export_text_for_item(item, global_idx, self.params['pts'], pitch_floor=self.params['pitch_floor'], pitch_ceiling=self.params['pitch_ceiling'])
                         f.write(txt_data)
                         global_idx += 1
 
@@ -928,9 +1052,48 @@ Rules:
         fig.savefig(out_file, dpi=300, bbox_inches='tight')
         plt.close(fig)
 
+    def do_log(self, arg):
+        """
+        Enable or disable session logging.
+        Usage: log on [filename]
+               log off
+        Default filename is 'phontracer_session.log'.
+        """
+        args = shlex.split(arg)
+        if not args:
+            print('{"success": False, "error": "Missing argument: on or off"}')
+            return
+            
+        action = args[0].lower()
+        if action == 'on':
+            if self.log_file:
+                print('{"success": False, "error": "Logging is already on"}')
+                return
+            filename = args[1] if len(args) > 1 else 'phontracer_session.log'
+            try:
+                self.log_file = open(filename, 'a', encoding='utf-8')
+                sys.stdout = LoggerOut(self.original_stdout, self.log_file)
+                print(json.dumps({"success": True, "message": f"Logging enabled to {filename}"}))
+            except Exception as e:
+                print(json.dumps({"success": False, "error": str(e)}))
+        elif action == 'off':
+            if not self.log_file:
+                print('{"success": False, "error": "Logging is not currently on"}')
+                return
+            sys.stdout = self.original_stdout
+            self.log_file.close()
+            self.log_file = None
+            print(json.dumps({"success": True, "message": "Logging disabled"}))
+        else:
+            print('{"success": False, "error": "Invalid argument. Use on or off"}')
+
     def do_exit(self, arg):
         """Exit the CLI."""
         print("Exiting...")
+        if self.log_file:
+            sys.stdout = self.original_stdout
+            self.log_file.close()
+            self.log_file = None
         self.executor.shutdown(wait=False)
         return True
 
