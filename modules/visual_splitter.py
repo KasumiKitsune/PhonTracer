@@ -312,10 +312,12 @@ class VisualSplitter(ctk.CTkToplevel):
                     # 如果是词语，分离出多个标签块
                     if len(display_label) > 1 and len(inner_splits) == len(display_label) - 1:
                         splits = [seg['start']] + inner_splits + [seg['end']]
+                        char_colors = ["#3B82F6", "#10B981", "#EF4444", "#F59E0B", "#8B5CF6", "#14B8A6", "#EC4899", "#6366F1"]
                         for char_idx, char in enumerate(display_label):
                             c_s, c_e = splits[char_idx], splits[char_idx+1]
                             cx = (c_s + c_e) / 2 * self.px_per_sec
-                            bbox = create_pill_smooth(self.canvas, cx, tag_y, f"▶ {char}", "#3B82F6", f"btn_{i}_{char_idx}")
+                            color = char_colors[char_idx % len(char_colors)]
+                            bbox = create_pill_smooth(self.canvas, cx, tag_y, f"▶ {char}", color, f"btn_{i}_{char_idx}")
                             self.play_rects.append({'idx': i, 'start': c_s, 'end': c_e, 'bbox': bbox})
                     else:
                         cx = (x1 + x2) / 2
