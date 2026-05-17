@@ -403,11 +403,11 @@ class VisualSplitter(ctk.CTkToplevel):
         canvas_y = self.canvas.canvasy(event.y)
         
         if self.mode in ('edit', 'review'):
-            for pr in self.play_rects:
+            for pr in reversed(self.play_rects):
                 x1, y1, x2, y2 = pr['bbox']
                 if x1 <= canvas_x <= x2 and y1 <= canvas_y <= y2:
                     return self.canvas.config(cursor="hand2")
-            for dr in self.delete_rects:
+            for dr in reversed(self.delete_rects):
                 x1, y1, x2, y2 = dr['bbox']
                 if x1 <= canvas_x <= x2 and y1 <= canvas_y <= y2:
                     return self.canvas.config(cursor="hand2")
@@ -425,11 +425,11 @@ class VisualSplitter(ctk.CTkToplevel):
         time_sec = canvas_x / self.px_per_sec
         
         if self.mode in ('edit', 'review'):
-            for pr in self.play_rects:
+            for pr in reversed(self.play_rects):
                 x1, y1, x2, y2 = pr['bbox']
                 if x1 <= canvas_x <= x2 and y1 <= canvas_y <= y2:
                     return self.play_segment(pr['start'], pr['end'])
-            for dr in self.delete_rects:
+            for dr in reversed(self.delete_rects):
                 x1, y1, x2, y2 = dr['bbox']
                 if x1 <= canvas_x <= x2 and y1 <= canvas_y <= y2:
                     return self.toggle_delete_segment(dr['idx'])
