@@ -116,7 +116,7 @@ class SpectrogramPanel:
         
         # Init chars_bounds
         label = item.get('label', '')
-        if 'chars_bounds' not in item:
+        if 'chars_bounds' not in item or not item.get('chars_bounds'):
             inner_splits = item.get('inner_splits', [])
             splits = [t_start] + [s for s in inner_splits if t_start < s < t_end] + [t_end]
             if len(label) > 1 and len(splits) != len(label) + 1:

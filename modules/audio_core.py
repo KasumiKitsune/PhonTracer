@@ -334,6 +334,8 @@ def batch_process_worker(path: str, params: Dict[str, float], trim_silence: bool
         if len(name) > 1:
             inner_splits = auto_split_inner_word(snd, mic_s, mic_e, len(name))
             chars_bounds = auto_split_to_chars_bounds(snd, mic_s, mic_e, inner_splits, len(name), params)
+        else:
+            chars_bounds = [[mic_s, mic_e]]
             
         return {
             'label': name,
@@ -373,6 +375,8 @@ def long_process_worker(snd_values: np.ndarray, snd_sf: float, pitch_xs: np.ndar
             local_chars_bounds = auto_split_to_chars_bounds(snd_part, mic_s, mic_e, splits, len(word_label), params)
             chars_bounds = [[s + ms, e + ms] for s, e in local_chars_bounds]
             inner_splits = [t + ms for t in splits]  # 复原到全局时间轴
+        else:
+            chars_bounds = [[mic_s + ms, mic_e + ms]]
         
         mic_s += ms
         mic_e += ms
