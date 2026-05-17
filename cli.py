@@ -1,0 +1,938 @@
+import cmd
+import shlex
+import sys
+import os
+import parselmouth
+import numpy as np
+import concurrent.futures
+from collections import OrderedDict
+import json
+
+# Modify sys.path if necessary
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from modules.audio_core import macroscopic_vad, core_microscopic_vowel_nucleus, auto_split_inner_word, auto_split_to_chars_bounds, batch_process_worker, recalculate_bounds_fast
+from modules.data_utils import parse_wordlist, fuzzy_match_word_to_path, get_export_text_for_item
+
+class PhonTracerCLI(cmd.Cmd):
+    intro = """PhonTracer CLI - AI Agent Mode
+Type 'help' or '?' to list commands.
+Rules:
+- Output is optimized for token efficiency.
+- All actions result in 'success' or 'error' messages.
+- Use 'status' to get current project state.
+- Use 'list_items' to view extracted audio segments and warnings.
+"""
+    prompt = "(phontracer) "
+
+    def __init__(self):
+        super().__init__()
+        self.params = {
+            'pts': 11,
+            'db': 60.0,
+            'skip_front': 0.00,
+            'pitch_floor': 75,
+            'pitch_ceiling': 600,
+            'trim_silence': True
+        }
+
+        self.items = OrderedDict()
+        self.groups = []
+        self.mode = None # 'long' or 'batch'
+
+        self.long_snd = None
+        self.long_snd_path = None
+        self.batch_paths = []
+        self.audio_cache = {}
+
+        self.executor = concurrent.futures.ProcessPoolExecutor(max_workers=min(os.cpu_count() or 4, 8))
+
+    def _check_item_has_empty_data(self, item):
+        """Returns True if the item contains a 0Hz pitch in the 11-point preview."""
+        if 'has_empty_data' in item:
+            return item['has_empty_data']
+        if item.get('preview_f0'):
+            return any(hz == 0.0 for hz in item['preview_f0'])
+        return False
+
+    def do_set_params(self, arg):
+        """
+        Set analysis parameters.
+        Usage: set_params key=value [key=value ...]
+        Valid keys: pts, db, skip_front, pitch_floor, pitch_ceiling, trim_silence
+        Example: set_params db=50.0 trim_silence=False
+        """
+        args = shlex.split(arg)
+        if not args:
+            print(json.dumps({"success": True, "params": self.params}))
+            return
+
+        updated = False
+        for kv in args:
+            if '=' in kv:
+                k, v = kv.split('=', 1)
+                if k in self.params:
+                    try:
+                        if k == 'trim_silence':
+                            self.params[k] = v.lower() in ('true', '1', 'yes')
+                        elif k in ('pts', 'pitch_floor', 'pitch_ceiling'):
+                            self.params[k] = int(v)
+                        else:
+                            self.params[k] = float(v)
+                        updated = True
+                    except ValueError:
+                        print(f'{{"success": False, "error": "Invalid value for {k}"}}')
+                        return
+                else:
+                    print(f'{{"success": False, "error": "Unknown parameter {k}"}}')
+                    return
+
+        print(json.dumps({"success": True, "message": "Parameters updated", "params": self.params}))
+
+    def do_load_long(self, arg):
+        """
+        Load a single long audio file.
+        Usage: load_long <filepath>
+        """
+        args = shlex.split(arg)
+        if not args:
+            print('{"success": False, "error": "Filepath required"}')
+            return
+
+        filepath = args[0]
+        if not os.path.exists(filepath):
+            print(json.dumps({"success": False, "error": f"File not found: {filepath}"}))
+            return
+
+        try:
+            self.long_snd = parselmouth.Sound(filepath)
+            self.long_snd_path = filepath
+            self.mode = 'long'
+            self.batch_paths = []
+            self.items.clear()
+            self.groups.clear()
+            print('{"success": True, "message": "Long audio loaded"}')
+        except Exception as e:
+            print(json.dumps({"success": False, "error": str(e)}))
+
+    def do_load_batch(self, arg):
+        """
+        Load multiple independent audio files.
+        Usage: load_batch <file1> <file2> ...
+        """
+        args = shlex.split(arg)
+        if not args:
+            print('{"success": False, "error": "Filepaths required"}')
+            return
+
+        valid_paths = []
+        for p in args:
+            if os.path.exists(p):
+                valid_paths.append(p)
+            else:
+                print(json.dumps({"success": False, "error": f"File not found: {p}"}))
+                return
+
+        self.batch_paths = valid_paths
+        self.mode = 'batch'
+        self.long_snd = None
+        self.long_snd_path = None
+        self.items.clear()
+        self.groups.clear()
+        print(json.dumps({"success": True, "message": f"Loaded {len(self.batch_paths)} batch files"}))
+
+    def do_apply_wordlist(self, arg):
+        """
+        Apply a wordlist (text file) to split/match the audio.
+        Usage: apply_wordlist <wordlist_filepath> [match_mode]
+        match_mode for batch: 'fuzzy' or 'order' (default 'fuzzy')
+        """
+        args = shlex.split(arg)
+        if not args:
+            print('{"success": False, "error": "Wordlist filepath required"}')
+            return
+
+        filepath = args[0]
+        match_mode = args[1] if len(args) > 1 else 'fuzzy'
+
+        if not os.path.exists(filepath):
+            print(json.dumps({"success": False, "error": f"File not found: {filepath}"}))
+            return
+
+        with open(filepath, 'r', encoding='utf-8') as f:
+            raw_text = f.read()
+
+        groups, flat_words = parse_wordlist(raw_text)
+        if not flat_words:
+            print('{"success": False, "error": "No words found in wordlist"}')
+            return
+
+        self.groups = [g['group'] for g in groups]
+        self.items.clear()
+
+        if self.mode == 'long':
+            self._process_long_wordlist(groups, flat_words)
+        elif self.mode == 'batch':
+            self._process_batch_wordlist(groups, flat_words, match_mode)
+        else:
+            print('{"success": False, "error": "No audio loaded. Use load_long or load_batch first."}')
+
+    def _process_long_wordlist(self, groups, flat_words):
+        try:
+            global_pitch = self.long_snd.to_pitch_ac(time_step=None, pitch_floor=self.params['pitch_floor'], pitch_ceiling=self.params['pitch_ceiling'], voicing_threshold=0.25, octave_jump_cost=0.9)
+            macro_segments = macroscopic_vad(self.long_snd)
+
+            pitch_xs = global_pitch.xs()
+            pitch_freqs = global_pitch.selected_array['frequency']
+
+            word_idx = 0
+            for grp in groups:
+                for word in grp['items']:
+                    iid = f"item_{word_idx}"
+                    if word_idx < len(macro_segments):
+                        ms, me = macro_segments[word_idx]
+
+                        mic_s, mic_e, raw_s, raw_e = core_microscopic_vowel_nucleus(
+                            self.long_snd, global_pitch, ms, me,
+                            self.params['db'], self.params['skip_front'], self.params['trim_silence']
+                        )
+
+                        inner_splits = []
+                        chars_bounds = []
+                        if len(word) > 1:
+                            inner_splits = auto_split_inner_word(self.long_snd, mic_s, mic_e, len(word))
+                            chars_bounds = auto_split_to_chars_bounds(self.long_snd, mic_s, mic_e, inner_splits, len(word), self.params)
+                        else:
+                            chars_bounds = [[mic_s, mic_e]]
+
+                        # Preview
+                        preview_times = np.linspace(mic_s, mic_e, 11)
+                        preview_f0 = [global_pitch.get_value_at_time(t) for t in preview_times]
+                        preview_f0 = [0.0 if (np.isnan(hz) or hz <= 0) else hz for hz in preview_f0]
+                        has_empty = any(f == 0.0 for f in preview_f0)
+
+                        self.items[iid] = {
+                            'id': iid, 'label': word, 'group': grp['group'],
+                            'snd': self.long_snd, 'pitch': global_pitch,
+                            'macro_start': ms, 'macro_end': me,
+                            'start': mic_s, 'end': mic_e,
+                            'raw_start': raw_s, 'raw_end': raw_e,
+                            'inner_splits': inner_splits, 'chars_bounds': chars_bounds,
+                            'preview_f0': preview_f0, 'has_empty_data': has_empty, 'missing': False
+                        }
+                    else:
+                        self.items[iid] = {
+                            'id': iid, 'label': word, 'group': grp['group'],
+                            'missing': True, 'start': None, 'end': None
+                        }
+                    word_idx += 1
+            print(json.dumps({"success": True, "message": f"Processed long audio with {len(flat_words)} words"}))
+        except Exception as e:
+            print(json.dumps({"success": False, "error": str(e)}))
+
+    def _process_batch_wordlist(self, groups, flat_words, match_mode):
+        tasks = []
+        if match_mode == 'fuzzy':
+            import re
+            def natural_sort_key(s):
+                return [int(text) if text.isdigit() else text.lower() for text in re.split('([0-9]+)', s)]
+            sorted_paths = sorted(self.batch_paths, key=natural_sort_key)
+            used_indices = []
+            for grp in groups:
+                for word in grp['items']:
+                    idx = fuzzy_match_word_to_path(word, sorted_paths, used_indices)
+                    if idx is not None:
+                        path = sorted_paths[idx]
+                        used_indices.append(idx)
+                        tasks.append({'word': word, 'group': grp['group'], 'path': path, 'missing': False})
+                    else:
+                        tasks.append({'word': word, 'group': grp['group'], 'missing': True})
+        else:
+            path_idx = 0
+            for grp in groups:
+                for word in grp['items']:
+                    if path_idx < len(self.batch_paths):
+                        tasks.append({'word': word, 'group': grp['group'], 'path': self.batch_paths[path_idx], 'missing': False})
+                        path_idx += 1
+                    else:
+                        tasks.append({'word': word, 'group': grp['group'], 'missing': True})
+
+        futures = {}
+        for i, t in enumerate(tasks):
+            if not t['missing']:
+                path = t['path']
+                f = self.executor.submit(batch_process_worker, path, self.params, self.params['trim_silence'])
+                futures[f] = i
+
+        results = [None] * len(tasks)
+        for i, t in enumerate(tasks):
+            if t['missing']:
+                results[i] = {'label': t['word'], 'group': t['group'], 'missing': True}
+
+        for future in concurrent.futures.as_completed(futures):
+            orig_idx = futures[future]
+            try:
+                res = future.result()
+                res['missing'] = False
+                res['group'] = tasks[orig_idx]['group']
+                res['label'] = tasks[orig_idx]['word']
+
+                # Fix word splits if batch process used filename as label initially
+                word = res['label']
+                if res.get('success') and len(word) > 1:
+                    snd = parselmouth.Sound(res['path'])
+                    res['inner_splits'] = auto_split_inner_word(snd, res['start'], res['end'], len(word))
+                    res['chars_bounds'] = auto_split_to_chars_bounds(snd, res['start'], res['end'], res['inner_splits'], len(word), self.params)
+                results[orig_idx] = res
+            except Exception as e:
+                results[orig_idx] = {'label': tasks[orig_idx]['word'], 'group': tasks[orig_idx]['group'], 'missing': True, 'error': str(e)}
+
+        for i, res in enumerate(results):
+            iid = f"item_{i}"
+            if not res.get('missing') and res.get('success'):
+                # Load sound and pitch object into memory for fast recalculation
+                try:
+                    snd = parselmouth.Sound(res['path'])
+                    pitch = snd.to_pitch_ac(time_step=None, pitch_floor=self.params['pitch_floor'], pitch_ceiling=self.params['pitch_ceiling'], voicing_threshold=0.25, octave_jump_cost=0.9)
+                    res['snd'] = snd
+                    res['pitch'] = pitch
+                except Exception:
+                    pass
+            res['id'] = iid
+            self.items[iid] = res
+
+        print(json.dumps({"success": True, "message": f"Processed batch files with {len(tasks)} words"}))
+
+    def do_status(self, arg):
+        """
+        Show current global status.
+        Usage: status
+        """
+        status = {
+            "mode": self.mode,
+            "params": self.params,
+            "groups": self.groups,
+            "total_items": len(self.items),
+            "missing_items": sum(1 for it in self.items.values() if it.get('missing') or not it.get('success', True)),
+            "warnings": sum(1 for it in self.items.values() if self._check_item_has_empty_data(it))
+        }
+        print(json.dumps({"success": True, "status": status}))
+
+    def do_list_items(self, arg):
+        """
+        List details of items.
+        Usage: list_items [all|warnings|group_name]
+        """
+        filter_type = arg.strip() if arg else "all"
+
+        output = []
+        for iid, item in self.items.items():
+            if filter_type == 'warnings' and not self._check_item_has_empty_data(item):
+                continue
+            if filter_type not in ('all', 'warnings') and item.get('group') != filter_type:
+                continue
+
+            entry = {
+                "id": iid,
+                "label": item.get('label'),
+                "group": item.get('group'),
+            }
+            if item.get('missing') or not item.get('success', True):
+                entry['status'] = 'missing/error'
+            else:
+                entry['status'] = 'ok'
+                entry['start'] = item.get('start')
+                entry['end'] = item.get('end')
+                entry['warning'] = self._check_item_has_empty_data(item)
+            output.append(entry)
+
+        print(json.dumps({"success": True, "items": output}))
+
+    def do_modify_bounds(self, arg):
+        """
+        Modify time boundaries of an item manually. This overrides automatic VAD.
+        Usage: modify_bounds <item_id> <start> <end>
+        Example: modify_bounds item_0 1.25 1.85
+        """
+        args = shlex.split(arg)
+        if len(args) != 3:
+            print('{"success": False, "error": "Requires item_id, start, and end"}')
+            return
+
+        iid = args[0]
+        try:
+            new_s = float(args[1])
+            new_e = float(args[2])
+        except ValueError:
+            print('{"success": False, "error": "start and end must be floats"}')
+            return
+
+        if iid not in self.items:
+            print(json.dumps({"success": False, "error": f"Item {iid} not found"}))
+            return
+
+        item = self.items[iid]
+        if 'snd' not in item or item['snd'] is None:
+            print('{"success": False, "error": "Item has no loaded audio data"}')
+            return
+
+        item['start'] = new_s
+        item['end'] = new_e
+        item['raw_start'] = new_s
+        item['raw_end'] = new_e
+
+        # Re-split inner words if needed
+        label = item['label']
+        if len(label) > 1:
+            item['inner_splits'] = auto_split_inner_word(item['snd'], new_s, new_e, len(label))
+            item['chars_bounds'] = auto_split_to_chars_bounds(item['snd'], new_s, new_e, item['inner_splits'], len(label), self.params)
+        else:
+            item['inner_splits'] = []
+            item['chars_bounds'] = [[new_s, new_e]]
+
+        # Re-evaluate warnings
+        if item.get('pitch'):
+            preview_times = np.linspace(new_s, new_e, 11)
+            preview_f0 = [item['pitch'].get_value_at_time(t) for t in preview_times]
+            item['preview_f0'] = [0.0 if (np.isnan(hz) or hz <= 0) else hz for hz in preview_f0]
+            item['has_empty_data'] = any(f == 0.0 for f in item['preview_f0'])
+
+        print(json.dumps({"success": True, "message": f"Bounds updated for {iid}", "warning": item.get('has_empty_data', False)}))
+
+    def do_recalculate(self, arg):
+        """
+        Recalculate bounds and pitches for all items based on current params.
+        Usage: recalculate
+        """
+        print('{"status": "processing", "message": "Recalculating... this may take a moment."}')
+
+        recompute_pitch = True # For simplicity, always recompute pitch on full recalculate
+
+        if self.mode == 'long' and self.long_snd:
+            # Recompute global pitch
+            global_pitch = self.long_snd.to_pitch_ac(time_step=None, pitch_floor=self.params['pitch_floor'], pitch_ceiling=self.params['pitch_ceiling'], voicing_threshold=0.25, octave_jump_cost=0.9)
+
+            for iid, item in self.items.items():
+                if item.get('missing') or not item.get('success', True): continue
+
+                item['pitch'] = global_pitch
+                mac_s, mac_e = item['macro_start'], item['macro_end']
+
+                mic_s, mic_e, raw_s, raw_e = core_microscopic_vowel_nucleus(
+                    item['snd'], item['pitch'], mac_s, mac_e,
+                    self.params['db'], self.params['skip_front'], self.params['trim_silence']
+                )
+
+                item['start'], item['end'] = mic_s, mic_e
+                item['raw_start'], item['raw_end'] = raw_s, raw_e
+
+                label = item['label']
+                if len(label) > 1:
+                    item['inner_splits'] = auto_split_inner_word(item['snd'], mic_s, mic_e, len(label))
+                    item['chars_bounds'] = auto_split_to_chars_bounds(item['snd'], mic_s, mic_e, item['inner_splits'], len(label), self.params)
+                else:
+                    item['inner_splits'] = []
+                    item['chars_bounds'] = [[mic_s, mic_e]]
+
+                preview_times = np.linspace(mic_s, mic_e, 11)
+                preview_f0 = [item['pitch'].get_value_at_time(t) for t in preview_times]
+                item['preview_f0'] = [0.0 if (np.isnan(hz) or hz <= 0) else hz for hz in preview_f0]
+                item['has_empty_data'] = any(f == 0.0 for f in item['preview_f0'])
+
+        elif self.mode == 'batch':
+            # Use multiprocessing
+            tasks = []
+            iids = []
+            for iid, item in self.items.items():
+                if item.get('missing') or not item.get('success', True): continue
+                tasks.append(item['path'])
+                iids.append(iid)
+
+            futures = {}
+            for i, p in enumerate(tasks):
+                f = self.executor.submit(batch_process_worker, p, self.params, self.params['trim_silence'])
+                futures[f] = i
+
+            for future in concurrent.futures.as_completed(futures):
+                orig_idx = futures[future]
+                iid = iids[orig_idx]
+                try:
+                    res = future.result()
+                    if res.get('success'):
+                        item = self.items[iid]
+                        item['start'] = res['start']
+                        item['end'] = res['end']
+                        item['raw_start'] = res['raw_start']
+                        item['raw_end'] = res['raw_end']
+
+                        word = item['label']
+                        if len(word) > 1:
+                            snd = parselmouth.Sound(res['path'])
+                            item['inner_splits'] = auto_split_inner_word(snd, res['start'], res['end'], len(word))
+                            item['chars_bounds'] = auto_split_to_chars_bounds(snd, res['start'], res['end'], item['inner_splits'], len(word), self.params)
+                        else:
+                            item['inner_splits'] = []
+                            item['chars_bounds'] = [[res['start'], res['end']]]
+
+                        # Refresh pitch obj
+                        item['snd'] = parselmouth.Sound(res['path'])
+                        item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=self.params['pitch_floor'], pitch_ceiling=self.params['pitch_ceiling'], voicing_threshold=0.25, octave_jump_cost=0.9)
+
+                        preview_times = np.linspace(item['start'], item['end'], 11)
+                        preview_f0 = [item['pitch'].get_value_at_time(t) for t in preview_times]
+                        item['preview_f0'] = [0.0 if (np.isnan(hz) or hz <= 0) else hz for hz in preview_f0]
+                        item['has_empty_data'] = any(f == 0.0 for f in item['preview_f0'])
+                except Exception:
+                    pass
+
+        print('{"success": True, "message": "Recalculation complete"}')
+
+    def do_export(self, arg):
+        """
+        Export data to various formats.
+        Usage: export <format> <output_file> [rule]
+        Formats: txt, xlsx, line_chart, kde
+        Rule: continuous (default) or per_group
+        Example: export xlsx output.xlsx continuous
+        """
+        args = shlex.split(arg)
+        if len(args) < 2:
+            print('{"success": False, "error": "Requires format and output_file"}')
+            return
+
+        fmt = args[0]
+        out_file = args[1]
+        rule = args[2] if len(args) > 2 else 'continuous'
+
+        if not self.items:
+            print('{"success": False, "error": "No items to export"}')
+            return
+
+        # Structure items by group
+        structure = []
+        for grp in self.groups:
+            grp_items = [iid for iid, item in self.items.items() if item.get('group') == grp]
+            structure.append((grp, grp_items))
+
+        try:
+            if fmt == 'txt':
+                self._export_txt(out_file, structure, rule)
+            elif fmt == 'xlsx':
+                self._export_xlsx(out_file, structure, rule)
+            elif fmt == 'line_chart':
+                self._export_line_chart(out_file, structure)
+            elif fmt == 'kde':
+                self._export_kde_heatmap(out_file, structure)
+            else:
+                print(f'{{"success": False, "error": "Unknown format: {fmt}"}}')
+                return
+            print(json.dumps({"success": True, "message": f"Exported to {out_file}"}))
+        except Exception as e:
+            print(json.dumps({"success": False, "error": str(e)}))
+
+    # --- Export Implementation Helpers (Abstracted from GUI) ---
+    def _export_txt(self, out_file, structure, rule):
+        is_continuous = (rule == "continuous")
+        with open(out_file, "w", encoding="utf-8") as f:
+            global_idx = 1
+            for grp_name, children in structure:
+                if not is_continuous: global_idx = 1
+                f.write(f"{grp_name}\n")
+                for child in children:
+                    item = self.items[child]
+                    if item.get('start') is not None:
+                        txt_data = get_export_text_for_item(item, global_idx, self.params['pts'])
+                        f.write(txt_data)
+                        global_idx += 1
+
+    def _extract_syl_data(self, item, num_points):
+        if item.get('start') is None or not item.get('snd') or not item.get('pitch'): return 0, []
+        t_s, t_e = item['start'], item['end']
+        if t_e <= t_s: return 0, []
+
+        label = item.get('label', '')
+        inner_splits = item.get('inner_splits', [])
+        pitch = item['pitch']
+        p_xs = pitch.xs()
+        p_freqs = pitch.selected_array['frequency']
+
+        splits = [t_s] + [s for s in inner_splits if t_s < s < t_e] + [t_e]
+        if len(label) > 1 and len(splits) != len(label) + 1:
+            splits = np.linspace(t_s, t_e, len(label) + 1).tolist()
+        elif len(label) <= 1:
+            splits = [t_s, t_e]
+
+        syl_data = []
+        for i in range(len(splits) - 1):
+            c_s, c_e = splits[i], splits[i+1]
+            if c_e <= c_s:
+                syl_data.append((0.0, [0.0]*num_points))
+                continue
+
+            valid_idx = np.where((p_xs >= c_s) & (p_xs <= c_e) & (p_freqs > 0))[0]
+            if len(valid_idx) >= 2:
+                v_s, v_e = p_xs[valid_idx[0]], p_xs[valid_idx[-1]]
+                seg_xs = p_xs[valid_idx]
+                seg_ys = p_freqs[valid_idx]
+            else:
+                syl_data.append((0.0, [0.0]*num_points))
+                continue
+
+            dur = v_e - v_s
+            if dur <= 0:
+                syl_data.append((0.0, [0.0]*num_points))
+                continue
+
+            times = np.linspace(v_s, v_e, num_points)
+            if len(seg_xs) >= 2:
+                f0s = np.interp(times, seg_xs, seg_ys).tolist()
+                for j, t in enumerate(times):
+                    if np.min(np.abs(seg_xs - t)) > 0.025:
+                        f0s[j] = 0.0
+                syl_data.append((dur, f0s))
+            else:
+                syl_data.append((dur, [0.0]*num_points))
+
+        return t_e - t_s, syl_data
+
+    def _export_xlsx(self, out_file, structure, rule):
+        import xlsxwriter
+        is_continuous = (rule == "continuous")
+        num_points = self.params['pts']
+
+        max_syls = 1
+        for grp_name, children in structure:
+            for child in children:
+                lbl = self.items[child].get('label', '')
+                if len(lbl) > max_syls: max_syls = len(lbl)
+
+        workbook = xlsxwriter.Workbook(out_file)
+        ws_data = workbook.add_worksheet("数据")
+        ws_res = workbook.add_worksheet("分析结果")
+
+        headers = ["组别", "编号", "词语", "总时长(s)"]
+        for k in range(1, max_syls + 1):
+            headers.append(f"字{k}_时长(s)")
+            for i in range(1, num_points + 1):
+                headers.append(f"字{k}_T{i}(Hz)")
+        for col, header in enumerate(headers): ws_data.write(0, col, header)
+
+        global_idx = 1
+        row_idx = 1
+        dict_data = {}
+
+        for grp_name, children in structure:
+            if not is_continuous: global_idx = 1
+            for child in children:
+                item = self.items[child]
+                total_dur, syl_data = self._extract_syl_data(item, num_points)
+                if total_dur <= 0: continue
+
+                row = [grp_name, global_idx, item['label'], float(f"{total_dur:.6f}")]
+
+                if grp_name not in dict_data:
+                    dict_data[grp_name] = {
+                        'syl_dur_sums': [0.0]*max_syls, 'syl_counts': [0]*max_syls,
+                        'f0_sums': [[0.0]*num_points for _ in range(max_syls)],
+                        'f0_counts': [[0]*num_points for _ in range(max_syls)]
+                    }
+
+                for k in range(max_syls):
+                    if k < len(syl_data):
+                        dur, f0s = syl_data[k]
+                        row.append(float(f"{dur:.6f}"))
+                        dict_data[grp_name]['syl_dur_sums'][k] += dur
+                        dict_data[grp_name]['syl_counts'][k] += 1
+                        for i, f0 in enumerate(f0s):
+                            if not np.isnan(f0) and f0 > 0:
+                                row.append(float(f"{f0:.6f}"))
+                                dict_data[grp_name]['f0_sums'][k][i] += f0
+                                dict_data[grp_name]['f0_counts'][k][i] += 1
+                            else:
+                                row.append("")
+                    else:
+                        row.append("")
+                        for _ in range(num_points): row.append("")
+
+                for col, val in enumerate(row):
+                    ws_data.write(row_idx, col, val)
+
+                row_idx += 1
+                global_idx += 1
+
+        res_headers = ["声调类型"]
+        for k in range(1, max_syls + 1):
+            res_headers.append(f"字{k}_平均时长")
+            for i in range(1, num_points + 1): res_headers.append(f"字{k}_T{i}")
+        for col, header in enumerate(res_headers): ws_res.write(0, col, header)
+
+        all_avg_hz = []
+        avg_points_map = {}
+        import math
+
+        for grp, st in dict_data.items():
+            avg_points_map[grp] = []
+            for k in range(max_syls):
+                syl_avgs = []
+                for i in range(num_points):
+                    cnt = st['f0_counts'][k][i]
+                    avg_hz = st['f0_sums'][k][i] / cnt if cnt > 0 else 0
+                    syl_avgs.append(avg_hz)
+                    if avg_hz > 0: all_avg_hz.append(avg_hz)
+                avg_points_map[grp].append(syl_avgs)
+
+        if not all_avg_hz:
+            workbook.close()
+            return
+
+        min_hz, max_hz = min(all_avg_hz), max(all_avg_hz)
+
+        res_row = 1
+        for grp, st in dict_data.items():
+            ws_res.write(res_row, 0, grp)
+            col = 1
+            for k in range(max_syls):
+                cnt = st['syl_counts'][k]
+                avg_dur = st['syl_dur_sums'][k] / cnt if cnt > 0 else 0
+                ws_res.write(res_row, col, round(avg_dur, 4))
+                col += 1
+
+                for avg_hz in avg_points_map[grp][k]:
+                    if avg_hz > 0 and max_hz > min_hz and min_hz > 0:
+                        t_val = 5 * (math.log10(avg_hz) - math.log10(min_hz)) / (math.log10(max_hz) - math.log10(min_hz))
+                        ws_res.write(res_row, col, round(t_val, 2))
+                    else:
+                        ws_res.write(res_row, col, "")
+                    col += 1
+            res_row += 1
+
+        workbook.close()
+
+    def _collect_group_avg_data(self, structure):
+        num_points = self.params['pts']
+        max_syls = 1
+        dict_data = {}
+        for grp_name, children in structure:
+            for child in children:
+                lbl = self.items[child].get('label', '')
+                if len(lbl) > max_syls: max_syls = len(lbl)
+                item = self.items[child]
+                total_dur, syl_data = self._extract_syl_data(item, num_points)
+                if total_dur <= 0: continue
+
+                if grp_name not in dict_data:
+                    dict_data[grp_name] = { 'f0_sums': [[0.0]*num_points for _ in range(20)], 'f0_counts': [[0]*num_points for _ in range(20)] }
+                for k, (dur, f0s) in enumerate(syl_data):
+                    for i, f0 in enumerate(f0s):
+                        if not np.isnan(f0) and f0 > 0:
+                            dict_data[grp_name]['f0_sums'][k][i] += f0
+                            dict_data[grp_name]['f0_counts'][k][i] += 1
+
+        all_avg_hz = []
+        avg_points_map = {}
+        for grp, st in dict_data.items():
+            avg_points_map[grp] = []
+            for k in range(max_syls):
+                syl_avgs = []
+                for i in range(num_points):
+                    cnt = st['f0_counts'][k][i]
+                    hz = st['f0_sums'][k][i] / cnt if cnt > 0 else 0
+                    syl_avgs.append(hz)
+                    if hz > 0: all_avg_hz.append(hz)
+                avg_points_map[grp].append(syl_avgs)
+
+        if not all_avg_hz: return None, 1
+        min_hz, max_hz = min(all_avg_hz), max(all_avg_hz)
+
+        import math
+        result = {}
+        for grp, syl_avgs_list in avg_points_map.items():
+            flat_t_vals = []
+            for syl_avgs in syl_avgs_list:
+                for h in syl_avgs:
+                    if h > 0 and max_hz > min_hz and min_hz > 0:
+                        flat_t_vals.append(5 * (math.log10(h) - math.log10(min_hz)) / (math.log10(max_hz) - math.log10(min_hz)))
+                    else: flat_t_vals.append(None)
+            result[grp] = flat_t_vals
+
+        return result, max_syls
+
+    def _export_line_chart(self, out_file, structure):
+        import matplotlib.pyplot as plt
+        data, max_syls = self._collect_group_avg_data(structure)
+        if not data:
+            raise Exception("No valid data for charting")
+
+        num_points = self.params['pts']
+        plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
+        plt.rcParams['axes.unicode_minus'] = False
+
+        fig, ax = plt.subplots(figsize=(6 + 4 * max_syls, 6))
+        total_points = max_syls * num_points
+        x_vals = list(range(1, total_points + 1))
+
+        colors = ['#2563EB', '#DC2626', '#16A34A', '#9333EA', '#EA580C', '#0891B2', '#CA8A04', '#6366F1']
+
+        for i, (name, t_vals) in enumerate(data.items()):
+            valid_x = [x for x, v in zip(x_vals, t_vals) if v is not None]
+            valid_y = [v for v in t_vals if v is not None]
+            if valid_x:
+                ax.plot(valid_x, valid_y, '-o', color=colors[i % len(colors)], linewidth=2, markersize=5, label=name)
+
+        ax.set_ylim(0, 5)
+        ax.set_xlim(0.5, total_points + 0.5)
+        ax.set_yticks([0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5])
+
+        ax.set_xticks(range(1, total_points + 1))
+        ax.set_xticklabels([(idx % num_points) + 1 for idx in range(total_points)])
+
+        for k in range(1, max_syls):
+            div_x = k * num_points + 0.5
+            ax.axvline(div_x, color='gray', linestyle='--', alpha=0.5)
+
+        ax.set_xlabel('Points')
+        ax.set_ylabel('T-Value (0-5)')
+        ax.set_title('Tone Pattern')
+        ax.legend(loc='best', fontsize=10)
+        ax.grid(True, alpha=0.3)
+
+        fig.tight_layout()
+        fig.savefig(out_file, dpi=300, bbox_inches='tight')
+        plt.close(fig)
+
+    def _export_kde_heatmap(self, out_file, structure):
+        import matplotlib.pyplot as plt
+        from scipy.interpolate import interp1d
+        from scipy.signal import savgol_filter
+        from scipy.stats import gaussian_kde
+        import math
+
+        N_DENSE = 100
+        group_syl_contours = {}
+
+        max_syls = 1
+        for grp_name, children in structure:
+            group_syl_contours[grp_name] = {}
+            for child in children:
+                lbl = self.items[child].get('label', '')
+                if len(lbl) > max_syls: max_syls = len(lbl)
+
+        for grp_name, children in structure:
+            for child in children:
+                item = self.items[child]
+                if item.get('start') is None or not item.get('snd') or not item.get('pitch'): continue
+
+                t_s, t_e = item['start'], item['end']
+                label = item.get('label', '')
+                inner_splits = item.get('inner_splits', [])
+
+                splits = [t_s] + [s for s in inner_splits if t_s < s < t_e] + [t_e]
+                if len(splits) != len(label) + 1: splits = np.linspace(t_s, t_e, len(label) + 1).tolist()
+                if len(label) <= 1: splits = [t_s, t_e]
+
+                pitch = item['pitch']
+                p_xs, p_freqs = pitch.xs(), pitch.selected_array['frequency']
+
+                for k in range(len(splits) - 1):
+                    c_s, c_e = splits[k], splits[k+1]
+                    valid_idx = np.where((p_xs >= c_s) & (p_xs <= c_e) & (p_freqs > 0))[0]
+                    if len(valid_idx) >= 2:
+                        v_s, v_e = p_xs[valid_idx[0]], p_xs[valid_idx[-1]]
+                        mask = (p_xs >= v_s) & (p_xs <= v_e) & (p_freqs > 0)
+                        valid_freqs = p_freqs[mask]
+                        if len(valid_freqs) < 3: continue
+
+                        win = len(valid_freqs) // 3
+                        if win % 2 == 0: win += 1
+                        win = max(win, 3)
+                        smoothed = savgol_filter(valid_freqs, win, 2) if len(valid_freqs) > win else valid_freqs
+
+                        x_orig = np.linspace(0, 1, len(smoothed))
+                        f_interp = interp1d(x_orig, smoothed, kind='linear')
+                        y_dense = f_interp(np.linspace(0, 1, N_DENSE))
+
+                        if k not in group_syl_contours[grp_name]: group_syl_contours[grp_name][k] = []
+                        group_syl_contours[grp_name][k].append(y_dense)
+
+        all_mean_vals = []
+        for name, syls_dict in group_syl_contours.items():
+            for k, y_arrays in syls_dict.items():
+                if y_arrays:
+                    mean_contour = np.mean(y_arrays, axis=0)
+                    all_mean_vals.extend(mean_contour.tolist())
+
+        if not all_mean_vals:
+            raise Exception("No valid data for KDE Heatmap")
+
+        min_f0, max_f0 = min(all_mean_vals), max(all_mean_vals)
+
+        def hz_to_5_scale(hz):
+            if max_f0 == min_f0: return 3.0
+            return 5 * (np.log(hz) - np.log(min_f0)) / (np.log(max_f0) - np.log(min_f0))
+
+        group_norm_points = {}
+        for name, syls_dict in group_syl_contours.items():
+            X_all, Y_all = [], []
+            for k, y_arrays in syls_dict.items():
+                x_dense = np.linspace(k * 100, (k + 1) * 100, N_DENSE)
+                for y_arr in y_arrays:
+                    X_all.extend(x_dense.tolist())
+                    Y_all.extend([hz_to_5_scale(h) for h in y_arr])
+            group_norm_points[name] = (np.array(X_all), np.array(Y_all))
+
+        plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
+        plt.rcParams['axes.unicode_minus'] = False
+
+        groups_with_data = [g for g in self.groups if group_norm_points.get(g) and len(group_norm_points[g][0]) > 0]
+        n_groups = len(groups_with_data)
+        if n_groups == 0:
+            raise Exception("No valid data for KDE Heatmap")
+
+        n_cols = min(2, n_groups)
+        n_rows = math.ceil(n_groups / n_cols)
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(5 * max_syls * n_cols, 5 * n_rows), squeeze=False, sharex=True, sharey=True)
+        axes_flat = axes.flatten()
+
+        for idx, grp_name in enumerate(groups_with_data):
+            ax = axes_flat[idx]
+            X_all, Y_all = group_norm_points[grp_name]
+
+            xmin, xmax = 0, max_syls * 100
+            ymin, ymax = -1, 6
+
+            positions = np.vstack([X_all, Y_all])
+            try:
+                kernel = gaussian_kde(positions, bw_method=0.15)
+                xi, yi = np.mgrid[xmin:xmax:200j, ymin:ymax:100j]
+                zi = kernel(np.vstack([xi.flatten(), yi.flatten()]))
+                zi = zi.reshape(xi.shape)
+
+                vmax = zi.max()
+                if vmax > 0:
+                    levels = np.linspace(vmax * 0.05, vmax, 30)
+                    ax.contourf(xi, yi, zi, levels=levels, cmap="YlOrRd", extend='neither')
+            except Exception:
+                pass
+
+            for k in range(1, max_syls):
+                ax.axvline(k * 100, color='gray', linestyle='--', alpha=0.8)
+
+            ax.set_title(grp_name, fontsize=16)
+            ax.set_ylim(-1, 6)
+            ax.set_xlim(0, max_syls * 100)
+
+        for idx in range(n_groups, len(axes_flat)): axes_flat[idx].set_visible(False)
+
+        fig.suptitle('KDE Heatmap', fontsize=20, fontweight='bold', y=1.05)
+        fig.tight_layout()
+        fig.savefig(out_file, dpi=300, bbox_inches='tight')
+        plt.close(fig)
+
+    def do_exit(self, arg):
+        """Exit the CLI."""
+        print("Exiting...")
+        self.executor.shutdown(wait=False)
+        return True
+
+if __name__ == '__main__':
+    PhonTracerCLI().cmdloop()
