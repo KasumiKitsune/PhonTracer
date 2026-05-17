@@ -134,6 +134,7 @@ exe3 = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='assets/cli.ico',
 )
 
 # --- 6. 统一收集到同一个目录 ---
