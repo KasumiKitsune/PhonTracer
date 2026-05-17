@@ -441,53 +441,61 @@ class ProjectTreePanel:
         """精准检测子音节区间的11点中是否含有0/NaN值（已应用智能边界收缩防误报）"""
         if not item or item.get('start') is None: return False
         
-        # 优先使用显式的 has_empty_data 标记
+        # 1. 如果音频和 Pitch 对象已加载，优先执行最高精度的实时重新计算，并更新缓存
+        if item.get('snd') and item.get('pitch'):
+            num_points = int(self.app_state_params.get('pts', 10))
+            t_s, t_e = item['start'], item['end']
+            label = item.get('label', '')
+            inner_splits = item.get('inner_splits', [])
+            
+            splits = [t_s] + [s for s in inner_splits if t_s < s < t_e] + [t_e]
+            if len(label) > 1 and len(splits) != len(label) + 1:
+                splits = np.linspace(t_s, t_e, len(label) + 1).tolist()
+            elif len(label) <= 1:
+                splits = [t_s, t_e]
+                
+            pitch = item['pitch']
+            p_xs = pitch.xs()
+            p_freqs = pitch.selected_array['frequency']
+            
+            has_empty = False
+            for i in range(len(splits) - 1):
+                c_s, c_e = splits[i], splits[i+1]
+                if c_e <= c_s: continue
+                
+                # 智能收缩围栏，过滤Gap
+                valid_idx = np.where((p_xs >= c_s) & (p_xs <= c_e) & (p_freqs > 0))[0]
+                if len(valid_idx) >= 2:
+                    v_s, v_e = p_xs[valid_idx[0]], p_xs[valid_idx[-1]]
+                    seg_xs = p_xs[valid_idx]
+                    seg_ys = p_freqs[valid_idx]
+                else:
+                    has_empty = True
+                    break
+                    
+                if v_e <= v_s: 
+                    has_empty = True
+                    break
+                    
+                times = np.linspace(v_s, v_e, num_points)
+                f0s = np.interp(times, seg_xs, seg_ys)
+                for t, hz in zip(times, f0s):
+                    if np.min(np.abs(seg_xs - t)) > 0.025 or np.isnan(hz) or hz <= 0:
+                        has_empty = True
+                        break
+                if has_empty:
+                    break
+                    
+            item['has_empty_data'] = has_empty
+            return has_empty
+            
+        # 2. 如果音频没有加载，则退回到已有缓存标记
         if 'has_empty_data' in item:
             return item['has_empty_data']
             
-        # 兜底逻辑：如果存在 preview_f0 列表
         if item.get('preview_f0'):
             return any(hz == 0 for hz in item['preview_f0'])
             
-        if item.get('start') is None or not item.get('snd') or not item.get('pitch'):
-            return False
-            
-        num_points = int(self.app_state_params.get('pts', 10))
-            
-        t_s, t_e = item['start'], item['end']
-        label = item.get('label', '')
-        inner_splits = item.get('inner_splits', [])
-        
-        splits = [t_s] + [s for s in inner_splits if t_s < s < t_e] + [t_e]
-        if len(label) > 1 and len(splits) != len(label) + 1:
-            splits = np.linspace(t_s, t_e, len(label) + 1).tolist()
-        elif len(label) <= 1:
-            splits = [t_s, t_e]
-            
-        pitch = item['pitch']
-        p_xs = pitch.xs()
-        p_freqs = pitch.selected_array['frequency']
-            
-        for i in range(len(splits) - 1):
-            c_s, c_e = splits[i], splits[i+1]
-            if c_e <= c_s: continue
-            
-            # 智能收缩围栏，过滤Gap
-            valid_idx = np.where((p_xs >= c_s) & (p_xs <= c_e) & (p_freqs > 0))[0]
-            if len(valid_idx) >= 2:
-                v_s, v_e = p_xs[valid_idx[0]], p_xs[valid_idx[-1]]
-                seg_xs = p_xs[valid_idx]
-                seg_ys = p_freqs[valid_idx]
-            else:
-                return True
-                
-            if v_e <= v_s: return True
-                
-            times = np.linspace(v_s, v_e, num_points)
-            f0s = np.interp(times, seg_xs, seg_ys)
-            for t, hz in zip(times, f0s):
-                if np.min(np.abs(seg_xs - t)) > 0.025 or np.isnan(hz) or hz <= 0:
-                    return True
         return False
 
     def update_item_icon(self, iid):

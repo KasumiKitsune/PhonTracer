@@ -565,8 +565,15 @@ class PhoneticsApp:
     def on_trim_silence_toggle(self):
         self.recalculate_current_item(only_trim_silence=True)
 
-    def recalculate_all_audio(self, only_trim_silence=False, recompute_pitch=False):
+    def recalculate_all_audio(self, only_trim_silence=False, recompute_pitch=True):
         if not self.items: return
+        
+        # 1. 确保所有 UI 输入框的最新的参数值都已经同步到了 self.last_params 中（在主线程中执行）
+        try:
+            self.on_param_change()
+        except Exception:
+            pass
+            
         items_snapshot = list(self.items.items())
         total = len(items_snapshot)
 
@@ -678,6 +685,7 @@ class PhoneticsApp:
                                         target_item['raw_start'] = res['raw_start']
                                         target_item['raw_end'] = res['raw_end']
                                         target_item['inner_splits'] = res.get('inner_splits', [])
+                                        target_item['chars_bounds'] = res.get('chars_bounds', [])
                                         target_item['has_empty_data'] = res.get('has_empty_data', False)
                                         target_item['preview_f0'] = res.get('preview_f0', [])
                                         # 如果是独立音频，还需要把 Cache 也更新了，防止下次加载又是旧的
@@ -690,6 +698,7 @@ class PhoneticsApp:
                                         target_item['raw_start'] = res['raw_s']
                                         target_item['raw_end'] = res['raw_e']
                                         target_item['inner_splits'] = res.get('inner_splits', [])
+                                        target_item['chars_bounds'] = res.get('chars_bounds', [])
                                         target_item['has_empty_data'] = res.get('has_empty_data', False)
                                         target_item['preview_f0'] = res.get('preview_f0', [])
                             except Exception: pass
