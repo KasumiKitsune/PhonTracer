@@ -229,6 +229,8 @@ class VisualSplitter(ctk.CTkToplevel):
             
         self.canvas.bind("<MouseWheel>", self.on_mousewheel)
         self.canvas.bind("<Control-MouseWheel>", self.on_ctrl_mousewheel)
+        if platform.system() == 'Darwin':
+            self.canvas.bind("<Command-MouseWheel>", self.on_ctrl_mousewheel)
         self.canvas.bind("<Configure>", lambda e: self.render_canvas())
 
     def init_data(self):

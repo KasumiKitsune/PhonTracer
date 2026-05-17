@@ -43,12 +43,12 @@ jobs:
         # 压缩整个套件文件夹
         Compress-Archive -Path dist/PhonTracer_Suite -DestinationPath dist/PhonTracer_Suite-Windows.zip
 
-    - name: Create Zip Archive (macOS)
+    - name: Create DMG Archive (macOS)
       if: matrix.os == 'macos-latest'
       run: |
         cd dist
-        # macOS 下压缩整个 Suite 文件夹（包含 .app）
-        zip -yr PhonTracer_Suite-macOS.zip PhonTracer_Suite/
+        # Create a DMG file for macOS distribution
+        hdiutil create -volname "PhonTracer_Suite" -srcfolder PhonTracer_Suite -ov -format UDZO PhonTracer_Suite-macOS.dmg
 
     - name: Create Release and Upload Artifacts
       uses: softprops/action-gh-release@v2
@@ -56,12 +56,12 @@ jobs:
       with:
         files: |
           dist/PhonTracer_Suite-Windows.zip
-          dist/PhonTracer_Suite-macOS.zip
+          dist/PhonTracer_Suite-macOS.dmg
         name: ToneExtractor ${{ github.ref_name }}
         body: |
           ### 🚀 自动化发布
           - 平台: ${{ matrix.os }}
-          - 自动构建可执行文件 (Zip 打包)
+          - 自动构建可执行文件 (Windows 为 Zip, macOS 为 DMG)
           - 基于最新代码逻辑与资源路径
         draft: false
         prerelease: false
@@ -73,4 +73,4 @@ jobs:
         name: PhonTracer-Suite-${{ matrix.os }}
         path: |
           dist/PhonTracer_Suite-Windows.zip
-          dist/PhonTracer_Suite-macOS.zip
+          dist/PhonTracer_Suite-macOS.dmg
