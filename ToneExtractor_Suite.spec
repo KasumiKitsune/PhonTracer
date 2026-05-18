@@ -9,7 +9,8 @@ ctk_path = os.path.dirname(customtkinter.__file__)
 # 隐式导入与排除列表
 hidden_imports = [
     'parselmouth', 'PIL._tkinter_finder', 'xlsxwriter',
-    'scipy.interpolate', 'scipy.signal', 'scipy.stats', 'scipy.special._cdflib'
+    'scipy.interpolate', 'scipy.signal', 'scipy.stats', 'scipy.special._cdflib',
+    'textgrid'
 ]
 if sys.platform == 'win32':
     hidden_imports.append('windnd')

@@ -14,7 +14,8 @@ hidden_imports = [
     'scipy.interpolate',
     'scipy.signal',
     'scipy.stats',
-    'scipy.special._cdflib' # scipy 经常漏掉的底层库
+    'scipy.special._cdflib', # scipy 经常漏掉的底层库
+    'textgrid'
 ]
 
 if sys.platform == 'win32':
