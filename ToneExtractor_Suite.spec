@@ -183,14 +183,14 @@ if sys.platform == 'darwin':
     # 为主程序创建 .app
     app1 = BUNDLE(
         coll,
-        name='PhonTracer_Suite/PhonTracer.app',
+        name='PhonTracer.app',
         icon='assets/icon.icns',
         bundle_identifier='com.kasumikitsune.phonetracer',
     )
     # 为工具箱创建 .app (通常 macOS 上如果是套件，用户会更习惯在同一个目录下看到两个 app)
     app2 = BUNDLE(
         coll,
-        name='PhonTracer_Suite/AudioToolkit.app',
+        name='AudioToolkit.app',
         icon='assets/tool_icon.icns',
         bundle_identifier='com.kasumikitsune.audiotoolkit',
     )

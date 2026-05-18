@@ -47,6 +47,10 @@ jobs:
       if: matrix.os == 'macos-latest'
       run: |
         cd dist
+        # 创建套件文件夹并将生成的 .app 移动进去
+        mkdir PhonTracer_Suite
+        mv PhonTracer.app PhonTracer_Suite/
+        mv AudioToolkit.app PhonTracer_Suite/
         # Create a DMG file for macOS distribution
         hdiutil create -volname "PhonTracer_Suite" -srcfolder PhonTracer_Suite -ov -format UDZO PhonTracer_Suite-macOS.dmg
 
