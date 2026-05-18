@@ -358,7 +358,30 @@ def batch_process_worker(path: str, params: Dict[str, float], trim_silence: bool
         return {'success': False, 'error': str(e), 'path': path}
 
 
-def long_process_worker(snd_values: np.ndarray, snd_sf: float, pitch_xs: np.ndarray, pitch_freqs: np.ndarray, ms: float, me: float, params: Dict[str, float], trim_silence: bool, word_label: str = "") -> Dict[str, Any]:
+def find_minimum_intensity_valley(snd: parselmouth.Sound, t_ref: float, search_window: float = 0.08) -> float:
+    """
+    Search in a local window [t_ref - search_window, t_ref + search_window]
+    for the exact point of minimum intensity (lowest volume).
+    """
+    dur = snd.get_total_duration()
+    t_min = max(0.0, t_ref - search_window)
+    t_max = min(dur, t_ref + search_window)
+    if t_max <= t_min:
+        return t_ref
+    try:
+        part = snd.extract_part(from_time=t_min, to_time=t_max)
+        intensity = part.to_intensity(time_step=0.005)
+        vals = intensity.values[0]
+        xs = intensity.xs() + t_min
+        if len(vals) > 0:
+            min_idx = np.argmin(vals)
+            return float(xs[min_idx])
+    except Exception:
+        pass
+    return t_ref
+
+
+def long_process_worker(snd_values: np.ndarray, snd_sf: float, pitch_xs: np.ndarray, pitch_freqs: np.ndarray, ms: float, me: float, params: Dict[str, float], trim_silence: bool, word_label: str = "", ref_splits: List[float] = None) -> Dict[str, Any]:
     try:
         snd_part = parselmouth.Sound(snd_values, sampling_frequency=snd_sf)
         shifted_xs = pitch_xs - ms
@@ -373,7 +396,13 @@ def long_process_worker(snd_values: np.ndarray, snd_sf: float, pitch_xs: np.ndar
         inner_splits = []
         chars_bounds = []
         if word_label and len(word_label) > 1:
-            splits = auto_split_inner_word(snd_part, mic_s, mic_e, len(word_label))
+            if ref_splits:
+                # 寻找在空白处（TextGrid分割线附近）的音量最低值点
+                local_ref_splits = [t - ms for t in ref_splits]
+                splits = [find_minimum_intensity_valley(snd_part, t_ref) for t_ref in local_ref_splits]
+            else:
+                splits = auto_split_inner_word(snd_part, mic_s, mic_e, len(word_label))
+                
             local_chars_bounds = auto_split_to_chars_bounds(snd_part, mic_s, mic_e, splits, len(word_label), params)
             chars_bounds = [[s + ms, e + ms] for s, e in local_chars_bounds]
             inner_splits = [t + ms for t in splits]  # 复原到全局时间轴
@@ -408,3 +437,31 @@ def long_process_worker(snd_values: np.ndarray, snd_sf: float, pitch_xs: np.ndar
         }
     except Exception as e:
         return {'success': False, 'error': str(e), 'ms': ms, 'me': me}
+
+
+def process_single_long_word(snd_values: np.ndarray, snd_sf: float, word: str, ms: float, me: float, params: Dict[str, float], trim: bool, pitch_xs: np.ndarray, pitch_freqs: np.ndarray, ref_splits: List[float] = None) -> Dict[str, Any]:
+    """
+    Import helper that processes a single word slice from a long audio,
+    running long_process_worker and translating keys back to target format.
+    """
+    res = long_process_worker(snd_values, snd_sf, pitch_xs, pitch_freqs, ms, me, params, trim, word_label=word, ref_splits=ref_splits)
+    if res.get('success'):
+        return {
+            'label': word,
+            'macro_start': ms,
+            'macro_end': me,
+            'start': res['mis'],
+            'end': res['mie'],
+            'raw_start': res['raw_s'],
+            'raw_end': res['raw_e'],
+            'inner_splits': res.get('inner_splits', []),
+            'chars_bounds': res.get('chars_bounds', []),
+            'has_empty_data': res.get('has_empty_data', False),
+            'success': True
+        }
+    else:
+        return {
+            'label': word,
+            'success': False,
+            'error': res.get('error', 'Unknown error')
+        }

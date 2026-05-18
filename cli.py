@@ -327,6 +327,210 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
         else:
             print('{"success": False, "error": "No audio loaded. Use load_long or load_batch first."}')
 
+    def do_apply_textgrid(self, arg):
+        """
+        Apply a TextGrid file to segment and match the active long audio.
+        Usage: apply_textgrid <textgrid_filepath>
+        """
+        args = shlex.split(arg)
+        if not args:
+            print('{"success": False, "error": "TextGrid filepath required"}')
+            return
+
+        filepath = args[0]
+        if not os.path.exists(filepath):
+            print(json.dumps({"success": False, "error": f"File not found: {filepath}"}))
+            return
+
+        if self.mode != 'long' or not self.long_snd:
+            print('{"success": False, "error": "This command requires active long audio mode. Use load_long first."}')
+            return
+
+        try:
+            import textgrid
+            tg = textgrid.TextGrid.fromFile(filepath)
+
+            words_tier = None
+            chars_tier = None
+            groups_tier = None
+            for t in tg.tiers:
+                if t.name == "words":
+                    words_tier = t
+                elif t.name == "chars":
+                    chars_tier = t
+                elif t.name in ["groups", "group"]:
+                    groups_tier = t
+
+            if not words_tier:
+                for t in tg.tiers:
+                    if isinstance(t, textgrid.IntervalTier):
+                        words_tier = t
+                        break
+
+            if not words_tier:
+                print('{"success": False, "error": "No IntervalTier found in TextGrid"}')
+                return
+
+            tg_intervals = []
+            for interval in words_tier:
+                lbl = interval.mark.strip()
+                if lbl:
+                    grp_name = "导入内容"
+                    if groups_tier:
+                        center = (interval.minTime + interval.maxTime) / 2.0
+                        for g_interval in groups_tier:
+                            if g_interval.minTime <= center <= g_interval.maxTime:
+                                g_lbl = g_interval.mark.strip()
+                                if g_lbl:
+                                    grp_name = g_lbl
+                                    break
+
+                    chars_bounds = []
+                    inner_splits = []
+                    if chars_tier:
+                        overlapping_chars = []
+                        for c_interval in chars_tier:
+                            c_lbl = c_interval.mark.strip()
+                            if c_lbl:
+                                center = (c_interval.minTime + c_interval.maxTime) / 2.0
+                                if interval.minTime <= center <= interval.maxTime:
+                                    overlapping_chars.append(c_interval)
+                        
+                        overlapping_chars.sort(key=lambda c: c.minTime)
+                        if overlapping_chars:
+                            for c in overlapping_chars:
+                                chars_bounds.append([c.minTime, c.maxTime])
+                            for j in range(len(overlapping_chars) - 1):
+                                inner_splits.append(overlapping_chars[j].maxTime)
+                    
+                    if not chars_bounds:
+                        w_len = len(lbl)
+                        if w_len > 1:
+                            splits = np.linspace(interval.minTime, interval.maxTime, w_len + 1).tolist()
+                            chars_bounds = [[splits[j], splits[j+1]] for j in range(w_len)]
+                            inner_splits = splits[1:-1]
+                        else:
+                            chars_bounds = [[interval.minTime, interval.maxTime]]
+                            inner_splits = []
+
+                    tg_intervals.append({
+                        'start': interval.minTime,
+                        'end': interval.maxTime,
+                        'label': lbl,
+                        'group': grp_name,
+                        'inner_splits': inner_splits,
+                        'chars_bounds': chars_bounds
+                    })
+
+            if not tg_intervals:
+                print('{"success": False, "error": "No non-empty labeled intervals found in TextGrid"}')
+                return
+
+            self.items.clear()
+            
+            unique_groups = []
+            for item in tg_intervals:
+                g = item.get('group', '导入内容')
+                if g not in unique_groups:
+                    unique_groups.append(g)
+            self.groups = unique_groups
+
+            snd = self.long_snd
+            global_pitch = snd.to_pitch_ac(time_step=None, pitch_floor=self.params['pitch_floor'], pitch_ceiling=self.params['pitch_ceiling'], voicing_threshold=self.params.get('voicing_threshold', 0.25), very_accurate=True, octave_jump_cost=0.9)
+
+            pitch_xs = global_pitch.xs()
+            pitch_freqs = global_pitch.selected_array['frequency']
+
+            tasks = []
+            for item in tg_intervals:
+                ms = item['start']
+                me = item['end']
+                word = item['label']
+                grp_name = item.get('group', '导入内容')
+                ref_splits = item.get('inner_splits', [])
+
+                valid_ms = max(0, ms)
+                valid_me = min(snd.get_total_duration(), me)
+
+                if valid_me > valid_ms:
+                    part = snd.extract_part(from_time=valid_ms, to_time=valid_me)
+                    snd_values = part.values
+                    snd_sf = part.sampling_frequency
+
+                    idx_start = np.searchsorted(pitch_xs, valid_ms)
+                    idx_end = np.searchsorted(pitch_xs, valid_me)
+                    sliced_xs = pitch_xs[idx_start:idx_end]
+                    sliced_freqs = pitch_freqs[idx_start:idx_end]
+
+                    tasks.append({
+                        'word': word, 'group': grp_name, 'ms': ms, 'me': me,
+                        'snd_values': snd_values, 'snd_sf': snd_sf,
+                        'sliced_xs': sliced_xs, 'sliced_freqs': sliced_freqs,
+                        'ref_splits': ref_splits,
+                        'missing': False
+                    })
+                else:
+                    tasks.append({'word': word, 'group': grp_name, 'missing': True})
+
+            from modules.audio_core import process_single_long_word
+            
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(os.cpu_count() or 4, 8)) as executor:
+                futures = {}
+                for i, t in enumerate(tasks):
+                    if t.get('missing'):
+                        continue
+
+                    future = executor.submit(
+                        process_single_long_word,
+                        t['snd_values'], t['snd_sf'], t['word'], t['ms'], t['me'],
+                        self.params, self.params['trim_silence'], t['sliced_xs'], t['sliced_freqs'], t['ref_splits']
+                    )
+                    futures[future] = i
+
+                results = [None] * len(tasks)
+                for i, t in enumerate(tasks):
+                    if t.get('missing'):
+                        results[i] = {'label': t['word'], 'group': t['group'], 'missing': True}
+
+                for future in concurrent.futures.as_completed(futures):
+                    orig_idx = futures[future]
+                    try:
+                        res = future.result()
+                        res['group'] = tasks[orig_idx]['group']
+                        res['missing'] = False
+                        results[orig_idx] = res
+                    except Exception as e:
+                        results[orig_idx] = {'label': tasks[orig_idx]['word'], 'group': tasks[orig_idx]['group'], 'missing': True, 'error': str(e)}
+
+            matched_count = 0
+            for idx, res in enumerate(results):
+                iid = f"item_{idx}"
+                if res and res.get('success'):
+                    res['snd'] = self.long_snd
+                    res['pitch'] = global_pitch
+                    res['pitch_floor'] = self.params['pitch_floor']
+                    res['pitch_ceiling'] = self.params['pitch_ceiling']
+                    res['voicing_threshold'] = self.params.get('voicing_threshold', 0.25)
+                    
+                    preview_times = np.linspace(res['start'], res['end'], 11)
+                    preview_f0 = [global_pitch.get_value_at_time(t) for t in preview_times]
+                    res['preview_f0'] = [0.0 if (np.isnan(hz) or hz <= 0) else hz for hz in preview_f0]
+                    res['has_empty_data'] = any(f == 0.0 for f in res['preview_f0'])
+                    
+                    self.items[iid] = res
+                    matched_count += 1
+                else:
+                    self.items[iid] = {
+                        'id': iid,
+                        'label': res['label'],
+                        'group': res['group'],
+                        'missing': True
+                    }
+
+            print(json.dumps({"success": True, "message": f"TextGrid applied: processed {matched_count}/{len(results)} items."}))
+        except Exception as e:
+            print(json.dumps({"success": False, "error": str(e)}))
+
     def _process_long_wordlist(self, groups, flat_words):
         try:
             global_pitch = self.long_snd.to_pitch_ac(time_step=None, pitch_floor=self.params['pitch_floor'], pitch_ceiling=self.params['pitch_ceiling'], voicing_threshold=self.params.get('voicing_threshold', 0.25), very_accurate=True, octave_jump_cost=0.9)
@@ -1017,7 +1221,6 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                     syl_avgs.append(avg_hz)
                     if avg_hz > 0: all_avg_hz.append(avg_hz)
                 avg_points_map[grp].append(syl_avgs)
-
         if not all_avg_hz:
             workbook.close()
             return
@@ -1199,7 +1402,8 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                     all_mean_vals.extend(mean_contour.tolist())
 
         if not all_mean_vals:
-            raise Exception("No valid data for KDE Heatmap")
+            print('{"success": False, "error": "No valid data to plot"}')
+            return
 
         min_f0, max_f0 = min(all_mean_vals), max(all_mean_vals)
 
@@ -1340,7 +1544,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                 path_to_items[path].append(item)
 
             for path, items in path_to_items.items():
-                base_name = items[0].get("group", os.path.splitext(os.path.basename(path))[0])
+                base_name = os.path.splitext(os.path.basename(path))[0]
                 tg_path = os.path.join(out_subdir, f"{base_name}.TextGrid")
                 self._write_textgrid(tg_path, items)
 
@@ -1364,22 +1568,30 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
         tg = textgrid.TextGrid(maxTime=max_time)
         word_tier = textgrid.IntervalTier(name="words", minTime=0.0, maxTime=max_time)
         char_tier = textgrid.IntervalTier(name="chars", minTime=0.0, maxTime=max_time)
+        group_tier = textgrid.IntervalTier(name="groups", minTime=0.0, maxTime=max_time)
 
         items.sort(key=lambda x: x.get('start', 0))
 
         last_word_end = 0.0
         last_char_end = 0.0
+        last_group_end = 0.0
         has_chars = False
 
         for item in items:
             t_s, t_e = item['start'], item['end']
             label = item.get('label', '')
             inner_splits = item.get('inner_splits', [])
+            grp_name = item.get('group', '导入内容')
 
             if t_s > last_word_end:
                 word_tier.add(last_word_end, t_s, "")
             word_tier.add(t_s, t_e, label)
             last_word_end = t_e
+
+            if t_s > last_group_end:
+                group_tier.add(last_group_end, t_s, "")
+            group_tier.add(t_s, t_e, grp_name)
+            last_group_end = t_e
 
             if len(label) > 1:
                 has_chars = True
@@ -1414,8 +1626,11 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
             word_tier.add(last_word_end, max_time, "")
         if max_time > last_char_end:
             char_tier.add(last_char_end, max_time, "")
+        if max_time > last_group_end:
+            group_tier.add(last_group_end, max_time, "")
 
         tg.append(word_tier)
+        tg.append(group_tier)
         if has_chars:
             tg.append(char_tier)
 

@@ -358,7 +358,8 @@ class PhoneticsApp:
             items_dict=self.items,
             app_state_params=self.last_params,
             on_item_selected_callback=self.on_tree_item_selected,
-            on_clear_canvas_callback=self.on_clear_canvas_callback
+            on_clear_canvas_callback=self.on_clear_canvas_callback,
+            app=self
         )
 
         # 实例化中间画布面板 (最后初始化并 expand=True 以占据剩余空间)
@@ -1498,29 +1499,77 @@ class PhoneticsApp:
                 import textgrid
                 tg = textgrid.TextGrid.fromFile(path)
 
-                # Check for words tier, fallback to chars or first interval tier
-                tier = None
+                words_tier = None
+                chars_tier = None
+                groups_tier = None
                 for t in tg.tiers:
                     if t.name == "words":
-                        tier = t
-                        break
-                if not tier:
+                        words_tier = t
+                    elif t.name == "chars":
+                        chars_tier = t
+                    elif t.name in ["groups", "group"]:
+                        groups_tier = t
+
+                if not words_tier:
                     for t in tg.tiers:
                         if isinstance(t, textgrid.IntervalTier):
-                            tier = t
+                            words_tier = t
                             break
 
-                if not tier:
+                if not words_tier:
                     return messagebox.showerror("错误", "TextGrid 中没有找到 IntervalTier")
 
                 tg_intervals = []
-                for interval in tier:
+                for interval in words_tier:
                     lbl = interval.mark.strip()
                     if lbl:
+                        grp_name = "导入内容"
+                        if groups_tier:
+                            center = (interval.minTime + interval.maxTime) / 2.0
+                            for g_interval in groups_tier:
+                                if g_interval.minTime <= center <= g_interval.maxTime:
+                                    g_lbl = g_interval.mark.strip()
+                                    if g_lbl:
+                                        grp_name = g_lbl
+                                        break
+
+                        chars_bounds = []
+                        inner_splits = []
+                        if chars_tier:
+                            overlapping_chars = []
+                            for c_interval in chars_tier:
+                                c_lbl = c_interval.mark.strip()
+                                if c_lbl:
+                                    # Use interval center to check overlap and robust tolerance
+                                    center = (c_interval.minTime + c_interval.maxTime) / 2.0
+                                    if interval.minTime <= center <= interval.maxTime:
+                                        overlapping_chars.append(c_interval)
+                            
+                            overlapping_chars.sort(key=lambda c: c.minTime)
+                            if overlapping_chars:
+                                for c in overlapping_chars:
+                                    chars_bounds.append([c.minTime, c.maxTime])
+                                for j in range(len(overlapping_chars) - 1):
+                                    inner_splits.append(overlapping_chars[j].maxTime)
+                        
+                        # Fallback to even splits if chars tier data is missing or empty
+                        if not chars_bounds:
+                            w_len = len(lbl)
+                            if w_len > 1:
+                                splits = np.linspace(interval.minTime, interval.maxTime, w_len + 1).tolist()
+                                chars_bounds = [[splits[j], splits[j+1]] for j in range(w_len)]
+                                inner_splits = splits[1:-1]
+                            else:
+                                chars_bounds = [[interval.minTime, interval.maxTime]]
+                                inner_splits = []
+
                         tg_intervals.append({
                             'start': interval.minTime,
                             'end': interval.maxTime,
-                            'label': lbl
+                            'label': lbl,
+                            'group': grp_name,
+                            'inner_splits': inner_splits,
+                            'chars_bounds': chars_bounds
                         })
 
                 if not tg_intervals:
@@ -1531,11 +1580,7 @@ class PhoneticsApp:
             except Exception as e:
                 return messagebox.showerror("错误", f"解析 TextGrid 失败: {e}")
 
-        if mode == 'long':
-            btn_import_tg = ctk.CTkButton(toolbar, text=" 导入 .TextGrid", image=self.icons.get("cut"), compound="left",
-                                          width=110, height=28, corner_radius=14, fg_color="#8B5CF6", text_color="white",
-                                          hover_color="#7C3AED", command=load_textgrid)
-            btn_import_tg.pack(side=tk.LEFT, padx=(10, 0))
+
 
         btn_prompt = ctk.CTkButton(toolbar, text=" 复制 AI 整理提示词", image=self.icons.get("copy_white"), compound="left", 
                                    width=150, height=28, corner_radius=14, fg_color="#F59E0B", text_color="white", 
@@ -1643,7 +1688,17 @@ class PhoneticsApp:
             if mode == 'long': self.process_long_with_wordlist(raw_text)
             else: self.process_batch_with_wordlist(raw_text, match_mode=match_mode_var.get())
             
-        CTkReleaseButton(dlg, text="开始匹配提取", command=process, corner_radius=20, height=40, font=self.font_main).pack(pady=15, anchor="e", padx=20)
+        # 底部按钮栏
+        btn_row = ctk.CTkFrame(dlg, fg_color="transparent")
+        btn_row.pack(fill=tk.X, padx=20, pady=(5, 15))
+
+        if mode == 'long':
+            btn_import_tg = ctk.CTkButton(btn_row, text="导入 .TextGrid",
+                                          width=120, height=40, corner_radius=20, fg_color="#8B5CF6", text_color="white",
+                                          hover_color="#7C3AED", command=load_textgrid, font=self.font_main)
+            btn_import_tg.pack(side=tk.LEFT)
+
+        CTkReleaseButton(btn_row, text="开始匹配提取", command=process, corner_radius=20, height=40, font=self.font_main).pack(side=tk.RIGHT)
         
         # 初始触发一次统计
         update_stats()
@@ -1652,10 +1707,11 @@ class PhoneticsApp:
         if not tg_intervals: return
 
         def run():
-            self.root.after(0, lambda: self.start_loading("正在处理 TextGrid..."))
+            self.root.after(0, lambda: self.start_loading("正在并行分析 TextGrid 音段..."))
             self.root.after(0, self.tree_panel.clear_all)
 
             snd = self.pending_long_snd
+            # Compute global pitch once
             global_pitch = snd.to_pitch_ac(time_step=None, pitch_floor=self.last_params['pitch_floor'], pitch_ceiling=self.last_params['pitch_ceiling'], voicing_threshold=self.last_params.get('voicing_threshold', 0.25), very_accurate=True, octave_jump_cost=0.9)
 
             total = len(tg_intervals)
@@ -1667,13 +1723,12 @@ class PhoneticsApp:
             pitch_freqs = global_pitch.selected_array['frequency']
 
             tasks = []
-
-            # Here we override the "group" to just be default "TextGrid_Import", since we don't have group info in basic TextGrid intervals
-            # Or we can put them all in one group.
             for item in tg_intervals:
                 ms = item['start']
                 me = item['end']
                 word = item['label']
+                grp_name = item.get('group', '导入内容')
+                ref_splits = item.get('inner_splits', [])
 
                 valid_ms = max(0, ms)
                 valid_me = min(snd.get_total_duration(), me)
@@ -1690,12 +1745,14 @@ class PhoneticsApp:
                     sliced_freqs = pitch_freqs[idx_start:idx_end]
 
                     tasks.append({
-                        'word': word, 'group': '导入内容', 'ms': ms, 'me': me,
+                        'word': word, 'group': grp_name, 'ms': ms, 'me': me,
                         'snd_values': snd_values, 'snd_sf': snd_sf,
-                        'sliced_xs': sliced_xs, 'sliced_freqs': sliced_freqs
+                        'sliced_xs': sliced_xs, 'sliced_freqs': sliced_freqs,
+                        'ref_splits': ref_splits,
+                        'missing': False
                     })
                 else:
-                    tasks.append({'word': word, 'group': '导入内容', 'missing': True})
+                    tasks.append({'word': word, 'group': grp_name, 'missing': True})
 
             import concurrent.futures
             from modules.audio_core import process_single_long_word
@@ -1710,7 +1767,7 @@ class PhoneticsApp:
                     future = executor.submit(
                         process_single_long_word,
                         t['snd_values'], t['snd_sf'], t['word'], t['ms'], t['me'],
-                        params, trim, t['sliced_xs'], t['sliced_freqs']
+                        params, trim, t['sliced_xs'], t['sliced_freqs'], t['ref_splits']
                     )
                     futures[future] = (i, t['group'], t['word'])
 
@@ -1727,33 +1784,45 @@ class PhoneticsApp:
                         logging.getLogger(__name__).error(f"处理 '{w}' 时出错: {e}", exc_info=True)
                         temp_results[idx] = {'label': w, 'group': grp, 'success': False, 'missing': True}
 
-            # Override macro_segments for next workflow (re-trim or editing)
+            # Override macro_segments for next workflow
             self.current_macro_segments = [(t['ms'], t['me']) for t in tasks if not t.get('missing')]
 
             def finalize():
                 self.tree_panel.clear_all()
-                self.items = {}
+                self.items.clear()
                 matched_count = 0
 
-                # Pre-register the group
-                if '导入内容' not in self.tree_panel.project_groups:
-                    self.tree_panel.project_groups.append('导入内容')
-                self.tree_panel.tree.insert("", tk.END, iid="group_导入内容", text="导入内容", tags=('group',), open=True)
-                self.tree_panel.group_nodes['导入内容'] = "group_导入内容"
+                # Pre-register the groups from the tasks
+                unique_groups = []
+                for t in tasks:
+                    g = t.get('group', '导入内容')
+                    if g not in unique_groups:
+                        unique_groups.append(g)
+
+                for g in unique_groups:
+                    if g not in self.tree_panel.project_groups:
+                        self.tree_panel.project_groups.append(g)
+                    iid_grp = f"group_{g}"
+                    self.tree_panel.tree.insert("", tk.END, iid=iid_grp, text=g, tags=('group',), open=True)
+                    self.tree_panel.group_nodes[g] = iid_grp
 
                 for idx, res in enumerate(temp_results):
                     gid = self.tree_panel.group_nodes.get(res['group'])
                     if res and res.get('success'):
                         iid = f"item_{res['label']}_{id(res)}"
                         res['snd'] = self.pending_long_snd
+                        res['pitch'] = global_pitch
+                        res['pitch_floor'] = params['pitch_floor']
+                        res['pitch_ceiling'] = params['pitch_ceiling']
+                        res['voicing_threshold'] = params['voicing_threshold']
 
-                        self.tree_panel.insert_item(gid, tk.END, iid=iid, text=res['label'], tags=('item',), group=res['group'])
+                        self.tree_panel.tree.insert(gid, tk.END, iid=iid, text=res['label'], tags=('item',))
                         self.items[iid] = res
                         self.tree_panel.update_item_icon(iid)
                         matched_count += 1
                     else:
                         iid = f"missing_{res['label']}_{id(res)}"
-                        self.tree_panel.insert_item(gid, tk.END, iid=iid, text=res['label'] + " (失败)", tags=('item',), group=res['group'])
+                        self.tree_panel.tree.insert(gid, tk.END, iid=iid, text=res['label'] + " (失败)", tags=('item',))
                         self.items[iid] = {'label': res['label'], 'group': res['group'], 'snd': None, 'start': None, 'end': None, 'inner_splits': []}
 
                 self.stop_loading(f"TextGrid 导入完成: {matched_count}/{total}")

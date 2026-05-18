@@ -13,8 +13,9 @@ from .ui_widgets import ToolTip, CTkReleaseButton, AutoScrollbar
 logger = logging.getLogger(__name__)
 
 class ProjectTreePanel:
-    def __init__(self, parent, icons, items_dict, app_state_params, on_item_selected_callback, on_clear_canvas_callback, tk_icons=None):
+    def __init__(self, parent, icons, items_dict, app_state_params, on_item_selected_callback, on_clear_canvas_callback, tk_icons=None, app=None):
         self.parent = parent
+        self.app = app
         self.icons = icons
         self.tk_icons = tk_icons or {}
         self.items = items_dict
@@ -588,7 +589,13 @@ class ProjectTreePanel:
                     messagebox.showinfo("成功", f"数据已导出至:\n{out_file}")
                 except Exception as e: messagebox.showerror("错误", str(e))
             elif mode == 'textgrid':
-                if self.parent.tabview.get() == "多条独立音频":
+                is_batch = False
+                if self.app and hasattr(self.app, 'tabview'):
+                    is_batch = (self.app.tabview.get() == "多条独立音频")
+                elif hasattr(self.parent, 'tabview'):
+                    is_batch = (self.parent.tabview.get() == "多条独立音频")
+                
+                if is_batch:
                     out_dir = filedialog.askdirectory(title="选择TextGrid导出文件夹")
                     if not out_dir: return
                     try:
@@ -1197,18 +1204,22 @@ class ProjectTreePanel:
         tg = textgrid.TextGrid(maxTime=max_time)
         word_tier = textgrid.IntervalTier(name="words", minTime=0.0, maxTime=max_time)
         char_tier = textgrid.IntervalTier(name="chars", minTime=0.0, maxTime=max_time)
+        group_tier = textgrid.IntervalTier(name="groups", minTime=0.0, maxTime=max_time)
 
         has_chars = False
 
         last_word_end = 0.0
         last_char_end = 0.0
+        last_group_end = 0.0
 
         flat_items = []
+        item_to_group = {}
         for grp_name, children in tree_structure:
             for child in children:
                 item = self.items[child]
                 if item.get('start') is not None and item.get('end') is not None:
                     flat_items.append(item)
+                    item_to_group[id(item)] = grp_name
 
         flat_items.sort(key=lambda x: x['start'])
 
@@ -1216,11 +1227,17 @@ class ProjectTreePanel:
             t_s, t_e = item['start'], item['end']
             label = item.get('label', '')
             inner_splits = item.get('inner_splits', [])
+            grp_name = item_to_group.get(id(item), "导入内容")
 
             if t_s > last_word_end:
                 word_tier.add(last_word_end, t_s, "")
             word_tier.add(t_s, t_e, label)
             last_word_end = t_e
+
+            if t_s > last_group_end:
+                group_tier.add(last_group_end, t_s, "")
+            group_tier.add(t_s, t_e, grp_name)
+            last_group_end = t_e
 
             if len(label) > 1:
                 has_chars = True
@@ -1258,8 +1275,11 @@ class ProjectTreePanel:
             word_tier.add(last_word_end, max_time, "")
         if max_time > last_char_end:
             char_tier.add(last_char_end, max_time, "")
+        if max_time > last_group_end:
+            group_tier.add(last_group_end, max_time, "")
 
         tg.append(word_tier)
+        tg.append(group_tier)
         if has_chars:
             tg.append(char_tier)
 
@@ -1272,9 +1292,11 @@ class ProjectTreePanel:
 
         # Group items by source file path
         path_to_items = {}
+        item_to_group = {}
         for grp_name, children in tree_structure:
             for child in children:
                 item = self.items[child]
+                item_to_group[id(item)] = grp_name
                 if item.get('path'):
                     path = item['path']
                     if path not in path_to_items:
@@ -1285,7 +1307,7 @@ class ProjectTreePanel:
         os.makedirs(out_subdir, exist_ok=True)
 
         for path, items in path_to_items.items():
-            base_name = items[0].get("group", os.path.splitext(os.path.basename(path))[0])
+            base_name = os.path.splitext(os.path.basename(path))[0]
             tg_path = os.path.join(out_subdir, f"{base_name}.TextGrid")
 
             # Since it's batch mode, usually each item corresponds to the full file.
@@ -1304,11 +1326,13 @@ class ProjectTreePanel:
             tg = textgrid.TextGrid(maxTime=max_time)
             word_tier = textgrid.IntervalTier(name="words", minTime=0.0, maxTime=max_time)
             char_tier = textgrid.IntervalTier(name="chars", minTime=0.0, maxTime=max_time)
+            group_tier = textgrid.IntervalTier(name="groups", minTime=0.0, maxTime=max_time)
 
             items.sort(key=lambda x: x.get('start', 0))
 
             last_word_end = 0.0
             last_char_end = 0.0
+            last_group_end = 0.0
             has_chars = False
 
             for item in items:
@@ -1316,11 +1340,17 @@ class ProjectTreePanel:
                 t_s, t_e = item['start'], item['end']
                 label = item.get('label', '')
                 inner_splits = item.get('inner_splits', [])
+                grp_name = item_to_group.get(id(item), "导入内容")
 
                 if t_s > last_word_end:
                     word_tier.add(last_word_end, t_s, "")
                 word_tier.add(t_s, t_e, label)
                 last_word_end = t_e
+
+                if t_s > last_group_end:
+                    group_tier.add(last_group_end, t_s, "")
+                group_tier.add(t_s, t_e, grp_name)
+                last_group_end = t_e
 
                 if len(label) > 1:
                     has_chars = True
@@ -1356,8 +1386,11 @@ class ProjectTreePanel:
                 word_tier.add(last_word_end, max_time, "")
             if max_time > last_char_end:
                 char_tier.add(last_char_end, max_time, "")
+            if max_time > last_group_end:
+                group_tier.add(last_group_end, max_time, "")
 
             tg.append(word_tier)
+            tg.append(group_tier)
             if has_chars:
                 tg.append(char_tier)
 
