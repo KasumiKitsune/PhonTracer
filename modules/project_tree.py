@@ -633,7 +633,7 @@ class ProjectTreePanel:
                 except Exception as e: messagebox.showerror("错误", str(e))
         
         ctk.CTkButton(dlg, text="  📄  文本文件 (.txt)", command=lambda: do_export('txt'), fg_color="#F3F4F6", text_color="#374151", hover_color="#E5E7EB", **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
-        ctk.CTkButton(dlg, text="  ✂️  TextGrid 标注文件 (.TextGrid)", command=lambda: do_export('textgrid'), fg_color="#F3E8FF", text_color="#6B21A8", hover_color="#E9D5FF", **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
+        ctk.CTkButton(dlg, text="  🏷  TextGrid 标注文件 (.TextGrid)", command=lambda: do_export('textgrid'), fg_color="#F3E8FF", text_color="#6B21A8", hover_color="#E9D5FF", **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
         ctk.CTkButton(dlg, text="  📊  Excel 表格 (.xlsx)", command=lambda: do_export('xlsx'), fg_color="#ECFDF5", text_color="#047857", hover_color="#D1FAE5", **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
         ctk.CTkButton(dlg, text="  📈  声调格局连贯折线图", command=lambda: do_export('line_chart'), fg_color="#EFF6FF", text_color="#1E40AF", hover_color="#DBEAFE", **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
         ctk.CTkButton(dlg, text="  🔥  词语时序密度热力图", command=lambda: do_export('kde'), fg_color="#FFF7ED", text_color="#9A3412", hover_color="#FFEDD5", **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
