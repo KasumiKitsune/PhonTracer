@@ -310,7 +310,7 @@ def auto_split_to_chars_bounds(snd: parselmouth.Sound, mic_s: float, mic_e: floa
     return chars_bounds
 
 
-def batch_process_worker(path: str, params: Dict[str, float], trim_silence: bool) -> Dict[str, Any]:
+def batch_process_worker(path: str, params: Dict[str, float], trim_silence: bool, word_label: str = "") -> Dict[str, Any]:
     try:
         snd = parselmouth.Sound(path)
         pitch = snd.to_pitch_ac(time_step=None, pitch_floor=params.get('pitch_floor', 75), pitch_ceiling=params.get('pitch_ceiling', 600), voicing_threshold=params.get('voicing_threshold', 0.25), very_accurate=True, octave_jump_cost=0.9)
@@ -328,12 +328,14 @@ def batch_process_worker(path: str, params: Dict[str, float], trim_silence: bool
         
         name = os.path.splitext(os.path.basename(path))[0]
         
+        label_for_split = word_label if word_label else name
+        
         # 检测是否进入词语模式，预初始化蓝线
         inner_splits = []
         chars_bounds = []
-        if len(name) > 1:
-            inner_splits = auto_split_inner_word(snd, mic_s, mic_e, len(name))
-            chars_bounds = auto_split_to_chars_bounds(snd, mic_s, mic_e, inner_splits, len(name), params)
+        if len(label_for_split) > 1:
+            inner_splits = auto_split_inner_word(snd, mic_s, mic_e, len(label_for_split))
+            chars_bounds = auto_split_to_chars_bounds(snd, mic_s, mic_e, inner_splits, len(label_for_split), params)
         else:
             chars_bounds = [[mic_s, mic_e]]
             

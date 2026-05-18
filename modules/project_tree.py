@@ -802,9 +802,61 @@ class ProjectTreePanel:
             res_row += 1
             
         if include_chart:
-            chart = workbook.add_chart({'type': 'scatter', 'subtype': 'straight'})
-            workbook.close()
-            return
+            try:
+                ws_chart_data = workbook.add_worksheet("图表数据")
+                ws_chart_data.hide()
+                ws_chart_data.write(0, 0, "声调类型")
+                for p in range(1, max_syls * num_points + 1):
+                    ws_chart_data.write(0, p, p)
+                    
+                chart_row = 1
+                for grp, st in dict_data.items():
+                    ws_chart_data.write(chart_row, 0, grp)
+                    col_idx = 1
+                    for k in range(max_syls):
+                        for avg_hz in avg_points_map[grp][k]:
+                            if avg_hz > 0 and max_hz > min_hz and min_hz > 0:
+                                t_val = 5 * (math.log10(avg_hz) - math.log10(min_hz)) / (math.log10(max_hz) - math.log10(min_hz))
+                                ws_chart_data.write(chart_row, col_idx, round(t_val, 2))
+                            else:
+                                ws_chart_data.write(chart_row, col_idx, "")
+                            col_idx += 1
+                    chart_row += 1
+                    
+                chart = workbook.add_chart({'type': 'line'})
+                for r in range(1, len(dict_data) + 1):
+                    chart.add_series({
+                        'name':       ['图表数据', r, 0],
+                        'categories': ['图表数据', 0, 1, 0, max_syls * num_points],
+                        'values':     ['图表数据', r, 1, r, max_syls * num_points],
+                        'line':       {'width': 2.0},
+                    })
+                    
+                chart.set_title({
+                    'name': '连读变调声调格局图',
+                    'name_font': {'name': 'Microsoft YaHei', 'size': 14, 'bold': True}
+                })
+                chart.set_x_axis({
+                    'name': '测量点 (时序展开)',
+                    'name_font': {'name': 'Microsoft YaHei', 'size': 10},
+                    'num_font': {'name': 'Arial', 'size': 9}
+                })
+                chart.set_y_axis({
+                    'name': 'T值 (0-5 标度)',
+                    'name_font': {'name': 'Microsoft YaHei', 'size': 10},
+                    'num_font': {'name': 'Arial', 'size': 9},
+                    'min': 0,
+                    'max': 5
+                })
+                chart.set_legend({
+                    'position': 'bottom',
+                    'font': {'name': 'Microsoft YaHei', 'size': 9}
+                })
+                chart.set_size({'width': 720, 'height': 400})
+                
+                ws_res.insert_chart(f'A{res_row + 3}', chart)
+            except Exception as chart_err:
+                logger.error(f"Error generating Excel chart: {chart_err}", exc_info=True)
         
         workbook.close()
 

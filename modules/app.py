@@ -753,7 +753,7 @@ class PhoneticsApp:
                         for idx, task in enumerate(tasks):
                             if task.get('type') == 'batch':
                                 # 独立音频：重新运行 batch_process_worker
-                                f = executor.submit(batch_process_worker, task['path'], params, trim_silence)
+                                f = executor.submit(batch_process_worker, task['path'], params, trim_silence, task.get('word_label', ""))
                             else:
                                 # 长音频：重新运行 long_process_worker
                                 f = executor.submit(
@@ -1370,7 +1370,7 @@ class PhoneticsApp:
                         res = self.audio_cache[path]
                         results[i] = {**res, 'missing': False, 'group': t['group']}
                     else:
-                        futures[executor.submit(batch_process_worker, path, params, trim)] = i
+                        futures[executor.submit(batch_process_worker, path, params, trim, tasks[i]['word'])] = i
             
             total_futures = len(futures) if futures else 1
             done_count = 0

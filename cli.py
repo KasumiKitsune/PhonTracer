@@ -414,7 +414,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
         for i, t in enumerate(tasks):
             if not t['missing']:
                 path = t['path']
-                f = self.executor.submit(batch_process_worker, path, self.params, self.params['trim_silence'])
+                f = self.executor.submit(batch_process_worker, path, self.params, self.params['trim_silence'], t['word'])
                 futures[f] = i
 
         results = [None] * len(tasks)
@@ -683,12 +683,12 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
             iids = []
             for iid, item in self.items.items():
                 if item.get('missing') or not item.get('success', True): continue
-                tasks.append(item['path'])
+                tasks.append({'path': item['path'], 'label': item.get('label', '')})
                 iids.append(iid)
 
             futures = {}
-            for i, p in enumerate(tasks):
-                f = self.executor.submit(batch_process_worker, p, self.params, self.params['trim_silence'])
+            for i, t in enumerate(tasks):
+                f = self.executor.submit(batch_process_worker, t['path'], self.params, self.params['trim_silence'], t['label'])
                 futures[f] = i
 
             for future in concurrent.futures.as_completed(futures):
