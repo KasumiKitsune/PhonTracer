@@ -732,7 +732,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
         """
         Export data to various formats.
         Usage: export <format> <output_file> [rule]
-        Formats: txt, xlsx, line_chart, kde, wav, merged_wav
+        Formats: txt, xlsx, line_chart, kde, wav, merged_wav, textgrid
         Rule: continuous (default) or per_group (For 'wav' and 'merged_wav', rule can also be buffer_sec or gap_sec like 0.5)
         Example: export xlsx output.xlsx continuous
         Example: export wav scratch/output_dir 0.1
@@ -770,6 +770,8 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                 self._export_wav(out_file, structure, rule)
             elif fmt == 'merged_wav':
                 self._export_merged_wav(out_file, structure, rule)
+            elif fmt == 'textgrid':
+                self._export_textgrid(out_file, structure)
             else:
                 print(f'{{"success": False, "error": "Unknown format: {fmt}"}}')
                 return
@@ -1307,6 +1309,117 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
             self.log_file = None
         self.executor.shutdown(wait=False)
         return True
+
+
+
+    def _export_textgrid(self, out_path, structure):
+        import textgrid
+        import os
+
+        flat_items = []
+        for grp_name, children in structure:
+            for child in children:
+                if self.items[child].get('start') is not None and self.items[child].get('end') is not None:
+                    flat_items.append(self.items[child])
+
+        if not flat_items:
+            print('{"success": False, "error": "No valid items to export"}')
+            return
+
+        # Simple heuristic: if we have paths, it might be batch mode, but CLI might not have "long audio" vs "batch" mode
+        # If output is a directory or ends in a slash, treat as batch export
+        if os.path.isdir(out_path) or not out_path.endswith('.TextGrid'):
+            out_subdir = os.path.join(out_path, "Textgrid_export")
+            os.makedirs(out_subdir, exist_ok=True)
+
+            path_to_items = {}
+            for item in flat_items:
+                path = item.get('path', 'unknown')
+                if path not in path_to_items:
+                    path_to_items[path] = []
+                path_to_items[path].append(item)
+
+            for path, items in path_to_items.items():
+                base_name = items[0].get("group", os.path.splitext(os.path.basename(path))[0])
+                tg_path = os.path.join(out_subdir, f"{base_name}.TextGrid")
+                self._write_textgrid(tg_path, items)
+
+            print(f'{{"success": True, "message": "Exported batch TextGrids to {out_subdir}"}}')
+        else:
+            self._write_textgrid(out_path, flat_items)
+            print(f'{{"success": True, "message": "Exported TextGrid to {out_path}"}}')
+
+    def _write_textgrid(self, tg_path, items):
+        import textgrid
+        import numpy as np
+        max_time = 0
+        for item in items:
+            if item.get('snd'):
+                dur = item['snd'].get_total_duration()
+                if dur > max_time: max_time = dur
+            elif item['end'] > max_time:
+                max_time = item['end']
+
+        if max_time == 0: max_time = 1.0
+        tg = textgrid.TextGrid(maxTime=max_time)
+        word_tier = textgrid.IntervalTier(name="words", minTime=0.0, maxTime=max_time)
+        char_tier = textgrid.IntervalTier(name="chars", minTime=0.0, maxTime=max_time)
+
+        items.sort(key=lambda x: x.get('start', 0))
+
+        last_word_end = 0.0
+        last_char_end = 0.0
+        has_chars = False
+
+        for item in items:
+            t_s, t_e = item['start'], item['end']
+            label = item.get('label', '')
+            inner_splits = item.get('inner_splits', [])
+
+            if t_s > last_word_end:
+                word_tier.add(last_word_end, t_s, "")
+            word_tier.add(t_s, t_e, label)
+            last_word_end = t_e
+
+            if len(label) > 1:
+                has_chars = True
+                if t_s > last_char_end:
+                    char_tier.add(last_char_end, t_s, "")
+
+                chars_bounds = item.get('chars_bounds', [])
+                if not chars_bounds:
+                    splits = [t_s] + [s for s in inner_splits if t_s < s < t_e] + [t_e]
+                    if len(splits) != len(label) + 1:
+                        splits = np.linspace(t_s, t_e, len(label) + 1).tolist()
+                    chars_bounds = [(splits[j], splits[j+1]) for j in range(len(splits)-1)]
+
+                local_last = t_s
+                for i in range(len(label)):
+                    if i < len(chars_bounds):
+                        c_s, c_e = chars_bounds[i]
+                        if c_s > local_last:
+                            char_tier.add(local_last, c_s, "")
+                        char_tier.add(c_s, c_e, label[i])
+                        local_last = c_e
+                if local_last < t_e:
+                    char_tier.add(local_last, t_e, "")
+                last_char_end = t_e
+            else:
+                if t_s > last_char_end:
+                    char_tier.add(last_char_end, t_s, "")
+                char_tier.add(t_s, t_e, label)
+                last_char_end = t_e
+
+        if max_time > last_word_end:
+            word_tier.add(last_word_end, max_time, "")
+        if max_time > last_char_end:
+            char_tier.add(last_char_end, max_time, "")
+
+        tg.append(word_tier)
+        if has_chars:
+            tg.append(char_tier)
+
+        tg.write(tg_path)
 
 if __name__ == '__main__':
     PhonTracerCLI().cmdloop()

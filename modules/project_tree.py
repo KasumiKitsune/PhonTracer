@@ -564,14 +564,14 @@ class ProjectTreePanel:
     def _show_export_menu(self, tree_structure=None):
         dlg = ctk.CTkToplevel(self.parent)
         dlg.title("选择导出格式")
-        dlg.geometry("320x320")
+        dlg.geometry("320x380")
         dlg.attributes('-topmost', True)
         dlg.resizable(False, False)
         
         dlg.update_idletasks()
         main_win = self.parent.winfo_toplevel()
         x = main_win.winfo_rootx() + (main_win.winfo_width() - 320) // 2
-        y = main_win.winfo_rooty() + (main_win.winfo_height() - 320) // 2
+        y = main_win.winfo_rooty() + (main_win.winfo_height() - 380) // 2
         dlg.geometry(f"+{x}+{y}")
         
         ctk.CTkLabel(dlg, text="请选择导出格式", font=self.font_title, text_color="#111827").pack(pady=(20, 15))
@@ -587,6 +587,21 @@ class ProjectTreePanel:
                     self._export_txt(out_file, tree_structure=tree_structure)
                     messagebox.showinfo("成功", f"数据已导出至:\n{out_file}")
                 except Exception as e: messagebox.showerror("错误", str(e))
+            elif mode == 'textgrid':
+                if self.parent.tabview.get() == "多条独立音频":
+                    out_dir = filedialog.askdirectory(title="选择TextGrid导出文件夹")
+                    if not out_dir: return
+                    try:
+                        self._export_textgrid_batch(out_dir, tree_structure=tree_structure)
+                        messagebox.showinfo("成功", f"独立音频 TextGrid 已导出至:\n{out_dir}")
+                    except Exception as e: messagebox.showerror("错误", str(e))
+                else:
+                    out_file = filedialog.asksaveasfilename(title="导出 TextGrid", defaultextension=".TextGrid", initialfile="tone_export_data", filetypes=[("TextGrid 文件", "*.TextGrid")])
+                    if not out_file: return
+                    try:
+                        self._export_textgrid_long(out_file, tree_structure=tree_structure)
+                        messagebox.showinfo("成功", f"TextGrid 已导出至:\n{out_file}")
+                    except Exception as e: messagebox.showerror("错误", str(e))
             elif mode == 'xlsx':
                 out_file = filedialog.asksaveasfilename(title="导出Excel", defaultextension=".xlsx", initialfile="tone_export_data", filetypes=[("Excel 表格", "*.xlsx")])
                 if not out_file: return
@@ -611,6 +626,7 @@ class ProjectTreePanel:
                 except Exception as e: messagebox.showerror("错误", str(e))
         
         ctk.CTkButton(dlg, text="  📄  文本文件 (.txt)", command=lambda: do_export('txt'), fg_color="#F3F4F6", text_color="#374151", hover_color="#E5E7EB", **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
+        ctk.CTkButton(dlg, text="  ✂️  TextGrid 标注文件 (.TextGrid)", command=lambda: do_export('textgrid'), fg_color="#F3E8FF", text_color="#6B21A8", hover_color="#E9D5FF", **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
         ctk.CTkButton(dlg, text="  📊  Excel 表格 (.xlsx)", command=lambda: do_export('xlsx'), fg_color="#ECFDF5", text_color="#047857", hover_color="#D1FAE5", **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
         ctk.CTkButton(dlg, text="  📈  声调格局连贯折线图", command=lambda: do_export('line_chart'), fg_color="#EFF6FF", text_color="#1E40AF", hover_color="#DBEAFE", **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
         ctk.CTkButton(dlg, text="  🔥  词语时序密度热力图", command=lambda: do_export('kde'), fg_color="#FFF7ED", text_color="#9A3412", hover_color="#FFEDD5", **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
@@ -1163,3 +1179,186 @@ class ProjectTreePanel:
         fig.savefig(out_file, dpi=300, bbox_inches='tight')
         plt.close(fig)
         prog_dlg.destroy()
+
+    def _export_textgrid_long(self, out_file, tree_structure=None):
+        import textgrid
+        if tree_structure is None: tree_structure = self._get_all_items_by_group()
+
+        max_time = 0
+        for grp_name, children in tree_structure:
+            for child in children:
+                item = self.items[child]
+                if item.get('end') is not None and item['end'] > max_time:
+                    max_time = item['end']
+
+        if max_time == 0:
+            max_time = 1.0 # default if empty
+
+        tg = textgrid.TextGrid(maxTime=max_time)
+        word_tier = textgrid.IntervalTier(name="words", minTime=0.0, maxTime=max_time)
+        char_tier = textgrid.IntervalTier(name="chars", minTime=0.0, maxTime=max_time)
+
+        has_chars = False
+
+        last_word_end = 0.0
+        last_char_end = 0.0
+
+        flat_items = []
+        for grp_name, children in tree_structure:
+            for child in children:
+                item = self.items[child]
+                if item.get('start') is not None and item.get('end') is not None:
+                    flat_items.append(item)
+
+        flat_items.sort(key=lambda x: x['start'])
+
+        for item in flat_items:
+            t_s, t_e = item['start'], item['end']
+            label = item.get('label', '')
+            inner_splits = item.get('inner_splits', [])
+
+            if t_s > last_word_end:
+                word_tier.add(last_word_end, t_s, "")
+            word_tier.add(t_s, t_e, label)
+            last_word_end = t_e
+
+            if len(label) > 1:
+                has_chars = True
+
+                if t_s > last_char_end:
+                    char_tier.add(last_char_end, t_s, "")
+
+                chars_bounds = item.get('chars_bounds', [])
+                if not chars_bounds:
+                    import numpy as np
+                    splits = [t_s] + [s for s in inner_splits if t_s < s < t_e] + [t_e]
+                    if len(splits) != len(label) + 1:
+                        splits = np.linspace(t_s, t_e, len(label) + 1).tolist()
+                    chars_bounds = [(splits[j], splits[j+1]) for j in range(len(splits)-1)]
+
+                local_last = t_s
+                for i in range(len(label)):
+                    if i < len(chars_bounds):
+                        c_s, c_e = chars_bounds[i]
+                        if c_s > local_last:
+                            char_tier.add(local_last, c_s, "")
+                        char_tier.add(c_s, c_e, label[i])
+                        local_last = c_e
+
+                if local_last < t_e:
+                    char_tier.add(local_last, t_e, "")
+                last_char_end = t_e
+            else:
+                if t_s > last_char_end:
+                    char_tier.add(last_char_end, t_s, "")
+                char_tier.add(t_s, t_e, label)
+                last_char_end = t_e
+
+        if max_time > last_word_end:
+            word_tier.add(last_word_end, max_time, "")
+        if max_time > last_char_end:
+            char_tier.add(last_char_end, max_time, "")
+
+        tg.append(word_tier)
+        if has_chars:
+            tg.append(char_tier)
+
+        tg.write(out_file)
+
+    def _export_textgrid_batch(self, out_dir, tree_structure=None):
+        import textgrid
+        import os
+        if tree_structure is None: tree_structure = self._get_all_items_by_group()
+
+        # Group items by source file path
+        path_to_items = {}
+        for grp_name, children in tree_structure:
+            for child in children:
+                item = self.items[child]
+                if item.get('path'):
+                    path = item['path']
+                    if path not in path_to_items:
+                        path_to_items[path] = []
+                    path_to_items[path].append(item)
+
+        out_subdir = os.path.join(out_dir, "Textgrid_export")
+        os.makedirs(out_subdir, exist_ok=True)
+
+        for path, items in path_to_items.items():
+            base_name = items[0].get("group", os.path.splitext(os.path.basename(path))[0])
+            tg_path = os.path.join(out_subdir, f"{base_name}.TextGrid")
+
+            # Since it's batch mode, usually each item corresponds to the full file.
+            # but if multiple items share the same file, we'll combine them based on their time ranges
+            max_time = 0
+            for item in items:
+                # If batch mode, the audio length might be available via snd object
+                if item.get('snd'):
+                    dur = item['snd'].get_total_duration()
+                    if dur > max_time: max_time = dur
+                elif item.get('end') is not None and item['end'] > max_time:
+                    max_time = item['end']
+
+            if max_time == 0: max_time = 1.0
+
+            tg = textgrid.TextGrid(maxTime=max_time)
+            word_tier = textgrid.IntervalTier(name="words", minTime=0.0, maxTime=max_time)
+            char_tier = textgrid.IntervalTier(name="chars", minTime=0.0, maxTime=max_time)
+
+            items.sort(key=lambda x: x.get('start', 0))
+
+            last_word_end = 0.0
+            last_char_end = 0.0
+            has_chars = False
+
+            for item in items:
+                if item.get('start') is None or item.get('end') is None: continue
+                t_s, t_e = item['start'], item['end']
+                label = item.get('label', '')
+                inner_splits = item.get('inner_splits', [])
+
+                if t_s > last_word_end:
+                    word_tier.add(last_word_end, t_s, "")
+                word_tier.add(t_s, t_e, label)
+                last_word_end = t_e
+
+                if len(label) > 1:
+                    has_chars = True
+                    if t_s > last_char_end:
+                        char_tier.add(last_char_end, t_s, "")
+
+                    chars_bounds = item.get('chars_bounds', [])
+                    if not chars_bounds:
+                        import numpy as np
+                        splits = [t_s] + [s for s in inner_splits if t_s < s < t_e] + [t_e]
+                        if len(splits) != len(label) + 1:
+                            splits = np.linspace(t_s, t_e, len(label) + 1).tolist()
+                        chars_bounds = [(splits[j], splits[j+1]) for j in range(len(splits)-1)]
+
+                    local_last = t_s
+                    for i in range(len(label)):
+                        if i < len(chars_bounds):
+                            c_s, c_e = chars_bounds[i]
+                            if c_s > local_last:
+                                char_tier.add(local_last, c_s, "")
+                            char_tier.add(c_s, c_e, label[i])
+                            local_last = c_e
+                    if local_last < t_e:
+                        char_tier.add(local_last, t_e, "")
+                    last_char_end = t_e
+                else:
+                    if t_s > last_char_end:
+                        char_tier.add(last_char_end, t_s, "")
+                    char_tier.add(t_s, t_e, label)
+                    last_char_end = t_e
+
+            if max_time > last_word_end:
+                word_tier.add(last_word_end, max_time, "")
+            if max_time > last_char_end:
+                char_tier.add(last_char_end, max_time, "")
+
+            tg.append(word_tier)
+            if has_chars:
+                tg.append(char_tier)
+
+            tg.write(tg_path)

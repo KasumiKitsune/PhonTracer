@@ -1,4 +1,5 @@
 import os
+import textgrid
 from typing import List, Dict, Optional, Any, Tuple
 import numpy as np
 import parselmouth
@@ -185,3 +186,59 @@ def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: 
                 output += f"{t:.6f}   0.000000\n"
             
     return output
+
+import textgrid
+
+def get_export_textgrid_for_item(item, max_time=None):
+    if item.get('start') is None or item.get('end') is None: return None
+    t_s, t_e = item['start'], item['end']
+
+    label = item.get('label', '')
+    inner_splits = item.get('inner_splits', [])
+    is_word_mode = len(label) > 1
+
+    tg = textgrid.TextGrid(maxTime=max_time if max_time else t_e)
+
+    # Create Words tier
+    word_tier = textgrid.IntervalTier(name="words", minTime=0.0, maxTime=max_time if max_time else t_e)
+    if t_s > 0:
+        word_tier.add(0.0, t_s, "")
+    word_tier.add(t_s, t_e, label)
+    if (max_time and max_time > t_e) or (not max_time):
+        end_time = max_time if max_time else t_e
+        if end_time > t_e:
+            word_tier.add(t_e, end_time, "")
+    tg.append(word_tier)
+
+    if is_word_mode:
+        char_tier = textgrid.IntervalTier(name="chars", minTime=0.0, maxTime=max_time if max_time else t_e)
+        if t_s > 0:
+            char_tier.add(0.0, t_s, "")
+
+        chars_bounds = item.get('chars_bounds', [])
+        if not chars_bounds:
+            import numpy as np
+            splits = [t_s] + [s for s in inner_splits if t_s < s < t_e] + [t_e]
+            if len(splits) != len(label) + 1:
+                splits = np.linspace(t_s, t_e, len(label) + 1).tolist()
+            chars_bounds = [(splits[j], splits[j+1]) for j in range(len(splits)-1)]
+
+        last_e = t_s
+        for i in range(len(label)):
+            char = label[i]
+            if i < len(chars_bounds):
+                c_start, c_end = chars_bounds[i]
+                if c_start > last_e:
+                    char_tier.add(last_e, c_start, "")
+                char_tier.add(c_start, c_end, char)
+                last_e = c_end
+
+        if last_e < t_e:
+            char_tier.add(last_e, t_e, "")
+
+        end_time = max_time if max_time else t_e
+        if end_time > t_e:
+            char_tier.add(t_e, end_time, "")
+        tg.append(char_tier)
+
+    return tg

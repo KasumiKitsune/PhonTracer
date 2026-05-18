@@ -1490,6 +1490,53 @@ class PhoneticsApp:
                                    width=110, height=28, corner_radius=14, fg_color="#3B82F6", text_color="white", 
                                    hover_color="#2563EB", command=load_txt)
         btn_import.pack(side=tk.LEFT)
+
+        def load_textgrid():
+            path = filedialog.askopenfilename(filetypes=[("TextGrid Files", "*.TextGrid"), ("All Files", "*.*")])
+            if not path: return
+            try:
+                import textgrid
+                tg = textgrid.TextGrid.fromFile(path)
+
+                # Check for words tier, fallback to chars or first interval tier
+                tier = None
+                for t in tg.tiers:
+                    if t.name == "words":
+                        tier = t
+                        break
+                if not tier:
+                    for t in tg.tiers:
+                        if isinstance(t, textgrid.IntervalTier):
+                            tier = t
+                            break
+
+                if not tier:
+                    return messagebox.showerror("错误", "TextGrid 中没有找到 IntervalTier")
+
+                tg_intervals = []
+                for interval in tier:
+                    lbl = interval.mark.strip()
+                    if lbl:
+                        tg_intervals.append({
+                            'start': interval.minTime,
+                            'end': interval.maxTime,
+                            'label': lbl
+                        })
+
+                if not tg_intervals:
+                    return messagebox.showerror("错误", "TextGrid 中没有非空标签的区间")
+
+                dlg.destroy()
+                self.process_long_with_textgrid(tg_intervals)
+            except Exception as e:
+                return messagebox.showerror("错误", f"解析 TextGrid 失败: {e}")
+
+        if mode == 'long':
+            btn_import_tg = ctk.CTkButton(toolbar, text=" 导入 .TextGrid", image=self.icons.get("cut"), compound="left",
+                                          width=110, height=28, corner_radius=14, fg_color="#8B5CF6", text_color="white",
+                                          hover_color="#7C3AED", command=load_textgrid)
+            btn_import_tg.pack(side=tk.LEFT, padx=(10, 0))
+
         btn_prompt = ctk.CTkButton(toolbar, text=" 复制 AI 整理提示词", image=self.icons.get("copy_white"), compound="left", 
                                    width=150, height=28, corner_radius=14, fg_color="#F59E0B", text_color="white", 
                                    hover_color="#D97706", command=copy_prompt)
@@ -1600,3 +1647,119 @@ class PhoneticsApp:
         
         # 初始触发一次统计
         update_stats()
+
+    def process_long_with_textgrid(self, tg_intervals):
+        if not tg_intervals: return
+
+        def run():
+            self.root.after(0, lambda: self.start_loading("正在处理 TextGrid..."))
+            self.root.after(0, self.tree_panel.clear_all)
+
+            snd = self.pending_long_snd
+            global_pitch = snd.to_pitch_ac(time_step=None, pitch_floor=self.last_params['pitch_floor'], pitch_ceiling=self.last_params['pitch_ceiling'], voicing_threshold=self.last_params.get('voicing_threshold', 0.25), very_accurate=True, octave_jump_cost=0.9)
+
+            total = len(tg_intervals)
+            results = []
+
+            params = {'db': self.last_params['db'], 'skip_front': self.last_params['skip_front'], 'pitch_floor': self.last_params['pitch_floor'], 'pitch_ceiling': self.last_params['pitch_ceiling'], 'voicing_threshold': self.last_params.get('voicing_threshold', 0.25)}
+            trim = self.switch_trim_silence.get()
+            pitch_xs = global_pitch.xs()
+            pitch_freqs = global_pitch.selected_array['frequency']
+
+            tasks = []
+
+            # Here we override the "group" to just be default "TextGrid_Import", since we don't have group info in basic TextGrid intervals
+            # Or we can put them all in one group.
+            for item in tg_intervals:
+                ms = item['start']
+                me = item['end']
+                word = item['label']
+
+                valid_ms = max(0, ms)
+                valid_me = min(snd.get_total_duration(), me)
+
+                if valid_me > valid_ms:
+                    part = snd.extract_part(from_time=valid_ms, to_time=valid_me)
+                    snd_values = part.values
+                    snd_sf = part.sampling_frequency
+
+                    import numpy as np
+                    idx_start = np.searchsorted(pitch_xs, valid_ms)
+                    idx_end = np.searchsorted(pitch_xs, valid_me)
+                    sliced_xs = pitch_xs[idx_start:idx_end]
+                    sliced_freqs = pitch_freqs[idx_start:idx_end]
+
+                    tasks.append({
+                        'word': word, 'group': '导入内容', 'ms': ms, 'me': me,
+                        'snd_values': snd_values, 'snd_sf': snd_sf,
+                        'sliced_xs': sliced_xs, 'sliced_freqs': sliced_freqs
+                    })
+                else:
+                    tasks.append({'word': word, 'group': '导入内容', 'missing': True})
+
+            import concurrent.futures
+            from modules.audio_core import process_single_long_word
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(os.cpu_count() or 4, 8)) as executor:
+                futures = {}
+                for i, t in enumerate(tasks):
+                    if t.get('missing'):
+                        results.append({'label': t['word'], 'group': t['group'], 'success': False, 'missing': True})
+                        continue
+
+                    future = executor.submit(
+                        process_single_long_word,
+                        t['snd_values'], t['snd_sf'], t['word'], t['ms'], t['me'],
+                        params, trim, t['sliced_xs'], t['sliced_freqs']
+                    )
+                    futures[future] = (i, t['group'], t['word'])
+
+                temp_results = [None] * len(tasks)
+                for future in concurrent.futures.as_completed(futures):
+                    idx, grp, w = futures[future]
+                    try:
+                        res = future.result()
+                        res['group'] = grp
+                        res['missing'] = False
+                        temp_results[idx] = res
+                    except Exception as e:
+                        import logging
+                        logging.getLogger(__name__).error(f"处理 '{w}' 时出错: {e}", exc_info=True)
+                        temp_results[idx] = {'label': w, 'group': grp, 'success': False, 'missing': True}
+
+            # Override macro_segments for next workflow (re-trim or editing)
+            self.current_macro_segments = [(t['ms'], t['me']) for t in tasks if not t.get('missing')]
+
+            def finalize():
+                self.tree_panel.clear_all()
+                self.items = {}
+                matched_count = 0
+
+                # Pre-register the group
+                if '导入内容' not in self.tree_panel.project_groups:
+                    self.tree_panel.project_groups.append('导入内容')
+                self.tree_panel.tree.insert("", tk.END, iid="group_导入内容", text="导入内容", tags=('group',), open=True)
+                self.tree_panel.group_nodes['导入内容'] = "group_导入内容"
+
+                for idx, res in enumerate(temp_results):
+                    gid = self.tree_panel.group_nodes.get(res['group'])
+                    if res and res.get('success'):
+                        iid = f"item_{res['label']}_{id(res)}"
+                        res['snd'] = self.pending_long_snd
+
+                        self.tree_panel.insert_item(gid, tk.END, iid=iid, text=res['label'], tags=('item',), group=res['group'])
+                        self.items[iid] = res
+                        self.tree_panel.update_item_icon(iid)
+                        matched_count += 1
+                    else:
+                        iid = f"missing_{res['label']}_{id(res)}"
+                        self.tree_panel.insert_item(gid, tk.END, iid=iid, text=res['label'] + " (失败)", tags=('item',), group=res['group'])
+                        self.items[iid] = {'label': res['label'], 'group': res['group'], 'snd': None, 'start': None, 'end': None, 'inner_splits': []}
+
+                self.stop_loading(f"TextGrid 导入完成: {matched_count}/{total}")
+                self.tree_panel.select_first_item()
+
+            self.root.after(0, finalize)
+
+        import threading
+        threading.Thread(target=run, daemon=True).start()
