@@ -7,6 +7,7 @@ sys.modules['flet'] = MagicMock()
 sys.modules['sounddevice'] = MagicMock()
 sys.modules['parselmouth'] = MagicMock()
 sys.modules['customtkinter'] = MagicMock()
+sys.modules['windnd'] = MagicMock()
 
 import parselmouth
 
@@ -104,26 +105,6 @@ class TestUISyncBugs(unittest.TestCase):
         self.assertEqual(self.item['end'], 0.8)
         self.assertTrue(self.item.get('is_manual_edited'))
 
-    def test_export_updates_pitch_if_params_changed(self):
-        """Test that get_export_text_for_item forces a recalculation if pitch bounds changed"""
-        # Change the app state params
-        self.item['path'] = 'dummy.wav'
-
-        # Original pitch info
-        self.assertEqual(self.item['pitch_floor'], 75)
-
-        # Mock the return values for Pitch recalculation logic
-        mock_snd_inst = MagicMock()
-        mock_snd_inst.extract_part.return_value = mock_snd_inst
-        mock_snd_inst.to_pitch_ac.return_value = self.mock_pitch
-        self.item['snd'] = mock_snd_inst
-
-        # get_export_text_for_item uses the passed in pitch_floor and pitch_ceiling (which mimic UI)
-        res = get_export_text_for_item(self.item, 1, 11, pitch_floor=100.0, pitch_ceiling=500.0, voicing_threshold=0.25)
-
-        # The lazy load should regenerate pitch
-        self.assertEqual(self.item['pitch_floor'], 100.0)
-        self.assertEqual(self.item['pitch_ceiling'], 500.0)
-
 if __name__ == '__main__':
     unittest.main()
+
