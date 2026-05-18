@@ -420,7 +420,7 @@ class ProjectTreePanel:
             
         item = self.items[self.current_iid]
         real_idx = self._get_item_index(self.current_iid)
-        text = get_export_text_for_item(item, real_idx, self.app_state_params['pts'])
+        text = get_export_text_for_item(item, real_idx, self.app_state_params['pts'], pitch_floor=self.app_state_params.get('pitch_floor', 75.0), pitch_ceiling=self.app_state_params.get('pitch_ceiling', 600.0), voicing_threshold=self.app_state_params.get('voicing_threshold', 0.25))
         
         self.text_preview.configure(state='normal')
         self.text_preview.delete('1.0', tk.END)
@@ -713,7 +713,10 @@ class ProjectTreePanel:
                 if (not item.get('snd') or not item.get('pitch')) and item.get('path'):
                     try:
                         item['snd'] = parselmouth.Sound(item['path'])
-                        item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=self.app_state_params.get('pitch_floor', 75), pitch_ceiling=self.app_state_params.get('pitch_ceiling', 600), voicing_threshold=0.25, octave_jump_cost=0.9)
+                        pf = item.get('pitch_floor', self.app_state_params.get('pitch_floor', 75))
+                        pc = item.get('pitch_ceiling', self.app_state_params.get('pitch_ceiling', 600))
+                        vt = item.get('voicing_threshold', self.app_state_params.get('voicing_threshold', 0.25))
+                        item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=pf, pitch_ceiling=pc, voicing_threshold=vt, very_accurate=True, octave_jump_cost=0.9)
                     except Exception as e:
                         logger.error(f"Error loading sound or pitch for {item['path']}: {e}", exc_info=True)
                         continue
@@ -817,7 +820,7 @@ class ProjectTreePanel:
                 for child in children:
                     item = self.items[child]
                     if item['start'] is not None:
-                        txt_data = get_export_text_for_item(item, global_idx, self.app_state_params['pts'])
+                        txt_data = get_export_text_for_item(item, global_idx, self.app_state_params['pts'], pitch_floor=self.app_state_params.get('pitch_floor', 75.0), pitch_ceiling=self.app_state_params.get('pitch_ceiling', 600.0), voicing_threshold=self.app_state_params.get('voicing_threshold', 0.25))
                         f.write(txt_data)
                         global_idx += 1
 
@@ -835,7 +838,10 @@ class ProjectTreePanel:
                 if (not item.get('snd') or not item.get('pitch')) and item.get('path'):
                     try:
                         item['snd'] = parselmouth.Sound(item['path'])
-                        item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=self.app_state_params.get('pitch_floor', 75), pitch_ceiling=self.app_state_params.get('pitch_ceiling', 600), voicing_threshold=0.25, octave_jump_cost=0.9)
+                        pf = item.get('pitch_floor', self.app_state_params.get('pitch_floor', 75))
+                        pc = item.get('pitch_ceiling', self.app_state_params.get('pitch_ceiling', 600))
+                        vt = item.get('voicing_threshold', self.app_state_params.get('voicing_threshold', 0.25))
+                        item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=pf, pitch_ceiling=pc, voicing_threshold=vt, very_accurate=True, octave_jump_cost=0.9)
                     except Exception: continue
                 total_dur, syl_data = self._extract_syl_data(item, num_points)
                 if total_dur <= 0: continue
@@ -968,7 +974,10 @@ class ProjectTreePanel:
                 if (not item.get('snd') or not item.get('pitch')) and item.get('path'):
                     try:
                         item['snd'] = parselmouth.Sound(item['path'])
-                        item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=self.app_state_params.get('pitch_floor', 75), pitch_ceiling=self.app_state_params.get('pitch_ceiling', 600), voicing_threshold=0.25, octave_jump_cost=0.9)
+                        pf = item.get('pitch_floor', self.app_state_params.get('pitch_floor', 75))
+                        pc = item.get('pitch_ceiling', self.app_state_params.get('pitch_ceiling', 600))
+                        vt = item.get('voicing_threshold', self.app_state_params.get('voicing_threshold', 0.25))
+                        item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=pf, pitch_ceiling=pc, voicing_threshold=vt, very_accurate=True, octave_jump_cost=0.9)
                     except Exception: continue
                 if item.get('start') is None or not item.get('snd') or not item.get('pitch'): continue
 

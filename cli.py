@@ -55,8 +55,10 @@ Rules:
             'skip_front': 0.00,
             'pitch_floor': 75,
             'pitch_ceiling': 600,
+            'voicing_threshold': 0.25,
             'trim_silence': True
         }
+        self.lang = 'en'
 
         self.items = OrderedDict()
         self.groups = []
@@ -89,7 +91,7 @@ Rules:
         """
         Set analysis parameters.
         Usage: set_params key=value [key=value ...]
-        Valid keys: pts, db, skip_front, pitch_floor, pitch_ceiling, trim_silence
+        Valid keys: pts, db, skip_front, pitch_floor, pitch_ceiling, voicing_threshold, trim_silence
         Example: set_params db=50.0 trim_silence=False
         """
         args = shlex.split(arg)
@@ -118,6 +120,124 @@ Rules:
                     return
 
         print(json.dumps({"success": True, "message": "Parameters updated", "params": self.params}))
+
+    def do_lang(self, arg):
+        """
+        Switch display language for messages and guides between English and Chinese.
+        Usage: lang [zh|en]
+        Example: lang zh
+        """
+        choice = arg.strip().lower()
+        if choice in ('zh', 'cn', 'chinese', '中文'):
+            self.lang = 'zh'
+            self.prompt = "(phontracer)[中文] "
+            print(json.dumps({"success": True, "message": "语言已切换为中文", "lang": "zh"}))
+        elif choice in ('en', 'english', '英文'):
+            self.lang = 'en'
+            self.prompt = "(phontracer) "
+            print(json.dumps({"success": True, "message": "Language switched to English", "lang": "en"}))
+        else:
+            print(json.dumps({"success": True, "lang": self.lang}))
+
+    def do_help(self, arg):
+        if not arg:
+            if getattr(self, 'lang', 'en') == 'zh':
+                print("""
+================================================================================
+                            PhonTracer 命令行手册 (AI Agent 与开发者指南)
+================================================================================
+PhonTracer 是一款高精度的声学声调格局分析工具。
+
+--- 工作流生命周期 ---
+1. 导入音频：
+   - 导入单条长音频（如整句朗读录音）：
+     `load_long <音频路径>`
+   - 导入批量独立短音频文件：
+     `load_batch <路径1> <路径2> ...`
+2. 导入字词表（进行音节切分/匹配）：
+   - `apply_wordlist <字词表路径> [匹配模式]`
+     * 字词表格式：支持按分组名、回车或Tab分隔（例如："组1\n演讲\n工作"）。
+     * 匹配模式：'fuzzy'（模糊文件名匹配，默认）或 'order'（按物理顺序匹配）。
+3. 微调边界或声学提取参数：
+   - 精细修正某个音节的自动 VAD 时间边界：
+     `modify_bounds <音节ID> <开始时间> <结束时间>`
+   - 精细修正某个音节的 Parselmouth 独立基频提取参数（所见即所得）：
+     `modify_params <音节ID> pitch_floor=30 voicing_threshold=0.20`
+   - 使用最新修改的全局参数，重新批量计算整个项目的所有项：
+     `recalculate`
+4. 数据导出：
+   - `export <格式> <输出路径> [规则]`
+     * 支持的导出格式：txt, xlsx, line_chart, kde, wav, merged_wav
+
+--- 声学参数与调优指南 ---
+* pts: 等分插值采样点数（默认：11）
+* db: VAD 切分能量落差阈值（默认：60.0）
+* skip_front: 排除声母时长，避免声母辅音浊化干扰（默认：0.0）
+* pitch_floor: 音高分析下限（默认：75 Hz） -> 通用甜点区：75
+* pitch_ceiling: 音高分析上限（默认：600 Hz） -> 通用甜点区：600
+* voicing_threshold: 浊音阈值（默认：0.25） -> 针对汉语三声等低频“气泡音/嘎裂声”，建议手动调低至 0.15 ~ 0.20
+* trim_silence: 自动切除有效声学边界首尾低于 -50dB 的静音区（默认：True）
+
+--- 核心命令速查表 ---
+- `status`: 获取项目当前模式、状态指标、警告统计等。
+- `list_items [all|warnings|组名]`: 列表打印当前已切分的数据项及警告状态。
+- `set_params 键=值 ...`: 动态更新全局算法提取参数。
+- `modify_bounds <音节ID> <开始秒数> <结束秒数>`: 手动重写音节声学边界。
+- `modify_params <音节ID> 键=值 ...`: 手动指定单个音节专属的提取参数。
+- `recalculate`: 基于全局最新参数，批量重算整个项目。
+- `lang [zh|en]`: 切换命令行显示语言为中文或英文。
+================================================================================
+""")
+            else:
+                print("""
+================================================================================
+                            PhonTracer CLI MANUAL (Agent & Developer Guide)
+================================================================================
+PhonTracer is a high-accuracy acoustic tone analysis tool. 
+
+--- WORKFLOW LIFECYCLE ---
+1. Load Audio:
+   - For single long audio files (e.g. continuous sentence speech):
+     `load_long <filepath>`
+   - For multiple isolated sound files:
+     `load_batch <file1> <file2> ...`
+2. Apply Wordlist (Syllable Segmenting):
+   - `apply_wordlist <wordlist_filepath> [match_mode]`
+     * Wordlist structure: Tab/Newline grouped words (e.g., "组1\n演讲\n工作").
+     * match_mode: 'fuzzy' (fuzzy filename matching) or 'order' (strict order matching).
+3. Fine-Tune boundaries or acoustic parameters:
+   - To fine-tune VAD time boundaries of a specific syllable:
+     `modify_bounds <item_id> <start> <end>`
+   - To fine-tune Parselmouth acoustic parameters of a specific syllable (WYSIWYG):
+     `modify_params <item_id> pitch_floor=30 voicing_threshold=0.20`
+   - To recalculate all items globally with updated global parameters:
+     `recalculate`
+4. Export:
+   - `export <format> <output_file> [rule]`
+     * format: txt, xlsx, line_chart, kde, wav, merged_wav
+
+--- CURRENT CONFIG & SCHEMAS ---
+- Global parameters (modifiable via `set_params`):
+  * pts: Number of interpolation points (default: 11)
+  * db: VAD energy threshold (default: 60.0)
+  * skip_front: Avoid segmenting consonant onset duration (default: 0.0)
+  * pitch_floor: Minimum F0 range (default: 75) -> Sweet spot: 75
+  * pitch_ceiling: Maximum F0 range (default: 600) -> Sweet spot: 600
+  * voicing_threshold: Voicing tolerance (default: 0.25) -> Adjust lower (0.15~0.20) for creaky voice
+  * trim_silence: Cut prefix/suffix silence under -50dB (default: True)
+
+--- ALL COMMANDS REFERENCE ---
+- `status`: Show current project state, active parameters, item warnings.
+- `list_items [all|warnings|group_name]`: List segmented items and warning flags.
+- `set_params key=value ...`: Update global extraction parameters.
+- `modify_bounds <item_id> <start> <end>`: Set manual time boundaries.
+- `modify_params <item_id> key=value ...`: Set item-specific custom parameters.
+- `recalculate`: Recalculate VAD boundaries & F0 curves globally.
+- `lang [zh|en]`: Switch CLI language between Chinese and English.
+================================================================================
+""")
+        else:
+            super().do_help(arg)
 
     def do_load_long(self, arg):
         """
@@ -209,7 +329,7 @@ Rules:
 
     def _process_long_wordlist(self, groups, flat_words):
         try:
-            global_pitch = self.long_snd.to_pitch_ac(time_step=None, pitch_floor=self.params['pitch_floor'], pitch_ceiling=self.params['pitch_ceiling'], voicing_threshold=0.25, octave_jump_cost=0.9)
+            global_pitch = self.long_snd.to_pitch_ac(time_step=None, pitch_floor=self.params['pitch_floor'], pitch_ceiling=self.params['pitch_ceiling'], voicing_threshold=self.params.get('voicing_threshold', 0.25), very_accurate=True, octave_jump_cost=0.9)
             macro_segments = macroscopic_vad(self.long_snd)
 
             pitch_xs = global_pitch.xs()
@@ -248,7 +368,10 @@ Rules:
                             'start': mic_s, 'end': mic_e,
                             'raw_start': raw_s, 'raw_end': raw_e,
                             'inner_splits': inner_splits, 'chars_bounds': chars_bounds,
-                            'preview_f0': preview_f0, 'has_empty_data': has_empty, 'missing': False
+                            'preview_f0': preview_f0, 'has_empty_data': has_empty, 'missing': False,
+                            'pitch_floor': self.params['pitch_floor'],
+                            'pitch_ceiling': self.params['pitch_ceiling'],
+                            'voicing_threshold': self.params.get('voicing_threshold', 0.25)
                         }
                     else:
                         self.items[iid] = {
@@ -323,9 +446,12 @@ Rules:
                 # Load sound and pitch object into memory for fast recalculation
                 try:
                     snd = parselmouth.Sound(res['path'])
-                    pitch = snd.to_pitch_ac(time_step=None, pitch_floor=self.params['pitch_floor'], pitch_ceiling=self.params['pitch_ceiling'], voicing_threshold=0.25, octave_jump_cost=0.9)
+                    pitch = snd.to_pitch_ac(time_step=None, pitch_floor=self.params['pitch_floor'], pitch_ceiling=self.params['pitch_ceiling'], voicing_threshold=self.params.get('voicing_threshold', 0.25), very_accurate=True, octave_jump_cost=0.9)
                     res['snd'] = snd
                     res['pitch'] = pitch
+                    res['pitch_floor'] = self.params['pitch_floor']
+                    res['pitch_ceiling'] = self.params['pitch_ceiling']
+                    res['voicing_threshold'] = self.params.get('voicing_threshold', 0.25)
                 except Exception:
                     pass
             res['id'] = iid
@@ -429,6 +555,85 @@ Rules:
 
         print(json.dumps({"success": True, "message": f"Bounds updated for {iid}", "warning": item.get('has_empty_data', False)}))
 
+    def do_modify_params(self, arg):
+        """
+        Modify analysis parameters of a specific item manually. This overrides global parameters.
+        Usage: modify_params <item_id> key=value [key=value ...]
+        Example: modify_params item_0 pitch_floor=30 voicing_threshold=0.20
+        """
+        args = shlex.split(arg)
+        if len(args) < 2:
+            print('{"success": False, "error": "Requires item_id and key=value pairs"}')
+            return
+
+        iid = args[0]
+        if iid not in self.items:
+            print(json.dumps({"success": False, "error": f"Item {iid} not found"}))
+            return
+
+        item = self.items[iid]
+        if item.get('missing') or not item.get('success', True):
+            print('{"success": False, "error": "Item has no loaded audio data"}')
+            return
+
+        # Initialize defaults if not present
+        if 'pitch_floor' not in item:
+            item['pitch_floor'] = self.params['pitch_floor']
+            item['pitch_ceiling'] = self.params['pitch_ceiling']
+            item['voicing_threshold'] = self.params.get('voicing_threshold', 0.25)
+
+        updated = False
+        for kv in args[1:]:
+            if '=' in kv:
+                k, v = kv.split('=', 1)
+                if k in ('pitch_floor', 'pitch_ceiling', 'voicing_threshold'):
+                    try:
+                        if k in ('pitch_floor', 'pitch_ceiling'):
+                            item[k] = int(v)
+                        else:
+                            item[k] = float(v)
+                        updated = True
+                    except ValueError:
+                        print(json.dumps({"success": False, "error": f"Invalid value for {k}"}))
+                        return
+
+        if updated and 'snd' in item and item['snd'] is not None:
+            # Recompute pitch object for this item
+            try:
+                item['pitch'] = item['snd'].to_pitch_ac(
+                    time_step=None, pitch_floor=item['pitch_floor'], pitch_ceiling=item['pitch_ceiling'],
+                    voicing_threshold=item['voicing_threshold'], very_accurate=True, octave_jump_cost=0.9
+                )
+                
+                # Recompute chars bounds with new params if word mode
+                label = item['label']
+                if len(label) > 1:
+                    item['inner_splits'] = auto_split_inner_word(item['snd'], item['start'], item['end'], len(label))
+                    item['chars_bounds'] = auto_split_to_chars_bounds(item['snd'], item['start'], item['end'], item['inner_splits'], len(label), item)
+                else:
+                    item['inner_splits'] = []
+                    item['chars_bounds'] = [[item['start'], item['end']]]
+                    
+                # Re-evaluate warnings
+                preview_times = np.linspace(item['start'], item['end'], 11)
+                preview_f0 = [item['pitch'].get_value_at_time(t) for t in preview_times]
+                item['preview_f0'] = [0.0 if (np.isnan(hz) or hz <= 0) else hz for hz in preview_f0]
+                item['has_empty_data'] = any(f == 0.0 for f in item['preview_f0'])
+            except Exception as e:
+                print(json.dumps({"success": False, "error": str(e)}))
+                return
+
+        print(json.dumps({
+            "success": True, 
+            "message": f"Parameters updated for {iid}", 
+            "item_params": {
+                "pitch_floor": item.get('pitch_floor'), 
+                "pitch_ceiling": item.get('pitch_ceiling'), 
+                "voicing_threshold": item.get('voicing_threshold')
+            },
+            "warning": item.get('has_empty_data', False)
+        }))
+
     def do_recalculate(self, arg):
         """
         Recalculate bounds and pitches for all items based on current params.
@@ -440,12 +645,15 @@ Rules:
 
         if self.mode == 'long' and self.long_snd:
             # Recompute global pitch
-            global_pitch = self.long_snd.to_pitch_ac(time_step=None, pitch_floor=self.params['pitch_floor'], pitch_ceiling=self.params['pitch_ceiling'], voicing_threshold=0.25, octave_jump_cost=0.9)
+            global_pitch = self.long_snd.to_pitch_ac(time_step=None, pitch_floor=self.params['pitch_floor'], pitch_ceiling=self.params['pitch_ceiling'], voicing_threshold=self.params.get('voicing_threshold', 0.25), very_accurate=True, octave_jump_cost=0.9)
 
             for iid, item in self.items.items():
                 if item.get('missing') or not item.get('success', True): continue
 
                 item['pitch'] = global_pitch
+                item['pitch_floor'] = self.params['pitch_floor']
+                item['pitch_ceiling'] = self.params['pitch_ceiling']
+                item['voicing_threshold'] = self.params.get('voicing_threshold', 0.25)
                 mac_s, mac_e = item['macro_start'], item['macro_end']
 
                 mic_s, mic_e, raw_s, raw_e = core_microscopic_vowel_nucleus(
@@ -506,7 +714,10 @@ Rules:
 
                         # Refresh pitch obj
                         item['snd'] = parselmouth.Sound(res['path'])
-                        item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=self.params['pitch_floor'], pitch_ceiling=self.params['pitch_ceiling'], voicing_threshold=0.25, octave_jump_cost=0.9)
+                        item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=self.params['pitch_floor'], pitch_ceiling=self.params['pitch_ceiling'], voicing_threshold=self.params.get('voicing_threshold', 0.25), very_accurate=True, octave_jump_cost=0.9)
+                        item['pitch_floor'] = self.params['pitch_floor']
+                        item['pitch_ceiling'] = self.params['pitch_ceiling']
+                        item['voicing_threshold'] = self.params.get('voicing_threshold', 0.25)
 
                         preview_times = np.linspace(item['start'], item['end'], 11)
                         preview_f0 = [item['pitch'].get_value_at_time(t) for t in preview_times]
@@ -665,7 +876,7 @@ Rules:
                 for child in children:
                     item = self.items[child]
                     if item.get('start') is not None:
-                        txt_data = get_export_text_for_item(item, global_idx, self.params['pts'], pitch_floor=self.params['pitch_floor'], pitch_ceiling=self.params['pitch_ceiling'])
+                        txt_data = get_export_text_for_item(item, global_idx, self.params['pts'], pitch_floor=self.params['pitch_floor'], pitch_ceiling=self.params['pitch_ceiling'], voicing_threshold=self.params.get('voicing_threshold', 0.25))
                         f.write(txt_data)
                         global_idx += 1
 

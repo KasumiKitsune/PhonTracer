@@ -66,7 +66,7 @@ def fuzzy_match_word_to_path(word: str, available_paths: List[str], used_indices
         
     return None
 
-def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: int, pitch_floor: float = 75.0, pitch_ceiling: float = 600.0) -> str:
+def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: int, pitch_floor: float = 75.0, pitch_ceiling: float = 600.0, voicing_threshold: float = 0.25) -> str:
     if item.get('start') is None or item.get('end') is None: return ""
     t_s, t_e = item['start'], item['end']
     duration = t_e - t_s
@@ -75,6 +75,11 @@ def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: 
     inner_splits = item.get('inner_splits', [])
     is_word_mode = len(label) > 1
     
+    # 优先使用 item 内部存储的个性化参数实现所见即所得
+    p_floor = item.get('pitch_floor', pitch_floor)
+    p_ceiling = item.get('pitch_ceiling', pitch_ceiling)
+    v_thresh = item.get('voicing_threshold', voicing_threshold)
+
     if (not item.get('snd') or not item.get('pitch')) and item.get('path'):
         if num_points == 11 and item.get('preview_f0') and not is_word_mode:
             output = f"{real_index}.{label}\n{duration:.3f}\n"
@@ -87,7 +92,7 @@ def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: 
         else:
             try:
                 item['snd'] = parselmouth.Sound(item['path'])
-                item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=pitch_floor, pitch_ceiling=pitch_ceiling, voicing_threshold=0.25, octave_jump_cost=0.9)
+                item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=p_floor, pitch_ceiling=p_ceiling, voicing_threshold=v_thresh, very_accurate=True, octave_jump_cost=0.9)
             except Exception: return ""
 
     if duration <= 0 or not item.get('snd'): return ""
@@ -116,7 +121,7 @@ def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: 
             try:
                 if c_end - c_start <= 0.01: continue
                 c_snd = item['snd'].extract_part(from_time=c_start, to_time=c_end)
-                c_pitch = c_snd.to_pitch_ac(time_step=None, pitch_floor=pitch_floor, pitch_ceiling=pitch_ceiling, voicing_threshold=0.25, octave_jump_cost=0.9)
+                c_pitch = c_snd.to_pitch_ac(time_step=None, pitch_floor=p_floor, pitch_ceiling=p_ceiling, voicing_threshold=v_thresh, very_accurate=True, octave_jump_cost=0.9)
                 p_xs = c_pitch.xs() + c_start
                 p_freqs = c_pitch.selected_array['frequency']
             except Exception:

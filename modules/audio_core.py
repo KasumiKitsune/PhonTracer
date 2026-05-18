@@ -294,7 +294,7 @@ def auto_split_to_chars_bounds(snd: parselmouth.Sound, mic_s: float, mic_e: floa
         try:
             if c_e - c_s > 0.01:
                 c_snd = snd.extract_part(from_time=c_s, to_time=c_e)
-                c_pitch = c_snd.to_pitch_ac(time_step=None, pitch_floor=params.get('pitch_floor', 75), pitch_ceiling=params.get('pitch_ceiling', 600), voicing_threshold=0.25, octave_jump_cost=0.9)
+                c_pitch = c_snd.to_pitch_ac(time_step=None, pitch_floor=params.get('pitch_floor', 75), pitch_ceiling=params.get('pitch_ceiling', 600), voicing_threshold=params.get('voicing_threshold', 0.25), very_accurate=True, octave_jump_cost=0.9)
                 p_xs = c_pitch.xs() + c_s
                 p_freqs = c_pitch.selected_array['frequency']
                 valid_idx = np.where(p_freqs > 0)[0]
@@ -313,7 +313,7 @@ def auto_split_to_chars_bounds(snd: parselmouth.Sound, mic_s: float, mic_e: floa
 def batch_process_worker(path: str, params: Dict[str, float], trim_silence: bool) -> Dict[str, Any]:
     try:
         snd = parselmouth.Sound(path)
-        pitch = snd.to_pitch_ac(time_step=None, pitch_floor=params.get('pitch_floor', 75), pitch_ceiling=params.get('pitch_ceiling', 600), voicing_threshold=0.25, octave_jump_cost=0.9)
+        pitch = snd.to_pitch_ac(time_step=None, pitch_floor=params.get('pitch_floor', 75), pitch_ceiling=params.get('pitch_ceiling', 600), voicing_threshold=params.get('voicing_threshold', 0.25), very_accurate=True, octave_jump_cost=0.9)
         mac_s, mac_e = 0.0, snd.get_total_duration()
         
         mic_s, mic_e, raw_s, raw_e = core_microscopic_vowel_nucleus(

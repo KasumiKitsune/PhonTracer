@@ -54,7 +54,8 @@ class PhoneticsApp:
             'db': 60.0,
             'skip_front': 0.00,
             'pitch_floor': 75,
-            'pitch_ceiling': 600
+            'pitch_ceiling': 600,
+            'voicing_threshold': 0.25
         }
 
         # Shared ProcessPoolExecutor for performance optimization
@@ -321,7 +322,17 @@ class PhoneticsApp:
         self.entry_pitch_floor.insert(0, str(self.last_params['pitch_floor']))
         self.entry_pitch_floor.pack(side=tk.RIGHT)
         self.setup_entry_behavior(self.entry_pitch_floor, 'pitch_floor')
-        ToolTip(row_pitch, "Praat pitch 分析的频率范围。\n男声建议 75~300，女声/儿童建议 100~500。")
+        ToolTip(row_pitch, "Praat pitch 分析的频率范围。\n男声建议 30~300 (嘎裂声设为30或40)，女声/儿童建议 100~500。")
+        
+        # 浊音阈值参数
+        row_voicing = ctk.CTkFrame(card_params, fg_color="transparent")
+        row_voicing.pack(fill=tk.X, padx=15, pady=5)
+        ctk.CTkLabel(row_voicing, text=" 浊音阈值:", image=self.icons.get("points"), compound="left", text_color="#374151", font=self.font_main).pack(side=tk.LEFT)
+        self.entry_voicing_threshold = ctk.CTkEntry(row_voicing, width=55, justify="center", corner_radius=20, height=26)
+        self.entry_voicing_threshold.insert(0, f"{self.last_params['voicing_threshold']:.2f}")
+        self.entry_voicing_threshold.pack(side=tk.RIGHT)
+        self.setup_entry_behavior(self.entry_voicing_threshold, 'voicing_threshold')
+        ToolTip(row_voicing, "浊音阈值 (Voicing Threshold)，默认 0.25。\n数值越低对嘎裂声 (气泡音) 等不规则波形越宽容。")
         
         row_trim = ctk.CTkFrame(card_params, fg_color="transparent")
         row_trim.pack(fill=tk.X, padx=15, pady=(10, 15))
@@ -368,7 +379,10 @@ class PhoneticsApp:
             self.root.update_idletasks()
             try:
                 item['snd'] = parselmouth.Sound(item['path'])
-                item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=self.last_params['pitch_floor'], pitch_ceiling=self.last_params['pitch_ceiling'], voicing_threshold=0.25, octave_jump_cost=0.9)
+                item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=self.last_params['pitch_floor'], pitch_ceiling=self.last_params['pitch_ceiling'], voicing_threshold=self.last_params.get('voicing_threshold', 0.25), very_accurate=True, octave_jump_cost=0.9)
+                item['pitch_floor'] = self.last_params['pitch_floor']
+                item['pitch_ceiling'] = self.last_params['pitch_ceiling']
+                item['voicing_threshold'] = self.last_params.get('voicing_threshold', 0.25)
                 self.set_status("就绪", "#10B981", "status_success")
             except Exception as e:
                 self.set_status(f"加载失败: {str(e)}", "#EF4444", "status_error")
@@ -547,7 +561,7 @@ class PhoneticsApp:
             entry.configure(border_color=["#979DA2", "#565B5E"], border_width=1)
             current_val = entry.get()
             if hasattr(entry, '_last_val') and current_val == entry._last_val: return
-            if param_key in ['pts', 'db', 'skip_front']: self.on_param_change()
+            if param_key in ['pts', 'db', 'skip_front', 'pitch_floor', 'pitch_ceiling', 'voicing_threshold']: self.on_param_change()
 
         entry.bind("<Enter>", on_enter)
         entry.bind("<Leave>", on_leave)
@@ -572,11 +586,15 @@ class PhoneticsApp:
             recompute_pitch = False
             new_floor = int(self.entry_pitch_floor.get())
             new_ceiling = int(self.entry_pitch_ceiling.get())
+            new_voicing = float(self.entry_voicing_threshold.get())
             if new_floor != self.last_params['pitch_floor']:
                 self.last_params['pitch_floor'] = new_floor
                 recompute_pitch = True
             if new_ceiling != self.last_params['pitch_ceiling']:
                 self.last_params['pitch_ceiling'] = new_ceiling
+                recompute_pitch = True
+            if new_voicing != self.last_params['voicing_threshold']:
+                self.last_params['voicing_threshold'] = new_voicing
                 recompute_pitch = True
                 
             if changed_algo or recompute_pitch: 
@@ -629,7 +647,8 @@ class PhoneticsApp:
                     'db': self.last_params['db'], 
                     'skip_front': self.last_params['skip_front'], 
                     'pitch_floor': self.last_params['pitch_floor'], 
-                    'pitch_ceiling': self.last_params['pitch_ceiling']
+                    'pitch_ceiling': self.last_params['pitch_ceiling'],
+                    'voicing_threshold': self.last_params.get('voicing_threshold', 0.25)
                 }
                 
                 valid_items = []
@@ -644,12 +663,17 @@ class PhoneticsApp:
                         if recompute_pitch:
                             try:
                                 if snd_id not in recomputed_pitches:
-                                    recomputed_pitches[snd_id] = snd.to_pitch_ac(time_step=None, voicing_threshold=0.25, octave_jump_cost=0.9,
+                                    recomputed_pitches[snd_id] = snd.to_pitch_ac(time_step=None, voicing_threshold=self.last_params.get('voicing_threshold', 0.25), very_accurate=True, octave_jump_cost=0.9,
                                         pitch_floor=self.last_params['pitch_floor'],
                                         pitch_ceiling=self.last_params['pitch_ceiling']
                                     )
                                 item['pitch'] = recomputed_pitches[snd_id]
                             except Exception: pass
+                        
+                        # 保存计算该项时所用的参数实现所见即所得导出
+                        item['pitch_floor'] = params['pitch_floor']
+                        item['pitch_ceiling'] = params['pitch_ceiling']
+                        item['voicing_threshold'] = params['voicing_threshold']
                         
                         mac_s, mac_e = item['macro_start'], item['macro_end']
                         valid_ms = max(0, mac_s)
@@ -762,10 +786,13 @@ class PhoneticsApp:
                     item['snd'] = parselmouth.Sound(item['path'])
                     # 总是为单项重新生成 pitch 确保准确性
                     item['pitch'] = item['snd'].to_pitch_ac(
-                        time_step=None, voicing_threshold=0.25, octave_jump_cost=0.9,
+                        time_step=None, voicing_threshold=self.last_params.get('voicing_threshold', 0.25), very_accurate=True, octave_jump_cost=0.9,
                         pitch_floor=self.last_params['pitch_floor'],
                         pitch_ceiling=self.last_params['pitch_ceiling']
                     )
+                    item['pitch_floor'] = self.last_params['pitch_floor']
+                    item['pitch_ceiling'] = self.last_params['pitch_ceiling']
+                    item['voicing_threshold'] = self.last_params.get('voicing_threshold', 0.25)
                     # 独立音频的宏观边界就是全文
                     item['macro_start'] = 0.0
                     item['macro_end'] = item['snd'].get_total_duration()
@@ -773,10 +800,13 @@ class PhoneticsApp:
                 # 如果修改了 Pitch Floor/Ceiling，重新计算该项的 Pitch
                 if recompute_pitch and item.get('snd'):
                     item['pitch'] = item['snd'].to_pitch_ac(
-                        time_step=None, voicing_threshold=0.25, octave_jump_cost=0.9,
+                        time_step=None, voicing_threshold=self.last_params.get('voicing_threshold', 0.25), very_accurate=True, octave_jump_cost=0.9,
                         pitch_floor=self.last_params['pitch_floor'],
                         pitch_ceiling=self.last_params['pitch_ceiling']
                     )
+                    item['pitch_floor'] = self.last_params['pitch_floor']
+                    item['pitch_ceiling'] = self.last_params['pitch_ceiling']
+                    item['voicing_threshold'] = self.last_params.get('voicing_threshold', 0.25)
                     
                 if item.get('snd') and 'macro_start' in item and 'macro_end' in item:
                     if only_trim_silence:
@@ -940,7 +970,7 @@ class PhoneticsApp:
                     if not item.get('snd'):
                         item['snd'] = self.pending_long_snd
                         if global_pitch_cache is None:
-                            global_pitch_cache = self.pending_long_snd.to_pitch_ac(time_step=None, voicing_threshold=0.25, octave_jump_cost=0.9,
+                            global_pitch_cache = self.pending_long_snd.to_pitch_ac(time_step=None, voicing_threshold=self.last_params.get('voicing_threshold', 0.25), very_accurate=True, octave_jump_cost=0.9,
                                 pitch_floor=self.last_params['pitch_floor'], 
                                 pitch_ceiling=self.last_params['pitch_ceiling']
                             )
@@ -1031,7 +1061,7 @@ class PhoneticsApp:
             self.root.after(0, self.tree_panel.clear_all)
             
             snd = self.pending_long_snd
-            global_pitch = snd.to_pitch_ac(time_step=None, pitch_floor=self.last_params['pitch_floor'], pitch_ceiling=self.last_params['pitch_ceiling'], voicing_threshold=0.25, octave_jump_cost=0.9)
+            global_pitch = snd.to_pitch_ac(time_step=None, pitch_floor=self.last_params['pitch_floor'], pitch_ceiling=self.last_params['pitch_ceiling'], voicing_threshold=self.last_params.get('voicing_threshold', 0.25), very_accurate=True, octave_jump_cost=0.9)
             
             if hasattr(self, 'manual_segments') and self.manual_segments:
                 macro_segments = self.manual_segments
@@ -1043,7 +1073,7 @@ class PhoneticsApp:
             results = []
             
             # 准备参数
-            params = {'db': self.last_params['db'], 'skip_front': self.last_params['skip_front'], 'pitch_floor': self.last_params['pitch_floor'], 'pitch_ceiling': self.last_params['pitch_ceiling']}
+            params = {'db': self.last_params['db'], 'skip_front': self.last_params['skip_front'], 'pitch_floor': self.last_params['pitch_floor'], 'pitch_ceiling': self.last_params['pitch_ceiling'], 'voicing_threshold': self.last_params.get('voicing_threshold', 0.25)}
             trim = self.switch_trim_silence.get()
             pitch_xs = global_pitch.xs()
             pitch_freqs = global_pitch.selected_array['frequency']
@@ -1129,7 +1159,10 @@ class PhoneticsApp:
                             'start': res['mis'], 'end': res['mie'],
                             'inner_splits': res.get('inner_splits', []),
                             'chars_bounds': res.get('chars_bounds', []),
-                            'raw_start': res.get('raw_s', res['mis']), 'raw_end': res.get('raw_e', res['mie'])
+                            'raw_start': res.get('raw_s', res['mis']), 'raw_end': res.get('raw_e', res['mie']),
+                            'pitch_floor': params['pitch_floor'],
+                            'pitch_ceiling': params['pitch_ceiling'],
+                            'voicing_threshold': params['voicing_threshold']
                         }
                         self.tree_panel.update_item_icon(iid)
                     else:
@@ -1153,7 +1186,7 @@ class PhoneticsApp:
 
     def start_background_batch_processing(self, paths):
         def run():
-            params = {'db': self.last_params['db'], 'skip_front': self.last_params['skip_front'], 'pitch_floor': self.last_params['pitch_floor'], 'pitch_ceiling': self.last_params['pitch_ceiling']}
+            params = {'db': self.last_params['db'], 'skip_front': self.last_params['skip_front'], 'pitch_floor': self.last_params['pitch_floor'], 'pitch_ceiling': self.last_params['pitch_ceiling'], 'voicing_threshold': self.last_params.get('voicing_threshold', 0.25)}
             trim = self.switch_trim_silence.get()
             paths_to_process = [p for p in paths if p not in self.audio_cache]
             if not paths_to_process:
@@ -1185,7 +1218,7 @@ class PhoneticsApp:
             self.root.after(0, self.tree_panel.clear_all)
             
             total = len(self.pending_batch_paths)
-            params = {'db': self.last_params['db'], 'skip_front': self.last_params['skip_front'], 'pitch_floor': self.last_params['pitch_floor'], 'pitch_ceiling': self.last_params['pitch_ceiling']}
+            params = {'db': self.last_params['db'], 'skip_front': self.last_params['skip_front'], 'pitch_floor': self.last_params['pitch_floor'], 'pitch_ceiling': self.last_params['pitch_ceiling'], 'voicing_threshold': self.last_params.get('voicing_threshold', 0.25)}
             trim = self.switch_trim_silence.get()
             
             results = []
@@ -1219,6 +1252,9 @@ class PhoneticsApp:
                 for _, res in results:
                     if res.get('success'):
                         res['group'] = "独立文件"
+                        res['pitch_floor'] = params['pitch_floor']
+                        res['pitch_ceiling'] = params['pitch_ceiling']
+                        res['voicing_threshold'] = params['voicing_threshold']
                         iid = f"batch_{res['label']}_{id(res)}"
                         self.items[iid] = res
                         has_empty = res.get('has_empty_data', False)
@@ -1276,7 +1312,7 @@ class PhoneticsApp:
                             tasks.append({'word': word, 'group': group_name, 'missing': True})
 
             results = [None] * len(tasks)
-            params = {'db': self.last_params['db'], 'skip_front': self.last_params['skip_front'], 'pitch_floor': self.last_params['pitch_floor'], 'pitch_ceiling': self.last_params['pitch_ceiling']}
+            params = {'db': self.last_params['db'], 'skip_front': self.last_params['skip_front'], 'pitch_floor': self.last_params['pitch_floor'], 'pitch_ceiling': self.last_params['pitch_ceiling'], 'voicing_threshold': self.last_params.get('voicing_threshold', 0.25)}
             trim = self.switch_trim_silence.get()
             
             futures = {}
@@ -1336,6 +1372,10 @@ class PhoneticsApp:
                     if not res.get('missing') and res.get('success'):
                         res['group'] = tasks[i]['group']
                         res['label'] = tasks[i]['word']
+                        if 'pitch_floor' not in res:
+                            res['pitch_floor'] = params['pitch_floor']
+                            res['pitch_ceiling'] = params['pitch_ceiling']
+                            res['voicing_threshold'] = params['voicing_threshold']
                         display = f"{res['label']} ← {os.path.basename(res['path'])}" if match_mode == 'fuzzy' else res['label']
                         iid = f"batch_wl_{res['label']}_{id(res)}"
                         
