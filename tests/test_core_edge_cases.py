@@ -34,7 +34,7 @@ class MockSound:
             return new_sound
         return self
     def to_pitch_ac(self, *args, **kwargs):
-        return getattr(self, 'mock_pitch', MockPitch(np.ones(100) * 150.0))
+        return getattr(self, 'mock_pitch', MockPitch(np.zeros(100))) # By default return zeros unless explicitly set, to prevent overriding the tests intention
     def to_intensity(self, *args, **kwargs):
         class MockIntensity:
             def __init__(self):

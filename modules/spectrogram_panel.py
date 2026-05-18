@@ -357,6 +357,7 @@ class SpectrogramPanel:
             if chars_bounds:
                 item['start'] = chars_bounds[0][0]
                 item['end'] = chars_bounds[-1][1]
+                item['is_manual_edited'] = True
 
             # Update the cursor line and text coordinates in real-time
             if self.cursor_line and self.cursor_text:
@@ -437,6 +438,8 @@ class SpectrogramPanel:
                 item['start'] = new_s
                 item['end'] = new_e
                 
+            item['is_manual_edited'] = True
+
             self.plot_item_spectrogram()
             self.update_ui_times()
         except ValueError: 

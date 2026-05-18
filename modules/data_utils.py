@@ -75,13 +75,19 @@ def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: 
     inner_splits = item.get('inner_splits', [])
     is_word_mode = len(label) > 1
     
-    # 优先使用 item 内部存储的个性化参数实现所见即所得
-    p_floor = item.get('pitch_floor', pitch_floor)
-    p_ceiling = item.get('pitch_ceiling', pitch_ceiling)
-    v_thresh = item.get('voicing_threshold', voicing_threshold)
+    # 这里需要确保跟随传入的最新参数 (app_state_params) 检查是否需要重算
+    p_floor = pitch_floor
+    p_ceiling = pitch_ceiling
+    v_thresh = voicing_threshold
 
-    if (not item.get('snd') or not item.get('pitch')) and item.get('path'):
-        if num_points == 11 and item.get('preview_f0') and not is_word_mode:
+    # Check if we need to recalculate pitch due to parameter changes
+    needs_recalc = False
+    if item.get('pitch') and item.get('snd'):
+        if item.get('pitch_floor') != p_floor or item.get('pitch_ceiling') != p_ceiling or item.get('voicing_threshold') != v_thresh:
+            needs_recalc = True
+
+    if (not item.get('snd') or not item.get('pitch') or needs_recalc) and item.get('path'):
+        if num_points == 11 and item.get('preview_f0') and not is_word_mode and not needs_recalc:
             output = f"{real_index}.{label}\n{duration:.3f}\n"
             times = np.linspace(t_s, t_e, 11)
             for i, t in enumerate(times):
@@ -91,9 +97,20 @@ def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: 
             return output
         else:
             try:
-                item['snd'] = parselmouth.Sound(item['path'])
+                if not item.get('snd'):
+                    item['snd'] = parselmouth.Sound(item['path'])
                 item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=p_floor, pitch_ceiling=p_ceiling, voicing_threshold=v_thresh, very_accurate=True, octave_jump_cost=0.9)
+                item['pitch_floor'] = p_floor
+                item['pitch_ceiling'] = p_ceiling
+                item['voicing_threshold'] = v_thresh
             except Exception: return ""
+    if needs_recalc and item.get('snd') and not item.get('path'):
+        try:
+            item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=p_floor, pitch_ceiling=p_ceiling, voicing_threshold=v_thresh, very_accurate=True, octave_jump_cost=0.9)
+            item['pitch_floor'] = p_floor
+            item['pitch_ceiling'] = p_ceiling
+            item['voicing_threshold'] = v_thresh
+        except Exception: return ""
 
     if duration <= 0 or not item.get('snd'): return ""
     

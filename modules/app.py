@@ -405,6 +405,14 @@ class PhoneticsApp:
         self.spectrogram_panel.load_item(item)
 
     def on_spectrogram_time_changed(self, item):
+        # Time has been manually changed. We need to clear the cached preview_f0
+        # so that _check_item_has_empty_data in project_tree will properly recalculate
+        # and not rely on stale preview_f0 values.
+        if 'preview_f0' in item:
+            item.pop('preview_f0')
+        if 'has_empty_data' in item:
+            item.pop('has_empty_data')
+
         self.tree_panel.update_preview()
         for iid, it in list(self.items.items()):
             if it is item:
@@ -655,13 +663,23 @@ class PhoneticsApp:
                         mic_s, mic_e = recalculate_bounds_fast(
                             item['snd'], item['pitch'], item['raw_start'], item['raw_end'], trim_silence
                         )
-                        # 等比例缩放内部蓝线
+                        # 等比例缩放内部蓝线和 chars_bounds (如果只因裁切而变化)
                         old_s, old_e = item.get('start', mic_s), item.get('end', mic_e)
+
+                        # 如果用户手动修改了 start/end，我们可以检查 item.get('is_manual_edited', False)
+                        # 但由于没有这个 flag，我们依然等比例缩放它们。
                         if 'inner_splits' in item and item['inner_splits'] and old_e > old_s:
                             ratio = (mic_e - mic_s) / (old_e - old_s)
                             item['inner_splits'] = [mic_s + (s - old_s) * ratio for s in item['inner_splits']]
-                            
-                        item['start'], item['end'] = mic_s, mic_e
+                            if 'chars_bounds' in item and item['chars_bounds']:
+                                item['chars_bounds'] = [[mic_s + (c[0] - old_s) * ratio, mic_s + (c[1] - old_s) * ratio] for c in item['chars_bounds']]
+
+                        # 如果有 chars_bounds，则基于 chars_bounds 更新 start/end 以防错位
+                        if 'chars_bounds' in item and item['chars_bounds']:
+                            item['start'] = item['chars_bounds'][0][0]
+                            item['end'] = item['chars_bounds'][-1][1]
+                        else:
+                            item['start'], item['end'] = mic_s, mic_e
                         
                     if i % 5 == 0 or i == total - 1:
                         self.root.after(0, lambda v=(i + 1) / total: self.set_progress(v))
@@ -754,12 +772,13 @@ class PhoneticsApp:
                                     target_item = valid_items[idx]
                                     if tasks[idx].get('type') == 'batch':
                                         # 合并独立音频处理结果
-                                        target_item['start'] = res['start']
-                                        target_item['end'] = res['end']
-                                        target_item['raw_start'] = res['raw_start']
-                                        target_item['raw_end'] = res['raw_end']
-                                        target_item['inner_splits'] = res.get('inner_splits', [])
-                                        target_item['chars_bounds'] = res.get('chars_bounds', [])
+                                        if not target_item.get('is_manual_edited'):
+                                            target_item['start'] = res['start']
+                                            target_item['end'] = res['end']
+                                            target_item['raw_start'] = res['raw_start']
+                                            target_item['raw_end'] = res['raw_end']
+                                            target_item['inner_splits'] = res.get('inner_splits', [])
+                                            target_item['chars_bounds'] = res.get('chars_bounds', [])
                                         target_item['has_empty_data'] = res.get('has_empty_data', False)
                                         target_item['preview_f0'] = res.get('preview_f0', [])
                                         # 如果是独立音频，还需要把 Cache 也更新了，防止下次加载又是旧的
@@ -767,12 +786,13 @@ class PhoneticsApp:
                                             self.audio_cache[target_item['path']] = res
                                     else:
                                         # 合并长音频处理结果
-                                        target_item['start'] = res['mis']
-                                        target_item['end'] = res['mie']
-                                        target_item['raw_start'] = res['raw_s']
-                                        target_item['raw_end'] = res['raw_e']
-                                        target_item['inner_splits'] = res.get('inner_splits', [])
-                                        target_item['chars_bounds'] = res.get('chars_bounds', [])
+                                        if not target_item.get('is_manual_edited'):
+                                            target_item['start'] = res['mis']
+                                            target_item['end'] = res['mie']
+                                            target_item['raw_start'] = res['raw_s']
+                                            target_item['raw_end'] = res['raw_e']
+                                            target_item['inner_splits'] = res.get('inner_splits', [])
+                                            target_item['chars_bounds'] = res.get('chars_bounds', [])
                                         target_item['has_empty_data'] = res.get('has_empty_data', False)
                                         target_item['preview_f0'] = res.get('preview_f0', [])
                             except Exception: pass
