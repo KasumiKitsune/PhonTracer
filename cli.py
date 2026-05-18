@@ -167,7 +167,7 @@ PhonTracer 是一款高精度的声学声调格局分析工具。
      `recalculate`
 4. 数据导出：
    - `export <格式> <输出路径> [规则]`
-     * 支持的导出格式：txt, xlsx, line_chart, kde, wav, merged_wav
+     * 支持的导出格式：textgrid, txt, xlsx, line_chart, kde, wav, merged_wav
 
 --- 声学参数与调优指南 ---
 * pts: 等分插值采样点数（默认：11）
@@ -732,7 +732,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
         """
         Export data to various formats.
         Usage: export <format> <output_file> [rule]
-        Formats: txt, xlsx, line_chart, kde, wav, merged_wav
+        Formats: textgrid, txt, xlsx, line_chart, kde, wav, merged_wav
         Rule: continuous (default) or per_group (For 'wav' and 'merged_wav', rule can also be buffer_sec or gap_sec like 0.5)
         Example: export xlsx output.xlsx continuous
         Example: export wav scratch/output_dir 0.1
@@ -758,7 +758,9 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
             structure.append((grp, grp_items))
 
         try:
-            if fmt == 'txt':
+            if fmt == 'textgrid':
+                self._export_textgrid(out_file, structure, rule)
+            elif fmt == 'txt':
                 self._export_txt(out_file, structure, rule)
             elif fmt == 'xlsx':
                 self._export_xlsx(out_file, structure, rule)
@@ -778,6 +780,79 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
             print(json.dumps({"success": False, "error": str(e)}))
 
     # --- Export Implementation Helpers (Abstracted from GUI) ---
+    def _export_textgrid(self, out_file, structure, rule):
+        import os
+
+        def write_tg(path, duration, intervals):
+            lines = [
+                'File type = "ooTextFile"',
+                'Object class = "TextGrid"',
+                '',
+                'xmin = 0',
+                f'xmax = {duration}',
+                'tiers? <exists>',
+                'size = 1',
+                'item []:',
+                '    item [1]:',
+                '        class = "IntervalTier"',
+                '        name = "words"',
+                '        xmin = 0',
+                f'        xmax = {duration}',
+                f'        intervals: size = {len(intervals)}' # placeholder
+            ]
+
+            # Fill gaps for Praat compatibility
+            full_intervals = []
+            curr_time = 0.0
+            for (st, en, lab) in intervals:
+                if st > curr_time:
+                    full_intervals.append((curr_time, st, ""))
+                full_intervals.append((st, en, lab))
+                curr_time = en
+            if curr_time < duration:
+                full_intervals.append((curr_time, duration, ""))
+
+            lines[-1] = f'        intervals: size = {len(full_intervals)}'
+
+            for i, (st, en, lab) in enumerate(full_intervals):
+                lines.extend([
+                    f'        intervals [{i+1}]:',
+                    f'            xmin = {st}',
+                    f'            xmax = {en}',
+                    f'            text = "{lab}"'
+                ])
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(lines))
+
+        if getattr(self, 'mode', None) == 'long':
+            duration = self.long_snd.get_total_duration()
+            intervals = []
+            for grp, iids in structure:
+                for iid in iids:
+                    item = self.items[iid]
+                    if item.get('start') is not None and item.get('end') is not None:
+                        intervals.append((item['start'], item['end'], item['label']))
+            intervals.sort(key=lambda x: x[0])
+            write_tg(out_file, duration, intervals)
+        else:
+            base_dir = os.path.dirname(os.path.abspath(out_file))
+            tg_dir = os.path.join(base_dir, "TextGrid_export")
+            os.makedirs(tg_dir, exist_ok=True)
+            for grp, iids in structure:
+                for iid in iids:
+                    item = self.items[iid]
+                    if item.get('snd') is not None and item.get('start') is not None:
+                        duration = item['snd'].get_total_duration()
+                        if hasattr(item['snd'], 'filepath') and item['snd'].filepath:
+                            fname = os.path.splitext(os.path.basename(item['snd'].filepath))[0]
+                        else:
+                            fname = f"{grp}_{item['label']}"
+
+                        tg_path = os.path.join(tg_dir, f"{fname}.TextGrid")
+                        intervals = [(item['start'], item['end'], item['label'])]
+                        write_tg(tg_path, duration, intervals)
+
+
     def _export_merged_wav(self, out_file, structure, rule):
         import numpy as np
 

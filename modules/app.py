@@ -1490,6 +1490,43 @@ class PhoneticsApp:
                                    width=110, height=28, corner_radius=14, fg_color="#3B82F6", text_color="white", 
                                    hover_color="#2563EB", command=load_txt)
         btn_import.pack(side=tk.LEFT)
+
+        if mode == 'long':
+            def load_textgrid():
+                path = filedialog.askopenfilename(filetypes=[("TextGrid Files", "*.TextGrid"), ("All Files", "*.*")])
+                if not path: return
+                try:
+                    with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                        tg_content = f.read()
+                    import re
+                    pattern = re.compile(r'intervals\s*\[\d+\]:\s*xmin\s*=\s*([\d\.]+)\s*xmax\s*=\s*([\d\.]+)\s*text\s*=\s*"([^"]*)"', re.MULTILINE)
+                    segments = []
+                    words = []
+                    for match in pattern.finditer(tg_content):
+                        xmin = float(match.group(1))
+                        xmax = float(match.group(2))
+                        text = match.group(3).strip()
+                        if text:
+                            segments.append({'start': xmin, 'end': xmax})
+                            words.append(text)
+                    if not segments:
+                        return messagebox.showwarning("提示", "未能从 TextGrid 提取到有效的标注段。")
+                    self.manual_segments = segments
+
+                    # 生成假文本填入输入框
+                    display_text = "【TextGrid 导入】\n" + " ".join(words)
+                    text_box.delete("1.0", tk.END)
+                    text_box.insert("1.0", display_text)
+                    update_stats()
+                    messagebox.showinfo("成功", f"成功提取了 {len(segments)} 个时间段及其文本，已自动赋值时间边界。\n您可以直接点击“开始匹配提取”。")
+                except Exception as e:
+                    messagebox.showerror("错误", f"解析 TextGrid 失败: {e}")
+
+            btn_import_tg = ctk.CTkButton(toolbar, text=" 导入 TextGrid", image=self.icons.get("import_white"), compound="left",
+                                       width=110, height=28, corner_radius=14, fg_color="#8B5CF6", text_color="white",
+                                       hover_color="#7C3AED", command=load_textgrid)
+            btn_import_tg.pack(side=tk.LEFT, padx=(10, 0))
+
         btn_prompt = ctk.CTkButton(toolbar, text=" 复制 AI 整理提示词", image=self.icons.get("copy_white"), compound="left", 
                                    width=150, height=28, corner_radius=14, fg_color="#F59E0B", text_color="white", 
                                    hover_color="#D97706", command=copy_prompt)

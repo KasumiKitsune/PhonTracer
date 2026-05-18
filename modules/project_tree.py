@@ -580,7 +580,14 @@ class ProjectTreePanel:
         
         def do_export(mode):
             dlg.destroy()
-            if mode == 'txt':
+            if mode == 'textgrid':
+                out_file = filedialog.asksaveasfilename(title="导出TextGrid", defaultextension=".TextGrid", initialfile="tone_export_data", filetypes=[("TextGrid文件", "*.TextGrid"), ("所有文件", "*.*")])
+                if not out_file: return
+                try:
+                    self._export_textgrid(out_file, tree_structure=tree_structure)
+                    messagebox.showinfo("成功", f"数据已导出至:\n{out_file}\n（独立音频已保存到该目录下的 TextGrid_export 文件夹）")
+                except Exception as e: messagebox.showerror("错误", str(e))
+            elif mode == 'txt':
                 out_file = filedialog.asksaveasfilename(title="导出文本", defaultextension=".txt", initialfile="tone_export_data", filetypes=[("文本文件", "*.txt")])
                 if not out_file: return
                 try:
@@ -611,6 +618,7 @@ class ProjectTreePanel:
                 except Exception as e: messagebox.showerror("错误", str(e))
         
         ctk.CTkButton(dlg, text="  📄  文本文件 (.txt)", command=lambda: do_export('txt'), fg_color="#F3F4F6", text_color="#374151", hover_color="#E5E7EB", **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
+        ctk.CTkButton(dlg, text="  📝  TextGrid (.TextGrid)", command=lambda: do_export('textgrid'), fg_color="#FDF4FF", text_color="#86198F", hover_color="#FAE8FF", **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
         ctk.CTkButton(dlg, text="  📊  Excel 表格 (.xlsx)", command=lambda: do_export('xlsx'), fg_color="#ECFDF5", text_color="#047857", hover_color="#D1FAE5", **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
         ctk.CTkButton(dlg, text="  📈  声调格局连贯折线图", command=lambda: do_export('line_chart'), fg_color="#EFF6FF", text_color="#1E40AF", hover_color="#DBEAFE", **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
         ctk.CTkButton(dlg, text="  🔥  词语时序密度热力图", command=lambda: do_export('kde'), fg_color="#FFF7ED", text_color="#9A3412", hover_color="#FFEDD5", **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
@@ -859,6 +867,86 @@ class ProjectTreePanel:
                 logger.error(f"Error generating Excel chart: {chart_err}", exc_info=True)
         
         workbook.close()
+
+    def _export_textgrid(self, out_file, tree_structure=None):
+        import os
+        if tree_structure is None: tree_structure = self._get_all_items_by_group()
+
+        is_long = getattr(self.parent, 'pending_long_snd', None) is not None
+
+        def write_tg(path, duration, intervals):
+            lines = [
+                'File type = "ooTextFile"',
+                'Object class = "TextGrid"',
+                '',
+                'xmin = 0',
+                f'xmax = {duration}',
+                'tiers? <exists>',
+                'size = 1',
+                'item []:',
+                '    item [1]:',
+                '        class = "IntervalTier"',
+                '        name = "words"',
+                '        xmin = 0',
+                f'        xmax = {duration}',
+                f'        intervals: size = {len(intervals)}' # placeholder
+            ]
+
+            # Fill gaps for Praat compatibility
+            full_intervals = []
+            curr_time = 0.0
+            for (st, en, lab) in intervals:
+                if st > curr_time:
+                    full_intervals.append((curr_time, st, ""))
+                full_intervals.append((st, en, lab))
+                curr_time = en
+            if curr_time < duration:
+                full_intervals.append((curr_time, duration, ""))
+
+            lines[-1] = f'        intervals: size = {len(full_intervals)}'
+
+            for i, (st, en, lab) in enumerate(full_intervals):
+                lines.extend([
+                    f'        intervals [{i+1}]:',
+                    f'            xmin = {st}',
+                    f'            xmax = {en}',
+                    f'            text = "{lab}"'
+                ])
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(lines))
+
+        if is_long:
+            # Single TextGrid
+            duration = self.parent.pending_long_snd.get_total_duration()
+            intervals = []
+            for grp_name, children in tree_structure:
+                for child in children:
+                    item = self.items[child]
+                    if item.get('start') is not None and item.get('end') is not None:
+                        intervals.append((item['start'], item['end'], item['label']))
+            intervals.sort(key=lambda x: x[0])
+            write_tg(out_file, duration, intervals)
+        else:
+            # Batch mode: multiple textgrids
+            base_dir = os.path.dirname(os.path.abspath(out_file))
+            tg_dir = os.path.join(base_dir, "TextGrid_export")
+            os.makedirs(tg_dir, exist_ok=True)
+            for grp_name, children in tree_structure:
+                for child in children:
+                    item = self.items[child]
+                    if item.get('snd') is not None and item.get('start') is not None:
+                        duration = item['snd'].get_total_duration()
+                        # Output a textgrid for this file
+                        # Base filename
+                        if hasattr(item['snd'], 'filepath') and item['snd'].filepath:
+                            fname = os.path.splitext(os.path.basename(item['snd'].filepath))[0]
+                        else:
+                            fname = f"{grp_name}_{item['label']}"
+
+                        tg_path = os.path.join(tg_dir, f"{fname}.TextGrid")
+                        intervals = [(item['start'], item['end'], item['label'])]
+                        write_tg(tg_path, duration, intervals)
+
 
     def _export_txt(self, out_file, tree_structure=None):
         is_continuous = (self.num_rule_var.get() == "continuous")
