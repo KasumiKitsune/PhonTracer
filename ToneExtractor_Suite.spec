@@ -164,11 +164,26 @@ if is_win:
         name='PhonTracer_Suite',
     )
 else:
-    coll = COLLECT(
+    # 为 PhonTracer 准备独立的 COLLECT 和 BUNDLE
+    coll1 = COLLECT(
         exe1,
         a.binaries,
         a.zipfiles,
         a.datas,
+        strip=False,
+        upx=False,
+        upx_exclude=[],
+        name='PhonTracer_App',
+    )
+    app1 = BUNDLE(
+        coll1,
+        name='PhonTracer.app',
+        icon='assets/icon.icns',
+        bundle_identifier='com.kasumikitsune.phonetracer',
+    )
+
+    # 为 AudioToolkit 准备独立的 COLLECT 和 BUNDLE
+    coll2 = COLLECT(
         exe2,
         b.binaries,
         b.zipfiles,
@@ -176,20 +191,10 @@ else:
         strip=False,
         upx=False,
         upx_exclude=[],
-        name='PhonTracer_Suite',
+        name='AudioToolkit_App',
     )
-
-if sys.platform == 'darwin':
-    # 为主程序创建 .app
-    app1 = BUNDLE(
-        coll,
-        name='PhonTracer.app',
-        icon='assets/icon.icns',
-        bundle_identifier='com.kasumikitsune.phonetracer',
-    )
-    # 为工具箱创建 .app (通常 macOS 上如果是套件，用户会更习惯在同一个目录下看到两个 app)
     app2 = BUNDLE(
-        coll,
+        coll2,
         name='AudioToolkit.app',
         icon='assets/tool_icon.icns',
         bundle_identifier='com.kasumikitsune.audiotoolkit',
