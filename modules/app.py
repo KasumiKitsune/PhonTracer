@@ -387,6 +387,21 @@ class PhoneticsApp:
             except Exception as e:
                 self.set_status(f"加载失败: {str(e)}", "#EF4444", "status_error")
                 return
+                
+        # 同步侧边栏 UI 参数为当前选中项的独立参数（所见即所得）
+        if 'pitch_floor' in item:
+            self.entry_pitch_floor.delete(0, tk.END)
+            self.entry_pitch_floor.insert(0, str(int(item['pitch_floor'])))
+            self.entry_pitch_floor._last_val = str(int(item['pitch_floor']))
+        if 'pitch_ceiling' in item:
+            self.entry_pitch_ceiling.delete(0, tk.END)
+            self.entry_pitch_ceiling.insert(0, str(int(item['pitch_ceiling'])))
+            self.entry_pitch_ceiling._last_val = str(int(item['pitch_ceiling']))
+        if 'voicing_threshold' in item:
+            self.entry_voicing_threshold.delete(0, tk.END)
+            self.entry_voicing_threshold.insert(0, str(float(item['voicing_threshold'])))
+            self.entry_voicing_threshold._last_val = str(float(item['voicing_threshold']))
+            
         self.spectrogram_panel.load_item(item)
 
     def on_spectrogram_time_changed(self, item):
@@ -587,6 +602,8 @@ class PhoneticsApp:
             new_floor = int(self.entry_pitch_floor.get())
             new_ceiling = int(self.entry_pitch_ceiling.get())
             new_voicing = float(self.entry_voicing_threshold.get())
+            
+            # 无论如何先更新全局 last_params
             if new_floor != self.last_params['pitch_floor']:
                 self.last_params['pitch_floor'] = new_floor
                 recompute_pitch = True
@@ -597,6 +614,13 @@ class PhoneticsApp:
                 self.last_params['voicing_threshold'] = new_voicing
                 recompute_pitch = True
                 
+            # 即使全局 last_params 没变，只要当前输入框的值与“当前选中项的专属参数”不同，也要强制重算当前项
+            curr_item = getattr(self, 'spectrogram_panel', None) and self.spectrogram_panel.current_item
+            if curr_item:
+                if new_floor != curr_item.get('pitch_floor', self.last_params['pitch_floor']): recompute_pitch = True
+                if new_ceiling != curr_item.get('pitch_ceiling', self.last_params['pitch_ceiling']): recompute_pitch = True
+                if new_voicing != curr_item.get('voicing_threshold', self.last_params.get('voicing_threshold', 0.25)): recompute_pitch = True
+
             if changed_algo or recompute_pitch: 
                 self.recalculate_current_item(recompute_pitch=recompute_pitch)
             if new_pts != self.last_params['pts']:
