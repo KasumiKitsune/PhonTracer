@@ -140,8 +140,8 @@ Rules:
         """
         Set analysis parameters.
         Usage: set_params key=value [key=value ...]
-        Valid keys: pts, db, skip_front, pitch_floor, pitch_ceiling, voicing_threshold, trim_silence
-        Example: set_params db=50.0 trim_silence=False
+        Valid keys: pts, db, skip_front, pitch_floor, pitch_ceiling, voicing_threshold, trim_silence, f0_engine
+        Example: set_params db=50.0 trim_silence=False f0_engine=reaper
         """
         args = shlex.split(arg)
         if not args:
@@ -158,6 +158,8 @@ Rules:
                             self.params[k] = v.lower() in ('true', '1', 'yes')
                         elif k in ('pts', 'pitch_floor', 'pitch_ceiling'):
                             self.params[k] = int(v)
+                        elif k == 'f0_engine':
+                            self.params[k] = str(v)
                         else:
                             self.params[k] = float(v)
                         updated = True
@@ -942,15 +944,18 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
             item['pitch_floor'] = self.params['pitch_floor']
             item['pitch_ceiling'] = self.params['pitch_ceiling']
             item['voicing_threshold'] = self.params.get('voicing_threshold', 0.25)
+            item['f0_engine'] = self.params.get('f0_engine', 'praat')
 
         updated = False
         for kv in args[1:]:
             if '=' in kv:
                 k, v = kv.split('=', 1)
-                if k in ('pitch_floor', 'pitch_ceiling', 'voicing_threshold'):
+                if k in ('pitch_floor', 'pitch_ceiling', 'voicing_threshold', 'f0_engine'):
                     try:
                         if k in ('pitch_floor', 'pitch_ceiling'):
                             item[k] = int(v)
+                        elif k == 'f0_engine':
+                            item[k] = str(v)
                         else:
                             item[k] = float(v)
                         updated = True
@@ -1328,15 +1333,23 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                         global_idx += 1
 
     def _extract_syl_data(self, item, num_points):
-        if item.get('start') is None or not item.get('snd') or not item.get('pitch'): return 0, []
+        if item.get('start') is None or not item.get('snd'): return 0, []
+        
+        pitch_data = item.get('pitch_data')
+        if pitch_data:
+            p_xs = pitch_data['xs']
+            p_freqs = pitch_data['freqs']
+        else:
+            pitch = item.get('pitch')
+            if not pitch: return 0, []
+            p_xs = pitch.xs()
+            p_freqs = pitch.selected_array['frequency']
+
         t_s, t_e = item['start'], item['end']
         if t_e <= t_s: return 0, []
 
         label = item.get('label', '')
         inner_splits = item.get('inner_splits', [])
-        pitch = item['pitch']
-        p_xs = pitch.xs()
-        p_freqs = pitch.selected_array['frequency']
 
         splits = [t_s] + [s for s in inner_splits if t_s < s < t_e] + [t_e]
         if len(label) > 1 and len(splits) != len(label) + 1:
@@ -1600,7 +1613,16 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
         for grp_name, children in structure:
             for child in children:
                 item = speaker.items[child]
-                if item.get('start') is None or not item.get('snd') or not item.get('pitch'): continue
+                if item.get('start') is None or not item.get('snd'): continue
+
+                pitch_data = item.get('pitch_data')
+                if pitch_data:
+                    p_xs = pitch_data['xs']
+                    p_freqs = pitch_data['freqs']
+                else:
+                    pitch = item.get('pitch')
+                    if not pitch: continue
+                    p_xs, p_freqs = pitch.xs(), pitch.selected_array['frequency']
 
                 t_s, t_e = item['start'], item['end']
                 label = item.get('label', '')
@@ -1609,9 +1631,6 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                 splits = [t_s] + [s for s in inner_splits if t_s < s < t_e] + [t_e]
                 if len(splits) != len(label) + 1: splits = np.linspace(t_s, t_e, len(label) + 1).tolist()
                 if len(label) <= 1: splits = [t_s, t_e]
-
-                pitch = item['pitch']
-                p_xs, p_freqs = pitch.xs(), pitch.selected_array['frequency']
 
                 for k in range(len(splits) - 1):
                     c_s, c_e = splits[k], splits[k+1]
@@ -1934,7 +1953,16 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                     group_syl_contours[grp_name] = {}
                 for child in children:
                     item = s.items[child]
-                    if item.get('start') is None or not item.get('snd') or not item.get('pitch'): continue
+                    if item.get('start') is None or not item.get('snd'): continue
+
+                    pitch_data = item.get('pitch_data')
+                    if pitch_data:
+                        p_xs = pitch_data['xs']
+                        p_freqs = pitch_data['freqs']
+                    else:
+                        pitch = item.get('pitch')
+                        if not pitch: continue
+                        p_xs, p_freqs = pitch.xs(), pitch.selected_array['frequency']
 
                     t_s, t_e = item['start'], item['end']
                     label = item.get('label', '')
@@ -1943,9 +1971,6 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                     splits = [t_s] + [s_split for s_split in inner_splits if t_s < s_split < t_e] + [t_e]
                     if len(splits) != len(label) + 1: splits = np.linspace(t_s, t_e, len(label) + 1).tolist()
                     if len(label) <= 1: splits = [t_s, t_e]
-
-                    pitch = item['pitch']
-                    p_xs, p_freqs = pitch.xs(), pitch.selected_array['frequency']
 
                     for k in range(len(splits) - 1):
                         c_s, c_e = splits[k], splits[k+1]
