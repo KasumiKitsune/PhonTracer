@@ -378,7 +378,8 @@ class PhoneticsApp:
         left_scrollable.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         self._make_scrollable_auto(left_scrollable)
 
-        btn_kwargs_primary = {"corner_radius": 20, "height": 38, "font": self.font_main}
+        btn_kwargs_primary = {"corner_radius": 20, "height": 38, "font": self.font_main,
+                              "fg_color": "#3B82F6", "hover_color": "#2563EB"}
         btn_kwargs_secondary = {"corner_radius": 20, "height": 38, "font": self.font_main, 
                                 "fg_color": "#E5E7EB", "text_color": "#1F2937", "hover_color": "#D1D5DB"}
         
@@ -396,7 +397,7 @@ class PhoneticsApp:
         self.lbl_status.pack(pady=(5, 5), expand=True)
         
         self.progress_bar = ctk.CTkProgressBar(status_container, height=6, corner_radius=10, 
-                                               progress_color="#60A5FA", fg_color="#E5E7EB")
+                                               progress_color="#3B82F6", fg_color="#E5E7EB")
         self.progress_bar.set(0)
 
 
@@ -471,8 +472,8 @@ class PhoneticsApp:
         self.switch_unified_wordlist.select()
 
 
-        self.tabview = ctk.CTkTabview(left_scrollable, height=250, corner_radius=12, fg_color="white", 
-                                      segmented_button_selected_color="#60A5FA", segmented_button_fg_color="#F3F4F6")
+        self.tabview = ctk.CTkTabview(left_scrollable, height=185, corner_radius=12, fg_color="white", 
+                                      segmented_button_selected_color="#3B82F6", segmented_button_fg_color="#F3F4F6")
         self.tabview.pack(fill=tk.X, pady=(0, 10))
         tab_long = self.tabview.add("单条长音频")
         tab_batch = self.tabview.add("多条独立音频")
