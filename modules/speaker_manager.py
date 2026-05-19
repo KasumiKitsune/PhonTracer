@@ -12,7 +12,8 @@ class SpeakerState:
             'skip_front': 0.00,
             'pitch_floor': 75,
             'pitch_ceiling': 600,
-            'voicing_threshold': 0.25
+            'voicing_threshold': 0.25,
+            'f0_engine': 'praat'
         }
         self.pending_long_snd = None
         self.pending_batch_paths = []
@@ -29,8 +30,9 @@ class SpeakerManager:
     def get_active_speaker(self):
         return self.speakers[self.active_speaker_id]
 
-    def add_speaker(self, name):
+    def add_speaker(self, name, default_engine='praat'):
         new_speaker = SpeakerState(name)
+        new_speaker.last_params['f0_engine'] = default_engine
         self.speakers[new_speaker.id] = new_speaker
         return new_speaker
 

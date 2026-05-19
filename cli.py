@@ -19,7 +19,7 @@ json.dumps = dumps_utf8
 # Modify sys.path if necessary
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from modules.audio_core import macroscopic_vad, core_microscopic_vowel_nucleus, auto_split_inner_word, auto_split_to_chars_bounds, batch_process_worker, recalculate_bounds_fast
+from modules.audio_core import macroscopic_vad, core_microscopic_vowel_nucleus, auto_split_inner_word, auto_split_to_chars_bounds, batch_process_worker, recalculate_bounds_fast, extract_f0
 from modules.speaker_manager import SpeakerManager
 from modules.data_utils import parse_wordlist, fuzzy_match_word_to_path, get_export_text_for_item, build_five_point_chart
 
@@ -561,10 +561,10 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
             self.groups = unique_groups
 
             snd = self.long_snd
-            global_pitch = snd.to_pitch_ac(time_step=None, pitch_floor=self.params['pitch_floor'], pitch_ceiling=self.params['pitch_ceiling'], voicing_threshold=self.params.get('voicing_threshold', 0.25), very_accurate=True, octave_jump_cost=0.9)
+            pitch_data = extract_f0(snd, self.params)
 
-            pitch_xs = global_pitch.xs()
-            pitch_freqs = global_pitch.selected_array['frequency']
+            pitch_xs = pitch_data['xs']
+            pitch_freqs = pitch_data['freqs']
 
             tasks = []
             for item in tg_intervals:
@@ -632,14 +632,23 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                 iid = f"item_{idx}"
                 if res and res.get('success'):
                     res['snd'] = self.long_snd
-                    res['pitch'] = global_pitch
+                    res['pitch_data'] = pitch_data
                     res['pitch_floor'] = self.params['pitch_floor']
                     res['pitch_ceiling'] = self.params['pitch_ceiling']
                     res['voicing_threshold'] = self.params.get('voicing_threshold', 0.25)
+                    res['f0_engine'] = self.params.get('f0_engine', 'praat')
                     
                     preview_times = np.linspace(res['start'], res['end'], 11)
-                    preview_f0 = [global_pitch.get_value_at_time(t) for t in preview_times]
-                    res['preview_f0'] = [0.0 if (np.isnan(hz) or hz <= 0) else hz for hz in preview_f0]
+                    preview_f0 = np.interp(preview_times, pitch_xs, pitch_freqs).tolist()
+                    for j, t in enumerate(preview_times):
+                        valid_indices = np.where(pitch_freqs > 0)[0]
+                        if len(valid_indices) == 0:
+                            preview_f0[j] = 0.0
+                            continue
+                        valid_xs = pitch_xs[valid_indices]
+                        if np.min(np.abs(valid_xs - t)) > 0.025:
+                            preview_f0[j] = 0.0
+                    res['preview_f0'] = preview_f0
                     res['has_empty_data'] = any(f == 0.0 for f in res['preview_f0'])
                     
                     self.items[iid] = res
@@ -658,11 +667,11 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
 
     def _process_long_wordlist(self, groups, flat_words):
         try:
-            global_pitch = self.long_snd.to_pitch_ac(time_step=None, pitch_floor=self.params['pitch_floor'], pitch_ceiling=self.params['pitch_ceiling'], voicing_threshold=self.params.get('voicing_threshold', 0.25), very_accurate=True, octave_jump_cost=0.9)
+            pitch_data = extract_f0(self.long_snd, self.params)
             macro_segments = macroscopic_vad(self.long_snd)
 
-            pitch_xs = global_pitch.xs()
-            pitch_freqs = global_pitch.selected_array['frequency']
+            pitch_xs = pitch_data['xs']
+            pitch_freqs = pitch_data['freqs']
 
             word_idx = 0
             for grp in groups:
@@ -672,7 +681,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                         ms, me = macro_segments[word_idx]
 
                         mic_s, mic_e, raw_s, raw_e = core_microscopic_vowel_nucleus(
-                            self.long_snd, global_pitch, ms, me,
+                            self.long_snd, pitch_data, ms, me,
                             self.params['db'], self.params['skip_front'], self.params['trim_silence']
                         )
 
@@ -686,13 +695,20 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
 
                         # Preview
                         preview_times = np.linspace(mic_s, mic_e, 11)
-                        preview_f0 = [global_pitch.get_value_at_time(t) for t in preview_times]
-                        preview_f0 = [0.0 if (np.isnan(hz) or hz <= 0) else hz for hz in preview_f0]
+                        preview_f0 = np.interp(preview_times, pitch_xs, pitch_freqs).tolist()
+                        for j, t in enumerate(preview_times):
+                            valid_indices = np.where(pitch_freqs > 0)[0]
+                            if len(valid_indices) == 0:
+                                preview_f0[j] = 0.0
+                                continue
+                            valid_xs = pitch_xs[valid_indices]
+                            if np.min(np.abs(valid_xs - t)) > 0.025:
+                                preview_f0[j] = 0.0
                         has_empty = any(f == 0.0 for f in preview_f0)
 
                         self.items[iid] = {
                             'id': iid, 'label': word, 'group': grp['group'],
-                            'snd': self.long_snd, 'pitch': global_pitch,
+                            'snd': self.long_snd, 'pitch_data': pitch_data,
                             'macro_start': ms, 'macro_end': me,
                             'start': mic_s, 'end': mic_e,
                             'raw_start': raw_s, 'raw_end': raw_e,
@@ -700,7 +716,8 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                             'preview_f0': preview_f0, 'has_empty_data': has_empty, 'missing': False,
                             'pitch_floor': self.params['pitch_floor'],
                             'pitch_ceiling': self.params['pitch_ceiling'],
-                            'voicing_threshold': self.params.get('voicing_threshold', 0.25)
+                            'voicing_threshold': self.params.get('voicing_threshold', 0.25),
+                            'f0_engine': self.params.get('f0_engine', 'praat')
                         }
                     else:
                         self.items[iid] = {
@@ -772,15 +789,16 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
         for i, res in enumerate(results):
             iid = f"item_{i}"
             if not res.get('missing') and res.get('success'):
-                # Load sound and pitch object into memory for fast recalculation
+                # Load sound and pitch data into memory for fast recalculation
                 try:
                     snd = parselmouth.Sound(res['path'])
-                    pitch = snd.to_pitch_ac(time_step=None, pitch_floor=self.params['pitch_floor'], pitch_ceiling=self.params['pitch_ceiling'], voicing_threshold=self.params.get('voicing_threshold', 0.25), very_accurate=True, octave_jump_cost=0.9)
+                    pitch_data = extract_f0(snd, self.params)
                     res['snd'] = snd
-                    res['pitch'] = pitch
+                    res['pitch_data'] = pitch_data
                     res['pitch_floor'] = self.params['pitch_floor']
                     res['pitch_ceiling'] = self.params['pitch_ceiling']
                     res['voicing_threshold'] = self.params.get('voicing_threshold', 0.25)
+                    res['f0_engine'] = self.params.get('f0_engine', 'praat')
                 except Exception:
                     pass
             res['id'] = iid
@@ -876,10 +894,24 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
             item['chars_bounds'] = [[new_s, new_e]]
 
         # Re-evaluate warnings
-        if item.get('pitch'):
+        if item.get('pitch_data') or item.get('pitch'):
             preview_times = np.linspace(new_s, new_e, 11)
-            preview_f0 = [item['pitch'].get_value_at_time(t) for t in preview_times]
-            item['preview_f0'] = [0.0 if (np.isnan(hz) or hz <= 0) else hz for hz in preview_f0]
+            if item.get('pitch_data'):
+                p_xs = item['pitch_data']['xs']
+                p_freqs = item['pitch_data']['freqs']
+                preview_f0 = np.interp(preview_times, p_xs, p_freqs).tolist()
+                for j, t in enumerate(preview_times):
+                    valid_indices = np.where(p_freqs > 0)[0]
+                    if len(valid_indices) == 0:
+                        preview_f0[j] = 0.0
+                        continue
+                    valid_xs = p_xs[valid_indices]
+                    if np.min(np.abs(valid_xs - t)) > 0.025:
+                        preview_f0[j] = 0.0
+            else:
+                preview_f0 = [item['pitch'].get_value_at_time(t) for t in preview_times]
+                preview_f0 = [0.0 if (np.isnan(hz) or hz <= 0) else hz for hz in preview_f0]
+            item['preview_f0'] = preview_f0
             item['has_empty_data'] = any(f == 0.0 for f in item['preview_f0'])
 
         print(json.dumps({"success": True, "message": f"Bounds updated for {iid}", "warning": item.get('has_empty_data', False)}))
@@ -927,12 +959,14 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                         return
 
         if updated and 'snd' in item and item['snd'] is not None:
-            # Recompute pitch object for this item
+            # Recompute pitch for this item
             try:
-                item['pitch'] = item['snd'].to_pitch_ac(
-                    time_step=None, pitch_floor=item['pitch_floor'], pitch_ceiling=item['pitch_ceiling'],
-                    voicing_threshold=item['voicing_threshold'], very_accurate=True, octave_jump_cost=0.9
-                )
+                item['pitch_data'] = extract_f0(item['snd'], {
+                    'f0_engine': item.get('f0_engine', self.params.get('f0_engine', 'praat')),
+                    'pitch_floor': item['pitch_floor'],
+                    'pitch_ceiling': item['pitch_ceiling'],
+                    'voicing_threshold': item['voicing_threshold']
+                })
                 
                 # Recompute chars bounds with new params if word mode
                 label = item['label']
@@ -945,8 +979,18 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                     
                 # Re-evaluate warnings
                 preview_times = np.linspace(item['start'], item['end'], 11)
-                preview_f0 = [item['pitch'].get_value_at_time(t) for t in preview_times]
-                item['preview_f0'] = [0.0 if (np.isnan(hz) or hz <= 0) else hz for hz in preview_f0]
+                p_xs = item['pitch_data']['xs']
+                p_freqs = item['pitch_data']['freqs']
+                preview_f0 = np.interp(preview_times, p_xs, p_freqs).tolist()
+                for j, t in enumerate(preview_times):
+                    valid_indices = np.where(p_freqs > 0)[0]
+                    if len(valid_indices) == 0:
+                        preview_f0[j] = 0.0
+                        continue
+                    valid_xs = p_xs[valid_indices]
+                    if np.min(np.abs(valid_xs - t)) > 0.025:
+                        preview_f0[j] = 0.0
+                item['preview_f0'] = preview_f0
                 item['has_empty_data'] = any(f == 0.0 for f in item['preview_f0'])
             except Exception as e:
                 print(json.dumps({"success": False, "error": str(e)}))
@@ -974,19 +1018,22 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
 
         if self.mode == 'long' and self.long_snd:
             # Recompute global pitch
-            global_pitch = self.long_snd.to_pitch_ac(time_step=None, pitch_floor=self.params['pitch_floor'], pitch_ceiling=self.params['pitch_ceiling'], voicing_threshold=self.params.get('voicing_threshold', 0.25), very_accurate=True, octave_jump_cost=0.9)
+            pitch_data = extract_f0(self.long_snd, self.params)
+            pitch_xs = pitch_data['xs']
+            pitch_freqs = pitch_data['freqs']
 
             for iid, item in self.items.items():
                 if item.get('missing') or not item.get('success', True): continue
 
-                item['pitch'] = global_pitch
+                item['pitch_data'] = pitch_data
                 item['pitch_floor'] = self.params['pitch_floor']
                 item['pitch_ceiling'] = self.params['pitch_ceiling']
                 item['voicing_threshold'] = self.params.get('voicing_threshold', 0.25)
+                item['f0_engine'] = self.params.get('f0_engine', 'praat')
                 mac_s, mac_e = item['macro_start'], item['macro_end']
 
                 mic_s, mic_e, raw_s, raw_e = core_microscopic_vowel_nucleus(
-                    item['snd'], item['pitch'], mac_s, mac_e,
+                    item['snd'], item['pitch_data'], mac_s, mac_e,
                     self.params['db'], self.params['skip_front'], self.params['trim_silence']
                 )
 
@@ -1002,8 +1049,16 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                     item['chars_bounds'] = [[mic_s, mic_e]]
 
                 preview_times = np.linspace(mic_s, mic_e, 11)
-                preview_f0 = [item['pitch'].get_value_at_time(t) for t in preview_times]
-                item['preview_f0'] = [0.0 if (np.isnan(hz) or hz <= 0) else hz for hz in preview_f0]
+                preview_f0 = np.interp(preview_times, pitch_xs, pitch_freqs).tolist()
+                for j, t in enumerate(preview_times):
+                    valid_indices = np.where(pitch_freqs > 0)[0]
+                    if len(valid_indices) == 0:
+                        preview_f0[j] = 0.0
+                        continue
+                    valid_xs = pitch_xs[valid_indices]
+                    if np.min(np.abs(valid_xs - t)) > 0.025:
+                        preview_f0[j] = 0.0
+                item['preview_f0'] = preview_f0
                 item['has_empty_data'] = any(f == 0.0 for f in item['preview_f0'])
 
         elif self.mode == 'batch':
@@ -1043,14 +1098,25 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
 
                         # Refresh pitch obj
                         item['snd'] = parselmouth.Sound(res['path'])
-                        item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=self.params['pitch_floor'], pitch_ceiling=self.params['pitch_ceiling'], voicing_threshold=self.params.get('voicing_threshold', 0.25), very_accurate=True, octave_jump_cost=0.9)
+                        item['pitch_data'] = extract_f0(item['snd'], self.params)
                         item['pitch_floor'] = self.params['pitch_floor']
                         item['pitch_ceiling'] = self.params['pitch_ceiling']
                         item['voicing_threshold'] = self.params.get('voicing_threshold', 0.25)
+                        item['f0_engine'] = self.params.get('f0_engine', 'praat')
 
                         preview_times = np.linspace(item['start'], item['end'], 11)
-                        preview_f0 = [item['pitch'].get_value_at_time(t) for t in preview_times]
-                        item['preview_f0'] = [0.0 if (np.isnan(hz) or hz <= 0) else hz for hz in preview_f0]
+                        p_xs = item['pitch_data']['xs']
+                        p_freqs = item['pitch_data']['freqs']
+                        preview_f0 = np.interp(preview_times, p_xs, p_freqs).tolist()
+                        for j, t in enumerate(preview_times):
+                            valid_indices = np.where(p_freqs > 0)[0]
+                            if len(valid_indices) == 0:
+                                preview_f0[j] = 0.0
+                                continue
+                            valid_xs = p_xs[valid_indices]
+                            if np.min(np.abs(valid_xs - t)) > 0.025:
+                                preview_f0[j] = 0.0
+                        item['preview_f0'] = preview_f0
                         item['has_empty_data'] = any(f == 0.0 for f in item['preview_f0'])
                 except Exception:
                     pass

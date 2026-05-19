@@ -13,7 +13,7 @@ import queue
 # 导入拆分后的模块
 from .ui_widgets import ToolTip, CTkReleaseButton
 from .data_utils import parse_wordlist, fuzzy_match_word_to_path
-from .audio_core import core_microscopic_vowel_nucleus, batch_process_worker, macroscopic_vad, check_audio_segments, long_process_worker, recalculate_bounds_fast, auto_split_inner_word
+from .audio_core import core_microscopic_vowel_nucleus, batch_process_worker, macroscopic_vad, check_audio_segments, long_process_worker, recalculate_bounds_fast, auto_split_inner_word, extract_f0
 from .visual_splitter import VisualSplitter
 from .spectrogram_panel import SpectrogramPanel
 from .project_tree import ProjectTreePanel
@@ -365,7 +365,8 @@ class PhoneticsApp:
         left_scrollable.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         self._make_scrollable_auto(left_scrollable)
 
-        btn_kwargs_primary = {"corner_radius": 20, "height": 38, "font": self.font_main}
+        btn_kwargs_primary = {"corner_radius": 20, "height": 38, "font": self.font_main,
+                              "fg_color": "#3B82F6", "hover_color": "#2563EB", "text_color": "white"}
         btn_kwargs_secondary = {"corner_radius": 20, "height": 38, "font": self.font_main, 
                                 "fg_color": "#E5E7EB", "text_color": "#1F2937", "hover_color": "#D1D5DB"}
         
@@ -383,7 +384,7 @@ class PhoneticsApp:
         self.lbl_status.pack(pady=(5, 5), expand=True)
         
         self.progress_bar = ctk.CTkProgressBar(status_container, height=6, corner_radius=10, 
-                                               progress_color="#60A5FA", fg_color="#E5E7EB")
+                                               progress_color="#3B82F6", fg_color="#E5E7EB")
         self.progress_bar.set(0)
 
 
@@ -458,9 +459,33 @@ class PhoneticsApp:
         self.switch_unified_wordlist.select()
 
 
-        self.tabview = ctk.CTkTabview(left_scrollable, height=250, corner_radius=12, fg_color="white", 
-                                      segmented_button_selected_color="#60A5FA", segmented_button_fg_color="#F3F4F6")
+        self.tabview = ctk.CTkTabview(left_scrollable, height=170, corner_radius=12, fg_color="white", 
+                                      segmented_button_selected_color="#3B82F6", segmented_button_fg_color="#F3F4F6")
         self.tabview.pack(fill=tk.X, pady=(0, 10))
+
+        # 基频提取引擎 (药丸型按钮)
+        self.engine_frame = ctk.CTkFrame(left_scrollable, fg_color="white", corner_radius=10)
+        self.engine_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        lbl_engine_title = ctk.CTkLabel(self.engine_frame, text="基频提取引擎", font=self.font_title, text_color="#111827")
+        lbl_engine_title.pack(side=tk.LEFT, padx=15, pady=10)
+        
+        self.engine_button = ctk.CTkSegmentedButton(
+            self.engine_frame,
+            values=["praat", "reaper"],
+            command=self.on_engine_change,
+            selected_color="#3B82F6",
+            selected_hover_color="#2563EB",
+            fg_color="#F3F4F6",
+            unselected_color="#F3F4F6",
+            unselected_hover_color="#E5E7EB",
+            text_color="#1F2937",
+            corner_radius=20,  # Pill shaped!
+            height=32
+        )
+        self.engine_button.pack(side=tk.RIGHT, padx=15, pady=10)
+        self.engine_button.set(self.last_params.get('f0_engine', 'praat'))
+        self._update_engine_button_text_colors()
         tab_long = self.tabview.add("单条长音频")
         tab_batch = self.tabview.add("多条独立音频")
         
@@ -492,6 +517,7 @@ class PhoneticsApp:
         lbl_pts = ctk.CTkLabel(row_pts, text=" 等分点 (N):", image=self.icons.get("points"), compound="left", text_color="#374151", font=self.font_main)
         lbl_pts.pack(side=tk.LEFT)
         self.slider_pts = ctk.CTkSlider(row_pts, from_=5, to=20, number_of_steps=15, width=100, height=16, 
+                                        button_color="#3B82F6", button_hover_color="#2563EB", progress_color="#3B82F6",
                                         command=lambda v: self._on_slider_change(v, self.entry_points, 'pts'))
         self.slider_pts.set(self.last_params['pts'])
         self.slider_pts.pack(side=tk.LEFT, padx=10)
@@ -505,6 +531,7 @@ class PhoneticsApp:
         lbl_db = ctk.CTkLabel(row_db, text=" 能量落差:", image=self.icons.get("energy"), compound="left", text_color="#374151", font=self.font_main)
         lbl_db.pack(side=tk.LEFT)
         self.slider_db = ctk.CTkSlider(row_db, from_=10, to=100, number_of_steps=90, width=100, height=16,
+                                       button_color="#3B82F6", button_hover_color="#2563EB", progress_color="#3B82F6",
                                        command=lambda v: self._on_slider_change(v, self.entry_drop_db, 'db'))
         self.slider_db.set(self.last_params['db'])
         self.slider_db.pack(side=tk.LEFT, padx=10)
@@ -518,6 +545,7 @@ class PhoneticsApp:
         lbl_dur = ctk.CTkLabel(row_dur, text=" 排除声母:", image=self.icons.get("duration"), compound="left", text_color="#374151", font=self.font_main)
         lbl_dur.pack(side=tk.LEFT)
         self.slider_dur = ctk.CTkSlider(row_dur, from_=0.00, to=0.15, number_of_steps=15, width=100, height=16,
+                                        button_color="#3B82F6", button_hover_color="#2563EB", progress_color="#3B82F6",
                                         command=lambda v: self._on_slider_change(v, self.entry_min_dur, 'skip_front'))
         self.slider_dur.set(self.last_params['skip_front'])
         self.slider_dur.pack(side=tk.LEFT, padx=10)
@@ -593,20 +621,41 @@ class PhoneticsApp:
     # --- 交互回调 ---
     def on_tree_item_selected(self, iid):
         item = self.items[iid]
-        if (not item.get('snd') or not item.get('pitch')) and item.get('path'):
-            self.set_status(f"正在读取音频: {item['label']}...", "#3B82F6", "status_loading")
-            self.root.update_idletasks()
+        
+        if item.get('snd') and (item.get('pitch_data') or item.get('pitch')):
+            self._sync_ui_and_plot(item)
+            return
+
+        if not item.get('path'):
+            return
+
+        def run():
             try:
-                item['snd'] = parselmouth.Sound(item['path'])
-                item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=self.last_params['pitch_floor'], pitch_ceiling=self.last_params['pitch_ceiling'], voicing_threshold=self.last_params.get('voicing_threshold', 0.25), very_accurate=True, octave_jump_cost=0.9)
-                item['pitch_floor'] = self.last_params['pitch_floor']
-                item['pitch_ceiling'] = self.last_params['pitch_ceiling']
-                item['voicing_threshold'] = self.last_params.get('voicing_threshold', 0.25)
-                self.set_status("就绪", "#10B981", "status_success")
-            except Exception as e:
-                self.set_status(f"加载失败: {str(e)}", "#EF4444", "status_error")
-                return
+                self.root.after(0, lambda: self.set_status(f"正在读取音频: {item['label']}...", "#3B82F6", "status_loading"))
                 
+                snd = parselmouth.Sound(item['path'])
+                pitch_data = extract_f0(snd, self.last_params)
+                
+                def done():
+                    item['snd'] = snd
+                    item['pitch_data'] = pitch_data
+                    if 'pitch' in item:
+                        del item['pitch']
+                    item['pitch_floor'] = self.last_params['pitch_floor']
+                    item['pitch_ceiling'] = self.last_params['pitch_ceiling']
+                    item['voicing_threshold'] = self.last_params.get('voicing_threshold', 0.25)
+                    item['f0_engine'] = self.last_params.get('f0_engine', 'praat')
+                    
+                    self.set_status("就绪", "#10B981", "status_success")
+                    self._sync_ui_and_plot(item)
+                    
+                self.root.after(0, done)
+            except Exception as e:
+                self.root.after(0, lambda: self.set_status(f"加载失败: {str(e)}", "#EF4444", "status_error"))
+                
+        threading.Thread(target=run, daemon=True).start()
+
+    def _sync_ui_and_plot(self, item):
         # 同步侧边栏 UI 参数为当前选中项的独立参数（所见即所得）
         if 'pitch_floor' in item:
             self.entry_pitch_floor.delete(0, tk.END)
@@ -648,7 +697,7 @@ class PhoneticsApp:
         item = self.spectrogram_panel.current_item
         if not item: return
         snd = item['snd']
-        pitch = item['pitch']
+        pitch = item.get('pitch_data', item.get('pitch'))
         mac_s, mac_e = item['macro_start'], item['macro_end']
         
         def run():
@@ -778,7 +827,9 @@ class PhoneticsApp:
             if not any(s.name == name for s in self.speaker_manager.get_all_speakers()):
                 break
             idx += 1
-        new_speaker = self.speaker_manager.add_speaker(name)
+        # 新增发音人时自动继承当前活动发音人的基频提取引擎设置，避免非预期的重置
+        current_engine = self.last_params.get('f0_engine', 'praat')
+        new_speaker = self.speaker_manager.add_speaker(name, default_engine=current_engine)
         new_speaker.tab_mode = self.tabview.get()
         self._update_speaker_dropdown()
         self.speaker_option_var.set(new_speaker.name)
@@ -830,6 +881,8 @@ class PhoneticsApp:
         self.entry_pitch_floor.insert(0, str(self.last_params['pitch_floor']))
         self.entry_voicing_threshold.delete(0, tk.END)
         self.entry_voicing_threshold.insert(0, f"{self.last_params['voicing_threshold']:.2f}")
+        if hasattr(self, 'engine_button') and self.engine_button:
+            self.engine_button.set(self.last_params.get('f0_engine', 'praat'))
 
         if self.pending_long_snd: self.lbl_long_file.configure(text="已加载音频", text_color="#2563EB")
         else: self.lbl_long_file.configure(text="未选择", text_color="#6B7280")
@@ -949,6 +1002,22 @@ class PhoneticsApp:
     def on_trim_silence_toggle(self):
         self.recalculate_current_item(only_trim_silence=True)
 
+    def on_engine_change(self, value):
+        self.last_params['f0_engine'] = value
+        self._update_engine_button_text_colors()
+        if hasattr(self, 'audio_cache'):
+            self.audio_cache.clear()
+        self.recalculate_all_audio(recompute_pitch=True)
+
+    def _update_engine_button_text_colors(self):
+        current_val = self.engine_button.get()
+        if hasattr(self.engine_button, "_buttons_dict"):
+            for val, btn in self.engine_button._buttons_dict.items():
+                if val == current_val:
+                    btn.configure(text_color="white")
+                else:
+                    btn.configure(text_color="#1F2937")
+
     def recalculate_all_audio(self, only_trim_silence=False, recompute_pitch=True):
         if not self.items: return
         
@@ -969,7 +1038,7 @@ class PhoneticsApp:
                 for i, (iid, item) in enumerate(items_snapshot):
                     if item.get('snd') and 'raw_start' in item and 'raw_end' in item:
                         mic_s, mic_e = recalculate_bounds_fast(
-                            item['snd'], item['pitch'], item['raw_start'], item['raw_end'], trim_silence
+                            item['snd'], item.get('pitch_data', item.get('pitch')), item['raw_start'], item['raw_end'], trim_silence
                         )
                         # 等比例缩放内部蓝线和 chars_bounds (如果只因裁切而变化)
                         old_s, old_e = item.get('start', mic_s), item.get('end', mic_e)
@@ -1008,22 +1077,21 @@ class PhoneticsApp:
                         snd = item['snd']
                         snd_id = id(snd)
                         
-                        # 如果修改了 Pitch Floor/Ceiling，必须先重新计算 Pitch 对象
                         # 性能优化：按 snd 实例缓存 Pitch，避免长音频模式下被重复计算上千次
                         if recompute_pitch:
                             try:
                                 if snd_id not in recomputed_pitches:
-                                    recomputed_pitches[snd_id] = snd.to_pitch_ac(time_step=None, voicing_threshold=self.last_params.get('voicing_threshold', 0.25), very_accurate=True, octave_jump_cost=0.9,
-                                        pitch_floor=self.last_params['pitch_floor'],
-                                        pitch_ceiling=self.last_params['pitch_ceiling']
-                                    )
-                                item['pitch'] = recomputed_pitches[snd_id]
+                                    recomputed_pitches[snd_id] = extract_f0(snd, self.last_params)
+                                item['pitch_data'] = recomputed_pitches[snd_id]
+                                if 'pitch' in item:
+                                    del item['pitch']
                             except Exception: pass
                         
                         # 保存计算该项时所用的参数实现所见即所得导出
                         item['pitch_floor'] = params['pitch_floor']
                         item['pitch_ceiling'] = params['pitch_ceiling']
                         item['voicing_threshold'] = params['voicing_threshold']
+                        item['f0_engine'] = self.last_params.get('f0_engine', 'praat')
                         
                         mac_s, mac_e = item['macro_start'], item['macro_end']
                         valid_ms = max(0, mac_s)
@@ -1033,8 +1101,8 @@ class PhoneticsApp:
                             part = snd.extract_part(from_time=valid_ms, to_time=valid_me)
                             
                             # 性能优化：切片 Pitch 数组，大幅减少 IPC 数据量
-                            p_xs = item['pitch'].xs()
-                            p_freqs = item['pitch'].selected_array['frequency']
+                            p_xs = item['pitch_data']['xs']
+                            p_freqs = item['pitch_data']['freqs']
                             idx_start = np.searchsorted(p_xs, valid_ms)
                             idx_end = np.searchsorted(p_xs, valid_me)
                             
@@ -1133,37 +1201,49 @@ class PhoneticsApp:
             try:
                 self.root.after(0, lambda: self.set_status("正在更新当前项...", "#3B82F6", "status_loading"))
                 
+                def get_segmented_f0(snd, last_params):
+                    total_dur = snd.get_total_duration()
+                    if 'macro_start' in item and 'macro_end' in item and total_dur > 15.0:
+                        padding = 1.0
+                        seg_start = max(0.0, item['macro_start'] - padding)
+                        seg_end = min(total_dur, item['macro_end'] + padding)
+                        part_snd = snd.extract_part(from_time=seg_start, to_time=seg_end)
+                        part_pitch_data = extract_f0(part_snd, last_params)
+                        part_pitch_data['xs'] = part_pitch_data['xs'] + seg_start
+                        return part_pitch_data
+                    else:
+                        return extract_f0(snd, last_params)
+
                 # 如果是独立音频模式且没有加载 Sound 对象
                 if not item.get('snd') and item.get('path'):
                     item['snd'] = parselmouth.Sound(item['path'])
                     # 总是为单项重新生成 pitch 确保准确性
-                    item['pitch'] = item['snd'].to_pitch_ac(
-                        time_step=None, voicing_threshold=self.last_params.get('voicing_threshold', 0.25), very_accurate=True, octave_jump_cost=0.9,
-                        pitch_floor=self.last_params['pitch_floor'],
-                        pitch_ceiling=self.last_params['pitch_ceiling']
-                    )
+                    item['pitch_data'] = get_segmented_f0(item['snd'], self.last_params)
+                    if 'pitch' in item:
+                        del item['pitch']
                     item['pitch_floor'] = self.last_params['pitch_floor']
                     item['pitch_ceiling'] = self.last_params['pitch_ceiling']
                     item['voicing_threshold'] = self.last_params.get('voicing_threshold', 0.25)
+                    item['f0_engine'] = self.last_params.get('f0_engine', 'praat')
                     # 独立音频的宏观边界就是全文
                     item['macro_start'] = 0.0
                     item['macro_end'] = item['snd'].get_total_duration()
 
-                # 如果修改了 Pitch Floor/Ceiling，重新计算该项的 Pitch
+                # 如果修改了 Pitch Floor/Ceiling，重新计算该项 of Pitch
                 if recompute_pitch and item.get('snd'):
-                    item['pitch'] = item['snd'].to_pitch_ac(
-                        time_step=None, voicing_threshold=self.last_params.get('voicing_threshold', 0.25), very_accurate=True, octave_jump_cost=0.9,
-                        pitch_floor=self.last_params['pitch_floor'],
-                        pitch_ceiling=self.last_params['pitch_ceiling']
-                    )
+                    item['pitch_data'] = get_segmented_f0(item['snd'], self.last_params)
+                    if 'pitch' in item:
+                        del item['pitch']
                     item['pitch_floor'] = self.last_params['pitch_floor']
                     item['pitch_ceiling'] = self.last_params['pitch_ceiling']
                     item['voicing_threshold'] = self.last_params.get('voicing_threshold', 0.25)
+                    item['f0_engine'] = self.last_params.get('f0_engine', 'praat')
                     
                 if item.get('snd') and 'macro_start' in item and 'macro_end' in item:
+                    current_pitch = item.get('pitch_data', item.get('pitch'))
                     if only_trim_silence:
                         mic_s, mic_e = recalculate_bounds_fast(
-                            item['snd'], item['pitch'], item['raw_start'], item['raw_end'], self.switch_trim_silence.get()
+                            item['snd'], current_pitch, item['raw_start'], item['raw_end'], self.switch_trim_silence.get()
                         )
                         # 等比例缩放内部蓝线
                         old_s, old_e = item.get('start', mic_s), item.get('end', mic_e)
@@ -1175,7 +1255,7 @@ class PhoneticsApp:
                         item['start'], item['end'] = mic_s, mic_e
                     else:
                         mic_s, mic_e, raw_s, raw_e = self._microscopic_vowel_nucleus(
-                            item['snd'], item['pitch'], item['macro_start'], item['macro_end']
+                            item['snd'], current_pitch, item['macro_start'], item['macro_end']
                         )
                         item['start'], item['end'] = mic_s, mic_e
                         item['raw_start'], item['raw_end'] = raw_s, raw_e
@@ -1190,10 +1270,24 @@ class PhoneticsApp:
                             item['chars_bounds'] = [[mic_s, mic_e]]
                             
                 # 重新生成 11 点预览数据用于警告图标状态更新
-                if item.get('snd') and item.get('pitch'):
+                if item.get('snd') and (item.get('pitch_data') or item.get('pitch')):
                     preview_times = np.linspace(item['start'], item['end'], 11)
-                    preview_f0 = [item['pitch'].get_value_at_time(t) for t in preview_times]
-                    item['preview_f0'] = [0.0 if (np.isnan(hz) or hz <= 0) else hz for hz in preview_f0]
+                    if item.get('pitch_data'):
+                        p_xs = item['pitch_data']['xs']
+                        p_freqs = item['pitch_data']['freqs']
+                        preview_f0 = np.interp(preview_times, p_xs, p_freqs).tolist()
+                        for j, t in enumerate(preview_times):
+                            valid_indices = np.where(p_freqs > 0)[0]
+                            if len(valid_indices) == 0:
+                                preview_f0[j] = 0.0
+                                continue
+                            valid_xs = p_xs[valid_indices]
+                            if np.min(np.abs(valid_xs - t)) > 0.025:
+                                preview_f0[j] = 0.0
+                    else:
+                        preview_f0 = [item['pitch'].get_value_at_time(t) for t in preview_times]
+                        preview_f0 = [0.0 if (np.isnan(hz) or hz <= 0) else hz for hz in preview_f0]
+                    item['preview_f0'] = preview_f0
                     item['has_empty_data'] = any(f == 0.0 for f in item['preview_f0'])
                             
                 def finalize():
@@ -1329,11 +1423,10 @@ class PhoneticsApp:
                     if not item.get('snd'):
                         item['snd'] = self.pending_long_snd
                         if global_pitch_cache is None:
-                            global_pitch_cache = self.pending_long_snd.to_pitch_ac(time_step=None, voicing_threshold=self.last_params.get('voicing_threshold', 0.25), very_accurate=True, octave_jump_cost=0.9,
-                                pitch_floor=self.last_params['pitch_floor'], 
-                                pitch_ceiling=self.last_params['pitch_ceiling']
-                            )
-                        item['pitch'] = global_pitch_cache
+                            global_pitch_cache = extract_f0(self.pending_long_snd, self.last_params)
+                        item['pitch_data'] = global_pitch_cache
+                        if 'pitch' in item:
+                            del item['pitch']
                     
                     # 核心优化：如果没有被拖拽修改边界，且原来就有微观边界，直接继承！
                     if not seg.get('is_modified') and seg.get('old_id') and seg['old_id'] in old_micro_bounds:
@@ -1364,7 +1457,7 @@ class PhoneticsApp:
                         else:
                             # 纯新分配的自动识别段落，调用完整识别流
                             mic_s, mic_e, raw_s, raw_e = self._microscopic_vowel_nucleus(
-                                item['snd'], item['pitch'], item['macro_start'], item['macro_end']
+                                item['snd'], item.get('pitch_data', item.get('pitch')), item['macro_start'], item['macro_end']
                             )
                             item['start'], item['end'] = mic_s, mic_e
                             item['raw_start'], item['raw_end'] = raw_s, raw_e
@@ -1420,7 +1513,7 @@ class PhoneticsApp:
             self.root.after(0, self.tree_panel.clear_all)
             
             snd = self.pending_long_snd
-            global_pitch = snd.to_pitch_ac(time_step=None, pitch_floor=self.last_params['pitch_floor'], pitch_ceiling=self.last_params['pitch_ceiling'], voicing_threshold=self.last_params.get('voicing_threshold', 0.25), very_accurate=True, octave_jump_cost=0.9)
+            global_pitch_data = extract_f0(snd, self.last_params)
             
             if hasattr(self, 'manual_segments') and self.manual_segments:
                 macro_segments = self.manual_segments
@@ -1434,8 +1527,8 @@ class PhoneticsApp:
             # 准备参数
             params = {'db': self.last_params['db'], 'skip_front': self.last_params['skip_front'], 'pitch_floor': self.last_params['pitch_floor'], 'pitch_ceiling': self.last_params['pitch_ceiling'], 'voicing_threshold': self.last_params.get('voicing_threshold', 0.25)}
             trim = self.switch_trim_silence.get()
-            pitch_xs = global_pitch.xs()
-            pitch_freqs = global_pitch.selected_array['frequency']
+            pitch_xs = global_pitch_data['xs']
+            pitch_freqs = global_pitch_data['freqs']
             
             # 构建任务数据
             tasks = []
@@ -1513,7 +1606,7 @@ class PhoneticsApp:
                         img = self.tk_icons.get('warning', '') if has_empty else ''
                         iid = self.tree_panel.tree.insert(gid, tk.END, text=res['word'], tags=('item',), image=img)
                         self.items[iid] = {
-                            'label': res['word'], 'group': res['group'], 'snd': snd, 'pitch': global_pitch,
+                            'label': res['word'], 'group': res['group'], 'snd': snd, 'pitch_data': global_pitch_data,
                             'macro_start': res['ms'], 'macro_end': res['me'], 
                             'start': res['mis'], 'end': res['mie'],
                             'inner_splits': res.get('inner_splits', []),

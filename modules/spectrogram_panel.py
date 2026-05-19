@@ -203,8 +203,15 @@ class SpectrogramPanel:
         
         self.ax.pcolormesh(X, Y, sg_db, vmin=sg_db.max()-50, vmax=sg_db.max(), cmap='Greys')
         
-        global_pitch = item.get('pitch')
-        if global_pitch:
+        if item.get('pitch_data'):
+            p_xs = item['pitch_data']['xs']
+            p_freqs = item['pitch_data']['freqs']
+            mask = (p_xs >= view_s) & (p_xs <= view_e)
+            p_xs = p_xs[mask]
+            p_vals = p_freqs[mask].copy()
+            p_vals[p_vals == 0] = np.nan
+        elif item.get('pitch'):
+            global_pitch = item['pitch']
             p_xs = global_pitch.xs()
             p_freqs = global_pitch.selected_array['frequency']
             mask = (p_xs >= view_s) & (p_xs <= view_e)
