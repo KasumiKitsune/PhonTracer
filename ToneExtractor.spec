@@ -15,7 +15,8 @@ hidden_imports = [
     'scipy.signal',
     'scipy.stats',
     'scipy.special._cdflib', # scipy 经常漏掉的底层库
-    'textgrid'
+    'textgrid',
+    'pyreaper'
 ]
 
 if sys.platform == 'win32':
