@@ -319,7 +319,8 @@ class PhoneticsApp:
             "status_error": "status_error.png",
             "warning": "warning.png",
             "import": "import_file.png", "ai_prompt": "ai_prompt.png", "copy": "copy_icon.png",
-            "import_white": "import_white.png", "copy_white": "copy_white.png", "check_white": "check_white.png"
+            "import_white": "import_white.png", "copy_white": "copy_white.png", "check_white": "check_white.png",
+            "pause": "pause.png"
         }
         from PIL import ImageTk
         self.tk_icons = {}

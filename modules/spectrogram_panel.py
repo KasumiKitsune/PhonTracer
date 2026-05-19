@@ -51,7 +51,7 @@ class SpectrogramPanel:
         
         frame_tune = ctk.CTkFrame(top_bar, fg_color="#F9FAFB", corner_radius=8)
         frame_tune.pack(side=tk.TOP, fill=tk.X, pady=(0, 10))
-        ctk.CTkLabel(frame_tune, text="宏观区间(s):", font=self.font_title, text_color="#111827").pack(side=tk.LEFT, padx=(10, 10), pady=10)
+        ctk.CTkLabel(frame_tune, text="区间(s):", font=self.font_title, text_color="#111827").pack(side=tk.LEFT, padx=(10, 10), pady=10)
         ctk.CTkLabel(frame_tune, text=" 起:", image=self.icons.get("play"), compound="left").pack(side=tk.LEFT)
         self.var_t_start = ctk.StringVar(value="0.000")
         self.entry_t_start = ctk.CTkEntry(frame_tune, textvariable=self.var_t_start, width=70, corner_radius=20, height=28)
@@ -64,13 +64,29 @@ class SpectrogramPanel:
         self.entry_t_end.pack(side=tk.LEFT, padx=(5, 15))
         self.setup_entry_behavior(self.entry_t_end, 'end_manual')
         
+        # 将 “应用” 按钮放置在右上角，与区间在同一行
+        CTkReleaseButton(
+            frame_tune, 
+            text="应用", 
+            image=self.icons.get("check"), 
+            compound="left", 
+            command=self.apply_manual_time, 
+            corner_radius=14, 
+            height=28, 
+            width=70, 
+            fg_color="#E5E7EB", 
+            text_color="#1F2937", 
+            hover_color="#D1D5DB"
+        ).pack(side=tk.RIGHT, padx=(0, 10), pady=10)
+        
         frame_actions = ctk.CTkFrame(top_bar, fg_color="transparent")
         frame_actions.pack(side=tk.TOP, fill=tk.X, pady=(5, 0))
         
-        CTkReleaseButton(frame_actions, text="应用", image=self.icons.get("check"), compound="left", command=self.apply_manual_time, corner_radius=20, height=36, width=110, fg_color="#E5E7EB", text_color="#1F2937", hover_color="#D1D5DB").pack(side=tk.LEFT, padx=(0, 10))
         CTkReleaseButton(frame_actions, text="自动识别", image=self.icons.get("bulb"), compound="left", command=self.apply_auto_detect, corner_radius=20, height=36, width=110, fg_color="#FEE2E2", text_color="#DC2626", hover_color="#FCA5A5").pack(side=tk.LEFT, padx=(0, 20))
         
-        CTkReleaseButton(frame_actions, text=" 试听", image=self.icons.get("play"), compound="left", command=self.play_selected, font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), corner_radius=20, height=36, width=60, fg_color="#E5E7EB", text_color="#1F2937", hover_color="#D1D5DB").pack(side=tk.LEFT, padx=(0, 10))
+        self.btn_play = CTkReleaseButton(frame_actions, text=" 试听", image=self.icons.get("play"), compound="left", command=self.play_selected, font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), corner_radius=20, height=36, width=60, fg_color="#E5E7EB", text_color="#1F2937", hover_color="#D1D5DB")
+        self.btn_play.pack(side=tk.LEFT, padx=(0, 10))
+        
         CTkReleaseButton(frame_actions, text=" 导出", image=self.icons.get("save"), compound="left", command=self.on_export_callback, font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), corner_radius=20, height=36, width=60, fg_color="#10B981", hover_color="#059669").pack(side=tk.LEFT)
 
         self.fig = plt.Figure(figsize=(7, 5), facecolor='white') 
@@ -103,6 +119,14 @@ class SpectrogramPanel:
         entry.bind("<Return>", lambda e: entry.winfo_toplevel().focus_set())
 
     def clear_canvas(self):
+        if self.is_playing:
+            self.is_playing = False
+            try:
+                import sounddevice as sd
+                sd.stop()
+            except Exception:
+                pass
+            self._update_play_button_state(playing=False)
         self.current_item = None
         self.ax.clear()
         self.ax2.clear()
@@ -114,6 +138,14 @@ class SpectrogramPanel:
         self.var_t_end.set("0.000")
 
     def load_item(self, item):
+        if self.is_playing:
+            self.is_playing = False
+            try:
+                import sounddevice as sd
+                sd.stop()
+            except Exception:
+                pass
+            self._update_play_button_state(playing=False)
         self.current_item = item
         t_start = item.get('start')
         t_end = item.get('end')
@@ -455,22 +487,34 @@ class SpectrogramPanel:
         except ValueError: 
             messagebox.showerror("错误", "请输入有效的数字")
 
+    def _update_play_button_state(self, playing=False):
+        if hasattr(self, 'btn_play') and self.btn_play:
+            if playing:
+                self.btn_play.configure(text=" 暂停", image=self.icons.get("pause"))
+            else:
+                self.btn_play.configure(text=" 试听", image=self.icons.get("play"))
+
     def play_selected(self):
         item = self.current_item
         if not item: return
+
+        # 如果当前正在播放，则作为“暂停”功能：停止播放并恢复按钮状态
+        if self.is_playing:
+            self.is_playing = False
+            try:
+                import sounddevice as sd
+                sd.stop()
+            except Exception:
+                pass
+            self._update_play_button_state(playing=False)
+            return
+
         if not item.get('snd') and item.get('path'):
             try: item['snd'] = parselmouth.Sound(item['path'])
             except Exception: return
         if not item.get('snd'): return
 
         snd = item['snd']
-
-        if self.is_playing:
-            try:
-                import sounddevice as sd
-                sd.stop()
-            except Exception:
-                pass
 
         try:
             total_duration = snd.get_total_duration()
@@ -519,13 +563,18 @@ class SpectrogramPanel:
             self.play_start_audio_time = play_s
             self.play_end_audio_time = play_e
 
+            self._update_play_button_state(playing=True)
             self._playback_update_loop()
 
         except Exception as e:
+            self.is_playing = False
+            self._update_play_button_state(playing=False)
             messagebox.showerror("错误", f"播放失败: {str(e)}")
 
     def _playback_update_loop(self):
-        if not self.is_playing: return
+        if not self.is_playing:
+            self._update_play_button_state(playing=False)
+            return
         import time
         elapsed = time.time() - self.play_start_sys_time
         current_audio_time = self.play_start_audio_time + elapsed
@@ -537,6 +586,7 @@ class SpectrogramPanel:
             else:
                 self.cursor_x = self.play_end_audio_time
             self.update_cursor_graphics()
+            self._update_play_button_state(playing=False)
             return
 
         self.cursor_x = current_audio_time
