@@ -114,5 +114,55 @@ class TestUISyncBugs(unittest.TestCase):
             if os.path.exists(f_path):
                 os.remove(f_path)
 
+    def test_add_segment_by_right_click(self):
+        """Test right-clicking on an empty area adds a 0.5s segment and fits it in sequence"""
+        from modules.visual_splitter import VisualSplitter
+        
+        mock_snd = MagicMock()
+        mock_snd.get_total_duration.return_value = 10.0
+        mock_snd.values = [np.zeros(20000)]
+        mock_snd.sampling_frequency = 2000
+        
+        callback = MagicMock()
+        
+        existing_items = [
+            {'id': 0, 'label': 'A', 'start': 1.0, 'end': 2.0},
+            {'id': 1, 'label': 'B', 'start': 4.0, 'end': 5.0}
+        ]
+        
+        with patch.object(VisualSplitter, 'setup_ui'), \
+             patch.object(VisualSplitter, 'init_data'), \
+             patch.object(VisualSplitter, 'update_dynamic_labels'), \
+             patch.object(VisualSplitter, 'render_canvas'), \
+             patch.object(VisualSplitter, 'auto_fit_scale'):
+             
+            splitter = VisualSplitter(
+                master=self.root,
+                snd=mock_snd,
+                icons={},
+                callback=callback,
+                existing_items=existing_items
+            )
+            
+            splitter.original_words = [
+                {'id': 0, 'label': 'A'},
+                {'id': 1, 'label': 'B'}
+            ]
+            splitter.deleted_indices = set()
+            
+            mock_event = MagicMock()
+            splitter.px_per_sec = 100
+            mock_event.x = 300
+            splitter.canvas = MagicMock()
+            splitter.canvas.canvasx.return_value = 300.0
+            
+            splitter.on_right_click(mock_event)
+            
+            self.assertEqual(len(splitter.segments), 3)
+            self.assertEqual(splitter.segments[0]['start'], 1.0)
+            self.assertEqual(splitter.segments[1]['start'], 2.75) # 3.0 - 0.25
+            self.assertEqual(splitter.segments[1]['end'], 3.25)   # 3.0 + 0.25
+            self.assertEqual(splitter.segments[2]['start'], 4.0)
+
 if __name__ == '__main__':
     unittest.main()

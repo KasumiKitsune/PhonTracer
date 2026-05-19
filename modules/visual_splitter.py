@@ -349,7 +349,40 @@ class VisualSplitter(ctk.CTkToplevel):
         else: self.deleted_indices.add(idx)
         self.update_dynamic_labels()
         self.render_canvas()
-        if self.mode == 'review': self.update_review_count()
+        if self.mode in ('review', 'edit'): self.update_review_count()
+
+    def add_segment_at(self, start, end):
+        new_seg = {
+            'start': start,
+            'end': end,
+            'label': f'#{len(self.segments)+1}'
+        }
+        if self.mode == 'edit':
+            new_seg['orig_start'] = start
+            new_seg['orig_end'] = end
+            new_seg['orig_inner_splits'] = []
+            new_seg['inner_splits'] = []
+            
+        # Find sorted insertion index
+        insert_idx = 0
+        while insert_idx < len(self.segments) and self.segments[insert_idx]['start'] < start:
+            insert_idx += 1
+            
+        self.segments.insert(insert_idx, new_seg)
+        
+        # Adjust deleted_indices because we shifted segments after insert_idx
+        new_deleted_indices = set()
+        for idx in self.deleted_indices:
+            if idx >= insert_idx:
+                new_deleted_indices.add(idx + 1)
+            else:
+                new_deleted_indices.add(idx)
+        self.deleted_indices = new_deleted_indices
+        
+        self.update_dynamic_labels()
+        if self.mode in ('review', 'edit'):
+            self.update_review_count()
+        self.render_canvas()
 
     def _get_element_at_x(self, x):
         tolerance = 10
@@ -458,7 +491,15 @@ class VisualSplitter(ctk.CTkToplevel):
                 if hasattr(self, 'lbl_count'): self.lbl_count.configure(text=f"当前切分点：{len(self.cuts)}")
         elif self.mode in ('review', 'edit'):
             seg_idx = self._get_segment_at_x(canvas_x)
-            if seg_idx is not None: self.toggle_delete_segment(seg_idx)
+            if seg_idx is not None:
+                self.toggle_delete_segment(seg_idx)
+            else:
+                time_sec = canvas_x / self.px_per_sec
+                start = max(0, time_sec - 0.25)
+                end = min(self.duration, start + 0.5)
+                if end - start < 0.5 and self.duration >= 0.5:
+                    start = max(0, end - 0.5)
+                self.add_segment_at(start, end)
 
     def play_segment(self, start_t, end_t):
         try:
