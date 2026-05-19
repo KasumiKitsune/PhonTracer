@@ -1539,15 +1539,9 @@ class ProjectTreePanel:
                     item = self.items[child]
                     lbl = item.get('label', '')
                     if len(lbl) > max_syls: max_syls = len(lbl)
-                    if (not item.get('snd') or not item.get('pitch')) and item.get('path'):
-                        try:
-                            item['snd'] = parselmouth.Sound(item['path'])
-                            pf = item.get('pitch_floor', self.app_state_params.get('pitch_floor', 75))
-                            pc = item.get('pitch_ceiling', self.app_state_params.get('pitch_ceiling', 600))
-                            vt = item.get('voicing_threshold', self.app_state_params.get('voicing_threshold', 0.25))
-                            item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=pf, pitch_ceiling=pc, voicing_threshold=vt, very_accurate=True, octave_jump_cost=0.9)
-                        except: continue
-                    if item.get('start') is None or not item.get('snd') or not item.get('pitch'): continue
+                    self._ensure_item_loaded(item)
+                    if item.get('start') is None or not item.get('snd') or (not item.get('pitch') and not item.get('pitch_data')):
+                        continue
                     t_s, t_e = item['start'], item['end']
                     label = item.get('label', '')
                     inner_splits = item.get('inner_splits', [])
@@ -1556,8 +1550,13 @@ class ProjectTreePanel:
                     if len(splits) != len(label) + 1: splits = np.linspace(t_s, t_e, len(label) + 1).tolist()
                     if len(label) <= 1: splits = [t_s, t_e]
                     
-                    pitch = item['pitch']
-                    p_xs, p_freqs = pitch.xs(), pitch.selected_array['frequency']
+                    if item.get('pitch_data'):
+                        p_xs = item['pitch_data']['xs']
+                        p_freqs = item['pitch_data']['freqs']
+                    else:
+                        pitch = item['pitch']
+                        p_xs = pitch.xs()
+                        p_freqs = pitch.selected_array['frequency']
                     
                     for k in range(len(splits) - 1):
                         c_s, c_e = splits[k], splits[k+1]

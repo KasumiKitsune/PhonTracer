@@ -883,6 +883,7 @@ class PhoneticsApp:
         self.entry_voicing_threshold.insert(0, f"{self.last_params['voicing_threshold']:.2f}")
         if hasattr(self, 'engine_button') and self.engine_button:
             self.engine_button.set(self.last_params.get('f0_engine', 'praat'))
+            self._update_engine_button_text_colors()
 
         if self.pending_long_snd: self.lbl_long_file.configure(text="已加载音频", text_color="#2563EB")
         else: self.lbl_long_file.configure(text="未选择", text_color="#6B7280")
