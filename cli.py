@@ -1472,7 +1472,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
     def _export_line_chart(self, out_file, structure, speaker=None):
         speaker = speaker or self.current_speaker
         import matplotlib.pyplot as plt
-        data, max_syls = self._collect_group_avg_data(structure)
+        data, max_syls = self._collect_group_avg_data(structure, speaker)
         if not data:
             raise Exception("No valid data for charting")
 
