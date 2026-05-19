@@ -1,4 +1,5 @@
 import tkinter as tk
+import time
 from tkinter import messagebox
 import customtkinter as ctk
 import matplotlib.pyplot as plt
@@ -84,11 +85,11 @@ class SpectrogramPanel:
         
         CTkReleaseButton(frame_actions, text="自动识别", image=self.icons.get("bulb"), compound="left", command=self.apply_auto_detect, corner_radius=20, height=36, width=110, fg_color="#FEE2E2", text_color="#DC2626", hover_color="#FCA5A5").pack(side=tk.LEFT, padx=(0, 20))
         
-        # 导出按钮 (靠最右侧对齐)
-        CTkReleaseButton(frame_actions, text=" 导出", image=self.icons.get("save"), compound="left", command=self.on_export_callback, font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), corner_radius=20, height=36, width=60, fg_color="#10B981", hover_color="#059669").pack(side=tk.RIGHT)
+        # 导出按钮 (使用 ctk.CTkButton，实现即时按键响应)
+        ctk.CTkButton(frame_actions, text=" 导出", image=self.icons.get("save"), compound="left", command=self.on_export_callback, font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), corner_radius=20, height=36, width=60, fg_color="#10B981", hover_color="#059669").pack(side=tk.RIGHT)
         
-        # 播放/暂停按钮 (靠右侧对齐，位于导出按钮左侧)
-        self.btn_play = CTkReleaseButton(frame_actions, text=" 播放", image=self.icons.get("play"), compound="left", command=self.play_selected, font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), corner_radius=20, height=36, width=60, fg_color="#E5E7EB", text_color="#1F2937", hover_color="#D1D5DB")
+        # 播放/暂停按钮 (使用 ctk.CTkButton，实现即时按键响应)
+        self.btn_play = ctk.CTkButton(frame_actions, text=" 播放", image=self.icons.get("play"), compound="left", command=self.play_selected, font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), corner_radius=20, height=36, width=60, fg_color="#E5E7EB", text_color="#1F2937", hover_color="#D1D5DB")
         self.btn_play.pack(side=tk.RIGHT, padx=(0, 20))
 
         self.fig = plt.Figure(figsize=(7, 5), facecolor='white') 
@@ -504,7 +505,6 @@ class SpectrogramPanel:
         if self.is_playing:
             self.is_playing = False
             try:
-                import sounddevice as sd
                 sd.stop()
             except Exception:
                 pass
@@ -556,10 +556,8 @@ class SpectrogramPanel:
             part = snd.extract_part(from_time=play_s, to_time=play_e)
             audio_data = np.ascontiguousarray(part.values.T, dtype=np.float32)
 
-            import sounddevice as sd
             sd.play(audio_data, samplerate=int(part.sampling_frequency))
 
-            import time
             self.is_playing = True
             self.play_start_sys_time = time.time()
             self.play_start_audio_time = play_s
@@ -577,7 +575,6 @@ class SpectrogramPanel:
         if not self.is_playing:
             self._update_play_button_state(playing=False)
             return
-        import time
         elapsed = time.time() - self.play_start_sys_time
         current_audio_time = self.play_start_audio_time + elapsed
 
