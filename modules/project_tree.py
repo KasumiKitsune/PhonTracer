@@ -123,6 +123,17 @@ class ProjectTreePanel:
             tags.append('even' if i % 2 == 0 else 'odd')
             self.tree.item(item, tags=tags)
 
+    def clear_ui_only(self):
+        self.tree.delete(*self.tree.get_children())
+        self.project_groups.clear()
+        self.group_nodes.clear()
+        self.current_iid = None
+        self.warning_group_id = None
+        self.warning_iids.clear()
+        self.text_preview.configure(state='normal')
+        self.text_preview.delete('1.0', tk.END)
+        self.text_preview.configure(state='disabled')
+
     def clear_all(self):
         self.tree.delete(*self.tree.get_children())
         self.project_groups.clear()
@@ -542,96 +553,172 @@ class ProjectTreePanel:
         self._debounce_zebra_stripes()
 
     def export_project(self):
-        if not self.items: return messagebox.showwarning("提示", "没有可导出的数据。")
-        
-        tree_structure = self._get_all_items_by_group()
+        sm = getattr(self.app, 'speaker_manager', None)
+        if not self.items and (not sm or len(sm.get_all_speakers()) <= 1):
+            return messagebox.showwarning("提示", "没有可导出的数据。")
+        if sm and len(sm.get_all_speakers()) > 1:
+            self._show_multi_speaker_export_dialog(sm)
+        else:
+            self._do_export_preparation(None)
+
+    def _show_multi_speaker_export_dialog(self, sm):
+        dlg = ctk.CTkToplevel(self.parent)
+        dlg.title("导出范围选择")
+        dlg.geometry("350x260")
+        dlg.attributes('-topmost', True)
+        dlg.resizable(False, False)
+        dlg.update_idletasks()
+        main_win = self.parent.winfo_toplevel()
+        x = main_win.winfo_rootx() + (main_win.winfo_width() - 350) // 2
+        y = main_win.winfo_rooty() + (main_win.winfo_height() - 260) // 2
+        dlg.geometry(f"+{x}+{y}")
+        ctk.CTkLabel(dlg, text="请选择导出范围：", font=self.font_title).pack(pady=(20, 10))
+        mode_var = ctk.IntVar(value=1)
+        ctk.CTkRadioButton(dlg, text=f"仅导出当前发音人 ({sm.get_active_speaker().name})", variable=mode_var, value=1, font=self.font_main).pack(anchor="w", padx=40, pady=5)
+        ctk.CTkRadioButton(dlg, text=f"分别导出所有发音人 ({len(sm.get_all_speakers())}人)", variable=mode_var, value=2, font=self.font_main).pack(anchor="w", padx=40, pady=5)
+        ctk.CTkRadioButton(dlg, text=f"整合所有发音人的结果 (采用 T值归一化)", variable=mode_var, value=3, font=self.font_main).pack(anchor="w", padx=40, pady=5)
+        def on_confirm():
+            mode = mode_var.get()
+            dlg.destroy()
+            self._do_export_preparation(mode)
+        btn_frame = ctk.CTkFrame(dlg, fg_color="transparent")
+        btn_frame.pack(pady=20)
+        ctk.CTkButton(btn_frame, text="取消", width=80, command=dlg.destroy, fg_color="#E5E7EB", text_color="#374151", hover_color="#D1D5DB").pack(side=tk.LEFT, padx=10)
+        ctk.CTkButton(btn_frame, text="下一步", width=80, command=on_confirm).pack(side=tk.LEFT, padx=10)
+
+    def _do_export_preparation(self, multi_speaker_mode):
+        if not multi_speaker_mode or multi_speaker_mode == 1:
+            if not self.items: return messagebox.showwarning("提示", "没有可导出的数据。")
+            tree_structure = self._get_all_items_by_group()
+            self._check_empty_and_show_menu(tree_structure, mode='single')
+        else:
+            sm = self.app.speaker_manager
+            all_speakers = sm.get_all_speakers()
+            empty_labels = []
+            for s in all_speakers:
+                for grp_name, children in self._get_items_by_group_for_dict(s.items):
+                    for child in children:
+                        item = s.items[child]
+                        if self._check_item_has_empty_data(item):
+                            empty_labels.append(f"[{s.name}] {item['label']}")
+            if empty_labels:
+                msg = "部分项目的基频数据包含 0 值：\n\n" + "\n".join(empty_labels[:10])
+                if len(empty_labels) > 10: msg += f"\n... 等共 {len(empty_labels)} 项"
+                msg += "\n\n是否继续导出？"
+                if not messagebox.askyesno("空数据警告", msg): return
+            if multi_speaker_mode == 2: self._show_export_menu(mode='separate', all_speakers=all_speakers)
+            else: self._show_export_menu(mode='integrated', all_speakers=all_speakers)
+
+    def _get_items_by_group_for_dict(self, items_dict):
+        groups = {}
+        for k, v in items_dict.items():
+            g = v.get('group', '导入内容')
+            if g not in groups: groups[g] = []
+            groups[g].append(k)
+        return [(g, groups[g]) for g in groups]
+
+    def _check_empty_and_show_menu(self, tree_structure, mode='single'):
         empty_labels = []
         for grp_name, children in tree_structure:
             for child in children:
                 item = self.items[child]
-                if self._check_item_has_empty_data(item):
-                    empty_labels.append(f"[{grp_name}] {item['label']}")
-        
+                if self._check_item_has_empty_data(item): empty_labels.append(f"[{grp_name}] {item['label']}")
         if empty_labels:
-            msg = "以下项目的基频数据包含 0 值（可能无法提取有效声调）：\n\n"
-            msg += "\n".join(empty_labels[:10])
+            msg = "以下项目的基频数据包含 0 值（可能无法提取有效声调）：\n\n" + "\n".join(empty_labels[:10])
             if len(empty_labels) > 10: msg += f"\n... 等共 {len(empty_labels)} 项"
             msg += "\n\n是否继续导出？"
-            if not messagebox.askyesno("空数据警告", msg):
-                return
-                
-        self._show_export_menu(tree_structure)
+            if not messagebox.askyesno("空数据警告", msg): return
+        self._show_export_menu(tree_structure=tree_structure, mode=mode)
 
-    def _show_export_menu(self, tree_structure=None):
+    def _show_export_menu(self, tree_structure=None, mode='single', all_speakers=None):
         dlg = ctk.CTkToplevel(self.parent)
         dlg.title("选择导出格式")
         dlg.geometry("320x380")
         dlg.attributes('-topmost', True)
         dlg.resizable(False, False)
-        
         dlg.update_idletasks()
         main_win = self.parent.winfo_toplevel()
         x = main_win.winfo_rootx() + (main_win.winfo_width() - 320) // 2
         y = main_win.winfo_rooty() + (main_win.winfo_height() - 380) // 2
         dlg.geometry(f"+{x}+{y}")
-        
         ctk.CTkLabel(dlg, text="请选择导出格式", font=self.font_title, text_color="#111827").pack(pady=(20, 15))
-        
         btn_kwargs = {"corner_radius": 12, "height": 44, "font": self.font_main, "anchor": "w", "compound": "left"}
-        
-        def do_export(mode):
+
+        def do_export(format_mode):
             dlg.destroy()
-            if mode == 'txt':
-                out_file = filedialog.asksaveasfilename(title="导出文本", defaultextension=".txt", initialfile="tone_export_data", filetypes=[("文本文件", "*.txt")])
-                if not out_file: return
+            def execute_export(out_path, inc_chart=False):
                 try:
-                    self._export_txt(out_file, tree_structure=tree_structure)
-                    messagebox.showinfo("成功", f"数据已导出至:\n{out_file}")
-                except Exception as e: messagebox.showerror("错误", str(e))
-            elif mode == 'textgrid':
-                is_batch = False
-                if self.app and hasattr(self.app, 'tabview'):
-                    is_batch = (self.app.tabview.get() == "多条独立音频")
-                elif hasattr(self.parent, 'tabview'):
-                    is_batch = (self.parent.tabview.get() == "多条独立音频")
-                
-                if is_batch:
-                    out_dir = filedialog.askdirectory(title="选择TextGrid导出文件夹")
-                    if not out_dir: return
-                    try:
-                        self._export_textgrid_batch(out_dir, tree_structure=tree_structure)
-                        messagebox.showinfo("成功", f"独立音频 TextGrid 已导出至:\n{out_dir}")
-                    except Exception as e: messagebox.showerror("错误", str(e))
-                else:
-                    out_file = filedialog.asksaveasfilename(title="导出 TextGrid", defaultextension=".TextGrid", initialfile="tone_export_data", filetypes=[("TextGrid 文件", "*.TextGrid")])
-                    if not out_file: return
-                    try:
-                        self._export_textgrid_long(out_file, tree_structure=tree_structure)
-                        messagebox.showinfo("成功", f"TextGrid 已导出至:\n{out_file}")
-                    except Exception as e: messagebox.showerror("错误", str(e))
-            elif mode == 'xlsx':
-                out_file = filedialog.asksaveasfilename(title="导出Excel", defaultextension=".xlsx", initialfile="tone_export_data", filetypes=[("Excel 表格", "*.xlsx")])
-                if not out_file: return
-                try:
-                    include_chart = messagebox.askyesno("导出设置", "是否在 Excel 中包含分析图表？\n(包含图表可能在部分旧版 Office 中打开较慢)", default=messagebox.NO)
-                    self._export_xlsx(out_file, include_chart=include_chart, tree_structure=tree_structure)
-                    messagebox.showinfo("成功", f"数据已导出至:\n{out_file}")
-                except Exception as e: messagebox.showerror("错误", str(e))
-            elif mode == 'line_chart':
-                out_file = filedialog.asksaveasfilename(title="导出折线图", defaultextension=".png", initialfile="tone_line_chart", filetypes=[("PNG 图片", "*.png"), ("SVG 矢量图", "*.svg"), ("PDF 文档", "*.pdf")])
-                if not out_file: return
-                try:
-                    self._export_line_chart(out_file, tree_structure=tree_structure)
-                    messagebox.showinfo("成功", f"图表已导出至:\n{out_file}")
-                except Exception as e: messagebox.showerror("错误", str(e))
-            elif mode == 'kde':
-                out_file = filedialog.asksaveasfilename(title="导出KDE热力图", defaultextension=".png", initialfile="tone_kde_heatmap", filetypes=[("PNG 图片", "*.png"), ("SVG 矢量图", "*.svg"), ("PDF 文档", "*.pdf")])
-                if not out_file: return
-                try:
-                    self._export_kde_heatmap(out_file, tree_structure=tree_structure)
-                    messagebox.showinfo("成功", f"热力图已导出至:\n{out_file}")
-                except Exception as e: messagebox.showerror("错误", str(e))
-        
+                    if mode == 'single':
+                        if format_mode == 'txt': self._export_txt(out_path, tree_structure=tree_structure)
+                        elif format_mode == 'xlsx': self._export_xlsx(out_path, include_chart=inc_chart, tree_structure=tree_structure)
+                        elif format_mode == 'textgrid':
+                            is_batch = False
+                            if self.app and hasattr(self.app, 'tabview'): is_batch = (self.app.tabview.get() == "多条独立音频")
+                            elif hasattr(self.parent, 'tabview'): is_batch = (self.parent.tabview.get() == "多条独立音频")
+                            if is_batch: self._export_textgrid_batch(out_path, tree_structure=tree_structure)
+                            else: self._export_textgrid_long(out_path, tree_structure=tree_structure)
+                        elif format_mode == 'line_chart': self._export_line_chart(out_path, tree_structure=tree_structure)
+                        elif format_mode == 'kde': self._export_kde_heatmap(out_path, tree_structure=tree_structure)
+                    elif mode == 'separate':
+                        import os
+                        for s in all_speakers:
+                            s_struct = self._get_items_by_group_for_dict(s.items)
+                            orig_items = self.items
+                            self.items = s.items
+                            if format_mode == 'textgrid':
+                                s_out = os.path.join(out_path, s.name)
+                                os.makedirs(s_out, exist_ok=True)
+                                is_batch = False
+                                if getattr(s, 'tab_mode', None) == "多条独立音频": is_batch = True
+                                if is_batch: self._export_textgrid_batch(s_out, tree_structure=s_struct)
+                                else: self._export_textgrid_long(os.path.join(s_out, f"{s.name}.TextGrid"), tree_structure=s_struct)
+                            else:
+                                if os.path.isdir(out_path): s_out = os.path.join(out_path, f"{s.name}.{'txt' if format_mode=='txt' else 'xlsx' if format_mode=='xlsx' else 'png'}")
+                                else:
+                                    base, ext = os.path.splitext(out_path)
+                                    s_out = f"{base}_{s.name}{ext}"
+                                if format_mode == 'txt': self._export_txt(s_out, tree_structure=s_struct)
+                                elif format_mode == 'xlsx': self._export_xlsx(s_out, include_chart=inc_chart, tree_structure=s_struct)
+                                elif format_mode == 'line_chart': self._export_line_chart(s_out, tree_structure=s_struct)
+                                elif format_mode == 'kde': self._export_kde_heatmap(s_out, tree_structure=s_struct)
+                            self.items = orig_items
+                    elif mode == 'integrated':
+                        if format_mode in ('txt', 'xlsx'): self._export_integrated(out_path, format_mode, inc_chart, all_speakers)
+                        else:
+                            messagebox.showwarning("提示", "整合导出仅支持 Excel 和 Text 格式。")
+                            return False
+                    return True
+                except Exception as e:
+                    messagebox.showerror("错误", str(e))
+                    import logging
+                    logging.getLogger(__name__).error(f"Export error: {e}", exc_info=True)
+                    return False
+            if format_mode == 'txt':
+                out = filedialog.askdirectory(title="选择导出文件夹") if mode == 'separate' else filedialog.asksaveasfilename(title="导出文本", defaultextension=".txt", initialfile="tone_export_data", filetypes=[("文本文件", "*.txt")])
+                if out and execute_export(out): messagebox.showinfo("成功", f"数据已导出至:\n{out}")
+            elif format_mode == 'textgrid':
+                if mode == 'integrated': return messagebox.showwarning("提示", "不支持整合导出 TextGrid。")
+                out = filedialog.askdirectory(title="选择TextGrid导出文件夹") if mode == 'separate' else None
+                if mode != 'separate':
+                    is_batch = False
+                    if self.app and hasattr(self.app, 'tabview'): is_batch = (self.app.tabview.get() == "多条独立音频")
+                    elif hasattr(self.parent, 'tabview'): is_batch = (self.parent.tabview.get() == "多条独立音频")
+                    out = filedialog.askdirectory(title="选择TextGrid导出文件夹") if is_batch else filedialog.asksaveasfilename(title="导出 TextGrid", defaultextension=".TextGrid", initialfile="tone_export_data", filetypes=[("TextGrid 文件", "*.TextGrid")])
+                if out and execute_export(out): messagebox.showinfo("成功", f"TextGrid 已导出至:\n{out}")
+            elif format_mode == 'xlsx':
+                out = filedialog.askdirectory(title="选择导出文件夹") if mode == 'separate' else filedialog.asksaveasfilename(title="导出Excel", defaultextension=".xlsx", initialfile="tone_export_data", filetypes=[("Excel 表格", "*.xlsx")])
+                if out:
+                    inc_chart = False if mode == 'integrated' else messagebox.askyesno("导出设置", "是否在 Excel 中包含分析图表？", default=messagebox.NO)
+                    if execute_export(out, inc_chart): messagebox.showinfo("成功", f"数据已导出至:\n{out}")
+            elif format_mode == 'line_chart':
+                if mode == 'integrated': return messagebox.showwarning("提示", "图表暂不支持整合导出。")
+                out = filedialog.askdirectory(title="选择图表导出文件夹") if mode == 'separate' else filedialog.asksaveasfilename(title="导出折线图", defaultextension=".png", initialfile="tone_line_chart", filetypes=[("PNG 图片", "*.png"), ("SVG 矢量图", "*.svg"), ("PDF 文档", "*.pdf")])
+                if out and execute_export(out): messagebox.showinfo("成功", f"图表已导出至:\n{out}")
+            elif format_mode == 'kde':
+                if mode == 'integrated': return messagebox.showwarning("提示", "图表暂不支持整合导出。")
+                out = filedialog.askdirectory(title="选择热力图导出文件夹") if mode == 'separate' else filedialog.asksaveasfilename(title="导出热力图", defaultextension=".png", initialfile="tone_heatmap", filetypes=[("PNG 图片", "*.png")])
+                if out and execute_export(out): messagebox.showinfo("成功", f"热力图已导出至:\n{out}")
+
         ctk.CTkButton(dlg, text="  📄  文本文件 (.txt)", command=lambda: do_export('txt'), fg_color="#F3F4F6", text_color="#374151", hover_color="#E5E7EB", **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
         ctk.CTkButton(dlg, text="  🏷  TextGrid 标注文件 (.TextGrid)", command=lambda: do_export('textgrid'), fg_color="#F3E8FF", text_color="#6B21A8", hover_color="#E9D5FF", **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
         ctk.CTkButton(dlg, text="  📊  Excel 表格 (.xlsx)", command=lambda: do_export('xlsx'), fg_color="#ECFDF5", text_color="#047857", hover_color="#D1FAE5", **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
@@ -882,6 +969,108 @@ class ProjectTreePanel:
                 logger.error(f"Error generating Excel chart: {chart_err}", exc_info=True)
         
         workbook.close()
+
+    def _export_integrated(self, out_file, format_mode, include_chart, all_speakers):
+        try: import xlsxwriter
+        except ImportError:
+            if format_mode == 'xlsx': return messagebox.showerror("错误", "缺少 xlsxwriter 库，请先安装：pip install xlsxwriter")
+        is_continuous = (self.num_rule_var.get() == "continuous")
+        num_points = self.app_state_params['pts']
+        speaker_stats = {}
+        speaker_rows = {}
+        max_syls = 1
+        for speaker in all_speakers:
+            s_struct = self._get_items_by_group_for_dict(speaker.items)
+            rows = []
+            f0_values = []
+            orig_items = self.items
+            self.items = speaker.items
+            for grp_name, children in s_struct:
+                for child in children:
+                    item = self.items[child]
+                    lbl = item.get('label', '')
+                    if len(lbl) > max_syls: max_syls = len(lbl)
+                    if (not item.get('snd') or not item.get('pitch')) and item.get('path'):
+                        try:
+                            item['snd'] = parselmouth.Sound(item['path'])
+                            pf = item.get('pitch_floor', self.app_state_params.get('pitch_floor', 75))
+                            pc = item.get('pitch_ceiling', self.app_state_params.get('pitch_ceiling', 600))
+                            vt = item.get('voicing_threshold', self.app_state_params.get('voicing_threshold', 0.25))
+                            item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=pf, pitch_ceiling=pc, voicing_threshold=vt, very_accurate=True, octave_jump_cost=0.9)
+                        except Exception as e: continue
+                    total_dur, syl_data = self._extract_syl_data(item, num_points)
+                    if total_dur <= 0: continue
+                    rows.append({'group': grp_name, 'label': lbl, 'total_dur': total_dur, 'syl_data': syl_data, 'raw_item': item})
+                    for _, freqs in syl_data:
+                        for f in freqs:
+                            if f > 0: f0_values.append(f)
+            self.items = orig_items
+            if f0_values:
+                import numpy as np
+                speaker_stats[speaker.id] = (np.min(f0_values), np.max(f0_values))
+            else: speaker_stats[speaker.id] = (0, 0)
+            speaker_rows[speaker.id] = rows
+
+        if format_mode == 'xlsx':
+            workbook = xlsxwriter.Workbook(out_file)
+            ws_data = workbook.add_worksheet("整合数据(T值)")
+            headers = ["发音人", "组别", "编号", "词语", "总时长(s)"]
+            for k in range(1, max_syls + 1):
+                headers.append(f"字{k}_时长(s)")
+                for i in range(1, num_points + 1): headers.append(f"字{k}_T{i}")
+            for col, header in enumerate(headers): ws_data.write(0, col, header)
+            row_idx = 1
+            for speaker in all_speakers:
+                rows = speaker_rows.get(speaker.id, [])
+                s_min, s_max = speaker_stats.get(speaker.id, (0, 0))
+                diff = s_max - s_min if s_max > s_min else 1.0
+                global_idx = 1
+                for r in rows:
+                    ws_data.write(row_idx, 0, speaker.name)
+                    ws_data.write(row_idx, 1, r['group'])
+                    ws_data.write(row_idx, 2, global_idx)
+                    ws_data.write(row_idx, 3, r['label'])
+                    ws_data.write(row_idx, 4, round(r['total_dur'], 4))
+                    col_idx = 5
+                    for s_dur, freqs in r['syl_data']:
+                        ws_data.write(row_idx, col_idx, round(s_dur, 4))
+                        col_idx += 1
+                        for f in freqs:
+                            ws_data.write(row_idx, col_idx, round(((f - s_min) / diff) * 5 if f > 0 else 0.0, 2))
+                            col_idx += 1
+                    fill_count = max_syls - len(r['syl_data'])
+                    for _ in range(fill_count):
+                        ws_data.write(row_idx, col_idx, 0.0)
+                        col_idx += 1
+                        for _ in range(num_points):
+                            ws_data.write(row_idx, col_idx, 0.0)
+                            col_idx += 1
+                    global_idx += 1
+                    row_idx += 1
+            workbook.close()
+        elif format_mode == 'txt':
+            with open(out_file, 'w', encoding='utf-8') as f_out:
+                headers = ["发音人", "组别", "编号", "词语", "总时长(s)"]
+                for k in range(1, max_syls + 1):
+                    headers.append(f"字{k}_时长(s)")
+                    for i in range(1, num_points + 1): headers.append(f"字{k}_T{i}")
+                f_out.write("\\t".join(headers) + "\\n")
+                for speaker in all_speakers:
+                    rows = speaker_rows.get(speaker.id, [])
+                    s_min, s_max = speaker_stats.get(speaker.id, (0, 0))
+                    diff = s_max - s_min if s_max > s_min else 1.0
+                    global_idx = 1
+                    for r in rows:
+                        line_parts = [speaker.name, r['group'], str(global_idx), r['label'], f"{r['total_dur']:.4f}"]
+                        for s_dur, freqs in r['syl_data']:
+                            line_parts.append(f"{s_dur:.4f}")
+                            for f in freqs: line_parts.append(f"{((f - s_min) / diff) * 5 if f > 0 else 0.0:.2f}")
+                        fill_count = max_syls - len(r['syl_data'])
+                        for _ in range(fill_count):
+                            line_parts.append("0.0000")
+                            for _ in range(num_points): line_parts.append("0.00")
+                        f_out.write("\\t".join(line_parts) + "\\n")
+                        global_idx += 1
 
     def _export_txt(self, out_file, tree_structure=None):
         is_continuous = (self.num_rule_var.get() == "continuous")

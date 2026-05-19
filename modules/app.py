@@ -17,6 +17,7 @@ from .audio_core import core_microscopic_vowel_nucleus, batch_process_worker, ma
 from .visual_splitter import VisualSplitter
 from .spectrogram_panel import SpectrogramPanel
 from .project_tree import ProjectTreePanel
+from .speaker_manager import SpeakerManager
 
 class PhoneticsApp:
     def __init__(self, root, initial_files=None):
@@ -36,27 +37,10 @@ class PhoneticsApp:
         except Exception:
             pass
         
-        self.pending_long_snd = None 
-        self.pending_batch_paths = []
-        
-        # === 初始化安全队列以处理拖拽事件，防止 windnd 的 C++ 回调直接操作 Tkinter 引引发 GIL 崩溃 ===
         self.drop_queue = queue.Queue()
         self.root.after(100, self._check_drop_queue)
-        
-        # 全局数据源 (Source of Truth)
-        self.items = {}
-        self.audio_cache = {}
-        
         self.debounce_timer = None
-        
-        self.last_params = {
-            'pts': 11,
-            'db': 60.0,
-            'skip_front': 0.00,
-            'pitch_floor': 75,
-            'pitch_ceiling': 600,
-            'voicing_threshold': 0.25
-        }
+        self.speaker_manager = SpeakerManager()
 
         # Shared ProcessPoolExecutor for performance optimization
         max_workers = min(os.cpu_count() or 4, 8)
@@ -84,6 +68,38 @@ class PhoneticsApp:
         # 处理初始传入的文件（例如“打开方式”或拖动到图标）
         if initial_files:
             self.root.after(1500, lambda: self.on_files_dropped(initial_files))
+
+
+    @property
+    def active_speaker(self): return self.speaker_manager.get_active_speaker()
+    @property
+    def items(self): return self.active_speaker.items
+    @items.setter
+    def items(self, v): self.active_speaker.items = v
+    @property
+    def audio_cache(self): return self.active_speaker.audio_cache
+    @audio_cache.setter
+    def audio_cache(self, v): self.active_speaker.audio_cache = v
+    @property
+    def last_params(self): return self.active_speaker.last_params
+    @last_params.setter
+    def last_params(self, v): self.active_speaker.last_params = v
+    @property
+    def pending_long_snd(self): return self.active_speaker.pending_long_snd
+    @pending_long_snd.setter
+    def pending_long_snd(self, v): self.active_speaker.pending_long_snd = v
+    @property
+    def pending_batch_paths(self): return self.active_speaker.pending_batch_paths
+    @pending_batch_paths.setter
+    def pending_batch_paths(self, v): self.active_speaker.pending_batch_paths = v
+    @property
+    def current_macro_segments(self): return self.active_speaker.current_macro_segments
+    @current_macro_segments.setter
+    def current_macro_segments(self, v): self.active_speaker.current_macro_segments = v
+    @property
+    def manual_segments(self): return getattr(self.active_speaker, 'manual_segments', None)
+    @manual_segments.setter
+    def manual_segments(self, v): self.active_speaker.manual_segments = v
 
     def _check_drop_queue(self):
         try:
@@ -239,6 +255,21 @@ class PhoneticsApp:
         self.progress_bar = ctk.CTkProgressBar(status_container, height=6, corner_radius=10, 
                                                progress_color="#60A5FA", fg_color="#E5E7EB")
         self.progress_bar.set(0)
+
+
+        self.speaker_frame = ctk.CTkFrame(left_scrollable, fg_color="white", corner_radius=10)
+        self.speaker_frame.pack(fill=tk.X, pady=(0, 10))
+        speaker_header = ctk.CTkFrame(self.speaker_frame, fg_color="transparent")
+        speaker_header.pack(fill=tk.X, padx=15, pady=(10, 5))
+        ctk.CTkLabel(speaker_header, text="发音人列表", font=self.font_title, text_color="#111827").pack(side=tk.LEFT)
+        CTkReleaseButton(speaker_header, text="", image=self.icons.get("plus"), width=24, height=24, command=self.on_add_speaker, fg_color="transparent", hover_color="#E5E7EB").pack(side=tk.RIGHT)
+        self.speaker_option_var = ctk.StringVar(value=self.active_speaker.name)
+        self.speaker_dropdown = ctk.CTkOptionMenu(self.speaker_frame, variable=self.speaker_option_var, values=[s.name for s in self.speaker_manager.get_all_speakers()], command=self.on_speaker_changed, font=self.font_main, fg_color="#F3F4F6", text_color="#1F2937", button_color="#E5E7EB", button_hover_color="#D1D5DB")
+        self.speaker_dropdown.pack(fill=tk.X, padx=15, pady=(0, 10))
+        speaker_actions = ctk.CTkFrame(self.speaker_frame, fg_color="transparent")
+        speaker_actions.pack(fill=tk.X, padx=15, pady=(0, 10))
+        CTkReleaseButton(speaker_actions, text="重命名", command=self.on_rename_speaker, height=24, font=ctk.CTkFont(size=11), fg_color="#F3F4F6", text_color="#4B5563", hover_color="#E5E7EB").pack(side=tk.LEFT, expand=True, padx=(0, 5))
+        CTkReleaseButton(speaker_actions, text="删除", command=self.on_delete_speaker, height=24, font=ctk.CTkFont(size=11), fg_color="#FEE2E2", text_color="#DC2626", hover_color="#FCA5A5").pack(side=tk.RIGHT, expand=True, padx=(5, 0))
 
         self.tabview = ctk.CTkTabview(left_scrollable, height=250, corner_radius=12, fg_color="white", 
                                       segmented_button_selected_color="#60A5FA", segmented_button_fg_color="#F3F4F6")
@@ -551,6 +582,82 @@ class PhoneticsApp:
         self.set_progress(1.0)
         self.set_status(text, "#10B981", "status_success")
         self.root.after(1500, lambda: self.progress_bar.pack_forget())
+
+
+    def on_add_speaker(self):
+        dialog = ctk.CTkInputDialog(text="请输入新发音人的名称:", title="添加发音人")
+        name = dialog.get_input()
+        if name and name.strip():
+            new_speaker = self.speaker_manager.add_speaker(name.strip())
+            self._update_speaker_dropdown()
+            self.speaker_option_var.set(new_speaker.name)
+            self.on_speaker_changed(new_speaker.name)
+
+    def on_rename_speaker(self):
+        dialog = ctk.CTkInputDialog(text="请输入新的名称:", title="重命名发音人")
+        new_name = dialog.get_input()
+        if new_name and new_name.strip():
+            self.speaker_manager.rename_speaker(self.speaker_manager.active_speaker_id, new_name.strip())
+            self._update_speaker_dropdown()
+            self.speaker_option_var.set(new_name.strip())
+
+    def on_delete_speaker(self):
+        if len(self.speaker_manager.speakers) <= 1:
+            messagebox.showwarning("提示", "必须至少保留一个发音人。")
+            return
+        if messagebox.askyesno("确认", f"确定要删除发音人 '{self.active_speaker.name}' 吗？其所有数据将丢失。"):
+            self.speaker_manager.remove_speaker(self.speaker_manager.active_speaker_id)
+            self._update_speaker_dropdown()
+            self.speaker_option_var.set(self.active_speaker.name)
+            self.on_speaker_changed(self.active_speaker.name)
+
+    def _update_speaker_dropdown(self):
+        self.speaker_dropdown.configure(values=[s.name for s in self.speaker_manager.get_all_speakers()])
+
+    def on_speaker_changed(self, selected_name):
+        for s in self.speaker_manager.get_all_speakers():
+            if s.name == selected_name:
+                self.active_speaker.tab_mode = self.tabview.get()
+                self.speaker_manager.set_active_speaker(s.id)
+                self._refresh_ui_for_speaker()
+                break
+
+    def _refresh_ui_for_speaker(self):
+        if hasattr(self.active_speaker, 'tab_mode'):
+            try: self.tabview.set(self.active_speaker.tab_mode)
+            except ValueError: pass
+        self.slider_pts.set(self.last_params['pts'])
+        self.entry_points.delete(0, tk.END)
+        self.entry_points.insert(0, str(self.last_params['pts']))
+        self.slider_db.set(self.last_params['db'])
+        self.var_drop_db.set(str(self.last_params['db']))
+        self.slider_dur.set(self.last_params['skip_front'])
+        self.var_min_dur.set(f"{self.last_params['skip_front']:.2f}")
+        self.entry_pitch_ceiling.delete(0, tk.END)
+        self.entry_pitch_ceiling.insert(0, str(self.last_params['pitch_ceiling']))
+        self.entry_pitch_floor.delete(0, tk.END)
+        self.entry_pitch_floor.insert(0, str(self.last_params['pitch_floor']))
+        self.entry_voicing_threshold.delete(0, tk.END)
+        self.entry_voicing_threshold.insert(0, f"{self.last_params['voicing_threshold']:.2f}")
+
+        if self.pending_long_snd: self.lbl_long_file.configure(text="已加载音频", text_color="#2563EB")
+        else: self.lbl_long_file.configure(text="未选择", text_color="#6B7280")
+        if self.pending_batch_paths: self.lbl_batch_files.configure(text=f"已选 {len(self.pending_batch_paths)} 个文件", text_color="#2563EB")
+        else: self.lbl_batch_files.configure(text="未选择", text_color="#6B7280")
+
+        if hasattr(self, 'tree_panel'):
+            self.tree_panel.items = self.items
+            self.tree_panel.app_state_params = self.last_params
+            self.tree_panel.clear_ui_only()
+            unique_groups = set()
+            for item in self.items.values(): unique_groups.add(item.get('group', '导入内容'))
+            for g in unique_groups: self.tree_panel.ensure_group(g)
+            for iid, item in self.items.items():
+                gid = self.tree_panel.group_nodes.get(item.get('group', '导入内容'))
+                if gid:
+                    img = self.tk_icons.get('warning', '') if item.get('has_empty_data', False) else ''
+                    text = item.get('label', '') + (" (失败)" if 'missing' in iid else "")
+                    self.tree_panel.tree.insert(gid, tk.END, iid=iid, text=text, tags=('item',), image=img)
 
     def _make_scrollable_auto(self, scrollable_frame):
         """
