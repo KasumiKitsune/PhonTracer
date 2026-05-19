@@ -84,10 +84,12 @@ class SpectrogramPanel:
         
         CTkReleaseButton(frame_actions, text="自动识别", image=self.icons.get("bulb"), compound="left", command=self.apply_auto_detect, corner_radius=20, height=36, width=110, fg_color="#FEE2E2", text_color="#DC2626", hover_color="#FCA5A5").pack(side=tk.LEFT, padx=(0, 20))
         
-        self.btn_play = CTkReleaseButton(frame_actions, text=" 试听", image=self.icons.get("play"), compound="left", command=self.play_selected, font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), corner_radius=20, height=36, width=60, fg_color="#E5E7EB", text_color="#1F2937", hover_color="#D1D5DB")
-        self.btn_play.pack(side=tk.LEFT, padx=(0, 10))
+        # 导出按钮 (靠最右侧对齐)
+        CTkReleaseButton(frame_actions, text=" 导出", image=self.icons.get("save"), compound="left", command=self.on_export_callback, font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), corner_radius=20, height=36, width=60, fg_color="#10B981", hover_color="#059669").pack(side=tk.RIGHT)
         
-        CTkReleaseButton(frame_actions, text=" 导出", image=self.icons.get("save"), compound="left", command=self.on_export_callback, font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), corner_radius=20, height=36, width=60, fg_color="#10B981", hover_color="#059669").pack(side=tk.LEFT)
+        # 播放/暂停按钮 (靠右侧对齐，位于导出按钮左侧)
+        self.btn_play = CTkReleaseButton(frame_actions, text=" 播放", image=self.icons.get("play"), compound="left", command=self.play_selected, font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), corner_radius=20, height=36, width=60, fg_color="#E5E7EB", text_color="#1F2937", hover_color="#D1D5DB")
+        self.btn_play.pack(side=tk.RIGHT, padx=(0, 20))
 
         self.fig = plt.Figure(figsize=(7, 5), facecolor='white') 
         self.ax = self.fig.add_subplot(111)
@@ -492,7 +494,7 @@ class SpectrogramPanel:
             if playing:
                 self.btn_play.configure(text=" 暂停", image=self.icons.get("pause"))
             else:
-                self.btn_play.configure(text=" 试听", image=self.icons.get("play"))
+                self.btn_play.configure(text=" 播放", image=self.icons.get("play"))
 
     def play_selected(self):
         item = self.current_item
