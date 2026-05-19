@@ -188,7 +188,7 @@ def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: 
     return output
 
 def write_analysis_sheet_with_formulas(workbook, ws_res, group_list, num_points, max_syls,
-                                       last_data_row, data_sheet_name='数据'):
+                                       last_data_row, data_sheet_name='数据', speaker_col=None):
     """
     在分析结果 Sheet 中写入 Excel 公式，引用数据 Sheet 的原始 Hz 值进行计算。
 
@@ -206,6 +206,7 @@ def write_analysis_sheet_with_formulas(workbook, ws_res, group_list, num_points,
     max_syls : int — 最大音节数
     last_data_row : int — 数据 Sheet 中最后一行数据的 0-indexed 行号
     data_sheet_name : str
+    speaker_col : str, optional — 如果指定，表示是多发音人整合模式，首列将是发音人，数据列将右移
 
     Returns
     -------
@@ -220,6 +221,11 @@ def write_analysis_sheet_with_formulas(workbook, ws_res, group_list, num_points,
     num_groups = len(group_list)
     # Excel row of last data (1-indexed) = last_data_row + 1
     lr = last_data_row + 1
+
+    # 如果有 speaker_col，表示是多发音人整合导出，此时数据列会右移1列（首列为发音人，组别列为B）
+    is_integrated = (speaker_col is not None)
+    grp_col_letter = 'B' if is_integrated else 'A'
+    col_offset = 5 if is_integrated else 4
 
     # ────────── 格式 ──────────
     bold_fmt = workbook.add_format({'bold': True, 'bg_color': '#F2F2F2'})
@@ -253,15 +259,15 @@ def write_analysis_sheet_with_formulas(workbook, ws_res, group_list, num_points,
         r = hz_data_start + g_idx
         ws_res.write(r, 0, grp)
 
-        # 数据 Sheet 组别列 = A（col 0），条件范围固定
-        grp_range = f'{ds}!$A$2:$A${lr}'
+        # 数据 Sheet 组别列 条件范围固定
+        grp_range = f'{ds}!${grp_col_letter}$2:${grp_col_letter}${lr}'
         # 引用本行 A 列作为条件值（绝对列）
         criteria = f'$A{r + 1}'
 
         for k in range(max_syls):
             base_col = 1 + k * (num_points + 1)
             # ── 平均时长 ──
-            dur_data_col = 4 + k * (num_points + 1)  # 数据表中该音节时长列
+            dur_data_col = col_offset + k * (num_points + 1)  # 数据表中该音节时长列
             dc = xl_col_to_name(dur_data_col)
             val_range = f'{ds}!${dc}$2:${dc}${lr}'
             ws_res.write_formula(
