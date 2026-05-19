@@ -1,47 +1,23 @@
-import sys
-import os
 import unittest
 from unittest.mock import MagicMock, patch, PropertyMock
+import numpy as np
 
-sys.modules['flet'] = MagicMock()
-sys.modules['sounddevice'] = MagicMock()
-sys.modules['parselmouth'] = MagicMock()
-sys.modules['customtkinter'] = MagicMock()
-sys.modules['windnd'] = MagicMock()
-
-import parselmouth
-
-sys.modules['tkinter'] = MagicMock()
-sys.modules['tkinter.ttk'] = MagicMock()
-sys.modules['tkinter.filedialog'] = MagicMock()
-sys.modules['tkinter.messagebox'] = MagicMock()
-sys.modules['matplotlib'] = MagicMock()
-sys.modules['matplotlib.pyplot'] = MagicMock()
-sys.modules['matplotlib.backends'] = MagicMock()
-sys.modules['matplotlib.backends.backend_tkagg'] = MagicMock()
+from tests.shared_root import get_shared_root
+from modules.app import PhoneticsApp
+from modules.spectrogram_panel import SpectrogramPanel
 
 mock_img = MagicMock()
 type(mock_img).size = PropertyMock(return_value=(100, 100))
 
-mock_pil_image = MagicMock()
-mock_pil_image.open.return_value = mock_img
-sys.modules['PIL'] = MagicMock()
-sys.modules['PIL.Image'] = mock_pil_image
-sys.modules['PIL.ImageTk'] = MagicMock()
-
-from modules.app import PhoneticsApp
-from modules.project_tree import ProjectTreePanel
-from modules.spectrogram_panel import SpectrogramPanel
-from modules.data_utils import get_export_text_for_item
-import numpy as np
-
 class TestUISyncBugs(unittest.TestCase):
     def setUp(self):
-        self.root_mock = MagicMock()
+        self.root = get_shared_root()
 
         with patch('PIL.Image.open', return_value=mock_img):
-            with patch.object(PhoneticsApp, 'setup_icons'), patch.object(PhoneticsApp, 'setup_ui'): # completely bypass UI setup
-                self.app = PhoneticsApp(self.root_mock)
+            with patch.object(PhoneticsApp, 'setup_icons'), \
+                 patch.object(PhoneticsApp, 'setup_ui'), \
+                 patch.dict('sys.modules', {'windnd': MagicMock()}):
+                self.app = PhoneticsApp(self.root)
                 self.app.icons = {}
                 self.app.tk_icons = {}
                 self.app.tree_panel = MagicMock()
@@ -88,9 +64,8 @@ class TestUISyncBugs(unittest.TestCase):
 
     def test_apply_manual_time_sets_flag(self):
         """Test that applying manual time bounds sets is_manual_edited flag"""
-        # Since spectrogram_panel was mocked out, we instantiate one without actually drawing it
         with patch.object(SpectrogramPanel, 'setup_ui'):
-            panel = SpectrogramPanel(self.root_mock, {}, None, None, None)
+            panel = SpectrogramPanel(self.root, {}, None, None, None)
             panel.current_item = self.item
             panel.var_t_start = MagicMock()
             panel.var_t_end = MagicMock()
@@ -105,6 +80,39 @@ class TestUISyncBugs(unittest.TestCase):
         self.assertEqual(self.item['end'], 0.8)
         self.assertTrue(self.item.get('is_manual_edited'))
 
+    def test_wordlist_drag_and_drop_txt(self):
+        """Test that dropping a .txt file onto the wordlist dialog imports the file content"""
+        # Set up a mock dialog
+        mock_dlg = MagicMock()
+        mock_textbox = MagicMock()
+        mock_update_stats = MagicMock()
+        
+        self.app.active_import_dlg = mock_dlg
+        self.app.active_import_textbox = mock_textbox
+        self.app.active_import_update_stats = mock_update_stats
+        self.app.active_import_mode = 'long'
+        
+        # Simulate dropping a .txt file path (in bytes or string)
+        import tempfile
+        import os
+        with tempfile.NamedTemporaryFile(suffix='.txt', delete=False) as f:
+            f.write(b"Group1\nword1 word2")
+            f_path = f.name
+            
+        try:
+            # Put the drag and drop item in the drop queue
+            self.app.drop_queue.put(('dlg', [f_path.encode('utf-8')]))
+            
+            # Check the drop queue
+            self.app._check_drop_queue()
+            
+            # Assert text_box.delete and text_box.insert were called
+            mock_textbox.delete.assert_called_with("1.0", "end")
+            mock_textbox.insert.assert_called_with("1.0", "Group1\nword1 word2")
+            mock_update_stats.assert_called_once()
+        finally:
+            if os.path.exists(f_path):
+                os.remove(f_path)
+
 if __name__ == '__main__':
     unittest.main()
-

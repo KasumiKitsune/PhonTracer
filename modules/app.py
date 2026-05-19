@@ -51,9 +51,14 @@ class PhoneticsApp:
             self.root.destroy()
         self.root.protocol("WM_DELETE_WINDOW", on_closing)
         
-        self.font_title = ctk.CTkFont(family="Microsoft YaHei", size=15, weight="bold")
-        self.font_main = ctk.CTkFont(family="Microsoft YaHei", size=13)
-        self.font_code = ctk.CTkFont(family="Consolas", size=13)
+        try:
+            self.font_title = ctk.CTkFont(family="Microsoft YaHei", size=15, weight="bold")
+            self.font_main = ctk.CTkFont(family="Microsoft YaHei", size=13)
+            self.font_code = ctk.CTkFont(family="Consolas", size=13)
+        except Exception:
+            self.font_title = ("Microsoft YaHei", 15, "bold")
+            self.font_main = ("Microsoft YaHei", 13)
+            self.font_code = ("Consolas", 13)
 
         self.setup_icons()
         self.setup_ui()
@@ -105,11 +110,126 @@ class PhoneticsApp:
         try:
             # 安全地将拖入的文件拿到主线程标准事件流中
             while True:
-                files = self.drop_queue.get_nowait()
-                self._process_dropped_files(files)
+                item = self.drop_queue.get_nowait()
+                if isinstance(item, tuple) and len(item) == 2 and item[0] == 'dlg':
+                    self._process_dlg_dropped_files(item[1])
+                else:
+                    self._process_dropped_files(item)
         except queue.Empty:
             pass
         self.root.after(100, self._check_drop_queue)
+
+    def _process_dlg_dropped_files(self, files):
+        if not getattr(self, 'active_import_dlg', None) or not self.active_import_dlg.winfo_exists():
+            return
+            
+        decoded_paths = []
+        for f in files:
+            if isinstance(f, bytes):
+                try: decoded_paths.append(f.decode('gbk'))
+                except UnicodeDecodeError: decoded_paths.append(f.decode('utf-8'))
+            else:
+                decoded_paths.append(str(f))
+                
+        txt_files = [p for p in decoded_paths if p.lower().endswith(('.txt', '.csv'))]
+        tg_files = [p for p in decoded_paths if p.lower().endswith('.textgrid')]
+        
+        if tg_files:
+            path = tg_files[0]
+            if self.active_import_mode != 'long':
+                messagebox.showwarning("提示", "目前仅在“单条长音频”模式下支持导入 TextGrid 词表。", parent=self.active_import_dlg)
+                return
+            try:
+                import textgrid
+                tg = textgrid.TextGrid.fromFile(path)
+                words_tier = None
+                groups_tier = None
+                chars_tier = None
+                for t in tg.tiers:
+                    if t.name == "words": words_tier = t
+                    elif t.name == "chars": chars_tier = t
+                    elif t.name in ["groups", "group"]: groups_tier = t
+                if not words_tier:
+                    for t in tg.tiers:
+                        if isinstance(t, textgrid.IntervalTier):
+                            words_tier = t
+                            break
+                if not words_tier:
+                    messagebox.showerror("错误", "TextGrid 中没有找到 IntervalTier", parent=self.active_import_dlg)
+                    return
+                    
+                tg_intervals = []
+                import numpy as np
+                for interval in words_tier:
+                    lbl = interval.mark.strip()
+                    if lbl:
+                        grp_name = "导入内容"
+                        if groups_tier:
+                            center = (interval.minTime + interval.maxTime) / 2.0
+                            for g_interval in groups_tier:
+                                if g_interval.minTime <= center <= g_interval.maxTime:
+                                    g_lbl = g_interval.mark.strip()
+                                    if g_lbl:
+                                        grp_name = g_lbl
+                                        break
+                        chars_bounds = []
+                        inner_splits = []
+                        if chars_tier:
+                            overlapping_chars = []
+                            for c_interval in chars_tier:
+                                c_lbl = c_interval.mark.strip()
+                                if c_lbl:
+                                    center = (c_interval.minTime + c_interval.maxTime) / 2.0
+                                    if interval.minTime <= center <= interval.maxTime:
+                                        overlapping_chars.append(c_interval)
+                            overlapping_chars.sort(key=lambda c: c.minTime)
+                            if overlapping_chars:
+                                for c in overlapping_chars:
+                                    chars_bounds.append([c.minTime, c.maxTime])
+                                for j in range(len(overlapping_chars) - 1):
+                                    inner_splits.append(overlapping_chars[j].maxTime)
+                        if not chars_bounds:
+                            w_len = len(lbl)
+                            if w_len > 1:
+                                splits = np.linspace(interval.minTime, interval.maxTime, w_len + 1).tolist()
+                                chars_bounds = [[splits[j], splits[j+1]] for j in range(w_len)]
+                                inner_splits = splits[1:-1]
+                            else:
+                                chars_bounds = [[interval.minTime, interval.maxTime]]
+                                inner_splits = []
+                        tg_intervals.append({
+                            'start': interval.minTime,
+                            'end': interval.maxTime,
+                            'label': lbl,
+                            'group': grp_name,
+                            'inner_splits': inner_splits,
+                            'chars_bounds': chars_bounds
+                        })
+                if not tg_intervals:
+                    messagebox.showerror("错误", "TextGrid 中没有非空标签的区间", parent=self.active_import_dlg)
+                    return
+                
+                dlg = self.active_import_dlg
+                dlg.destroy()
+                self.process_long_with_textgrid(tg_intervals)
+            except Exception as e:
+                messagebox.showerror("错误", f"解析 TextGrid 失败: {e}", parent=self.active_import_dlg)
+                
+        elif txt_files:
+            path = txt_files[0]
+            try:
+                try:
+                    with open(path, 'r', encoding='utf-8') as f: text = f.read()
+                except UnicodeDecodeError:
+                    with open(path, 'r', encoding='gbk') as f: text = f.read()
+                
+                self.active_import_textbox.delete("1.0", tk.END)
+                self.active_import_textbox.insert("1.0", text)
+                self.active_import_update_stats()
+            except Exception as e:
+                messagebox.showerror("错误", f"读取文件失败: {e}", parent=self.active_import_dlg)
+        else:
+            messagebox.showwarning("提示", "拖入的文件类型不支持，请拖入 .txt 或 .TextGrid 文件。", parent=self.active_import_dlg)
 
     def on_files_dropped(self, files):
         # 仅将文件压入队列，彻底不涉及 Tkinter UI 的 Tcl 调用
@@ -148,16 +268,26 @@ class PhoneticsApp:
                         
                     def update_ui():
                         self.stop_loading()
+                        audio_name = os.path.splitext(os.path.basename(path))[0]
+                        if seg_count > 1 and self.active_speaker.name.startswith("发音人"):
+                            self.speaker_manager.rename_speaker(self.speaker_manager.active_speaker_id, audio_name)
+                            self._update_speaker_dropdown()
+                            self.speaker_option_var.set(audio_name)
+
                         if seg_count <= 1:
                             self.tabview.set("多条独立音频")
                             self.pending_batch_paths = [path]
                             self.lbl_batch_files.configure(text=f"已选 1 个文件 (从拖拽)", text_color="#2563EB")
                             self.lbl_status.configure(text="独立音频就绪", text_color="#10B981")
+                            if getattr(self, 'switch_unified_wordlist', None) and self.switch_unified_wordlist.get() and getattr(self, 'global_wordlist_text', None):
+                                self.process_batch_with_wordlist(self.global_wordlist_text, match_mode=getattr(self, 'global_wordlist_match_mode', 'fuzzy'))
                         else:
                             self.tabview.set("单条长音频")
                             self.pending_long_snd = snd
-                            self.lbl_long_file.configure(text=os.path.basename(path) + " (从拖拽)", text_color="#2563EB")
+                            self.lbl_long_file.configure(text=audio_name + " (从拖拽)", text_color="#2563EB")
                             self.lbl_status.configure(text="长音频就绪", text_color="#10B981")
+                            if getattr(self, 'switch_unified_wordlist', None) and self.switch_unified_wordlist.get() and getattr(self, 'global_wordlist_text', None):
+                                self.process_long_with_wordlist(self.global_wordlist_text)
                     self.root.after(0, update_ui)
                 except Exception as e:
                     self.root.after(0, self.stop_loading)
@@ -264,12 +394,69 @@ class PhoneticsApp:
         ctk.CTkLabel(speaker_header, text="发音人列表", font=self.font_title, text_color="#111827").pack(side=tk.LEFT)
         CTkReleaseButton(speaker_header, text="", image=self.icons.get("plus"), width=24, height=24, command=self.on_add_speaker, fg_color="transparent", hover_color="#E5E7EB").pack(side=tk.RIGHT)
         self.speaker_option_var = ctk.StringVar(value=self.active_speaker.name)
-        self.speaker_dropdown = ctk.CTkOptionMenu(self.speaker_frame, variable=self.speaker_option_var, values=[s.name for s in self.speaker_manager.get_all_speakers()], command=self.on_speaker_changed, font=self.font_main, fg_color="#F3F4F6", text_color="#1F2937", button_color="#E5E7EB", button_hover_color="#D1D5DB")
+        self.speaker_dropdown = ctk.CTkOptionMenu(
+            self.speaker_frame, 
+            variable=self.speaker_option_var, 
+            values=[s.name for s in self.speaker_manager.get_all_speakers()], 
+            command=self.on_speaker_changed, 
+            font=self.font_main, 
+            fg_color="#F3F4F6", 
+            text_color="#1F2937", 
+            button_color="#F3F4F6",             # 统一背景色，消除右侧色块，使其浑然一体
+            button_hover_color="#E5E7EB", 
+            height=32,                          # 增加高度以优化 Canvas 箭头高 DPI 渲染
+            corner_radius=16                    # 药丸型圆角
+        )
         self.speaker_dropdown.pack(fill=tk.X, padx=15, pady=(0, 10))
+        # 修复下拉菜单箭头在 Windows 高分屏上渲染出白色噪点，同时避免重绘背景时出现白色缝隙
+        try:
+            orig_draw_arrow = self.speaker_dropdown._draw_engine.draw_dropdown_arrow
+            def custom_draw_arrow(*args, **kwargs):
+                old_method = self.speaker_dropdown._draw_engine.preferred_drawing_method
+                self.speaker_dropdown._draw_engine.preferred_drawing_method = "polygon_shapes"
+                res = orig_draw_arrow(*args, **kwargs)
+                self.speaker_dropdown._draw_engine.preferred_drawing_method = old_method
+                try:
+                    self.speaker_dropdown._canvas.itemconfigure("dropdown_arrow", width=2)
+                except Exception:
+                    pass
+                return res
+            self.speaker_dropdown._draw_engine.draw_dropdown_arrow = custom_draw_arrow
+            self.speaker_dropdown._canvas.delete("dropdown_arrow")
+            # 依靠 pack 后的 <Configure> 事件自动触发正常的 _draw，无需手动重绘
+        except Exception:
+            pass
         speaker_actions = ctk.CTkFrame(self.speaker_frame, fg_color="transparent")
         speaker_actions.pack(fill=tk.X, padx=15, pady=(0, 10))
-        CTkReleaseButton(speaker_actions, text="重命名", command=self.on_rename_speaker, height=24, font=ctk.CTkFont(size=11), fg_color="#F3F4F6", text_color="#4B5563", hover_color="#E5E7EB").pack(side=tk.LEFT, expand=True, padx=(0, 5))
-        CTkReleaseButton(speaker_actions, text="删除", command=self.on_delete_speaker, height=24, font=ctk.CTkFont(size=11), fg_color="#FEE2E2", text_color="#DC2626", hover_color="#FCA5A5").pack(side=tk.RIGHT, expand=True, padx=(5, 0))
+        CTkReleaseButton(
+            speaker_actions, 
+            text="重命名", 
+            command=self.on_rename_speaker, 
+            height=32, 
+            corner_radius=16, 
+            font=self.font_main, 
+            fg_color="#F3F4F6", 
+            text_color="#4B5563", 
+            hover_color="#E5E7EB"
+        ).pack(side=tk.LEFT, expand=True, padx=(0, 5), fill=tk.X)
+        CTkReleaseButton(
+            speaker_actions, 
+            text="删除", 
+            command=self.on_delete_speaker, 
+            height=32, 
+            corner_radius=16, 
+            font=self.font_main, 
+            fg_color="#FEE2E2", 
+            text_color="#DC2626", 
+            hover_color="#FCA5A5"
+        ).pack(side=tk.LEFT, expand=True, padx=(5, 0), fill=tk.X)
+
+        switch_row = ctk.CTkFrame(self.speaker_frame, fg_color="transparent")
+        switch_row.pack(fill=tk.X, padx=15, pady=(0, 10))
+        self.switch_unified_wordlist = ctk.CTkSwitch(switch_row, text="统一字表", font=self.font_main, width=60)
+        self.switch_unified_wordlist.pack(side=tk.LEFT)
+        self.switch_unified_wordlist.select()
+
 
         self.tabview = ctk.CTkTabview(left_scrollable, height=250, corner_radius=12, fg_color="white", 
                                       segmented_button_selected_color="#60A5FA", segmented_button_fg_color="#F3F4F6")
@@ -585,13 +772,17 @@ class PhoneticsApp:
 
 
     def on_add_speaker(self):
-        dialog = ctk.CTkInputDialog(text="请输入新发音人的名称:", title="添加发音人")
-        name = dialog.get_input()
-        if name and name.strip():
-            new_speaker = self.speaker_manager.add_speaker(name.strip())
-            self._update_speaker_dropdown()
-            self.speaker_option_var.set(new_speaker.name)
-            self.on_speaker_changed(new_speaker.name)
+        idx = len(self.speaker_manager.get_all_speakers()) + 1
+        while True:
+            name = f"发音人 {idx}"
+            if not any(s.name == name for s in self.speaker_manager.get_all_speakers()):
+                break
+            idx += 1
+        new_speaker = self.speaker_manager.add_speaker(name)
+        new_speaker.tab_mode = self.tabview.get()
+        self._update_speaker_dropdown()
+        self.speaker_option_var.set(new_speaker.name)
+        self.on_speaker_changed(new_speaker.name)
 
     def on_rename_speaker(self):
         dialog = ctk.CTkInputDialog(text="请输入新的名称:", title="重命名发音人")
@@ -658,6 +849,15 @@ class PhoneticsApp:
                     img = self.tk_icons.get('warning', '') if item.get('has_empty_data', False) else ''
                     text = item.get('label', '') + (" (失败)" if 'missing' in iid else "")
                     self.tree_panel.tree.insert(gid, tk.END, iid=iid, text=text, tags=('item',), image=img)
+                    
+            if hasattr(self.active_speaker, 'last_selected_iid') and self.active_speaker.last_selected_iid in self.items:
+                try:
+                    self.tree_panel.tree.selection_set(self.active_speaker.last_selected_iid)
+                    self.tree_panel.on_tree_select(None)
+                except tk.TclError:
+                    self.tree_panel.select_first_item()
+            else:
+                self.tree_panel.select_first_item()
 
     def _make_scrollable_auto(self, scrollable_frame):
         """
@@ -1031,8 +1231,15 @@ class PhoneticsApp:
                 snd = parselmouth.Sound(path)
                 def done():
                     self.pending_long_snd = snd
+                    audio_name = os.path.splitext(os.path.basename(path))[0]
                     self.lbl_long_file.configure(text=os.path.basename(path), text_color="#2563EB")
                     self.stop_loading("长音频就绪")
+                    if self.active_speaker.name.startswith("发音人"):
+                        self.speaker_manager.rename_speaker(self.speaker_manager.active_speaker_id, audio_name)
+                        self._update_speaker_dropdown()
+                        self.speaker_option_var.set(audio_name)
+                    if getattr(self, 'switch_unified_wordlist', None) and self.switch_unified_wordlist.get() and getattr(self, 'global_wordlist_text', None):
+                        self.process_long_with_wordlist(self.global_wordlist_text)
                 self.root.after(0, done)
             except Exception as e:
                 self.root.after(0, lambda: self.stop_loading(f"加载失败: {e}"))
@@ -1331,10 +1538,12 @@ class PhoneticsApp:
     def load_batch_audio(self):
         paths = filedialog.askopenfilenames(filetypes=[("Audio Files", "*.wav *.mp3")])
         if not paths: return
-        self.pending_batch_paths = paths
+        self.pending_batch_paths = list(paths)
         self.lbl_batch_files.configure(text=f"已选 {len(paths)} 个文件", text_color="#2563EB")
         self.lbl_status.configure(text="独立音频就绪，正在后台分析...", text_color="#10B981")
         self.start_background_batch_processing(paths)
+        if getattr(self, 'switch_unified_wordlist', None) and self.switch_unified_wordlist.get() and getattr(self, 'global_wordlist_text', None):
+            self.root.after(100, lambda: self.process_batch_with_wordlist(self.global_wordlist_text, match_mode=getattr(self, 'global_wordlist_match_mode', 'fuzzy')))
 
     def start_background_batch_processing(self, paths):
         def run():
@@ -1791,6 +2000,8 @@ class PhoneticsApp:
                         if not messagebox.askyesno("数量不匹配警告", f"您刚才手动切分了 {seg_count} 个片段，但字表内包含 {word_count} 个项。\n\n数量不一致将导致音频与文本错位，是否继续强制提取？"):
                             return
                             
+            self.global_wordlist_text = raw_text
+            if mode == 'batch': self.global_wordlist_match_mode = match_mode_var.get()
             dlg.destroy()
             if mode == 'long': self.process_long_with_wordlist(raw_text)
             else: self.process_batch_with_wordlist(raw_text, match_mode=match_mode_var.get())
@@ -1809,6 +2020,18 @@ class PhoneticsApp:
         
         # 初始触发一次统计
         update_stats()
+
+        self.active_import_dlg = dlg
+        self.active_import_textbox = text_box
+        self.active_import_update_stats = update_stats
+        self.active_import_mode = mode
+        
+        try:
+            import windnd
+            windnd.hook_dropfiles(dlg, func=lambda files: self.drop_queue.put(('dlg', files)))
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Failed to hook dropfiles on import dialog: {e}")
 
     def process_long_with_textgrid(self, tg_intervals):
         if not tg_intervals: return

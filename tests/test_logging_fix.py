@@ -3,23 +3,13 @@ from unittest.mock import MagicMock, patch
 import logging
 import sys
 import numpy as np
-import parselmouth
 
-# Mock UI dependencies for non-GUI test environment
-sys.modules['tkinter'] = MagicMock()
-sys.modules['tkinter.ttk'] = MagicMock()
-sys.modules['tkinter.messagebox'] = MagicMock()
-sys.modules['tkinter.filedialog'] = MagicMock()
-sys.modules['customtkinter'] = MagicMock()
-sys.modules['xlsxwriter'] = MagicMock()
-sys.modules['matplotlib'] = MagicMock()
-sys.modules['matplotlib.pyplot'] = MagicMock()
-
+from tests.shared_root import get_shared_root
 from modules.project_tree import ProjectTreePanel
 
 def test_logging_on_exception(caplog):
     # Setup mocks
-    parent = MagicMock()
+    parent = get_shared_root()
     icons = {}
     items_dict = {
         'item1': {
@@ -32,7 +22,7 @@ def test_logging_on_exception(caplog):
     on_item_selected = MagicMock()
     on_clear_canvas = MagicMock()
 
-    # We need to mock more things because ProjectTreePanel.__init__ calls setup_ui
+    # We patch widget classes locally to run headlessly/mocked
     with patch('modules.project_tree.ttk.Style'), \
          patch('modules.project_tree.ctk.CTkFrame'), \
          patch('modules.project_tree.ctk.CTkLabel'), \
@@ -42,7 +32,8 @@ def test_logging_on_exception(caplog):
          patch('modules.project_tree.CTkReleaseButton'), \
          patch('modules.project_tree.ctk.StringVar'), \
          patch('modules.project_tree.ctk.CTkRadioButton'), \
-         patch('modules.project_tree.ctk.CTkTextbox'):
+         patch('modules.project_tree.ctk.CTkTextbox'), \
+         patch('modules.project_tree.AutoScrollbar'):
 
         panel = ProjectTreePanel(parent, icons, items_dict, app_state_params, on_item_selected, on_clear_canvas)
 

@@ -32,9 +32,14 @@ class ProjectTreePanel:
         self.warning_group_id = None
         self.warning_iids = {}
         
-        self.font_title = ctk.CTkFont(family="Microsoft YaHei", size=15, weight="bold")
-        self.font_main = ctk.CTkFont(family="Microsoft YaHei", size=13)
-        self.font_code = ctk.CTkFont(family="Consolas", size=13)
+        try:
+            self.font_title = ctk.CTkFont(family="Microsoft YaHei", size=15, weight="bold")
+            self.font_main = ctk.CTkFont(family="Microsoft YaHei", size=13)
+            self.font_code = ctk.CTkFont(family="Consolas", size=13)
+        except Exception:
+            self.font_title = ("Microsoft YaHei", 15, "bold")
+            self.font_main = ("Microsoft YaHei", 13)
+            self.font_code = ("Consolas", 13)
         
         self.setup_ui()
 
@@ -204,13 +209,6 @@ class ProjectTreePanel:
             elif 'item' in self.tree.item(iid, 'tags'):
                 self.tree.item(iid, text=new_name)
                 self.items[iid]['label'] = new_name
-                if iid.startswith('warning_'):
-                    orig_iid = iid[8:]
-                    if self.tree.exists(orig_iid): self.tree.item(orig_iid, text=new_name)
-                else:
-                    if iid in self.warning_iids:
-                        w_iid = self.warning_iids[iid]
-                        if self.tree.exists(w_iid): self.tree.item(w_iid, text=new_name)
             
             self.update_preview()
             self._debounce_zebra_stripes()
@@ -233,6 +231,8 @@ class ProjectTreePanel:
         if 'item' not in self.tree.item(iid, 'tags'): return
         
         self.current_iid = iid
+        if self.app and hasattr(self.app, 'active_speaker'):
+            self.app.active_speaker.last_selected_iid = iid
         if self.on_item_selected:
             self.on_item_selected(iid)
         self.update_preview()
@@ -265,21 +265,13 @@ class ProjectTreePanel:
                     if group_name in self.project_groups: self.project_groups.remove(group_name)
                     self.group_nodes.pop(group_name, None)
                     
-        real_items_to_del = set()
-        for iid in items_to_del:
-            if iid.startswith('warning_'):
-                real_items_to_del.add(iid[8:])
-            else:
-                real_items_to_del.add(iid)
+        real_items_to_del = set(items_to_del)
                 
         for iid in real_items_to_del:
             if self.tree.exists(iid):
                 self.items.pop(iid, None)
                 self.tree.delete(iid)
-                if iid in self.warning_iids:
-                    w_iid = self.warning_iids.pop(iid)
-                    if self.tree.exists(w_iid): self.tree.delete(w_iid)
-                if self.current_iid == iid or self.current_iid == f"warning_{iid}":
+                if self.current_iid == iid:
                     self.current_iid = None
                     if self.on_clear_canvas: self.on_clear_canvas()
                     
@@ -412,17 +404,7 @@ class ProjectTreePanel:
 
     def update_preview(self):
         if self.current_iid not in self.items:
-            if str(self.current_iid).startswith('warning_'):
-                orig_iid = self.current_iid[8:]
-                if orig_iid in self.items:
-                    self.current_iid = orig_iid
-                    try: 
-                        if self.tree.exists(orig_iid):
-                            self.tree.selection_set(orig_iid)
-                            self.tree.see(orig_iid)
-                    except: pass
-                else: self.current_iid = None
-            else: self.current_iid = None
+            self.current_iid = None
                 
         if not self.current_iid:
             self.text_preview.configure(state='normal')
@@ -530,21 +512,15 @@ class ProjectTreePanel:
             if not self.warning_group_id or not self.tree.exists(self.warning_group_id):
                 self.warning_group_id = self.tree.insert("", 0, text="⚠️ 需要检查", open=True, tags=('group', 'warning_group'))
             
-            if iid not in self.warning_iids:
-                w_iid = f"warning_{iid}"
-                self.tree.insert(self.warning_group_id, tk.END, iid=w_iid, text=item['label'], tags=('item',), image=img)
-                self.items[w_iid] = item
-                self.warning_iids[iid] = w_iid
-            else:
-                w_iid = self.warning_iids[iid]
-                if self.tree.exists(w_iid):
-                    self.tree.item(w_iid, text=item['label'], image=img)
+            self.tree.move(iid, self.warning_group_id, 'end')
         else:
-            if iid in self.warning_iids:
-                w_iid = self.warning_iids.pop(iid)
-                if self.tree.exists(w_iid):
-                    self.tree.delete(w_iid)
-                self.items.pop(w_iid, None)
+            if self.warning_group_id and self.tree.parent(iid) == self.warning_group_id:
+                orig_group = item.get('group', '导入内容')
+                if orig_group in self.group_nodes:
+                    self.tree.move(iid, self.group_nodes[orig_group], 'end')
+                else:
+                    gid = self.ensure_group(orig_group)
+                    self.tree.move(iid, gid, 'end')
                 
             if self.warning_group_id and self.tree.exists(self.warning_group_id):
                 if not self.tree.get_children(self.warning_group_id):
@@ -684,8 +660,10 @@ class ProjectTreePanel:
                             self.items = orig_items
                     elif mode == 'integrated':
                         if format_mode in ('txt', 'xlsx'): self._export_integrated(out_path, format_mode, inc_chart, all_speakers)
+                        elif format_mode == 'line_chart': self._export_line_chart_integrated(out_path, all_speakers)
+                        elif format_mode == 'kde': self._export_kde_heatmap_integrated(out_path, all_speakers)
                         else:
-                            messagebox.showwarning("提示", "整合导出仅支持 Excel 和 Text 格式。")
+                            messagebox.showwarning("提示", "未知的整合导出格式。")
                             return False
                     return True
                 except Exception as e:
@@ -711,11 +689,9 @@ class ProjectTreePanel:
                     inc_chart = False if mode == 'integrated' else messagebox.askyesno("导出设置", "是否在 Excel 中包含分析图表？", default=messagebox.NO)
                     if execute_export(out, inc_chart): messagebox.showinfo("成功", f"数据已导出至:\n{out}")
             elif format_mode == 'line_chart':
-                if mode == 'integrated': return messagebox.showwarning("提示", "图表暂不支持整合导出。")
                 out = filedialog.askdirectory(title="选择图表导出文件夹") if mode == 'separate' else filedialog.asksaveasfilename(title="导出折线图", defaultextension=".png", initialfile="tone_line_chart", filetypes=[("PNG 图片", "*.png"), ("SVG 矢量图", "*.svg"), ("PDF 文档", "*.pdf")])
                 if out and execute_export(out): messagebox.showinfo("成功", f"图表已导出至:\n{out}")
             elif format_mode == 'kde':
-                if mode == 'integrated': return messagebox.showwarning("提示", "图表暂不支持整合导出。")
                 out = filedialog.askdirectory(title="选择热力图导出文件夹") if mode == 'separate' else filedialog.asksaveasfilename(title="导出热力图", defaultextension=".png", initialfile="tone_heatmap", filetypes=[("PNG 图片", "*.png")])
                 if out and execute_export(out): messagebox.showinfo("成功", f"热力图已导出至:\n{out}")
 
@@ -1019,6 +995,8 @@ class ProjectTreePanel:
                 headers.append(f"字{k}_时长(s)")
                 for i in range(1, num_points + 1): headers.append(f"字{k}_T{i}")
             for col, header in enumerate(headers): ws_data.write(0, col, header)
+            
+            group_stats = {}
             row_idx = 1
             for speaker in all_speakers:
                 rows = speaker_rows.get(speaker.id, [])
@@ -1032,12 +1010,31 @@ class ProjectTreePanel:
                     ws_data.write(row_idx, 3, r['label'])
                     ws_data.write(row_idx, 4, round(r['total_dur'], 4))
                     col_idx = 5
-                    for s_dur, freqs in r['syl_data']:
+                    
+                    grp_name = r['group']
+                    if grp_name not in group_stats:
+                        group_stats[grp_name] = {
+                            'syl_dur_sums': [0.0] * max_syls,
+                            'syl_counts': [0] * max_syls,
+                            't_sums': [[0.0] * num_points for _ in range(max_syls)],
+                            't_counts': [[0] * num_points for _ in range(max_syls)]
+                        }
+                    stats = group_stats[grp_name]
+                    
+                    for k, (s_dur, freqs) in enumerate(r['syl_data']):
                         ws_data.write(row_idx, col_idx, round(s_dur, 4))
                         col_idx += 1
-                        for f in freqs:
-                            ws_data.write(row_idx, col_idx, round(((f - s_min) / diff) * 5 if f > 0 else 0.0, 2))
+                        if k < max_syls:
+                            stats['syl_dur_sums'][k] += s_dur
+                            stats['syl_counts'][k] += 1
+                        for i, f in enumerate(freqs):
+                            t_val = round(((f - s_min) / diff) * 5 if f > 0 else 0.0, 2)
+                            ws_data.write(row_idx, col_idx, t_val)
                             col_idx += 1
+                            if k < max_syls and f > 0:
+                                stats['t_sums'][k][i] += t_val
+                                stats['t_counts'][k][i] += 1
+                                
                     fill_count = max_syls - len(r['syl_data'])
                     for _ in range(fill_count):
                         ws_data.write(row_idx, col_idx, 0.0)
@@ -1047,6 +1044,89 @@ class ProjectTreePanel:
                             col_idx += 1
                     global_idx += 1
                     row_idx += 1
+            
+            # Create ws_res worksheet for averaged results
+            ws_res = workbook.add_worksheet("分析结果")
+            res_headers = ["声调类型"]
+            for k in range(1, max_syls + 1):
+                res_headers.append(f"字{k}_平均时长")
+                for i in range(1, num_points + 1): res_headers.append(f"字{k}_T{i}")
+            for col, header in enumerate(res_headers): ws_res.write(0, col, header)
+            
+            res_row = 1
+            for grp, st in group_stats.items():
+                ws_res.write(res_row, 0, grp)
+                col = 1
+                for k in range(max_syls):
+                    cnt = st['syl_counts'][k]
+                    avg_dur = st['syl_dur_sums'][k] / cnt if cnt > 0 else 0
+                    ws_res.write(res_row, col, round(avg_dur, 4))
+                    col += 1
+                    for i in range(num_points):
+                        t_cnt = st['t_counts'][k][i]
+                        if t_cnt > 0:
+                            ws_res.write(res_row, col, round(st['t_sums'][k][i] / t_cnt, 2))
+                        else:
+                            ws_res.write(res_row, col, "")
+                        col += 1
+                res_row += 1
+                
+            if include_chart and group_stats:
+                try:
+                    ws_chart_data = workbook.add_worksheet("图表数据")
+                    ws_chart_data.hide()
+                    ws_chart_data.write(0, 0, "声调类型")
+                    for p in range(1, max_syls * num_points + 1):
+                        ws_chart_data.write(0, p, p)
+                        
+                    chart_row = 1
+                    for grp, st in group_stats.items():
+                        ws_chart_data.write(chart_row, 0, grp)
+                        col_idx = 1
+                        for k in range(max_syls):
+                            for i in range(num_points):
+                                t_cnt = st['t_counts'][k][i]
+                                if t_cnt > 0:
+                                    ws_chart_data.write(chart_row, col_idx, round(st['t_sums'][k][i] / t_cnt, 2))
+                                else:
+                                    ws_chart_data.write(chart_row, col_idx, "")
+                                col_idx += 1
+                        chart_row += 1
+                        
+                    chart = workbook.add_chart({'type': 'line'})
+                    for r in range(1, len(group_stats) + 1):
+                        chart.add_series({
+                            'name':       ['图表数据', r, 0],
+                            'categories': ['图表数据', 0, 1, 0, max_syls * num_points],
+                            'values':     ['图表数据', r, 1, r, max_syls * num_points],
+                            'line':       {'width': 2.0},
+                        })
+                        
+                    chart.set_title({
+                        'name': '多发音人整合声调格局图',
+                        'name_font': {'name': 'Microsoft YaHei', 'size': 14, 'bold': True}
+                    })
+                    chart.set_x_axis({
+                        'name': '测量点 (时序展开)',
+                        'name_font': {'name': 'Microsoft YaHei', 'size': 10},
+                        'num_font': {'name': 'Arial', 'size': 9}
+                    })
+                    chart.set_y_axis({
+                        'name': 'T值 (0-5 标度)',
+                        'name_font': {'name': 'Microsoft YaHei', 'size': 10},
+                        'num_font': {'name': 'Arial', 'size': 9},
+                        'min': 0,
+                        'max': 5
+                    })
+                    chart.set_legend({
+                        'position': 'bottom',
+                        'font': {'name': 'Microsoft YaHei', 'size': 9}
+                    })
+                    chart.set_size({'width': 720, 'height': 400})
+                    
+                    ws_res.insert_chart(f'A{res_row + 3}', chart)
+                except Exception as chart_err:
+                    logger.error(f"Error generating integrated Excel chart: {chart_err}", exc_info=True)
             workbook.close()
         elif format_mode == 'txt':
             with open(out_file, 'w', encoding='utf-8') as f_out:
@@ -1149,7 +1229,9 @@ class ProjectTreePanel:
     def _export_line_chart(self, out_file, tree_structure=None):
         data, max_syls = self._collect_group_avg_data(tree_structure=tree_structure)
         if not data: return messagebox.showwarning("提示", "没有有效数据可供绘图。")
+        self._draw_line_chart(data, max_syls, out_file)
 
+    def _draw_line_chart(self, data, max_syls, out_file):
         num_points = self.app_state_params['pts']
         plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
         plt.rcParams['axes.unicode_minus'] = False
@@ -1189,6 +1271,85 @@ class ProjectTreePanel:
         fig.tight_layout()
         fig.savefig(out_file, dpi=300, bbox_inches='tight')
         plt.close(fig)
+
+    def _export_line_chart_integrated(self, out_file, all_speakers):
+        num_points = self.app_state_params['pts']
+        max_syls = 1
+        aggregated_t_sums = {}
+        aggregated_t_counts = {}
+        
+        for speaker in all_speakers:
+            s_struct = self._get_items_by_group_for_dict(speaker.items)
+            orig_items = self.items
+            self.items = speaker.items
+            
+            dict_data = {}
+            for grp_name, children in s_struct:
+                for child in children:
+                    item = self.items[child]
+                    lbl = item.get('label', '')
+                    if len(lbl) > max_syls: max_syls = len(lbl)
+                    if (not item.get('snd') or not item.get('pitch')) and item.get('path'):
+                        try:
+                            item['snd'] = parselmouth.Sound(item['path'])
+                            pf = item.get('pitch_floor', self.app_state_params.get('pitch_floor', 75))
+                            pc = item.get('pitch_ceiling', self.app_state_params.get('pitch_ceiling', 600))
+                            vt = item.get('voicing_threshold', self.app_state_params.get('voicing_threshold', 0.25))
+                            item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=pf, pitch_ceiling=pc, voicing_threshold=vt, very_accurate=True, octave_jump_cost=0.9)
+                        except: continue
+                    total_dur, syl_data = self._extract_syl_data(item, num_points)
+                    if total_dur <= 0: continue
+                    
+                    if grp_name not in dict_data:
+                        dict_data[grp_name] = { 'f0_sums': [[0.0]*num_points for _ in range(20)], 'f0_counts': [[0]*num_points for _ in range(20)] }
+                    for k, (dur, f0s) in enumerate(syl_data):
+                        for i, f0 in enumerate(f0s):
+                            if not np.isnan(f0) and f0 > 0:
+                                dict_data[grp_name]['f0_sums'][k][i] += f0
+                                dict_data[grp_name]['f0_counts'][k][i] += 1
+                                
+            all_hz = []
+            avg_points_map = {}
+            for grp, st in dict_data.items():
+                avg_points_map[grp] = []
+                for k in range(max_syls):
+                    syl_avgs = []
+                    for i in range(num_points):
+                        cnt = st['f0_counts'][k][i]
+                        hz = st['f0_sums'][k][i] / cnt if cnt > 0 else 0
+                        syl_avgs.append(hz)
+                        if hz > 0: all_hz.append(hz)
+                    avg_points_map[grp].append(syl_avgs)
+            
+            if all_hz:
+                min_hz, max_hz = min(all_hz), max(all_hz)
+                for grp, syl_avgs_list in avg_points_map.items():
+                    if grp not in aggregated_t_sums:
+                        aggregated_t_sums[grp] = [[0.0]*num_points for _ in range(max_syls)]
+                        aggregated_t_counts[grp] = [[0]*num_points for _ in range(max_syls)]
+                    for k, syl_avgs in enumerate(syl_avgs_list):
+                        for i, h in enumerate(syl_avgs):
+                            if h > 0 and max_hz > min_hz and min_hz > 0:
+                                t_val = 5 * (math.log10(h) - math.log10(min_hz)) / (math.log10(max_hz) - math.log10(min_hz))
+                                aggregated_t_sums[grp][k][i] += t_val
+                                aggregated_t_counts[grp][k][i] += 1
+                                
+            self.items = orig_items
+
+        data = {}
+        for grp in aggregated_t_sums:
+            flat_t_vals = []
+            for k in range(max_syls):
+                for i in range(num_points):
+                    cnt = aggregated_t_counts[grp][k][i]
+                    if cnt > 0:
+                        flat_t_vals.append(aggregated_t_sums[grp][k][i] / cnt)
+                    else:
+                        flat_t_vals.append(None)
+            data[grp] = flat_t_vals
+            
+        if not data: return messagebox.showwarning("提示", "没有有效数据可供绘图。")
+        self._draw_line_chart(data, max_syls, out_file)
 
     def _export_kde_heatmap(self, out_file, tree_structure=None):
         from scipy.interpolate import interp1d
@@ -1311,11 +1472,16 @@ class ProjectTreePanel:
             
         pbar.set(0.8)
         prog_dlg.update()
+        
+        self._draw_kde_heatmap(group_norm_points, max_syls, out_file, prog_dlg, pbar, lbl_status)
 
+    def _draw_kde_heatmap(self, group_norm_points, max_syls, out_file, prog_dlg, pbar, lbl_status):
+        import math
+        from scipy.stats import gaussian_kde
         plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
         plt.rcParams['axes.unicode_minus'] = False
 
-        groups_with_data = [g for g in self.project_groups if group_norm_points.get(g) and len(group_norm_points[g][0]) > 0]
+        groups_with_data = [g for g in group_norm_points.keys() if len(group_norm_points[g][0]) > 0]
         n_groups = len(groups_with_data)
         if n_groups == 0:
             prog_dlg.destroy()
@@ -1375,6 +1541,130 @@ class ProjectTreePanel:
         fig.savefig(out_file, dpi=300, bbox_inches='tight')
         plt.close(fig)
         prog_dlg.destroy()
+
+    def _export_kde_heatmap_integrated(self, out_file, all_speakers):
+        from scipy.interpolate import interp1d
+        from scipy.signal import savgol_filter
+        from scipy.stats import gaussian_kde
+
+        N_DENSE = 100
+        max_syls = 1
+        aggregated_syl_contours = {}
+
+        prog_dlg = ctk.CTkToplevel(self.parent)
+        prog_dlg.title("正在导出整合热力图")
+        prog_dlg.geometry("300x120")
+        prog_dlg.attributes('-topmost', True)
+        prog_dlg.resizable(False, False)
+        prog_dlg.update_idletasks()
+        main_win = self.parent.winfo_toplevel()
+        prog_dlg.geometry(f"+{main_win.winfo_rootx() + (main_win.winfo_width() - 300) // 2}+{main_win.winfo_rooty() + (main_win.winfo_height() - 120) // 2}")
+        
+        lbl_status = ctk.CTkLabel(prog_dlg, text="正在处理数据，请稍候...", font=self.font_main)
+        lbl_status.pack(pady=(20, 5))
+        pbar = ctk.CTkProgressBar(prog_dlg, width=250)
+        pbar.pack()
+        pbar.set(0)
+        prog_dlg.update()
+
+        total_speakers = len(all_speakers)
+        for s_idx, speaker in enumerate(all_speakers):
+            lbl_status.configure(text=f"正在处理 {speaker.name} ({s_idx+1}/{total_speakers})...")
+            pbar.set(0.6 * (s_idx / total_speakers))
+            prog_dlg.update()
+
+            s_struct = self._get_items_by_group_for_dict(speaker.items)
+            orig_items = self.items
+            self.items = speaker.items
+
+            speaker_contours = {}
+            for grp_name, children in s_struct:
+                speaker_contours[grp_name] = {}
+                for child in children:
+                    item = self.items[child]
+                    lbl = item.get('label', '')
+                    if len(lbl) > max_syls: max_syls = len(lbl)
+                    if (not item.get('snd') or not item.get('pitch')) and item.get('path'):
+                        try:
+                            item['snd'] = parselmouth.Sound(item['path'])
+                            pf = item.get('pitch_floor', self.app_state_params.get('pitch_floor', 75))
+                            pc = item.get('pitch_ceiling', self.app_state_params.get('pitch_ceiling', 600))
+                            vt = item.get('voicing_threshold', self.app_state_params.get('voicing_threshold', 0.25))
+                            item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=pf, pitch_ceiling=pc, voicing_threshold=vt, very_accurate=True, octave_jump_cost=0.9)
+                        except: continue
+                    if item.get('start') is None or not item.get('snd') or not item.get('pitch'): continue
+                    t_s, t_e = item['start'], item['end']
+                    label = item.get('label', '')
+                    inner_splits = item.get('inner_splits', [])
+                    
+                    splits = [t_s] + [s for s in inner_splits if t_s < s < t_e] + [t_e]
+                    if len(splits) != len(label) + 1: splits = np.linspace(t_s, t_e, len(label) + 1).tolist()
+                    if len(label) <= 1: splits = [t_s, t_e]
+                    
+                    pitch = item['pitch']
+                    p_xs, p_freqs = pitch.xs(), pitch.selected_array['frequency']
+                    
+                    for k in range(len(splits) - 1):
+                        c_s, c_e = splits[k], splits[k+1]
+                        valid_idx = np.where((p_xs >= c_s) & (p_xs <= c_e) & (p_freqs > 0))[0]
+                        if len(valid_idx) >= 2:
+                            v_s, v_e = p_xs[valid_idx[0]], p_xs[valid_idx[-1]]
+                            mask = (p_xs >= v_s) & (p_xs <= v_e) & (p_freqs > 0)
+                            valid_freqs = p_freqs[mask]
+                            if len(valid_freqs) < 3: continue
+        
+                            win = len(valid_freqs) // 3
+                            if win % 2 == 0: win += 1
+                            win = max(win, 3)
+                            smoothed = savgol_filter(valid_freqs, win, 2) if len(valid_freqs) > win else valid_freqs
+        
+                            x_orig = np.linspace(0, 1, len(smoothed))
+                            f_interp = interp1d(x_orig, smoothed, kind='linear')
+                            y_dense = f_interp(np.linspace(0, 1, N_DENSE))
+                            
+                            if k not in speaker_contours[grp_name]: speaker_contours[grp_name][k] = []
+                            speaker_contours[grp_name][k].append(y_dense)
+            
+            # 对当前发音人内的每个组别进行组内 F0 均值化并进行该发音人自身的 T值归一化
+            all_mean_vals = []
+            for name, syls_dict in speaker_contours.items():
+                for k, y_arrays in syls_dict.items():
+                    if y_arrays:
+                        mean_contour = np.mean(y_arrays, axis=0)
+                        all_mean_vals.extend(mean_contour.tolist())
+            if all_mean_vals:
+                min_f0, max_f0 = min(all_mean_vals), max(all_mean_vals)
+                def hz_to_5_scale_s(hz):
+                    if max_f0 == min_f0: return 3.0
+                    return 5 * (np.log(hz) - np.log(min_f0)) / (np.log(max_f0) - np.log(min_f0))
+                
+                for name, syls_dict in speaker_contours.items():
+                    if name not in aggregated_syl_contours: aggregated_syl_contours[name] = {} 
+                    for k, y_arrays in syls_dict.items():
+                        if k not in aggregated_syl_contours[name]: aggregated_syl_contours[name][k] = []
+                        for y_arr in y_arrays:
+                            t_arr = [hz_to_5_scale_s(h) for h in y_arr]
+                            aggregated_syl_contours[name][k].append(t_arr)
+            self.items = orig_items
+
+        pbar.set(0.7)
+        lbl_status.configure(text="正在汇总数据...")
+        prog_dlg.update()
+
+        group_norm_points = {}
+        for name, syls_dict in aggregated_syl_contours.items():
+            X_all, Y_all = [], []
+            for k, y_arrays in syls_dict.items():
+                x_dense = np.linspace(k * 100, (k + 1) * 100, N_DENSE)
+                for y_arr in y_arrays:
+                    X_all.extend(x_dense.tolist())
+                    Y_all.extend(y_arr)
+            group_norm_points[name] = (np.array(X_all), np.array(Y_all))
+
+        pbar.set(0.8)
+        prog_dlg.update()
+        
+        self._draw_kde_heatmap(group_norm_points, max_syls, out_file, prog_dlg, pbar, lbl_status)
 
     def _export_textgrid_long(self, out_file, tree_structure=None):
         import textgrid
@@ -1579,6 +1869,11 @@ class ProjectTreePanel:
                 group_tier.add(last_group_end, max_time, "")
 
             tg.append(word_tier)
+            tg.append(group_tier)
+            if has_chars:
+                tg.append(char_tier)
+
+            tg.write(tg_path)
             tg.append(group_tier)
             if has_chars:
                 tg.append(char_tier)

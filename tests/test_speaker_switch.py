@@ -5,15 +5,16 @@ sys.path.append('.')
 from modules.app import PhoneticsApp
 from unittest.mock import patch, MagicMock
 
+from tests.shared_root import get_shared_root
+
 class TestSpeakerStateSwitch(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-
-        cls.root = ctk.CTk()
+        cls.root = get_shared_root()
 
     @classmethod
     def tearDownClass(cls):
-        cls.root.destroy()
+        pass
 
 
     @patch('sounddevice.stop')
