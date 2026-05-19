@@ -39,9 +39,10 @@ class ProjectTreePanel:
         self.setup_ui()
 
     def setup_ui(self):
-        right_sidebar = ctk.CTkFrame(self.parent, width=300, fg_color="transparent")
-        right_sidebar.pack(side=tk.RIGHT, fill=tk.Y, padx=10, pady=10)
-        right_sidebar.pack_propagate(False)
+        self.main_frame = ctk.CTkFrame(self.parent, width=300, fg_color="transparent")
+        # Do not pack here, let the app manage packing
+        self.main_frame.pack_propagate(False)
+        right_sidebar = self.main_frame
         
         style = ttk.Style()
         style.theme_use("default")
@@ -585,7 +586,7 @@ class ProjectTreePanel:
                 out_file = filedialog.asksaveasfilename(title="导出文本", defaultextension=".txt", initialfile="tone_export_data", filetypes=[("文本文件", "*.txt")])
                 if not out_file: return
                 try:
-                    self._export_txt(out_file, tree_structure=tree_structure)
+                    self.export_txt(out_file, tree_structure=tree_structure)
                     messagebox.showinfo("成功", f"数据已导出至:\n{out_file}")
                 except Exception as e: messagebox.showerror("错误", str(e))
             elif mode == 'textgrid':
@@ -599,14 +600,14 @@ class ProjectTreePanel:
                     out_dir = filedialog.askdirectory(title="选择TextGrid导出文件夹")
                     if not out_dir: return
                     try:
-                        self._export_textgrid_batch(out_dir, tree_structure=tree_structure)
+                        self.export_textgrid_batch(out_dir, tree_structure=tree_structure)
                         messagebox.showinfo("成功", f"独立音频 TextGrid 已导出至:\n{out_dir}")
                     except Exception as e: messagebox.showerror("错误", str(e))
                 else:
                     out_file = filedialog.asksaveasfilename(title="导出 TextGrid", defaultextension=".TextGrid", initialfile="tone_export_data", filetypes=[("TextGrid 文件", "*.TextGrid")])
                     if not out_file: return
                     try:
-                        self._export_textgrid_long(out_file, tree_structure=tree_structure)
+                        self.export_textgrid_long(out_file, tree_structure=tree_structure)
                         messagebox.showinfo("成功", f"TextGrid 已导出至:\n{out_file}")
                     except Exception as e: messagebox.showerror("错误", str(e))
             elif mode == 'xlsx':
@@ -614,21 +615,21 @@ class ProjectTreePanel:
                 if not out_file: return
                 try:
                     include_chart = messagebox.askyesno("导出设置", "是否在 Excel 中包含分析图表？\n(包含图表可能在部分旧版 Office 中打开较慢)", default=messagebox.NO)
-                    self._export_xlsx(out_file, include_chart=include_chart, tree_structure=tree_structure)
+                    self.export_xlsx(out_file, include_chart=include_chart, tree_structure=tree_structure)
                     messagebox.showinfo("成功", f"数据已导出至:\n{out_file}")
                 except Exception as e: messagebox.showerror("错误", str(e))
             elif mode == 'line_chart':
                 out_file = filedialog.asksaveasfilename(title="导出折线图", defaultextension=".png", initialfile="tone_line_chart", filetypes=[("PNG 图片", "*.png"), ("SVG 矢量图", "*.svg"), ("PDF 文档", "*.pdf")])
                 if not out_file: return
                 try:
-                    self._export_line_chart(out_file, tree_structure=tree_structure)
+                    self.export_line_chart(out_file, tree_structure=tree_structure)
                     messagebox.showinfo("成功", f"图表已导出至:\n{out_file}")
                 except Exception as e: messagebox.showerror("错误", str(e))
             elif mode == 'kde':
                 out_file = filedialog.asksaveasfilename(title="导出KDE热力图", defaultextension=".png", initialfile="tone_kde_heatmap", filetypes=[("PNG 图片", "*.png"), ("SVG 矢量图", "*.svg"), ("PDF 文档", "*.pdf")])
                 if not out_file: return
                 try:
-                    self._export_kde_heatmap(out_file, tree_structure=tree_structure)
+                    self.export_kde_heatmap(out_file, tree_structure=tree_structure)
                     messagebox.showinfo("成功", f"热力图已导出至:\n{out_file}")
                 except Exception as e: messagebox.showerror("错误", str(e))
         
@@ -696,7 +697,7 @@ class ProjectTreePanel:
             
         return t_e - t_s, syl_data
 
-    def _export_xlsx(self, out_file, include_chart=False, tree_structure=None):
+    def export_xlsx(self, out_file, include_chart=False, tree_structure=None):
         try:
             import xlsxwriter
         except ImportError:
@@ -883,7 +884,7 @@ class ProjectTreePanel:
         
         workbook.close()
 
-    def _export_txt(self, out_file, tree_structure=None):
+    def export_txt(self, out_file, tree_structure=None):
         is_continuous = (self.num_rule_var.get() == "continuous")
         if tree_structure is None: tree_structure = self._get_all_items_by_group()
         
@@ -957,7 +958,7 @@ class ProjectTreePanel:
             
         return result, max_syls
 
-    def _export_line_chart(self, out_file, tree_structure=None):
+    def export_line_chart(self, out_file, tree_structure=None):
         data, max_syls = self._collect_group_avg_data(tree_structure=tree_structure)
         if not data: return messagebox.showwarning("提示", "没有有效数据可供绘图。")
 
@@ -1001,31 +1002,13 @@ class ProjectTreePanel:
         fig.savefig(out_file, dpi=300, bbox_inches='tight')
         plt.close(fig)
 
-    def _export_kde_heatmap(self, out_file, tree_structure=None):
+    def get_kde_norm_points(self, tree_structure=None):
         from scipy.interpolate import interp1d
         from scipy.signal import savgol_filter
-        from scipy.stats import gaussian_kde
 
         N_DENSE = 100  
         group_syl_contours = {} 
         
-        prog_dlg = ctk.CTkToplevel(self.parent)
-        prog_dlg.title("正在导出")
-        prog_dlg.geometry("300x120")
-        prog_dlg.attributes('-topmost', True)
-        prog_dlg.resizable(False, False)
-        
-        prog_dlg.update_idletasks()
-        main_win = self.parent.winfo_toplevel()
-        prog_dlg.geometry(f"+{main_win.winfo_rootx() + (main_win.winfo_width() - 300) // 2}+{main_win.winfo_rooty() + (main_win.winfo_height() - 120) // 2}")
-        
-        lbl_status = ctk.CTkLabel(prog_dlg, text="正在处理数据，请稍候...", font=self.font_main)
-        lbl_status.pack(pady=(20, 5))
-        pbar = ctk.CTkProgressBar(prog_dlg, width=250)
-        pbar.pack()
-        pbar.set(0)
-        prog_dlg.update()
-
         if tree_structure is None: tree_structure = self._get_all_items_by_group()
         
         max_syls = 1
@@ -1035,15 +1018,8 @@ class ProjectTreePanel:
                 lbl = self.items[child].get('label', '')
                 if len(lbl) > max_syls: max_syls = len(lbl)
 
-        total_items = sum(len(c) for _, c in tree_structure)
-        processed = 0
-
         for grp_name, children in tree_structure:
             for child in children:
-                processed += 1
-                pbar.set(0.7 * (processed / max(1, total_items)))
-                prog_dlg.update()
-                    
                 if child not in self.items: continue
                 item = self.items[child]
                 if (not item.get('snd') or not item.get('pitch')) and item.get('path'):
@@ -1069,7 +1045,6 @@ class ProjectTreePanel:
                 
                 for k in range(len(splits) - 1):
                     c_s, c_e = splits[k], splits[k+1]
-                    # 智能边界收缩：只画有真实发音的高密度区！
                     valid_idx = np.where((p_xs >= c_s) & (p_xs <= c_e) & (p_freqs > 0))[0]
                     if len(valid_idx) >= 2:
                         v_s, v_e = p_xs[valid_idx[0]], p_xs[valid_idx[-1]]
@@ -1097,14 +1072,9 @@ class ProjectTreePanel:
                     all_mean_vals.extend(mean_contour.tolist())
                     
         if not all_mean_vals:
-            prog_dlg.destroy()
-            return messagebox.showwarning("提示", "没有有效数据可供绘制热力图。")
+            return None, max_syls
             
         min_f0, max_f0 = min(all_mean_vals), max(all_mean_vals)
-
-        lbl_status.configure(text="正在进行数据归一化...")
-        pbar.set(0.75)
-        prog_dlg.update()
 
         def hz_to_5_scale(hz):
             if max_f0 == min_f0: return 3.0
@@ -1119,9 +1089,15 @@ class ProjectTreePanel:
                     X_all.extend(x_dense.tolist())
                     Y_all.extend([hz_to_5_scale(h) for h in y_arr])
             group_norm_points[name] = (np.array(X_all), np.array(Y_all))
-            
-        pbar.set(0.8)
-        prog_dlg.update()
+
+        return group_norm_points, max_syls
+
+    def export_kde_heatmap(self, out_file, tree_structure=None):
+        from scipy.stats import gaussian_kde
+        group_norm_points, max_syls = self.get_kde_norm_points(tree_structure)
+
+        if not group_norm_points:
+            return messagebox.showwarning("提示", "没有有效数据可供绘制热力图。")
 
         plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
         plt.rcParams['axes.unicode_minus'] = False
@@ -1187,7 +1163,7 @@ class ProjectTreePanel:
         plt.close(fig)
         prog_dlg.destroy()
 
-    def _export_textgrid_long(self, out_file, tree_structure=None):
+    def export_textgrid_long(self, out_file, tree_structure=None):
         import textgrid
         if tree_structure is None: tree_structure = self._get_all_items_by_group()
 
@@ -1285,7 +1261,7 @@ class ProjectTreePanel:
 
         tg.write(out_file)
 
-    def _export_textgrid_batch(self, out_dir, tree_structure=None):
+    def export_textgrid_batch(self, out_dir, tree_structure=None):
         import textgrid
         import os
         if tree_structure is None: tree_structure = self._get_all_items_by_group()

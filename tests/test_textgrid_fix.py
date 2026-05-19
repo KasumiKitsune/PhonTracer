@@ -105,7 +105,7 @@ class TestTextGridFix(unittest.TestCase):
             mock_tg.return_value = mock_tg_instance
             
             # Call _export_textgrid_batch
-            panel._export_textgrid_batch('C:/output_dir', tree_structure=tree_structure)
+            panel.export_textgrid_batch('C:/output_dir', tree_structure=tree_structure)
             
             # Verify that two separate TextGrids were created using filenames and NOT the group name
             calls = mock_tg_instance.write.call_args_list
@@ -277,7 +277,7 @@ class TestTextGridFix(unittest.TestCase):
             mock_tg.return_value = mock_tg_instance
             
             # Run _export_textgrid_long
-            panel._export_textgrid_long('C:/output.TextGrid', tree_structure=tree_structure)
+            panel.export_textgrid_long('C:/output.TextGrid', tree_structure=tree_structure)
             
             # Verify that group tier is added
             self.assertEqual(mock_tg_instance.append.call_count, 3) # words, groups, chars (because length of 'ma' > 1)

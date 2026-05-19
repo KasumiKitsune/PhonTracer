@@ -18,7 +18,41 @@ from .visual_splitter import VisualSplitter
 from .spectrogram_panel import SpectrogramPanel
 from .project_tree import ProjectTreePanel
 
+
+class SpeakerData:
+    def __init__(self, name):
+        self.name = name
+        self.items = {}
+        self.audio_cache = {}
+        self.pending_long_snd = None
+        self.pending_batch_paths = []
+        self.last_params = {
+            'pts': 11,
+            'db': 60.0,
+            'skip_front': 0.00,
+            'pitch_floor': 75,
+            'pitch_ceiling': 600,
+            'voicing_threshold': 0.25
+        }
+        self.tab_state = "多条独立音频"
+        self.tree_panel = None
+
 class PhoneticsApp:
+
+    @property
+    def pending_long_snd(self): return self.current_speaker.pending_long_snd if self.current_speaker else None
+
+    @pending_long_snd.setter
+    def pending_long_snd(self, val):
+        if self.current_speaker: self.current_speaker.pending_long_snd = val
+
+    @property
+    def pending_batch_paths(self): return self.current_speaker.pending_batch_paths if self.current_speaker else []
+
+    @pending_batch_paths.setter
+    def pending_batch_paths(self, val):
+        if self.current_speaker: self.current_speaker.pending_batch_paths = val
+
     def __init__(self, root, initial_files=None):
         self.root = root
         self.root.title("PhonTracer - 声调提取与分析工具")
@@ -36,27 +70,20 @@ class PhoneticsApp:
         except Exception:
             pass
         
-        self.pending_long_snd = None 
-        self.pending_batch_paths = []
+        # Multi-speaker setup
+        self.speakers = [] # list of SpeakerData
+        self.current_speaker = None
+
+        # We will create a default speaker inside setup_ui
+        self.items = {} # Will point to current_speaker.items
+        self.audio_cache = {} # Will point to current_speaker.audio_cache
+        self.last_params = {} # Will point to current_speaker.last_params
         
+        self.debounce_timer = None
+
         # === 初始化安全队列以处理拖拽事件，防止 windnd 的 C++ 回调直接操作 Tkinter 引引发 GIL 崩溃 ===
         self.drop_queue = queue.Queue()
         self.root.after(100, self._check_drop_queue)
-        
-        # 全局数据源 (Source of Truth)
-        self.items = {}
-        self.audio_cache = {}
-        
-        self.debounce_timer = None
-        
-        self.last_params = {
-            'pts': 11,
-            'db': 60.0,
-            'skip_front': 0.00,
-            'pitch_floor': 75,
-            'pitch_ceiling': 600,
-            'voicing_threshold': 0.25
-        }
 
         # Shared ProcessPoolExecutor for performance optimization
         max_workers = min(os.cpu_count() or 4, 8)
@@ -211,9 +238,28 @@ class PhoneticsApp:
         sidebar_frame = ctk.CTkFrame(self.root, width=320, fg_color="transparent")
         sidebar_frame.pack(side=tk.LEFT, fill=tk.Y, padx=10, pady=(10, 5))
         
+        # --- Right Sidebar Container for Speaker's ProjectTreePanel ---
+        self.right_sidebar_container = ctk.CTkFrame(self.root, width=300, fg_color="transparent")
+        self.right_sidebar_container.pack(side=tk.RIGHT, fill=tk.Y, padx=10, pady=10)
+        self.right_sidebar_container.pack_propagate(False)
+
         # --- Header (Fixed at top) ---
         header_frame = ctk.CTkFrame(sidebar_frame, fg_color="transparent")
         header_frame.pack(side=tk.TOP, fill=tk.X, pady=(5, 10))
+
+        # --- Speaker Selection (Fixed below header) ---
+        speaker_frame = ctk.CTkFrame(sidebar_frame, fg_color="white", corner_radius=10)
+        speaker_frame.pack(side=tk.TOP, fill=tk.X, pady=(0, 10))
+
+        speaker_header = ctk.CTkFrame(speaker_frame, fg_color="transparent")
+        speaker_header.pack(fill=tk.X, padx=10, pady=(5, 5))
+        ctk.CTkLabel(speaker_header, text="发音人列表", font=self.font_title, text_color="#111827").pack(side=tk.LEFT)
+        CTkReleaseButton(speaker_header, text="", image=self.icons.get("plus"), width=28, height=28, corner_radius=14, command=self.add_speaker, fg_color="#F3F4F6", hover_color="#E5E7EB").pack(side=tk.RIGHT)
+
+        self.speaker_list_frame = ctk.CTkScrollableFrame(speaker_frame, height=100, fg_color="transparent")
+        self.speaker_list_frame.pack(fill=tk.X, padx=5, pady=(0, 5))
+        self.speaker_var = ctk.StringVar()
+        self.speaker_radios = {}
 
         left_scrollable = ctk.CTkScrollableFrame(sidebar_frame, width=320, fg_color="transparent")
         left_scrollable.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
@@ -350,18 +396,6 @@ class PhoneticsApp:
                                               fg_color="#3B82F6", hover_color="#2563EB")
         self.btn_apply_all.pack(fill=tk.X, pady=(10, 5))
 
-        # 实例化右侧树状面板 (先于中间面板初始化以确保正确的 pack 顺序)
-        self.tree_panel = ProjectTreePanel(
-            parent=self.root,
-            icons=self.icons,
-            tk_icons=self.tk_icons,
-            items_dict=self.items,
-            app_state_params=self.last_params,
-            on_item_selected_callback=self.on_tree_item_selected,
-            on_clear_canvas_callback=self.on_clear_canvas_callback,
-            app=self
-        )
-
         # 实例化中间画布面板 (最后初始化并 expand=True 以占据剩余空间)
         self.spectrogram_panel = SpectrogramPanel(
             parent=self.root, 
@@ -371,6 +405,152 @@ class PhoneticsApp:
             on_export_callback=self.on_export_callback
         )
         self.spectrogram_panel.switch_trim_silence = self.switch_trim_silence
+
+        # Initialize default speaker
+        self.add_speaker(name="发音人 1")
+
+
+    def add_speaker(self, name=None):
+        if not name:
+            name = f"发音人 {len(self.speakers) + 1}"
+
+        spk = SpeakerData(name)
+        self.speakers.append(spk)
+
+        # Create tree panel for this speaker, parented to right_sidebar_container
+        spk.tree_panel = ProjectTreePanel(
+            parent=self.right_sidebar_container,
+            icons=self.icons,
+            tk_icons=self.tk_icons,
+            items_dict=spk.items,
+            app_state_params=spk.last_params,
+            on_item_selected_callback=self.on_tree_item_selected,
+            on_clear_canvas_callback=self.on_clear_canvas_callback,
+            app=self
+        )
+        # By default, do not pack the tree panel until it is selected
+
+        self.render_speaker_list()
+        self.switch_speaker(spk.name)
+
+    def rename_speaker(self, old_name):
+        new_name = ctk.CTkInputDialog(text="请输入新的发音人名称:", title="重命名发音人").get_input()
+        if new_name and new_name.strip():
+            new_name = new_name.strip()
+            if any(s.name == new_name for s in self.speakers):
+                messagebox.showwarning("错误", "发音人名称已存在。")
+                return
+            for s in self.speakers:
+                if s.name == old_name:
+                    s.name = new_name
+                    if self.current_speaker == s:
+                        self.speaker_var.set(new_name)
+                    break
+            self.render_speaker_list()
+
+    def delete_speaker(self, name):
+        if len(self.speakers) <= 1:
+            messagebox.showwarning("错误", "必须保留至少一个发音人。")
+            return
+        if messagebox.askyesno("确认删除", f"确定要删除发音人 {name} 吗？"):
+            idx_to_remove = -1
+            for i, s in enumerate(self.speakers):
+                if s.name == name:
+                    s.tree_panel.main_frame.pack_forget()
+                    s.tree_panel.main_frame.destroy()
+                    idx_to_remove = i
+                    break
+            if idx_to_remove != -1:
+                spk = self.speakers.pop(idx_to_remove)
+                self.render_speaker_list()
+                if self.current_speaker == spk:
+                    self.switch_speaker(self.speakers[0].name)
+
+    def render_speaker_list(self):
+        for widget in self.speaker_list_frame.winfo_children():
+            widget.destroy()
+        self.speaker_radios.clear()
+
+        for spk in self.speakers:
+            row = ctk.CTkFrame(self.speaker_list_frame, fg_color="transparent")
+            row.pack(fill=tk.X, pady=2)
+
+            rb = ctk.CTkRadioButton(row, text=spk.name, variable=self.speaker_var, value=spk.name, command=lambda n=spk.name: self.switch_speaker(n))
+            rb.pack(side=tk.LEFT, padx=5)
+            self.speaker_radios[spk.name] = rb
+
+            btn_del = CTkReleaseButton(row, text="删", width=20, height=20, corner_radius=10, command=lambda n=spk.name: self.delete_speaker(n), fg_color="#FEE2E2", text_color="#EF4444", hover_color="#FCA5A5")
+            btn_del.pack(side=tk.RIGHT, padx=2)
+            btn_ren = CTkReleaseButton(row, text="改", width=20, height=20, corner_radius=10, command=lambda n=spk.name: self.rename_speaker(n), fg_color="#E0E7FF", text_color="#4F46E5", hover_color="#C7D2FE")
+            btn_ren.pack(side=tk.RIGHT, padx=2)
+
+    def switch_speaker(self, name):
+        if self.current_speaker and self.current_speaker.name == name:
+            return
+
+        # Hide old speaker tree
+        if self.current_speaker:
+            self.current_speaker.tab_state = self.tabview.get()
+            if self.current_speaker.tree_panel and self.current_speaker.tree_panel.main_frame:
+                self.current_speaker.tree_panel.main_frame.pack_forget()
+
+        # Find new speaker
+        for spk in self.speakers:
+            if spk.name == name:
+                self.current_speaker = spk
+                break
+
+        self.speaker_var.set(name)
+
+        # Show new speaker tree
+        if self.current_speaker.tree_panel and self.current_speaker.tree_panel.main_frame:
+            self.current_speaker.tree_panel.main_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Update references
+        self.items = self.current_speaker.items
+        self.audio_cache = self.current_speaker.audio_cache
+        self.last_params = self.current_speaker.last_params
+        self.tree_panel = self.current_speaker.tree_panel
+
+        # Update references for SpectrogramPanel
+
+        # Restore UI states
+        try:
+            self.tabview.set(self.current_speaker.tab_state)
+            if self.current_speaker.pending_long_snd:
+                self.lbl_long_file.configure(text="已加载", text_color="#2563EB")
+            else:
+                self.lbl_long_file.configure(text="未选择", text_color="#6B7280")
+
+            if self.current_speaker.pending_batch_paths:
+                self.lbl_batch_files.configure(text=f"已选 {len(self.current_speaker.pending_batch_paths)} 个文件", text_color="#2563EB")
+            else:
+                self.lbl_batch_files.configure(text="未选择", text_color="#6B7280")
+
+            # Sync param inputs
+            self.slider_pts.set(self.last_params['pts'])
+            self.entry_points.delete(0, tk.END)
+            self.entry_points.insert(0, str(self.last_params['pts']))
+
+            self.slider_db.set(self.last_params['db'])
+            self.entry_drop_db.delete(0, tk.END)
+            self.entry_drop_db.insert(0, str(self.last_params['db']))
+
+            self.slider_dur.set(self.last_params['skip_front'])
+            self.entry_min_dur.delete(0, tk.END)
+            self.entry_min_dur.insert(0, f"{self.last_params['skip_front']:.2f}")
+
+            self.entry_pitch_floor.delete(0, tk.END)
+            self.entry_pitch_floor.insert(0, str(self.last_params['pitch_floor']))
+            self.entry_pitch_ceiling.delete(0, tk.END)
+            self.entry_pitch_ceiling.insert(0, str(self.last_params['pitch_ceiling']))
+            self.entry_voicing_threshold.delete(0, tk.END)
+            self.entry_voicing_threshold.insert(0, f"{self.last_params.get('voicing_threshold', 0.25):.2f}")
+        except Exception as e:
+            pass
+
+        self.spectrogram_panel.clear_canvas()
+        self.tree_panel.select_first_item()
 
     # --- 交互回调 ---
     def on_tree_item_selected(self, iid):
@@ -421,7 +601,363 @@ class PhoneticsApp:
                 break
 
     def on_export_callback(self):
-        self.tree_panel.export_project()
+        if not self.speakers: return
+
+        # Check if there's anything to export
+        has_data = any(spk.items for spk in self.speakers)
+        if not has_data:
+            return messagebox.showwarning("提示", "没有任何发音人包含可导出的数据。")
+
+        dlg = ctk.CTkToplevel(self.root)
+        dlg.title("选择导出选项")
+        dlg.geometry("380x500")
+        dlg.attributes('-topmost', True)
+        dlg.resizable(False, False)
+
+        dlg.update_idletasks()
+        main_win = self.root.winfo_toplevel()
+        x = main_win.winfo_rootx() + (main_win.winfo_width() - 380) // 2
+        y = main_win.winfo_rooty() + (main_win.winfo_height() - 500) // 2
+        dlg.geometry(f"+{x}+{y}")
+
+        ctk.CTkLabel(dlg, text="导出设置", font=self.font_title, text_color="#111827").pack(pady=(15, 10))
+
+        # Scope Selection
+        frame_scope = ctk.CTkFrame(dlg, fg_color="#F3F4F6", corner_radius=8)
+        frame_scope.pack(fill=tk.X, padx=20, pady=5)
+        ctk.CTkLabel(frame_scope, text="1. 选择导出范围", font=self.font_main, text_color="#374151").pack(anchor=tk.W, padx=10, pady=(5, 0))
+
+        scope_var = ctk.StringVar(value="current")
+        ctk.CTkRadioButton(frame_scope, text=f"仅导出当前发音人 ({self.current_speaker.name})", variable=scope_var, value="current", font=self.font_main).pack(anchor=tk.W, padx=20, pady=5)
+        ctk.CTkRadioButton(frame_scope, text=f"分别导出 {len(self.speakers)} 位发音人", variable=scope_var, value="separate", font=self.font_main).pack(anchor=tk.W, padx=20, pady=5)
+        ctk.CTkRadioButton(frame_scope, text=f"整合 {len(self.speakers)} 位发音人 (自动归一化合并)", variable=scope_var, value="integrated", font=self.font_main).pack(anchor=tk.W, padx=20, pady=(5, 10))
+
+        # Format Selection
+        frame_format = ctk.CTkFrame(dlg, fg_color="#F3F4F6", corner_radius=8)
+        frame_format.pack(fill=tk.X, padx=20, pady=10)
+        ctk.CTkLabel(frame_format, text="2. 选择文件格式", font=self.font_main, text_color="#374151").pack(anchor=tk.W, padx=10, pady=(5, 0))
+
+        btn_kwargs = {"corner_radius": 12, "height": 38, "font": self.font_main, "anchor": "w", "compound": "left"}
+
+        def do_export(fmt):
+            scope = scope_var.get()
+            dlg.destroy()
+
+            try:
+                if scope == "current":
+                    # Delegate to the current tree panel
+                    tree = self.current_speaker.tree_panel
+                    if fmt == "txt":
+                        out_file = filedialog.asksaveasfilename(title="导出文本", defaultextension=".txt", initialfile=f"tone_data_{self.current_speaker.name}", filetypes=[("文本文件", "*.txt")])
+                        if out_file:
+                            tree.export_txt(out_file)
+                            messagebox.showinfo("成功", f"数据已导出至:\n{out_file}")
+                    elif fmt == "textgrid":
+                        if self.tabview.get() == "多条独立音频":
+                            out_dir = filedialog.askdirectory(title="选择TextGrid导出文件夹")
+                            if out_dir:
+                                tree.export_textgrid_batch(out_dir)
+                                messagebox.showinfo("成功", f"TextGrid已导出至:\n{out_dir}")
+                        else:
+                            out_file = filedialog.asksaveasfilename(title="导出 TextGrid", defaultextension=".TextGrid", initialfile=f"tone_data_{self.current_speaker.name}", filetypes=[("TextGrid", "*.TextGrid")])
+                            if out_file:
+                                tree.export_textgrid_long(out_file)
+                                messagebox.showinfo("成功", f"TextGrid已导出至:\n{out_file}")
+                    elif fmt == "xlsx":
+                        out_file = filedialog.asksaveasfilename(title="导出Excel", defaultextension=".xlsx", initialfile=f"tone_data_{self.current_speaker.name}", filetypes=[("Excel 表格", "*.xlsx")])
+                        if out_file:
+                            inc_chart = messagebox.askyesno("导出设置", "是否在 Excel 中包含分析图表？")
+                            tree.export_xlsx(out_file, include_chart=inc_chart)
+                            messagebox.showinfo("成功", f"数据已导出至:\n{out_file}")
+                    elif fmt == "line_chart":
+                        out_file = filedialog.asksaveasfilename(title="导出折线图", defaultextension=".png", initialfile=f"line_chart_{self.current_speaker.name}", filetypes=[("PNG 图片", "*.png"), ("SVG 矢量图", "*.svg"), ("PDF 文档", "*.pdf")])
+                        if out_file:
+                            tree.export_line_chart(out_file)
+                            messagebox.showinfo("成功", f"图表已导出至:\n{out_file}")
+                    elif fmt == "kde":
+                        out_file = filedialog.asksaveasfilename(title="导出KDE热力图", defaultextension=".png", initialfile=f"kde_heatmap_{self.current_speaker.name}", filetypes=[("PNG 图片", "*.png"), ("SVG 矢量图", "*.svg"), ("PDF 文档", "*.pdf")])
+                        if out_file:
+                            tree.export_kde_heatmap(out_file)
+                            messagebox.showinfo("成功", f"热力图已导出至:\n{out_file}")
+
+                elif scope == "separate":
+                    if fmt == "textgrid" and self.tabview.get() == "多条独立音频":
+                        out_dir = filedialog.askdirectory(title="选择TextGrid导出主文件夹")
+                        if not out_dir: return
+                        for spk in self.speakers:
+                            if not spk.items: continue
+                            spk_dir = os.path.join(out_dir, spk.name)
+                            os.makedirs(spk_dir, exist_ok=True)
+                            spk.tree_panel.export_textgrid_batch(spk_dir)
+                        messagebox.showinfo("成功", f"分别导出的 TextGrid 已保存至:\n{out_dir}")
+                        return
+
+                    out_dir = filedialog.askdirectory(title="选择分别导出的目标文件夹")
+                    if not out_dir: return
+
+                    for spk in self.speakers:
+                        if not spk.items: continue
+                        if fmt == "txt":
+                            spk.tree_panel.export_txt(os.path.join(out_dir, f"{spk.name}.txt"))
+                        elif fmt == "textgrid":
+                            spk.tree_panel.export_textgrid_long(os.path.join(out_dir, f"{spk.name}.TextGrid"))
+                        elif fmt == "xlsx":
+                            spk.tree_panel.export_xlsx(os.path.join(out_dir, f"{spk.name}.xlsx"), include_chart=False)
+                        elif fmt == "line_chart":
+                            spk.tree_panel.export_line_chart(os.path.join(out_dir, f"{spk.name}.png"))
+                        elif fmt == "kde":
+                            spk.tree_panel.export_kde_heatmap(os.path.join(out_dir, f"{spk.name}.png"))
+                    messagebox.showinfo("成功", f"所有发音人的文件已分别导出至:\n{out_dir}")
+
+                elif scope == "integrated":
+                    if fmt in ["txt", "textgrid"]:
+                        return messagebox.showwarning("提示", "纯文本(txt)和TextGrid(时间轴标注)通常不支持跨发音人物理整合。如果您需要这些格式，请使用【分别导出】。")
+
+                    if fmt == "xlsx":
+                        out_file = filedialog.asksaveasfilename(title="导出整合Excel", defaultextension=".xlsx", initialfile="integrated_tone_data", filetypes=[("Excel 表格", "*.xlsx")])
+                        if out_file:
+                            self._export_integrated_xlsx(out_file)
+                    elif fmt == "line_chart":
+                        out_file = filedialog.asksaveasfilename(title="导出整合折线图", defaultextension=".png", initialfile="integrated_line_chart", filetypes=[("PNG 图片", "*.png"), ("SVG 矢量图", "*.svg"), ("PDF 文档", "*.pdf")])
+                        if out_file:
+                            self._export_integrated_line_chart(out_file)
+                    elif fmt == "kde":
+                        out_file = filedialog.asksaveasfilename(title="导出整合KDE热力图", defaultextension=".png", initialfile="integrated_kde_heatmap", filetypes=[("PNG 图片", "*.png"), ("SVG 矢量图", "*.svg"), ("PDF 文档", "*.pdf")])
+                        if out_file:
+                            self._export_integrated_kde(out_file)
+
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                messagebox.showerror("错误", f"导出失败: {str(e)}")
+
+        ctk.CTkButton(frame_format, text="  📄  文本文件 (.txt)", command=lambda: do_export('txt'), fg_color="#F3F4F6", text_color="#374151", hover_color="#E5E7EB", **btn_kwargs).pack(fill=tk.X, padx=15, pady=4)
+        ctk.CTkButton(frame_format, text="  🏷  TextGrid 标注文件 (.TextGrid)", command=lambda: do_export('textgrid'), fg_color="#F3E8FF", text_color="#6B21A8", hover_color="#E9D5FF", **btn_kwargs).pack(fill=tk.X, padx=15, pady=4)
+        ctk.CTkButton(frame_format, text="  📊  Excel 表格 (.xlsx)", command=lambda: do_export('xlsx'), fg_color="#ECFDF5", text_color="#047857", hover_color="#D1FAE5", **btn_kwargs).pack(fill=tk.X, padx=15, pady=4)
+        ctk.CTkButton(frame_format, text="  📈  声调格局连贯折线图", command=lambda: do_export('line_chart'), fg_color="#EFF6FF", text_color="#1E40AF", hover_color="#DBEAFE", **btn_kwargs).pack(fill=tk.X, padx=15, pady=4)
+        ctk.CTkButton(frame_format, text="  🔥  词语时序密度热力图", command=lambda: do_export('kde'), fg_color="#FFF7ED", text_color="#9A3412", hover_color="#FFEDD5", **btn_kwargs).pack(fill=tk.X, padx=15, pady=(4, 10))
+
+    def _export_integrated_xlsx(self, out_file):
+        try:
+            import xlsxwriter
+        except ImportError:
+            return messagebox.showerror("错误", "缺少 xlsxwriter 库，请先安装：pip install xlsxwriter")
+
+        workbook = xlsxwriter.Workbook(out_file)
+        ws_res = workbook.add_worksheet("整合平均T值")
+
+        # We will collect the normalized T-values from all speakers
+        # First, let's get the max_syls across all speakers
+        max_syls = 1
+        num_points = self.last_params['pts']
+
+        speaker_t_values = {} # {spk_name: {grp_name: [t_vals]}}
+        all_groups = set()
+
+        for spk in self.speakers:
+            if not spk.items: continue
+            data, m_syls = spk.tree_panel._collect_group_avg_data()
+            if m_syls > max_syls: max_syls = m_syls
+            if data:
+                speaker_t_values[spk.name] = data
+                all_groups.update(data.keys())
+
+        if not speaker_t_values:
+            workbook.close()
+            return messagebox.showwarning("提示", "没有可供整合的有效数据。")
+
+        # Headers
+        res_headers = ["组别"]
+        for k in range(1, max_syls + 1):
+            for i in range(1, num_points + 1):
+                res_headers.append(f"字{k}_T{i}")
+        for col, header in enumerate(res_headers): ws_res.write(0, col, header)
+
+        row_idx = 1
+        for grp in sorted(list(all_groups)):
+            # Calculate the average T-value across all speakers for this group
+            sum_t_vals = [0.0] * (max_syls * num_points)
+            count_t_vals = [0] * (max_syls * num_points)
+
+            for spk_name, data in speaker_t_values.items():
+                if grp in data:
+                    t_vals = data[grp]
+                    for i, val in enumerate(t_vals):
+                        if val is not None and i < len(sum_t_vals):
+                            sum_t_vals[i] += val
+                            count_t_vals[i] += 1
+
+            ws_res.write(row_idx, 0, grp)
+            col_idx = 1
+            for i in range(max_syls * num_points):
+                if count_t_vals[i] > 0:
+                    avg_t = sum_t_vals[i] / count_t_vals[i]
+                    ws_res.write(row_idx, col_idx, round(avg_t, 2))
+                else:
+                    ws_res.write(row_idx, col_idx, "")
+                col_idx += 1
+            row_idx += 1
+
+        workbook.close()
+        messagebox.showinfo("成功", f"多发音人归一化整合 Excel 已导出至:\n{out_file}")
+
+    def _export_integrated_line_chart(self, out_file):
+        import matplotlib.pyplot as plt
+        max_syls = 1
+        num_points = self.last_params['pts']
+        speaker_t_values = {}
+        all_groups = set()
+
+        for spk in self.speakers:
+            if not spk.items: continue
+            data, m_syls = spk.tree_panel._collect_group_avg_data()
+            if m_syls > max_syls: max_syls = m_syls
+            if data:
+                speaker_t_values[spk.name] = data
+                all_groups.update(data.keys())
+
+        if not speaker_t_values:
+            return messagebox.showwarning("提示", "没有可供绘图的有效数据。")
+
+        plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
+        plt.rcParams['axes.unicode_minus'] = False
+
+        fig, ax = plt.subplots(figsize=(6 + 4 * max_syls, 6))
+        total_points = max_syls * num_points
+        x_vals = list(range(1, total_points + 1))
+        colors = ['#2563EB', '#DC2626', '#16A34A', '#9333EA', '#EA580C', '#0891B2', '#CA8A04', '#6366F1']
+
+        grp_idx = 0
+        for grp in sorted(list(all_groups)):
+            sum_t_vals = [0.0] * (max_syls * num_points)
+            count_t_vals = [0] * (max_syls * num_points)
+
+            for spk_name, data in speaker_t_values.items():
+                if grp in data:
+                    t_vals = data[grp]
+                    for i, val in enumerate(t_vals):
+                        if val is not None and i < len(sum_t_vals):
+                            sum_t_vals[i] += val
+                            count_t_vals[i] += 1
+
+            valid_x = []
+            valid_y = []
+            for i in range(max_syls * num_points):
+                if count_t_vals[i] > 0:
+                    valid_x.append(x_vals[i])
+                    valid_y.append(sum_t_vals[i] / count_t_vals[i])
+
+            if valid_x:
+                ax.plot(valid_x, valid_y, '-o', color=colors[grp_idx % len(colors)], linewidth=2, markersize=5, label=grp)
+                grp_idx += 1
+
+        ax.set_ylim(0, 5)
+        ax.set_xlim(0.5, total_points + 0.5)
+        ax.set_yticks([0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5])
+
+        ax.set_xticks(range(1, total_points + 1))
+        ax.set_xticklabels([(idx % num_points) + 1 for idx in range(total_points)])
+
+        for k in range(1, max_syls):
+            div_x = k * num_points + 0.5
+            ax.axvline(div_x, color='gray', linestyle='--', alpha=0.5)
+            ax.text(div_x - num_points/2, 5.1, f"第 {k} 字", ha='center', va='bottom', fontsize=12, fontweight='bold', color='#4B5563')
+            if k == max_syls - 1:
+                ax.text(div_x + num_points/2, 5.1, f"第 {k+1} 字", ha='center', va='bottom', fontsize=12, fontweight='bold', color='#4B5563')
+
+        ax.set_xlabel('测量点 (沿时序展开)', fontsize=12)
+        ax.set_ylabel('平均 T 值 (0-5 标度)', fontsize=12)
+        ax.set_title(f'连读变调声调格局图 (整合 {len(speaker_t_values)} 位发音人)', fontsize=16, fontweight='bold', pad=25)
+        ax.legend(loc='best', fontsize=10)
+        ax.grid(True, alpha=0.3)
+
+        fig.tight_layout()
+        fig.savefig(out_file, dpi=300, bbox_inches='tight')
+        plt.close(fig)
+        messagebox.showinfo("成功", f"整合折线图已导出至:\n{out_file}")
+
+    def _export_integrated_kde(self, out_file):
+        import matplotlib.pyplot as plt
+        import numpy as np
+        from scipy.stats import gaussian_kde
+
+        max_syls = 1
+        integrated_norm_points = {} # {grp: (X_all, Y_all)}
+
+        for spk in self.speakers:
+            if not spk.items: continue
+            points_data, m_syls = spk.tree_panel.get_kde_norm_points()
+            if m_syls > max_syls: max_syls = m_syls
+
+            if points_data:
+                for grp, (x_arr, y_arr) in points_data.items():
+                    if grp not in integrated_norm_points:
+                        integrated_norm_points[grp] = (list(x_arr), list(y_arr))
+                    else:
+                        integrated_norm_points[grp][0].extend(x_arr)
+                        integrated_norm_points[grp][1].extend(y_arr)
+
+        if not integrated_norm_points:
+            return messagebox.showwarning("提示", "没有可供整合绘图的有效数据。")
+
+        plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
+        plt.rcParams['axes.unicode_minus'] = False
+
+        all_groups = sorted(list(integrated_norm_points.keys()))
+        n_groups = len(all_groups)
+        n_cols = min(2, n_groups)
+        n_rows = math.ceil(n_groups / n_cols)
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(5 * max_syls * n_cols, 5 * n_rows), squeeze=False, sharex=True, sharey=True)
+        axes_flat = axes.flatten()
+
+        for idx, grp_name in enumerate(all_groups):
+            ax = axes_flat[idx]
+            X_all = np.array(integrated_norm_points[grp_name][0])
+            Y_all = np.array(integrated_norm_points[grp_name][1])
+
+            xmin, xmax = 0, max_syls * 100
+            ymin, ymax = -1, 6
+
+            if len(X_all) > 3:
+                positions = np.vstack([X_all, Y_all])
+                try:
+                    kernel = gaussian_kde(positions, bw_method=0.15)
+                    xi, yi = np.mgrid[xmin:xmax:200j, ymin:ymax:100j]
+                    zi = kernel(np.vstack([xi.flatten(), yi.flatten()]))
+                    zi = zi.reshape(xi.shape)
+
+                    vmax = zi.max()
+                    if vmax > 0:
+                        levels = np.linspace(vmax * 0.05, vmax, 30)
+                        ax.contourf(xi, yi, zi, levels=levels, cmap="YlOrRd", extend='neither')
+                except Exception as e:
+                    pass
+
+            for k in range(1, max_syls):
+                ax.axvline(k * 100, color='gray', linestyle='--', alpha=0.8)
+
+            ax.set_title(f"{grp_name} (N={len(X_all)//100})", fontsize=16)
+            ax.set_ylim(-1, 6)
+            ax.set_xlim(0, max_syls * 100)
+            ax.set_yticks([-1, 0, 1, 2, 3, 4, 5, 6])
+
+            ticks, labels = [], []
+            for k in range(max_syls):
+                ticks.append(k * 100 + 50)
+                labels.append(f"第 {k+1} 字\n(0-100%)")
+            ax.set_xticks(ticks)
+            ax.set_xticklabels(labels)
+
+            if idx % n_cols == 0: ax.set_ylabel('归一化 T 值', fontsize=12)
+
+        for idx in range(n_groups, len(axes_flat)): axes_flat[idx].set_visible(False)
+
+        fig.suptitle(f'词语时序密度热力图 (整合 {len(self.speakers)} 位发音人)', fontsize=20, fontweight='bold', y=1.05)
+        fig.tight_layout()
+        fig.savefig(out_file, dpi=300, bbox_inches='tight')
+        plt.close(fig)
+        messagebox.showinfo("成功", f"整合热力图已导出至:\n{out_file}")
+
 
     def on_clear_canvas_callback(self):
         self.spectrogram_panel.clear_canvas()

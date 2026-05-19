@@ -56,7 +56,7 @@ def test_logging_on_exception(caplog):
         with patch('modules.project_tree.parselmouth.Sound', side_effect=Exception("Mocked Error")):
             with caplog.at_level(logging.ERROR):
                 # Trigger _export_xlsx (one of the methods with the fix)
-                panel._export_xlsx('test.xlsx')
+                panel.export_xlsx('test.xlsx')
 
                 # Verify that the error was logged
                 assert "Error loading sound or pitch for invalid_path.wav: Mocked Error" in caplog.text
