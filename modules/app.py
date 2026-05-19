@@ -319,7 +319,8 @@ class PhoneticsApp:
             "status_error": "status_error.png",
             "warning": "warning.png",
             "import": "import_file.png", "ai_prompt": "ai_prompt.png", "copy": "copy_icon.png",
-            "import_white": "import_white.png", "copy_white": "copy_white.png", "check_white": "check_white.png"
+            "import_white": "import_white.png", "copy_white": "copy_white.png", "check_white": "check_white.png",
+            "pause": "pause.png"
         }
         from PIL import ImageTk
         self.tk_icons = {}
@@ -327,6 +328,18 @@ class PhoneticsApp:
             path = os.path.join(icon_path, filename)
             if os.path.exists(path):
                 img = Image.open(path)
+                if key == "bulb":
+                    try:
+                        import numpy as np
+                        # 将接近黑色的像素修改为 #DC2626，同时完美保留 alpha 透明度
+                        rgba = np.array(img.convert("RGBA"))
+                        mask = (rgba[:, :, 0] < 50) & (rgba[:, :, 1] < 50) & (rgba[:, :, 2] < 50)
+                        rgba[mask, 0] = 220
+                        rgba[mask, 1] = 38
+                        rgba[mask, 2] = 38
+                        img = Image.fromarray(rgba)
+                    except Exception:
+                        pass
                 self.icons[key] = ctk.CTkImage(light_image=img, dark_image=img, size=(20, 20))
                 # Resize for ttk.Treeview
                 img_tk = img.resize((16, 16), Image.Resampling.LANCZOS)
