@@ -25,7 +25,10 @@ class SpectrogramPanel:
         self.bound_lines = []
         self.span_fills = []
         self.char_texts = []
-        self.font_title = ctk.CTkFont(family="Microsoft YaHei", size=15, weight="bold")
+        try:
+            self.font_title = ctk.CTkFont(family="Microsoft YaHei", size=15, weight="bold")
+        except Exception:
+            self.font_title = ("Microsoft YaHei", 15, "bold")
         
         # Cursor and playback state
         self.is_playing = False
