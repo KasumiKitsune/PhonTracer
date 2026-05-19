@@ -187,6 +187,354 @@ def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: 
             
     return output
 
+def write_analysis_sheet_with_formulas(workbook, ws_res, group_list, num_points, max_syls,
+                                       last_data_row, data_sheet_name='数据'):
+    """
+    在分析结果 Sheet 中写入 Excel 公式，引用数据 Sheet 的原始 Hz 值进行计算。
+
+    布局:
+      Section A (Hz 均值): AVERAGEIFS 公式，按组别从数据表中计算各测量点的平均 Hz
+      Section B (全局基频范围): MIN / MAX 公式
+      Section C (五度标调 T 值): LOG 转换公式，引用 Section A 与 B
+
+    Parameters
+    ----------
+    workbook : xlsxwriter.Workbook
+    ws_res : xlsxwriter worksheet
+    group_list : list[str] — 有序的组别名列表
+    num_points : int — 采样点数（如 11）
+    max_syls : int — 最大音节数
+    last_data_row : int — 数据 Sheet 中最后一行数据的 0-indexed 行号
+    data_sheet_name : str
+
+    Returns
+    -------
+    (res_row, min_cell_abs, max_cell_abs) :
+        res_row — T 值数据区之后的下一行（用于插入图表）
+        min_cell_abs — 全局最低 Hz 单元格绝对引用字符串
+        max_cell_abs — 全局最高 Hz 单元格绝对引用字符串
+    """
+    from xlsxwriter.utility import xl_col_to_name, xl_rowcol_to_cell
+
+    ds = data_sheet_name  # shorthand
+    num_groups = len(group_list)
+    # Excel row of last data (1-indexed) = last_data_row + 1
+    lr = last_data_row + 1
+
+    # ────────── 格式 ──────────
+    bold_fmt = workbook.add_format({'bold': True, 'bg_color': '#F2F2F2'})
+    section_fmt = workbook.add_format({'bold': True, 'font_size': 12, 'bg_color': '#D9E2F3'})
+    highlight_fmt = workbook.add_format({'bold': True, 'bg_color': '#FFF2CC', 'num_format': '0.00'})
+
+    # 设置列宽以防显示 ######
+    ws_res.set_column(0, 0, 16)  # 声调类型
+    ws_res.set_column(1, 1, 16)  # 字1_平均时长 / 全局最低最高Hz 所在列
+    for k in range(max_syls):
+        base_col = 1 + k * (num_points + 1)
+        ws_res.set_column(base_col, base_col, 16)  # 时长列
+        ws_res.set_column(base_col + 1, base_col + num_points, 10)  # T值或Hz值列
+
+    # ══════════ Section A: 基频均值 (Hz) ══════════
+    sec_a_header_row = 0
+    ws_res.merge_range(sec_a_header_row, 0, sec_a_header_row,
+                       max_syls * (num_points + 1),
+                       '一、各声调平均基频 (Hz)  —— 由 AVERAGEIFS 公式自动从「数据」表计算', section_fmt)
+
+    hz_header_row = 1
+    ws_res.write(hz_header_row, 0, '声调类型', bold_fmt)
+    for k in range(max_syls):
+        base_col = 1 + k * (num_points + 1)
+        ws_res.write(hz_header_row, base_col, f'字{k+1}_平均时长(s)', bold_fmt)
+        for i in range(num_points):
+            ws_res.write(hz_header_row, base_col + 1 + i, f'字{k+1}_T{i+1}均值(Hz)', bold_fmt)
+
+    hz_data_start = 2  # 0-indexed row where Hz averages begin
+    for g_idx, grp in enumerate(group_list):
+        r = hz_data_start + g_idx
+        ws_res.write(r, 0, grp)
+
+        # 数据 Sheet 组别列 = A（col 0），条件范围固定
+        grp_range = f'{ds}!$A$2:$A${lr}'
+        # 引用本行 A 列作为条件值（绝对列）
+        criteria = f'$A{r + 1}'
+
+        for k in range(max_syls):
+            base_col = 1 + k * (num_points + 1)
+            # ── 平均时长 ──
+            dur_data_col = 4 + k * (num_points + 1)  # 数据表中该音节时长列
+            dc = xl_col_to_name(dur_data_col)
+            val_range = f'{ds}!${dc}$2:${dc}${lr}'
+            ws_res.write_formula(
+                r, base_col,
+                f'=IFERROR(AVERAGEIFS({val_range},{grp_range},{criteria},{val_range},">0"),"")')
+
+            # ── 各测量点 Hz 均值 ──
+            for i in range(num_points):
+                hz_data_col = dur_data_col + 1 + i
+                hc = xl_col_to_name(hz_data_col)
+                hz_range = f'{ds}!${hc}$2:${hc}${lr}'
+                ws_res.write_formula(
+                    r, base_col + 1 + i,
+                    f'=IFERROR(AVERAGEIFS({hz_range},{grp_range},{criteria},{hz_range},">0"),"")')
+
+    # ══════════ Section B: 全局基频范围 ══════════
+    gap1 = hz_data_start + num_groups  # blank row
+    min_row = gap1 + 1
+    max_row = gap1 + 2
+
+    ws_res.write(min_row, 0, '全局最低Hz =', highlight_fmt)
+    ws_res.write(max_row, 0, '全局最高Hz =', highlight_fmt)
+
+    # 收集 Section A 中所有 Hz 均值单元格的范围
+    hz_cell_ranges = []
+    for k in range(max_syls):
+        base_col = 1 + k * (num_points + 1)
+        for i in range(num_points):
+            col = base_col + 1 + i
+            cl = xl_col_to_name(col)
+            hz_cell_ranges.append(f'{cl}{hz_data_start + 1}:{cl}{hz_data_start + num_groups}')
+
+    joined = ','.join(hz_cell_ranges)
+    ws_res.write_formula(min_row, 1, f'=MIN({joined})', highlight_fmt)
+    ws_res.write_formula(max_row, 1, f'=MAX({joined})', highlight_fmt)
+
+    min_cell_abs = xl_rowcol_to_cell(min_row, 1, row_abs=True, col_abs=True)
+    max_cell_abs = xl_rowcol_to_cell(max_row, 1, row_abs=True, col_abs=True)
+
+    # ══════════ Section C: 五度标调 T 值 ══════════
+    gap2 = max_row + 1
+    sec_c_header_row = gap2 + 1
+    ws_res.merge_range(sec_c_header_row, 0, sec_c_header_row,
+                       max_syls * (num_points + 1),
+                       '二、赵元任五度标调 T 值  —— 由上方 Hz 均值 + 全局极值经 LOG 公式换算', section_fmt)
+
+    t_header_row = sec_c_header_row + 1
+    ws_res.write(t_header_row, 0, '声调类型', bold_fmt)
+    for k in range(max_syls):
+        base_col = 1 + k * (num_points + 1)
+        ws_res.write(t_header_row, base_col, f'字{k+1}_平均时长(s)', bold_fmt)
+        for i in range(num_points):
+            ws_res.write(t_header_row, base_col + 1 + i, f'字{k+1}_T{i+1}', bold_fmt)
+
+    t_data_start = t_header_row + 1
+    for g_idx, grp in enumerate(group_list):
+        t_r = t_data_start + g_idx
+        ws_res.write(t_r, 0, grp)
+
+        for k in range(max_syls):
+            base_col = 1 + k * (num_points + 1)
+            # 平均时长直接引用 Section A 的对应单元格
+            dur_ref = xl_rowcol_to_cell(hz_data_start + g_idx, base_col)
+            ws_res.write_formula(t_r, base_col, f'={dur_ref}')
+
+            for i in range(num_points):
+                hz_ref = xl_rowcol_to_cell(hz_data_start + g_idx, base_col + 1 + i)
+                # T = 5 * (LOG(Hz) - LOG(min)) / (LOG(max) - LOG(min))
+                # 仅当 Hz>0 且 max>min 且 min>0 且均为有效数字时计算
+                ws_res.write_formula(
+                    t_r, base_col + 1 + i,
+                    f'=IF(AND(ISNUMBER({hz_ref}),{hz_ref}>0,{max_cell_abs}>{min_cell_abs},{min_cell_abs}>0),'
+                    f'5*(LOG({hz_ref})-LOG({min_cell_abs}))/(LOG({max_cell_abs})-LOG({min_cell_abs})),"")')
+
+    res_row = t_data_start + num_groups
+    return res_row, min_cell_abs, max_cell_abs
+
+
+def build_five_point_chart(workbook, target_sheet, dict_data, avg_points_map,
+                           num_points, max_syls, min_hz, max_hz,
+                           insert_cell='A1', chart_title='各声调平均基频五度标调图（保留真实时长）'):
+    """
+    在 xlsxwriter Workbook 中创建赵元任五度标调散点连线图。
+
+    复刻 VBA 宏 DrawFivePointPitchScale 的完整效果：
+    - 图表类型：带标记的 XY 散点连线 (scatter with straight lines and markers)
+    - X 轴：各声调的真实平均时长（秒），保留物理含义
+    - Y 轴：0~5 五度标调 T 值
+    - 自动按声调名称（阴平/阳平/上声/去声）上色
+    - 隐藏辅助系列在 Y 轴左侧标注区间数字 1~5
+
+    Parameters
+    ----------
+    workbook : xlsxwriter.Workbook
+    target_sheet : xlsxwriter worksheet  —— 图表插入到的目标 Sheet
+    dict_data : dict
+        { grp_name: { 'syl_dur_sums': [...], 'syl_counts': [...],
+                      'f0_sums': [[...]*max_syls], 'f0_counts': [[...]*max_syls] } }
+    avg_points_map : dict
+        { grp_name: [[avg_hz_per_point]*num_points  for each syl] }
+    num_points : int
+    max_syls : int
+    min_hz, max_hz : float
+    insert_cell : str
+    chart_title : str
+    """
+    import math
+
+    if max_hz <= min_hz or min_hz <= 0:
+        return  # 无有效数据，无法绘制
+
+    # ── 声调自动配色表 ──
+    TONE_COLORS = {
+        '阴平': '#0072BD',   # RGB(0,114,189)
+        '阳平': '#D95319',   # RGB(217,83,25)
+        '上声': '#77AC30',   # RGB(119,172,48)
+        '去声': '#7E2F8E',   # RGB(126,47,142)
+    }
+    FALLBACK_COLORS = [
+        '#0072BD', '#D95319', '#77AC30', '#7E2F8E',
+        '#EDB120', '#4DBEEE', '#A2142F', '#72B7B2',
+    ]
+
+    def _tone_color(group_name, idx):
+        """根据组名中的声调关键词返回颜色，无匹配则用轮换色。"""
+        for key, color in TONE_COLORS.items():
+            if key in group_name:
+                return color
+        return FALLBACK_COLORS[idx % len(FALLBACK_COLORS)]
+
+    # ── 隐藏的图表数据 Sheet ──
+    ws_cd = workbook.add_worksheet('五度图数据')
+    ws_cd.hide()
+
+    # 计算每组的平均时长和 T 值序列
+    max_avg_dur = 0.0
+    group_series = []  # [(name, [x_vals], [y_vals]), ...]
+
+    for g_idx, (grp, st) in enumerate(dict_data.items()):
+        cnt_dur = st['syl_counts'][0] if st['syl_counts'][0] > 0 else 1
+        avg_dur = st['syl_dur_sums'][0] / cnt_dur
+        if avg_dur > max_avg_dur:
+            max_avg_dur = avg_dur
+
+        x_vals = []
+        y_vals = []
+        has_valid = False
+        syl_avgs = avg_points_map[grp][0] if grp in avg_points_map else [0.0] * num_points
+        for i in range(num_points):
+            x_vals.append((i) * (avg_dur / (num_points - 1)) if num_points > 1 else 0)
+            avg_hz = syl_avgs[i]
+            if avg_hz > 0 and max_hz > min_hz and min_hz > 0:
+                t_val = 5 * (math.log(avg_hz) - math.log(min_hz)) / (math.log(max_hz) - math.log(min_hz))
+                y_vals.append(round(t_val, 4))
+                has_valid = True
+            else:
+                y_vals.append(None)
+
+        if has_valid:
+            group_series.append((grp, x_vals, y_vals))
+
+    if not group_series:
+        return
+
+    # ── 写入隐藏 Sheet ──
+    # 每组占 2 行 (X 行 + Y 行)，从第 0 行开始
+    row = 0
+    series_refs = []
+    for name, x_vals, y_vals in group_series:
+        ws_cd.write(row, 0, f'{name}_X')
+        ws_cd.write(row + 1, 0, f'{name}_Y')
+        for c, (xv, yv) in enumerate(zip(x_vals, y_vals)):
+            ws_cd.write(row, c + 1, xv)
+            if yv is not None:
+                ws_cd.write(row + 1, c + 1, yv)
+            else:
+                ws_cd.write(row + 1, c + 1, '')
+        series_refs.append((name, row, row + 1, len(x_vals)))
+        row += 2
+
+    # 额外写入隐形标签辅助系列 (Y 轴区间数字 1~5)
+    dummy_row_x = row
+    dummy_row_y = row + 1
+    ws_cd.write(dummy_row_x, 0, 'label_x')
+    ws_cd.write(dummy_row_y, 0, 'label_y')
+    for i in range(5):
+        x_pos = -0.03 * max_avg_dur if max_avg_dur > 0 else -0.01
+        ws_cd.write(dummy_row_x, i + 1, x_pos)
+        ws_cd.write(dummy_row_y, i + 1, i + 0.5)  # 0.5, 1.5, 2.5, 3.5, 4.5
+
+    # ── 创建散点连线图 ──
+    chart = workbook.add_chart({'type': 'scatter', 'subtype': 'straight_with_markers'})
+
+    for idx, (name, rx, ry, count) in enumerate(series_refs):
+        color = _tone_color(name, idx)
+        chart.add_series({
+            'name':       name,
+            'categories': ['五度图数据', rx, 1, rx, count],
+            'values':     ['五度图数据', ry, 1, ry, count],
+            'line':       {'color': color, 'width': 2.5},
+            'marker':     {
+                'type': 'circle',
+                'size': 6,
+                'fill': {'color': color},
+                'border': {'color': color},
+            },
+        })
+
+    # 添加隐形辅助系列用于 Y 轴区间数字
+    chart.add_series({
+        'name':       'Y_Labels',
+        'categories': ['五度图数据', dummy_row_x, 1, dummy_row_x, 5],
+        'values':     ['五度图数据', dummy_row_y, 1, dummy_row_y, 5],
+        'line':       {'none': True},
+        'marker':     {'type': 'none'},
+        'data_labels': {
+            'value':      False,
+            'category':   False,
+            'series_name': False,
+            'custom':     [
+                {'value': '1'},
+                {'value': '2'},
+                {'value': '3'},
+                {'value': '4'},
+                {'value': '5'},
+            ],
+            'position':   'left',
+            'font':       {'size': 12, 'bold': True, 'color': 'black'},
+        },
+    })
+
+    # ── 坐标轴设定 ──
+    x_min = -0.05 * max_avg_dur if max_avg_dur > 0 else 0
+    x_max = max_avg_dur * 1.05 if max_avg_dur > 0 else 1
+
+    chart.set_x_axis({
+        'name': '平均时长 Time (s)',
+        'name_font': {'name': 'Microsoft YaHei', 'size': 10},
+        'num_font':  {'name': 'Arial', 'size': 9},
+        'min':  x_min,
+        'max':  x_max,
+        'crossing': 0,
+    })
+
+    chart.set_y_axis({
+        'name': '赵元任五度标调法',
+        'name_font':  {'name': 'Microsoft YaHei', 'size': 10},
+        'num_font':   {'name': 'Arial', 'size': 1, 'color': 'white'},  # 隐藏默认数字
+        'min':  0,
+        'max':  5,
+        'major_unit':     1,
+        'major_gridlines': {'visible': True, 'line': {'color': '#D0D0D0', 'width': 0.5}},
+        'major_tick_mark': 'none',
+    })
+
+    # ── 图例：删除最后一个辅助标签系列的图例条目 ──
+    chart.set_legend({
+        'position': 'right',
+        'font':     {'name': 'Microsoft YaHei', 'size': 9},
+        'delete_series': [len(group_series)],  # 最后一个是 Y_Labels
+    })
+
+    chart.set_title({
+        'name':      chart_title,
+        'name_font': {'name': 'Microsoft YaHei', 'size': 14, 'bold': True},
+    })
+
+    chart.set_size({'width': 650, 'height': 450})
+    chart.set_plotarea({'border': {'none': True}})
+
+    target_sheet.insert_chart(insert_cell, chart)
+
+
 import textgrid
 
 def get_export_textgrid_for_item(item, max_time=None):

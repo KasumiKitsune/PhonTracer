@@ -20,7 +20,7 @@ json.dumps = dumps_utf8
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from modules.audio_core import macroscopic_vad, core_microscopic_vowel_nucleus, auto_split_inner_word, auto_split_to_chars_bounds, batch_process_worker, recalculate_bounds_fast
-from modules.data_utils import parse_wordlist, fuzzy_match_word_to_path, get_export_text_for_item
+from modules.data_utils import parse_wordlist, fuzzy_match_word_to_path, get_export_text_for_item, build_five_point_chart
 
 class LoggerOut:
     def __init__(self, original_stdout, log_file):
@@ -1201,12 +1201,6 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                 row_idx += 1
                 global_idx += 1
 
-        res_headers = ["声调类型"]
-        for k in range(1, max_syls + 1):
-            res_headers.append(f"字{k}_平均时长")
-            for i in range(1, num_points + 1): res_headers.append(f"字{k}_T{i}")
-        for col, header in enumerate(res_headers): ws_res.write(0, col, header)
-
         all_avg_hz = []
         avg_points_map = {}
         import math
@@ -1227,24 +1221,24 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
 
         min_hz, max_hz = min(all_avg_hz), max(all_avg_hz)
 
-        res_row = 1
-        for grp, st in dict_data.items():
-            ws_res.write(res_row, 0, grp)
-            col = 1
-            for k in range(max_syls):
-                cnt = st['syl_counts'][k]
-                avg_dur = st['syl_dur_sums'][k] / cnt if cnt > 0 else 0
-                ws_res.write(res_row, col, round(avg_dur, 4))
-                col += 1
+        # 写入分析结果 Sheet（全部使用 Excel 公式引用数据表）
+        from modules.data_utils import write_analysis_sheet_with_formulas
+        group_list = list(dict_data.keys())
+        last_data_row = row_idx - 1  # 0-indexed
+        res_row, _, _ = write_analysis_sheet_with_formulas(
+            workbook, ws_res, group_list, num_points, max_syls, last_data_row
+        )
 
-                for avg_hz in avg_points_map[grp][k]:
-                    if avg_hz > 0 and max_hz > min_hz and min_hz > 0:
-                        t_val = 5 * (math.log10(avg_hz) - math.log10(min_hz)) / (math.log10(max_hz) - math.log10(min_hz))
-                        ws_res.write(res_row, col, round(t_val, 2))
-                    else:
-                        ws_res.write(res_row, col, "")
-                    col += 1
-            res_row += 1
+        # 自动嵌入五度标调散点连线图
+        try:
+            build_five_point_chart(
+                workbook, ws_res, dict_data, avg_points_map,
+                num_points, max_syls, min_hz, max_hz,
+                insert_cell=f'A{res_row + 3}',
+                chart_title='各声调平均基频五度标调图（保留真实时长）'
+            )
+        except Exception:
+            pass  # CLI 下静默忽略图表错误
 
         workbook.close()
 

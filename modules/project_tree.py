@@ -7,7 +7,7 @@ import numpy as np
 import math
 import matplotlib.pyplot as plt
 import logging
-from .data_utils import get_export_text_for_item
+from .data_utils import get_export_text_for_item, build_five_point_chart, write_analysis_sheet_with_formulas
 from .ui_widgets import ToolTip, CTkReleaseButton, AutoScrollbar
 
 logger = logging.getLogger(__name__)
@@ -842,12 +842,6 @@ class ProjectTreePanel:
                 row_idx += 1
                 global_idx += 1
 
-        res_headers = ["声调类型"]
-        for k in range(1, max_syls + 1):
-            res_headers.append(f"字{k}_平均时长")
-            for i in range(1, num_points + 1): res_headers.append(f"字{k}_T{i}")
-        for col, header in enumerate(res_headers): ws_res.write(0, col, header)
-
         all_avg_hz = []
         avg_points_map = {}
         
@@ -867,80 +861,22 @@ class ProjectTreePanel:
             return
             
         min_hz, max_hz = min(all_avg_hz), max(all_avg_hz)
-        
-        res_row = 1
-        for grp, st in dict_data.items():
-            ws_res.write(res_row, 0, grp)
-            col = 1
-            for k in range(max_syls):
-                cnt = st['syl_counts'][k]
-                avg_dur = st['syl_dur_sums'][k] / cnt if cnt > 0 else 0
-                ws_res.write(res_row, col, round(avg_dur, 4))
-                col += 1
-                
-                for avg_hz in avg_points_map[grp][k]:
-                    if avg_hz > 0 and max_hz > min_hz and min_hz > 0:
-                        t_val = 5 * (math.log10(avg_hz) - math.log10(min_hz)) / (math.log10(max_hz) - math.log10(min_hz))
-                        ws_res.write(res_row, col, round(t_val, 2))
-                    else:
-                        ws_res.write(res_row, col, "")
-                    col += 1
-            res_row += 1
+
+        # 写入分析结果 Sheet（全部使用 Excel 公式引用数据表）
+        group_list = list(dict_data.keys())
+        last_data_row = row_idx - 1  # 0-indexed
+        res_row, _, _ = write_analysis_sheet_with_formulas(
+            workbook, ws_res, group_list, num_points, max_syls, last_data_row
+        )
             
         if include_chart:
             try:
-                ws_chart_data = workbook.add_worksheet("图表数据")
-                ws_chart_data.hide()
-                ws_chart_data.write(0, 0, "声调类型")
-                for p in range(1, max_syls * num_points + 1):
-                    ws_chart_data.write(0, p, p)
-                    
-                chart_row = 1
-                for grp, st in dict_data.items():
-                    ws_chart_data.write(chart_row, 0, grp)
-                    col_idx = 1
-                    for k in range(max_syls):
-                        for avg_hz in avg_points_map[grp][k]:
-                            if avg_hz > 0 and max_hz > min_hz and min_hz > 0:
-                                t_val = 5 * (math.log10(avg_hz) - math.log10(min_hz)) / (math.log10(max_hz) - math.log10(min_hz))
-                                ws_chart_data.write(chart_row, col_idx, round(t_val, 2))
-                            else:
-                                ws_chart_data.write(chart_row, col_idx, "")
-                            col_idx += 1
-                    chart_row += 1
-                    
-                chart = workbook.add_chart({'type': 'line'})
-                for r in range(1, len(dict_data) + 1):
-                    chart.add_series({
-                        'name':       ['图表数据', r, 0],
-                        'categories': ['图表数据', 0, 1, 0, max_syls * num_points],
-                        'values':     ['图表数据', r, 1, r, max_syls * num_points],
-                        'line':       {'width': 2.0},
-                    })
-                    
-                chart.set_title({
-                    'name': '连读变调声调格局图',
-                    'name_font': {'name': 'Microsoft YaHei', 'size': 14, 'bold': True}
-                })
-                chart.set_x_axis({
-                    'name': '测量点 (时序展开)',
-                    'name_font': {'name': 'Microsoft YaHei', 'size': 10},
-                    'num_font': {'name': 'Arial', 'size': 9}
-                })
-                chart.set_y_axis({
-                    'name': 'T值 (0-5 标度)',
-                    'name_font': {'name': 'Microsoft YaHei', 'size': 10},
-                    'num_font': {'name': 'Arial', 'size': 9},
-                    'min': 0,
-                    'max': 5
-                })
-                chart.set_legend({
-                    'position': 'bottom',
-                    'font': {'name': 'Microsoft YaHei', 'size': 9}
-                })
-                chart.set_size({'width': 720, 'height': 400})
-                
-                ws_res.insert_chart(f'A{res_row + 3}', chart)
+                build_five_point_chart(
+                    workbook, ws_res, dict_data, avg_points_map,
+                    num_points, max_syls, min_hz, max_hz,
+                    insert_cell=f'A{res_row + 3}',
+                    chart_title='各声调平均基频五度标调图（保留真实时长）'
+                )
             except Exception as chart_err:
                 logger.error(f"Error generating Excel chart: {chart_err}", exc_info=True)
         
@@ -1073,12 +1009,17 @@ class ProjectTreePanel:
                 
             if include_chart and group_stats:
                 try:
+                    # 将 group_stats 的 t_sums/t_counts 转换为 avg_points_map 格式（Hz 平均值）
+                    # 注意：整合模式下 t_sums/t_counts 里存的已经是 T 值而非 Hz，
+                    # 但 build_five_point_chart 需要 Hz 形式的 avg_points_map 和 min_hz/max_hz。
+                    # 这里直接复用 speaker_stats 中各发音人的原始 Hz 汇总来构建。
+                    # 由于整合模式比较特殊（跨发音人归一化），
+                    # 此处使用独立的折线图保持兼容。
                     ws_chart_data = workbook.add_worksheet("图表数据")
                     ws_chart_data.hide()
                     ws_chart_data.write(0, 0, "声调类型")
                     for p in range(1, max_syls * num_points + 1):
                         ws_chart_data.write(0, p, p)
-                        
                     chart_row = 1
                     for grp, st in group_stats.items():
                         ws_chart_data.write(chart_row, 0, grp)
@@ -1092,16 +1033,15 @@ class ProjectTreePanel:
                                     ws_chart_data.write(chart_row, col_idx, "")
                                 col_idx += 1
                         chart_row += 1
-                        
-                    chart = workbook.add_chart({'type': 'line'})
+                    chart = workbook.add_chart({'type': 'scatter', 'subtype': 'straight_with_markers'})
                     for r in range(1, len(group_stats) + 1):
                         chart.add_series({
                             'name':       ['图表数据', r, 0],
                             'categories': ['图表数据', 0, 1, 0, max_syls * num_points],
                             'values':     ['图表数据', r, 1, r, max_syls * num_points],
-                            'line':       {'width': 2.0},
+                            'line':       {'width': 2.5},
+                            'marker':     {'type': 'circle', 'size': 6},
                         })
-                        
                     chart.set_title({
                         'name': '多发音人整合声调格局图',
                         'name_font': {'name': 'Microsoft YaHei', 'size': 14, 'bold': True}
@@ -1112,18 +1052,19 @@ class ProjectTreePanel:
                         'num_font': {'name': 'Arial', 'size': 9}
                     })
                     chart.set_y_axis({
-                        'name': 'T值 (0-5 标度)',
+                        'name': '赵元任五度标调法',
                         'name_font': {'name': 'Microsoft YaHei', 'size': 10},
-                        'num_font': {'name': 'Arial', 'size': 9},
-                        'min': 0,
-                        'max': 5
+                        'num_font': {'name': 'Arial', 'size': 1, 'color': 'white'},
+                        'min': 0, 'max': 5,
+                        'major_unit': 1,
+                        'major_gridlines': {'visible': True, 'line': {'color': '#D0D0D0', 'width': 0.5}},
+                        'major_tick_mark': 'none',
                     })
                     chart.set_legend({
-                        'position': 'bottom',
+                        'position': 'right',
                         'font': {'name': 'Microsoft YaHei', 'size': 9}
                     })
-                    chart.set_size({'width': 720, 'height': 400})
-                    
+                    chart.set_size({'width': 650, 'height': 450})
                     ws_res.insert_chart(f'A{res_row + 3}', chart)
                 except Exception as chart_err:
                     logger.error(f"Error generating integrated Excel chart: {chart_err}", exc_info=True)
