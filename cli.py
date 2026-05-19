@@ -20,6 +20,7 @@ json.dumps = dumps_utf8
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from modules.audio_core import macroscopic_vad, core_microscopic_vowel_nucleus, auto_split_inner_word, auto_split_to_chars_bounds, batch_process_worker, recalculate_bounds_fast
+from modules.speaker_manager import SpeakerManager
 from modules.data_utils import parse_wordlist, fuzzy_match_word_to_path, get_export_text_for_item, build_five_point_chart
 
 class LoggerOut:
@@ -49,29 +50,77 @@ Rules:
 
     def __init__(self):
         super().__init__()
-        self.params = {
-            'pts': 11,
-            'db': 60.0,
-            'skip_front': 0.00,
-            'pitch_floor': 75,
-            'pitch_ceiling': 600,
-            'voicing_threshold': 0.25,
-            'trim_silence': True
-        }
+        self.speaker_manager = SpeakerManager()
         self.lang = 'en'
-
-        self.items = OrderedDict()
-        self.groups = []
-        self.mode = None # 'long' or 'batch'
-
-        self.long_snd = None
-        self.long_snd_path = None
-        self.batch_paths = []
-        self.audio_cache = {}
-
         self.executor = concurrent.futures.ProcessPoolExecutor(max_workers=min(os.cpu_count() or 4, 8))
         self.log_file = None
         self.original_stdout = sys.stdout
+
+    @property
+    def current_speaker(self):
+        return self.speaker_manager.get_active_speaker()
+
+    @property
+    def items(self):
+        return self.current_speaker.items
+
+    @property
+    def params(self):
+        if 'trim_silence' not in self.current_speaker.last_params:
+            self.current_speaker.last_params['trim_silence'] = True
+        return self.current_speaker.last_params
+
+    @property
+    def mode(self):
+        tab = getattr(self.current_speaker, 'tab_mode', '多条独立音频')
+        return 'long' if '单条' in tab else 'batch'
+
+    @mode.setter
+    def mode(self, value):
+        if value == 'long':
+            self.current_speaker.tab_mode = '导入单条长音频'
+        else:
+            self.current_speaker.tab_mode = '多条独立音频'
+
+    @property
+    def groups(self):
+        if not hasattr(self.current_speaker, 'cli_groups'):
+            self.current_speaker.cli_groups = []
+        return self.current_speaker.cli_groups
+
+    @groups.setter
+    def groups(self, val):
+        self.current_speaker.cli_groups = val
+
+    @property
+    def long_snd(self):
+        return self.current_speaker.pending_long_snd
+
+    @long_snd.setter
+    def long_snd(self, val):
+        self.current_speaker.pending_long_snd = val
+
+    @property
+    def long_snd_path(self):
+        if not hasattr(self.current_speaker, 'cli_long_snd_path'):
+            self.current_speaker.cli_long_snd_path = None
+        return self.current_speaker.cli_long_snd_path
+
+    @long_snd_path.setter
+    def long_snd_path(self, val):
+        self.current_speaker.cli_long_snd_path = val
+
+    @property
+    def batch_paths(self):
+        return self.current_speaker.pending_batch_paths
+
+    @batch_paths.setter
+    def batch_paths(self, val):
+        self.current_speaker.pending_batch_paths = val
+
+    @property
+    def audio_cache(self):
+        return self.current_speaker.audio_cache
 
     def precmd(self, line):
         if self.log_file:
@@ -238,6 +287,82 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
 """)
         else:
             super().do_help(arg)
+
+
+    def do_speakers(self, arg):
+        """
+        List all speakers and show the active one.
+        Usage: speakers
+        """
+        speakers = self.speaker_manager.get_all_speakers()
+        active_id = self.speaker_manager.active_speaker_id
+        res = []
+        for s in speakers:
+            res.append({
+                "id": s.id,
+                "name": s.name,
+                "active": s.id == active_id,
+                "items_count": len(s.items)
+            })
+        print(json.dumps({"success": True, "speakers": res}))
+
+    def do_add_speaker(self, arg):
+        """
+        Add a new speaker.
+        Usage: add_speaker <name>
+        """
+        name = arg.strip()
+        if not name:
+            print('{"success": False, "error": "Speaker name required"}')
+            return
+        new_speaker = self.speaker_manager.add_speaker(name)
+        print(json.dumps({"success": True, "message": f"Speaker '{name}' added", "speaker_id": new_speaker.id}))
+
+    def do_switch_speaker(self, arg):
+        """
+        Switch the active speaker.
+        Usage: switch_speaker <name_or_id>
+        """
+        target = arg.strip()
+        if not target:
+            print('{"success": False, "error": "Speaker name or id required"}')
+            return
+        found_id = None
+        for s in self.speaker_manager.get_all_speakers():
+            if s.id == target or s.name == target:
+                found_id = s.id
+                break
+
+        if found_id:
+            self.speaker_manager.set_active_speaker(found_id)
+            print(json.dumps({"success": True, "message": f"Switched to speaker '{target}'"}))
+        else:
+            print(json.dumps({"success": False, "error": f"Speaker '{target}' not found"}))
+
+    def do_remove_speaker(self, arg):
+        """
+        Remove a speaker. Cannot remove the last speaker.
+        Usage: remove_speaker <name_or_id>
+        """
+        target = arg.strip()
+        if not target:
+            print('{"success": False, "error": "Speaker name or id required"}')
+            return
+        found_id = None
+        for s in self.speaker_manager.get_all_speakers():
+            if s.id == target or s.name == target:
+                found_id = s.id
+                break
+
+        if not found_id:
+            print(json.dumps({"success": False, "error": f"Speaker '{target}' not found"}))
+            return
+
+        success = self.speaker_manager.remove_speaker(found_id)
+        if success:
+            print(json.dumps({"success": True, "message": f"Speaker '{target}' removed"}))
+        else:
+            print(json.dumps({"success": False, "error": "Cannot remove the last speaker"}))
 
     def do_load_long(self, arg):
         """
@@ -935,12 +1060,12 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
     def do_export(self, arg):
         """
         Export data to various formats.
-        Usage: export <format> <output_file> [rule]
+        Usage: export <format> <output_file> [rule] [target]
         Formats: txt, xlsx, line_chart, kde, wav, merged_wav, textgrid
         Rule: continuous (default) or per_group (For 'wav' and 'merged_wav', rule can also be buffer_sec or gap_sec like 0.5)
-        Example: export xlsx output.xlsx continuous
-        Example: export wav scratch/output_dir 0.1
-        Example: export merged_wav scratch/merged.wav 0.5
+        Target (Multi-speaker): active (default), separate (multiple files per speaker), integrated (merged T-value calculation)
+        Example: export xlsx output.xlsx continuous integrated
+        Example: export wav scratch/output_dir 0.1 separate
         """
         args = shlex.split(arg)
         if len(args) < 2:
@@ -950,44 +1075,92 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
         fmt = args[0]
         out_file = args[1]
         rule = args[2] if len(args) > 2 else 'continuous'
+        target = args[3] if len(args) > 3 else 'active'
 
-        if not self.items:
+        # Structure setup based on target
+        # For 'active', we just use current speaker's items and groups.
+        # For 'separate' or 'integrated', we need all speakers.
+        speakers_to_process = [self.current_speaker] if target == 'active' else self.speaker_manager.get_all_speakers()
+
+        if not any(len(s.items) > 0 for s in speakers_to_process):
             print('{"success": False, "error": "No items to export"}')
             return
 
-        # Structure items by group
-        structure = []
-        for grp in self.groups:
-            grp_items = [iid for iid, item in self.items.items() if item.get('group') == grp]
-            structure.append((grp, grp_items))
-
         try:
-            if fmt == 'txt':
-                self._export_txt(out_file, structure, rule)
-            elif fmt == 'xlsx':
-                self._export_xlsx(out_file, structure, rule)
-            elif fmt == 'line_chart':
-                self._export_line_chart(out_file, structure)
-            elif fmt == 'kde':
-                self._export_kde_heatmap(out_file, structure)
-            elif fmt == 'wav':
-                self._export_wav(out_file, structure, rule)
-            elif fmt == 'merged_wav':
-                self._export_merged_wav(out_file, structure, rule)
-            elif fmt == 'textgrid':
-                self._export_textgrid(out_file, structure)
-            else:
-                print(f'{{"success": False, "error": "Unknown format: {fmt}"}}')
-                return
-            print(json.dumps({"success": True, "message": f"Exported to {out_file}"}))
+            if target == 'separate':
+                import os
+                # Export individually to out_file (treated as directory)
+                os.makedirs(out_file, exist_ok=True)
+                for s in speakers_to_process:
+                    s_struct = [(grp, [iid for iid, item in s.items.items() if item.get('group') == grp]) for grp in getattr(s, 'cli_groups', [])]
+                    s_out = os.path.join(out_file, f"{s.name}_{fmt}")
+
+                    if fmt == 'txt':
+                        self._export_txt(f"{s_out}.txt", s_struct, rule, s)
+                    elif fmt == 'xlsx':
+                        self._export_xlsx(f"{s_out}.xlsx", s_struct, rule, s)
+                    elif fmt == 'line_chart':
+                        self._export_line_chart(f"{s_out}.png", s_struct, s)
+                    elif fmt == 'kde':
+                        self._export_kde_heatmap(f"{s_out}.png", s_struct, s)
+                    elif fmt == 'wav':
+                        self._export_wav(s_out, s_struct, rule, s)
+                    elif fmt == 'merged_wav':
+                        self._export_merged_wav(f"{s_out}.wav", s_struct, rule, s)
+                    elif fmt == 'textgrid':
+                        if s.tab_mode == '多条独立音频':
+                            self._export_textgrid(s_out, s_struct, s)
+                        else:
+                            self._export_textgrid(f"{s_out}.TextGrid", s_struct, s)
+                    else:
+                        print(f'{{"success": False, "error": "Unknown format: {fmt}"}}')
+                        return
+                print(json.dumps({"success": True, "message": f"Exported {fmt} for multiple speakers to {out_file}"}))
+
+            elif target == 'integrated':
+                if fmt not in ('txt', 'xlsx', 'line_chart', 'kde'):
+                    print(f'{{"success": False, "error": "Format {fmt} does not support integrated multi-speaker export"}}')
+                    return
+                if fmt == 'txt':
+                    self._export_txt_integrated(out_file, speakers_to_process, rule)
+                elif fmt == 'xlsx':
+                    self._export_xlsx_integrated(out_file, speakers_to_process, rule)
+                elif fmt == 'line_chart':
+                    self._export_line_chart_integrated(out_file, speakers_to_process)
+                elif fmt == 'kde':
+                    self._export_kde_heatmap_integrated(out_file, speakers_to_process)
+                print(json.dumps({"success": True, "message": f"Exported integrated {fmt} to {out_file}"}))
+
+            else: # active
+                s = self.current_speaker
+                structure = [(grp, [iid for iid, item in s.items.items() if item.get('group') == grp]) for grp in self.groups]
+                if fmt == 'txt':
+                    self._export_txt(out_file, structure, rule, s)
+                elif fmt == 'xlsx':
+                    self._export_xlsx(out_file, structure, rule, s)
+                elif fmt == 'line_chart':
+                    self._export_line_chart(out_file, structure, s)
+                elif fmt == 'kde':
+                    self._export_kde_heatmap(out_file, structure, s)
+                elif fmt == 'wav':
+                    self._export_wav(out_file, structure, rule, s)
+                elif fmt == 'merged_wav':
+                    self._export_merged_wav(out_file, structure, rule, s)
+                elif fmt == 'textgrid':
+                    self._export_textgrid(out_file, structure, s)
+                else:
+                    print(f'{{"success": False, "error": "Unknown format: {fmt}"}}')
+                    return
+                print(json.dumps({"success": True, "message": f"Exported to {out_file}"}))
         except Exception as e:
             print(json.dumps({"success": False, "error": str(e)}))
 
     # --- Export Implementation Helpers (Abstracted from GUI) ---
-    def _export_merged_wav(self, out_file, structure, rule):
+    def _export_merged_wav(self, out_file, structure, rule, speaker=None):
+        speaker = speaker or self.current_speaker
         import numpy as np
 
-        if self.mode != 'batch':
+        if ('batch' if '多条' in speaker.tab_mode else 'long') != 'batch':
             raise Exception("merged_wav export is only supported for batch audio mode")
 
         gap_sec = 0.5
@@ -1004,7 +1177,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
 
         for grp_name, children in structure:
             for child in children:
-                item = self.items[child]
+                item = speaker.items[child]
                 if item.get('missing') or not item.get('success', True) or not item.get('path'):
                     continue
                 
@@ -1024,9 +1197,10 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
         merged_snd = parselmouth.Sound(np.array([merged_vals]), sampling_frequency=target_sr)
         merged_snd.save(out_file, "WAV")
 
-    def _export_wav(self, out_dir, structure, rule):
+    def _export_wav(self, out_dir, structure, rule, speaker=None):
+        speaker = speaker or self.current_speaker
         import re
-        if self.mode != 'long' or not self.long_snd:
+        if ('batch' if '多条' in speaker.tab_mode else 'long') != 'long' or not speaker.pending_long_snd:
             raise Exception("WAV export is only supported for long audio mode")
 
         if not os.path.exists(out_dir):
@@ -1039,13 +1213,13 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
         except ValueError:
             pass
 
-        snd = self.long_snd
-        do_trim = self.params.get('trim_silence', True)
+        snd = speaker.pending_long_snd
+        do_trim = speaker.last_params.get('trim_silence', True)
         
         global_idx = 1
         for grp_name, children in structure:
             for child in children:
-                item = self.items[child]
+                item = speaker.items[child]
                 if item.get('missing') or not item.get('success', True): continue
                 if 'macro_start' not in item or 'macro_end' not in item: continue
 
@@ -1072,7 +1246,8 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                     extract.save(out_file, "WAV")
                     global_idx += 1
 
-    def _export_txt(self, out_file, structure, rule):
+    def _export_txt(self, out_file, structure, rule, speaker=None):
+        speaker = speaker or self.current_speaker
         is_continuous = (rule == "continuous")
         with open(out_file, "w", encoding="utf-8") as f:
             global_idx = 1
@@ -1080,13 +1255,14 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                 if not is_continuous: global_idx = 1
                 f.write(f"{grp_name}\n")
                 for child in children:
-                    item = self.items[child]
+                    item = speaker.items[child]
                     if item.get('start') is not None:
-                        txt_data = get_export_text_for_item(item, global_idx, self.params['pts'], pitch_floor=self.params['pitch_floor'], pitch_ceiling=self.params['pitch_ceiling'], voicing_threshold=self.params.get('voicing_threshold', 0.25))
+                        txt_data = get_export_text_for_item(item, global_idx, speaker.last_params['pts'], pitch_floor=speaker.last_params['pitch_floor'], pitch_ceiling=speaker.last_params['pitch_ceiling'], voicing_threshold=speaker.last_params.get('voicing_threshold', 0.25))
                         f.write(txt_data)
                         global_idx += 1
 
-    def _extract_syl_data(self, item, num_points):
+    def _extract_syl_data(self, item, num_points, speaker=None):
+        speaker = speaker or self.current_speaker
         if item.get('start') is None or not item.get('snd') or not item.get('pitch'): return 0, []
         t_s, t_e = item['start'], item['end']
         if t_e <= t_s: return 0, []
@@ -1136,15 +1312,17 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
 
         return t_e - t_s, syl_data
 
-    def _export_xlsx(self, out_file, structure, rule):
+    def _export_xlsx(self, out_file, structure, rule, speaker=None):
+        speaker = speaker or self.current_speaker
         import xlsxwriter
+        import numpy as np
         is_continuous = (rule == "continuous")
-        num_points = self.params['pts']
+        num_points = speaker.last_params['pts']
 
         max_syls = 1
         for grp_name, children in structure:
             for child in children:
-                lbl = self.items[child].get('label', '')
+                lbl = speaker.items[child].get('label', '')
                 if len(lbl) > max_syls: max_syls = len(lbl)
 
         workbook = xlsxwriter.Workbook(out_file)
@@ -1165,7 +1343,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
         for grp_name, children in structure:
             if not is_continuous: global_idx = 1
             for child in children:
-                item = self.items[child]
+                item = speaker.items[child]
                 total_dur, syl_data = self._extract_syl_data(item, num_points)
                 if total_dur <= 0: continue
 
@@ -1242,15 +1420,16 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
 
         workbook.close()
 
-    def _collect_group_avg_data(self, structure):
-        num_points = self.params['pts']
+    def _collect_group_avg_data(self, structure, speaker=None):
+        speaker = speaker or self.current_speaker
+        num_points = speaker.last_params['pts']
         max_syls = 1
         dict_data = {}
         for grp_name, children in structure:
             for child in children:
-                lbl = self.items[child].get('label', '')
+                lbl = speaker.items[child].get('label', '')
                 if len(lbl) > max_syls: max_syls = len(lbl)
-                item = self.items[child]
+                item = speaker.items[child]
                 total_dur, syl_data = self._extract_syl_data(item, num_points)
                 if total_dur <= 0: continue
 
@@ -1291,13 +1470,14 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
 
         return result, max_syls
 
-    def _export_line_chart(self, out_file, structure):
+    def _export_line_chart(self, out_file, structure, speaker=None):
+        speaker = speaker or self.current_speaker
         import matplotlib.pyplot as plt
         data, max_syls = self._collect_group_avg_data(structure)
         if not data:
             raise Exception("No valid data for charting")
 
-        num_points = self.params['pts']
+        num_points = speaker.last_params['pts']
         plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
         plt.rcParams['axes.unicode_minus'] = False
 
@@ -1334,7 +1514,8 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
         fig.savefig(out_file, dpi=300, bbox_inches='tight')
         plt.close(fig)
 
-    def _export_kde_heatmap(self, out_file, structure):
+    def _export_kde_heatmap(self, out_file, structure, speaker=None):
+        speaker = speaker or self.current_speaker
         import matplotlib.pyplot as plt
         from scipy.interpolate import interp1d
         from scipy.signal import savgol_filter
@@ -1348,12 +1529,12 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
         for grp_name, children in structure:
             group_syl_contours[grp_name] = {}
             for child in children:
-                lbl = self.items[child].get('label', '')
+                lbl = speaker.items[child].get('label', '')
                 if len(lbl) > max_syls: max_syls = len(lbl)
 
         for grp_name, children in structure:
             for child in children:
-                item = self.items[child]
+                item = speaker.items[child]
                 if item.get('start') is None or not item.get('snd') or not item.get('pitch'): continue
 
                 t_s, t_e = item['start'], item['end']
@@ -1418,7 +1599,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
         plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
         plt.rcParams['axes.unicode_minus'] = False
 
-        groups_with_data = [g for g in self.groups if group_norm_points.get(g) and len(group_norm_points[g][0]) > 0]
+        groups_with_data = [g for g in getattr(speaker, 'cli_groups', []) if group_norm_points.get(g) and len(group_norm_points[g][0]) > 0]
         n_groups = len(groups_with_data)
         if n_groups == 0:
             raise Exception("No valid data for KDE Heatmap")
@@ -1462,6 +1643,346 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
         fig.tight_layout()
         fig.savefig(out_file, dpi=300, bbox_inches='tight')
         plt.close(fig)
+
+
+    def _export_txt_integrated(self, out_file, speakers, rule):
+        is_continuous = (rule == "continuous")
+        with open(out_file, "w", encoding="utf-8") as f:
+            global_idx = 1
+            for s in speakers:
+                s_struct = [(grp, [iid for iid, item in s.items.items() if item.get('group') == grp]) for grp in getattr(s, 'cli_groups', [])]
+                f.write(f"--- 发音人: {s.name} ---\n")
+                if not is_continuous: global_idx = 1
+                for grp_name, children in s_struct:
+                    f.write(f"{grp_name}\n")
+                    for child in children:
+                        item = s.items[child]
+                        if item.get('start') is not None:
+                            from modules.data_utils import get_export_text_for_item
+                            txt_data = get_export_text_for_item(item, global_idx, s.last_params['pts'], pitch_floor=s.last_params['pitch_floor'], pitch_ceiling=s.last_params['pitch_ceiling'], voicing_threshold=s.last_params.get('voicing_threshold', 0.25))
+                            f.write(txt_data)
+                            global_idx += 1
+                f.write("\n")
+
+    def _export_xlsx_integrated(self, out_file, speakers, rule):
+        import xlsxwriter
+        import numpy as np
+        is_continuous = (rule == "continuous")
+
+        # Max syllables across all speakers
+        max_syls = 1
+        for s in speakers:
+            for item in s.items.values():
+                lbl = item.get('label', '')
+                if len(lbl) > max_syls: max_syls = len(lbl)
+
+        workbook = xlsxwriter.Workbook(out_file)
+        ws_data = workbook.add_worksheet("数据")
+        ws_res = workbook.add_worksheet("分析结果")
+
+        # Assume uniform points from active speaker
+        num_points = self.current_speaker.last_params['pts']
+
+        headers = ["发音人", "组别", "编号", "词语", "总时长(s)"]
+        for k in range(1, max_syls + 1):
+            headers.append(f"字{k}_时长(s)")
+            for i in range(1, num_points + 1):
+                headers.append(f"字{k}_T{i}(Hz)")
+        for col, header in enumerate(headers): ws_data.write(0, col, header)
+
+        global_idx = 1
+        row_idx = 1
+        dict_data = {}
+        all_groups = []
+
+        for s in speakers:
+            if not is_continuous: global_idx = 1
+            s_struct = [(grp, [iid for iid, item in s.items.items() if item.get('group') == grp]) for grp in getattr(s, 'cli_groups', [])]
+            for grp_name, children in s_struct:
+                if grp_name not in all_groups: all_groups.append(grp_name)
+                for child in children:
+                    item = s.items[child]
+                    total_dur, syl_data = self._extract_syl_data(item, num_points, speaker=s)
+                    if total_dur <= 0: continue
+
+                    row = [s.name, grp_name, global_idx, item['label'], float(f"{total_dur:.6f}")]
+
+                    if grp_name not in dict_data:
+                        dict_data[grp_name] = {
+                            'f0_sums': [[0.0]*num_points for _ in range(max_syls)],
+                            'f0_counts': [[0]*num_points for _ in range(max_syls)]
+                        }
+
+                    for k in range(max_syls):
+                        if k < len(syl_data):
+                            dur, f0s = syl_data[k]
+                            row.append(float(f"{dur:.6f}"))
+                            for i, f0 in enumerate(f0s):
+                                if not np.isnan(f0) and f0 > 0:
+                                    row.append(float(f"{f0:.6f}"))
+                                    dict_data[grp_name]['f0_sums'][k][i] += f0
+                                    dict_data[grp_name]['f0_counts'][k][i] += 1
+                                else:
+                                    row.append("")
+                        else:
+                            row.append("")
+                            for _ in range(num_points): row.append("")
+
+                    for col, val in enumerate(row):
+                        ws_data.write(row_idx, col, val)
+
+                    row_idx += 1
+                    global_idx += 1
+
+        all_avg_hz = []
+        avg_points_map = {}
+
+        for grp in dict_data:
+            st = dict_data[grp]
+            avg_points_map[grp] = []
+            for k in range(max_syls):
+                syl_avgs = []
+                for i in range(num_points):
+                    cnt = st['f0_counts'][k][i]
+                    avg_hz = st['f0_sums'][k][i] / cnt if cnt > 0 else 0
+                    syl_avgs.append(avg_hz)
+                    if avg_hz > 0: all_avg_hz.append(avg_hz)
+                avg_points_map[grp].append(syl_avgs)
+
+        if not all_avg_hz:
+            workbook.close()
+            return
+
+        min_hz, max_hz = min(all_avg_hz), max(all_avg_hz)
+
+        from modules.data_utils import write_analysis_sheet_with_formulas, build_five_point_chart
+        last_data_row = row_idx - 1
+        res_row, _, _ = write_analysis_sheet_with_formulas(
+            workbook, ws_res, all_groups, num_points, max_syls, last_data_row, speaker_col='A'
+        )
+
+        try:
+            build_five_point_chart(
+                workbook, ws_res, dict_data, avg_points_map,
+                num_points, max_syls, min_hz, max_hz,
+                insert_cell=f'A{res_row + 3}',
+                chart_title='各声调平均基频五度标调图（保留真实时长, 多发音人）'
+            )
+        except Exception:
+            pass
+
+        workbook.close()
+
+    def _export_line_chart_integrated(self, out_file, speakers):
+        import matplotlib.pyplot as plt
+        import math
+
+        num_points = self.current_speaker.last_params['pts']
+        max_syls = 1
+        combined_points_map = {}
+        all_groups = []
+
+        for s in speakers:
+            s_struct = [(grp, [iid for iid, item in s.items.items() if item.get('group') == grp]) for grp in getattr(s, 'cli_groups', [])]
+            data, m_syls = self._collect_group_avg_data(s_struct, speaker=s)
+            if not data: continue
+            if m_syls > max_syls: max_syls = m_syls
+
+            for grp, t_vals in data.items():
+                if grp not in all_groups: all_groups.append(grp)
+                if grp not in combined_points_map: combined_points_map[grp] = []
+                combined_points_map[grp].append(t_vals)
+
+        if not combined_points_map:
+            raise Exception("No valid data for charting across speakers")
+
+        final_data = {}
+        for grp, t_arrays in combined_points_map.items():
+            valid_len = max([len(arr) for arr in t_arrays])
+            avg_arr = []
+            for i in range(valid_len):
+                col_vals = [arr[i] for arr in t_arrays if i < len(arr) and arr[i] is not None]
+                if col_vals:
+                    avg_arr.append(sum(col_vals) / len(col_vals))
+                else:
+                    avg_arr.append(None)
+            final_data[grp] = avg_arr
+
+        plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
+        plt.rcParams['axes.unicode_minus'] = False
+
+        fig, ax = plt.subplots(figsize=(6 + 4 * max_syls, 6))
+        total_points = max_syls * num_points
+        x_vals = list(range(1, total_points + 1))
+
+        colors = ['#2563EB', '#DC2626', '#16A34A', '#9333EA', '#EA580C', '#0891B2', '#CA8A04', '#6366F1']
+
+        for i, grp in enumerate(all_groups):
+            if grp not in final_data: continue
+            t_vals = final_data[grp]
+            valid_x = [x for x, v in zip(x_vals, t_vals) if v is not None]
+            valid_y = [v for v in t_vals if v is not None]
+            if valid_x:
+                ax.plot(valid_x, valid_y, '-o', color=colors[i % len(colors)], linewidth=2, markersize=5, label=grp)
+
+        ax.set_ylim(0, 5)
+        ax.set_xlim(0.5, total_points + 0.5)
+        ax.set_yticks([0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5])
+        ax.set_xticks(range(1, total_points + 1))
+        ax.set_xticklabels([(idx % num_points) + 1 for idx in range(total_points)])
+
+        for k in range(1, max_syls):
+            div_x = k * num_points + 0.5
+            ax.axvline(div_x, color='gray', linestyle='--', alpha=0.5)
+
+        ax.set_xlabel('Points')
+        ax.set_ylabel('T-Value (0-5)')
+        ax.set_title(f'Integrated Tone Pattern ({len(speakers)} Speakers)')
+        ax.legend(loc='best', fontsize=10)
+        ax.grid(True, alpha=0.3)
+
+        fig.tight_layout()
+        fig.savefig(out_file, dpi=300, bbox_inches='tight')
+        plt.close(fig)
+
+    def _export_kde_heatmap_integrated(self, out_file, speakers):
+        import matplotlib.pyplot as plt
+        from scipy.interpolate import interp1d
+        from scipy.signal import savgol_filter
+        from scipy.stats import gaussian_kde
+        import numpy as np
+        import math
+
+        N_DENSE = 100
+        group_syl_contours = {}
+
+        max_syls = 1
+        for s in speakers:
+            for item in s.items.values():
+                lbl = item.get('label', '')
+                if len(lbl) > max_syls: max_syls = len(lbl)
+
+        for s in speakers:
+            s_struct = [(grp, [iid for iid, item in s.items.items() if item.get('group') == grp]) for grp in getattr(s, 'cli_groups', [])]
+            for grp_name, children in s_struct:
+                if grp_name not in group_syl_contours:
+                    group_syl_contours[grp_name] = {}
+                for child in children:
+                    item = s.items[child]
+                    if item.get('start') is None or not item.get('snd') or not item.get('pitch'): continue
+
+                    t_s, t_e = item['start'], item['end']
+                    label = item.get('label', '')
+                    inner_splits = item.get('inner_splits', [])
+
+                    splits = [t_s] + [s_split for s_split in inner_splits if t_s < s_split < t_e] + [t_e]
+                    if len(splits) != len(label) + 1: splits = np.linspace(t_s, t_e, len(label) + 1).tolist()
+                    if len(label) <= 1: splits = [t_s, t_e]
+
+                    pitch = item['pitch']
+                    p_xs, p_freqs = pitch.xs(), pitch.selected_array['frequency']
+
+                    for k in range(len(splits) - 1):
+                        c_s, c_e = splits[k], splits[k+1]
+                        valid_idx = np.where((p_xs >= c_s) & (p_xs <= c_e) & (p_freqs > 0))[0]
+                        if len(valid_idx) >= 2:
+                            v_s, v_e = p_xs[valid_idx[0]], p_xs[valid_idx[-1]]
+                            mask = (p_xs >= v_s) & (p_xs <= v_e) & (p_freqs > 0)
+                            valid_freqs = p_freqs[mask]
+                            if len(valid_freqs) < 3: continue
+
+                            win = len(valid_freqs) // 3
+                            if win % 2 == 0: win += 1
+                            win = max(win, 3)
+                            smoothed = savgol_filter(valid_freqs, win, 2) if len(valid_freqs) > win else valid_freqs
+
+                            x_orig = np.linspace(0, 1, len(smoothed))
+                            f_interp = interp1d(x_orig, smoothed, kind='linear')
+                            y_dense = f_interp(np.linspace(0, 1, N_DENSE))
+
+                            if k not in group_syl_contours[grp_name]: group_syl_contours[grp_name][k] = []
+                            group_syl_contours[grp_name][k].append(y_dense)
+
+        all_mean_vals = []
+        for name, syls_dict in group_syl_contours.items():
+            for k, y_arrays in syls_dict.items():
+                if y_arrays:
+                    mean_contour = np.mean(y_arrays, axis=0)
+                    all_mean_vals.extend(mean_contour.tolist())
+
+        if not all_mean_vals:
+            print('{"success": False, "error": "No valid data to plot"}')
+            return
+
+        min_f0, max_f0 = min(all_mean_vals), max(all_mean_vals)
+
+        def hz_to_5_scale(hz):
+            if max_f0 == min_f0: return 3.0
+            return 5 * (np.log(hz) - np.log(min_f0)) / (np.log(max_f0) - np.log(min_f0))
+
+        group_norm_points = {}
+        for name, syls_dict in group_syl_contours.items():
+            X_all, Y_all = [], []
+            for k, y_arrays in syls_dict.items():
+                x_dense = np.linspace(k * 100, (k + 1) * 100, N_DENSE)
+                for y_arr in y_arrays:
+                    X_all.extend(x_dense.tolist())
+                    Y_all.extend([hz_to_5_scale(h) for h in y_arr])
+            group_norm_points[name] = (np.array(X_all), np.array(Y_all))
+
+        plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
+        plt.rcParams['axes.unicode_minus'] = False
+
+        all_groups_with_data = []
+        for s in speakers:
+            for g in getattr(s, 'cli_groups', []):
+                if g not in all_groups_with_data and group_norm_points.get(g) and len(group_norm_points[g][0]) > 0:
+                    all_groups_with_data.append(g)
+
+        n_groups = len(all_groups_with_data)
+        if n_groups == 0:
+            raise Exception("No valid data for KDE Heatmap")
+
+        n_cols = min(2, n_groups)
+        n_rows = math.ceil(n_groups / n_cols)
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(5 * max_syls * n_cols, 5 * n_rows), squeeze=False, sharex=True, sharey=True)
+        axes_flat = axes.flatten()
+
+        for idx, grp_name in enumerate(all_groups_with_data):
+            ax = axes_flat[idx]
+            X_all, Y_all = group_norm_points[grp_name]
+
+            xmin, xmax = 0, max_syls * 100
+            ymin, ymax = -1, 6
+
+            positions = np.vstack([X_all, Y_all])
+            try:
+                kernel = gaussian_kde(positions, bw_method=0.15)
+                xi, yi = np.mgrid[xmin:xmax:200j, ymin:ymax:100j]
+                zi = kernel(np.vstack([xi.flatten(), yi.flatten()]))
+                zi = zi.reshape(xi.shape)
+
+                vmax = zi.max()
+                if vmax > 0:
+                    levels = np.linspace(vmax * 0.05, vmax, 30)
+                    ax.contourf(xi, yi, zi, levels=levels, cmap="YlOrRd", extend='neither')
+            except Exception:
+                pass
+
+            for k in range(1, max_syls):
+                ax.axvline(k * 100, color='gray', linestyle='--', alpha=0.8)
+
+            ax.set_title(grp_name, fontsize=16)
+            ax.set_ylim(-1, 6)
+            ax.set_xlim(0, max_syls * 100)
+
+        for idx in range(n_groups, len(axes_flat)): axes_flat[idx].set_visible(False)
+
+        fig.suptitle(f'Integrated KDE Heatmap ({len(speakers)} Speakers)', fontsize=20, fontweight='bold', y=1.05)
+        fig.tight_layout()
+        fig.savefig(out_file, dpi=300, bbox_inches='tight')
+        plt.close(fig)
+
 
     def do_log(self, arg):
         """
@@ -1510,15 +2031,16 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
 
 
 
-    def _export_textgrid(self, out_path, structure):
+    def _export_textgrid(self, out_path, structure, speaker=None):
+        speaker = speaker or self.current_speaker
         import textgrid
         import os
 
         flat_items = []
         for grp_name, children in structure:
             for child in children:
-                if self.items[child].get('start') is not None and self.items[child].get('end') is not None:
-                    flat_items.append(self.items[child])
+                if speaker.items[child].get('start') is not None and speaker.items[child].get('end') is not None:
+                    flat_items.append(speaker.items[child])
 
         if not flat_items:
             print('{"success": False, "error": "No valid items to export"}')
