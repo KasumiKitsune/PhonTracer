@@ -327,6 +327,19 @@ class PhoneticsApp:
             path = os.path.join(icon_path, filename)
             if os.path.exists(path):
                 img = Image.open(path)
+                
+                # 将 自动识别 (bulb) 的黑色图标染色为对应红色（#DC2626），与删除按钮风格高度统一
+                if key == "bulb":
+                    try:
+                        img_rgba = img.convert("RGBA")
+                        data = np.array(img_rgba)
+                        data[:,:,0] = 220 # R
+                        data[:,:,1] = 38  # G
+                        data[:,:,2] = 38  # B
+                        img = Image.fromarray(data)
+                    except Exception:
+                        pass
+                
                 self.icons[key] = ctk.CTkImage(light_image=img, dark_image=img, size=(20, 20))
                 # Resize for ttk.Treeview
                 img_tk = img.resize((16, 16), Image.Resampling.LANCZOS)
