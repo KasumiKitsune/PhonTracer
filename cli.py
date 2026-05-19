@@ -1261,8 +1261,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                         f.write(txt_data)
                         global_idx += 1
 
-    def _extract_syl_data(self, item, num_points, speaker=None):
-        speaker = speaker or self.current_speaker
+    def _extract_syl_data(self, item, num_points):
         if item.get('start') is None or not item.get('snd') or not item.get('pitch'): return 0, []
         t_s, t_e = item['start'], item['end']
         if t_e <= t_s: return 0, []
@@ -1702,7 +1701,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                 if grp_name not in all_groups: all_groups.append(grp_name)
                 for child in children:
                     item = s.items[child]
-                    total_dur, syl_data = self._extract_syl_data(item, num_points, speaker=s)
+                    total_dur, syl_data = self._extract_syl_data(item, num_points)
                     if total_dur <= 0: continue
 
                     row = [s.name, grp_name, global_idx, item['label'], float(f"{total_dur:.6f}")]
