@@ -249,7 +249,7 @@ sequenceDiagram
 <table width="100%">
   <tr>
     <td width="50%" valign="top">
-      <h4><img src="https://img.icons8.com/material-rounded/20/000000/table.png" width="18" style="vertical-align: middle;"/> 1. Excel 深度公式化报告 (.xlsx)</h4>
+      <h4>1. Excel 深度公式化报告 (.xlsx)</h4>
       <p><i>面向数据统计与公式化建模的深度报告。</i></p>
       <ul>
         <li>自动写入原始 Hz 频率数据与起止时间</li>
@@ -259,7 +259,7 @@ sequenceDiagram
       </ul>
     </td>
     <td width="50%" valign="top">
-      <h4><img src="https://img.icons8.com/material-rounded/20/000000/line-chart.png" width="18" style="vertical-align: middle;"/> 2. 声调格局折线图 (.png)</h4>
+      <h4>2. 声调格局折线图 (.png)</h4>
       <p><i>直观展示声调在声学空间中的时序演变。</i></p>
       <ul>
         <li>基于归一化 T 值或原始赫兹 (Hz) 生成格局折线图</li>
@@ -270,7 +270,7 @@ sequenceDiagram
   </tr>
   <tr>
     <td width="50%" valign="top">
-      <h4><img src="https://img.icons8.com/material-rounded/20/000000/heat-map.png" width="18" style="vertical-align: middle;"/> 3. KDE 时序密度热力图 (.png / .svg)</h4>
+      <h4>3. KDE 时序密度热力图 (.png / .svg)</h4>
       <p><i>基于 SciPy 二维核密度估计 (KDE) 的可视化。</i></p>
       <ul>
         <li>直观反映样本在不同发音时序段的基频游移规律</li>
@@ -279,7 +279,7 @@ sequenceDiagram
       </ul>
     </td>
     <td width="50%" valign="top">
-      <h4><img src="https://img.icons8.com/material-rounded/20/000000/audio.png" width="18" style="vertical-align: middle;"/> 4. Praat TextGrid 标注文件 (.TextGrid)</h4>
+      <h4>4. Praat TextGrid 标注文件 (.TextGrid)</h4>
       <p><i>方便在 Praat 中进行二次校验或联动分析。</i></p>
       <ul>
         <li>自动将切分结果生成为标准 TextGrid 标注文件</li>
@@ -290,7 +290,7 @@ sequenceDiagram
   </tr>
   <tr>
     <td colspan="2" valign="top">
-      <h4><img src="https://img.icons8.com/material-rounded/20/000000/document.png" width="18" style="vertical-align: middle;"/> 5. 原始特征纯文本数据 (.txt)</h4>
+      <h4>5. 原始特征纯文本数据 (.txt)</h4>
       <p><i>最轻量、通用的原始文本数据流。</i></p>
       <ul>
         <li>以纯文本/CSV 格式输出每个切分音段的基频时序轨迹</li>
