@@ -450,13 +450,15 @@ def batch_process_worker(path: str, params: Dict[str, float], trim_silence: bool
         name = os.path.splitext(os.path.basename(path))[0]
         
         label_for_split = word_label if word_label else name
+        from .data_utils import split_into_syllables
+        syls = split_into_syllables(label_for_split)
         
         # 检测是否进入词语模式，预初始化蓝线
         inner_splits = []
         chars_bounds = []
-        if len(label_for_split) > 1:
-            inner_splits = auto_split_inner_word(snd, mic_s, mic_e, len(label_for_split))
-            chars_bounds = auto_split_to_chars_bounds(snd, mic_s, mic_e, inner_splits, len(label_for_split), params)
+        if len(syls) > 1:
+            inner_splits = auto_split_inner_word(snd, mic_s, mic_e, len(syls))
+            chars_bounds = auto_split_to_chars_bounds(snd, mic_s, mic_e, inner_splits, len(syls), params)
         else:
             chars_bounds = [[mic_s, mic_e]]
             
@@ -517,15 +519,17 @@ def long_process_worker(snd_values: np.ndarray, snd_sf: float, pitch_xs: np.ndar
         # 提取内部蓝线边界
         inner_splits = []
         chars_bounds = []
-        if word_label and len(word_label) > 1:
+        from .data_utils import split_into_syllables
+        syls = split_into_syllables(word_label) if word_label else []
+        if syls and len(syls) > 1:
             if ref_splits:
                 # 寻找在空白处（TextGrid分割线附近）的音量最低值点
                 local_ref_splits = [t - ms for t in ref_splits]
                 splits = [find_minimum_intensity_valley(snd_part, t_ref) for t_ref in local_ref_splits]
             else:
-                splits = auto_split_inner_word(snd_part, mic_s, mic_e, len(word_label))
+                splits = auto_split_inner_word(snd_part, mic_s, mic_e, len(syls))
                 
-            local_chars_bounds = auto_split_to_chars_bounds(snd_part, mic_s, mic_e, splits, len(word_label), params)
+            local_chars_bounds = auto_split_to_chars_bounds(snd_part, mic_s, mic_e, splits, len(syls), params)
             chars_bounds = [[s + ms, e + ms] for s, e in local_chars_bounds]
             inner_splits = [t + ms for t in splits]  # 复原到全局时间轴
         else:

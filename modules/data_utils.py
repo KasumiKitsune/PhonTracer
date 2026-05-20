@@ -26,14 +26,33 @@ def parse_wordlist(raw_text: str) -> Tuple[List[Dict[str, Any]], List[str]]:
     if curr_items: groups.append({"group": curr_group, "items": curr_items})
     return groups, flat_words
 
+def has_cjk(word: str) -> bool:
+    if not word: return False
+    return bool(re.search(r'[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]', word))
+
+def split_into_syllables(word: str) -> List[str]:
+    if not word: return []
+    if '/' in word:
+        return [s.strip() for s in word.split('/') if s.strip()]
+    if has_cjk(word):
+        return re.findall(r'[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]', word)
+    cleaned = word.strip()
+    return [cleaned] if cleaned else []
+
 def fuzzy_match_word_to_path(word: str, available_paths: List[str], used_indices: Optional[List[int]] = None) -> Optional[int]:
+    is_cjk_mode = has_cjk(word)
+    
     def clean_str(s):
         if not s: return ""
-        import re
         import unicodedata
         s = s.replace('\ufeff', '')
         s = unicodedata.normalize('NFC', s)
-        s = re.sub(r'[^\w\u4e00-\u9fa5]|_', '', s)
+        if is_cjk_mode:
+            # 只保留 CJK 字符
+            s = "".join(re.findall(r'[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]', s))
+        else:
+            # 只保留字母(包括带声调的拉丁字母)，无视数字、斜杠、下划线及其他特殊字符
+            s = "".join(re.findall(r'[^\W\d_]', s))
         return s.lower().strip()
         
     if used_indices is None: used_indices = []
@@ -74,16 +93,17 @@ def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: 
     
     label = item.get('label', '')
     inner_splits = item.get('inner_splits', [])
-    is_word_mode = len(label) > 1
+    syls = split_into_syllables(label)
+    is_word_mode = len(syls) > 1
     
     # 优先使用 item 内部存储的个性化参数实现所见即所得
     p_floor = item.get('pitch_floor', pitch_floor)
     p_ceiling = item.get('pitch_ceiling', pitch_ceiling)
     v_thresh = item.get('voicing_threshold', voicing_threshold)
     engine = item.get('f0_engine', 'praat')
-
+ 
     from .audio_core import extract_f0
-
+ 
     if (not item.get('snd') or (not item.get('pitch') and not item.get('pitch_data'))) and item.get('path'):
         if num_points == 11 and item.get('preview_f0') and not is_word_mode:
             output = f"{real_index}.{label}\n{duration:.3f}\n"
@@ -98,7 +118,7 @@ def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: 
                 item['snd'] = parselmouth.Sound(item['path'])
                 item['pitch_data'] = extract_f0(item['snd'], {'f0_engine': engine, 'pitch_floor': p_floor, 'pitch_ceiling': p_ceiling, 'voicing_threshold': v_thresh})
             except Exception: return ""
-
+ 
     if duration <= 0 or not item.get('snd'): return ""
     
     output = ""
@@ -106,12 +126,12 @@ def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: 
         chars_bounds = item.get('chars_bounds', [])
         if not chars_bounds:
             splits = [t_s] + [s for s in inner_splits if t_s < s < t_e] + [t_e]
-            if len(splits) != len(label) + 1:
-                splits = np.linspace(t_s, t_e, len(label) + 1).tolist()
+            if len(splits) != len(syls) + 1:
+                splits = np.linspace(t_s, t_e, len(syls) + 1).tolist()
             chars_bounds = [(splits[j], splits[j+1]) for j in range(len(splits)-1)]
             
-        for i in range(len(label)):
-            char = label[i]
+        for i in range(len(syls)):
+            char = syls[i]
             if i < len(chars_bounds):
                 c_start, c_end = chars_bounds[i]
             else:
@@ -558,17 +578,18 @@ def build_five_point_chart(workbook, target_sheet, dict_data, avg_points_map,
 
 
 import textgrid
-
+ 
 def get_export_textgrid_for_item(item, max_time=None):
     if item.get('start') is None or item.get('end') is None: return None
     t_s, t_e = item['start'], item['end']
-
+ 
     label = item.get('label', '')
     inner_splits = item.get('inner_splits', [])
-    is_word_mode = len(label) > 1
-
+    syls = split_into_syllables(label)
+    is_word_mode = len(syls) > 1
+ 
     tg = textgrid.TextGrid(maxTime=max_time if max_time else t_e)
-
+ 
     # Create Words tier
     word_tier = textgrid.IntervalTier(name="words", minTime=0.0, maxTime=max_time if max_time else t_e)
     if t_s > 0:
@@ -579,33 +600,33 @@ def get_export_textgrid_for_item(item, max_time=None):
         if end_time > t_e:
             word_tier.add(t_e, end_time, "")
     tg.append(word_tier)
-
+ 
     if is_word_mode:
         char_tier = textgrid.IntervalTier(name="chars", minTime=0.0, maxTime=max_time if max_time else t_e)
         if t_s > 0:
             char_tier.add(0.0, t_s, "")
-
+ 
         chars_bounds = item.get('chars_bounds', [])
         if not chars_bounds:
             import numpy as np
             splits = [t_s] + [s for s in inner_splits if t_s < s < t_e] + [t_e]
-            if len(splits) != len(label) + 1:
-                splits = np.linspace(t_s, t_e, len(label) + 1).tolist()
+            if len(splits) != len(syls) + 1:
+                splits = np.linspace(t_s, t_e, len(syls) + 1).tolist()
             chars_bounds = [(splits[j], splits[j+1]) for j in range(len(splits)-1)]
-
+ 
         last_e = t_s
-        for i in range(len(label)):
-            char = label[i]
+        for i in range(len(syls)):
+            char = syls[i]
             if i < len(chars_bounds):
                 c_start, c_end = chars_bounds[i]
                 if c_start > last_e:
                     char_tier.add(last_e, c_start, "")
                 char_tier.add(c_start, c_end, char)
                 last_e = c_end
-
+ 
         if last_e < t_e:
             char_tier.add(last_e, t_e, "")
-
+ 
         end_time = max_time if max_time else t_e
         if end_time > t_e:
             char_tier.add(t_e, end_time, "")

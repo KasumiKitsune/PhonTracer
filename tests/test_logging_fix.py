@@ -34,6 +34,8 @@ def test_logging_on_exception(caplog):
          patch('modules.project_tree.ctk.CTkRadioButton'), \
          patch('modules.project_tree.ctk.CTkTextbox'), \
          patch('modules.project_tree.ctk.CTkSegmentedButton'), \
+         patch('modules.project_tree.ctk.CTkButton'), \
+         patch('modules.project_tree.ctk.CTkEntry'), \
          patch('modules.project_tree.AutoScrollbar'):
 
         panel = ProjectTreePanel(parent, icons, items_dict, app_state_params, on_item_selected, on_clear_canvas)

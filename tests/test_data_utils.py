@@ -3,7 +3,7 @@ import sys
 import numpy as np
 import parselmouth
 
-from modules.data_utils import parse_wordlist, fuzzy_match_word_to_path
+from modules.data_utils import parse_wordlist, fuzzy_match_word_to_path, has_cjk, split_into_syllables
 
 def test_parse_wordlist_basic():
     raw_text = """
@@ -166,3 +166,30 @@ def test_fuzzy_match_edge_cases():
     assert fuzzy_match_word_to_path("", ["a.wav"]) is None
     assert fuzzy_match_word_to_path("a", []) is None
     assert fuzzy_match_word_to_path("   ", ["a.wav"]) is None
+
+def test_has_cjk():
+    assert has_cjk("北京") is True
+    assert has_cjk("1. 北京_test") is True
+    assert has_cjk("brother") is False
+    assert has_cjk("bro/ther") is False
+    assert has_cjk("") is False
+
+def test_split_into_syllables():
+    assert split_into_syllables("北/京") == ["北", "京"]
+    assert split_into_syllables("bro/ther") == ["bro", "ther"]
+    assert split_into_syllables("1. bro/ther") == ["1. bro", "ther"]
+    assert split_into_syllables("北京") == ["北", "京"]
+    assert split_into_syllables("1. 北京_test") == ["北", "京"]
+    assert split_into_syllables("brother") == ["brother"]
+    assert split_into_syllables("") == []
+
+def test_fuzzy_match_smart_cjk_filtering():
+    paths = ["01_北京.wav", "02_上海.wav"]
+    assert fuzzy_match_word_to_path("1. 北京_spec", paths) == 0
+    assert fuzzy_match_word_to_path("北京", paths) == 0
+
+def test_fuzzy_match_smart_latin_filtering():
+    paths = ["01_brother.wav", "02_sister.wav"]
+    assert fuzzy_match_word_to_path("bro/ther", paths) == 0
+    assert fuzzy_match_word_to_path("brother", paths) == 0
+

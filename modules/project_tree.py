@@ -7,7 +7,7 @@ import numpy as np
 import math
 import matplotlib.pyplot as plt
 import logging
-from .data_utils import get_export_text_for_item, build_five_point_chart, write_analysis_sheet_with_formulas
+from .data_utils import get_export_text_for_item, build_five_point_chart, write_analysis_sheet_with_formulas, split_into_syllables
 from .ui_widgets import CTkReleaseButton, AutoScrollbar
 
 logger = logging.getLogger(__name__)
@@ -473,14 +473,15 @@ class ProjectTreePanel:
             label = item.get('label', '')
             inner_splits = item.get('inner_splits', [])
             
+            syls = split_into_syllables(label)
             chars_bounds = item.get('chars_bounds', [])
-            if chars_bounds and len(chars_bounds) == len(label):
+            if chars_bounds and len(chars_bounds) == len(syls):
                 bounds = chars_bounds
             else:
                 splits = [t_s] + [s for s in inner_splits if t_s < s < t_e] + [t_e]
-                if len(label) > 1 and len(splits) != len(label) + 1:
-                    splits = np.linspace(t_s, t_e, len(label) + 1).tolist()
-                elif len(label) <= 1:
+                if len(syls) > 1 and len(splits) != len(syls) + 1:
+                    splits = np.linspace(t_s, t_e, len(syls) + 1).tolist()
+                elif len(syls) <= 1:
                     splits = [t_s, t_e]
                 bounds = [[splits[i], splits[i+1]] for i in range(len(splits)-1)]
                 
@@ -779,14 +780,15 @@ class ProjectTreePanel:
             p_xs = pitch.xs()
             p_freqs = pitch.selected_array['frequency']
         
+        syls = split_into_syllables(label)
         chars_bounds = item.get('chars_bounds', [])
-        if chars_bounds and len(chars_bounds) == len(label):
+        if chars_bounds and len(chars_bounds) == len(syls):
             bounds = chars_bounds
         else:
             splits = [t_s] + [s for s in inner_splits if t_s < s < t_e] + [t_e]
-            if len(label) > 1 and len(splits) != len(label) + 1:
-                splits = np.linspace(t_s, t_e, len(label) + 1).tolist()
-            elif len(label) <= 1:
+            if len(syls) > 1 and len(splits) != len(syls) + 1:
+                splits = np.linspace(t_s, t_e, len(syls) + 1).tolist()
+            elif len(syls) <= 1:
                 splits = [t_s, t_e]
             bounds = [[splits[i], splits[i+1]] for i in range(len(splits)-1)]
             
@@ -1700,7 +1702,8 @@ class ProjectTreePanel:
             group_tier.add(t_s, t_e, grp_name)
             last_group_end = t_e
 
-            if len(label) > 1:
+            syls = split_into_syllables(label)
+            if len(syls) > 1:
                 has_chars = True
 
                 if t_s > last_char_end:
@@ -1710,17 +1713,17 @@ class ProjectTreePanel:
                 if not chars_bounds:
                     import numpy as np
                     splits = [t_s] + [s for s in inner_splits if t_s < s < t_e] + [t_e]
-                    if len(splits) != len(label) + 1:
-                        splits = np.linspace(t_s, t_e, len(label) + 1).tolist()
+                    if len(splits) != len(syls) + 1:
+                        splits = np.linspace(t_s, t_e, len(syls) + 1).tolist()
                     chars_bounds = [(splits[j], splits[j+1]) for j in range(len(splits)-1)]
 
                 local_last = t_s
-                for i in range(len(label)):
+                for i in range(len(syls)):
                     if i < len(chars_bounds):
                         c_s, c_e = chars_bounds[i]
                         if c_s > local_last:
                             char_tier.add(local_last, c_s, "")
-                        char_tier.add(c_s, c_e, label[i])
+                        char_tier.add(c_s, c_e, syls[i])
                         local_last = c_e
 
                 if local_last < t_e:
@@ -1813,7 +1816,8 @@ class ProjectTreePanel:
                 group_tier.add(t_s, t_e, grp_name)
                 last_group_end = t_e
 
-                if len(label) > 1:
+                syls = split_into_syllables(label)
+                if len(syls) > 1:
                     has_chars = True
                     if t_s > last_char_end:
                         char_tier.add(last_char_end, t_s, "")
@@ -1822,17 +1826,17 @@ class ProjectTreePanel:
                     if not chars_bounds:
                         import numpy as np
                         splits = [t_s] + [s for s in inner_splits if t_s < s < t_e] + [t_e]
-                        if len(splits) != len(label) + 1:
-                            splits = np.linspace(t_s, t_e, len(label) + 1).tolist()
+                        if len(splits) != len(syls) + 1:
+                            splits = np.linspace(t_s, t_e, len(syls) + 1).tolist()
                         chars_bounds = [(splits[j], splits[j+1]) for j in range(len(splits)-1)]
 
                     local_last = t_s
-                    for i in range(len(label)):
+                    for i in range(len(syls)):
                         if i < len(chars_bounds):
                             c_s, c_e = chars_bounds[i]
                             if c_s > local_last:
                                 char_tier.add(local_last, c_s, "")
-                            char_tier.add(c_s, c_e, label[i])
+                            char_tier.add(c_s, c_e, syls[i])
                             local_last = c_e
                     if local_last < t_e:
                         char_tier.add(local_last, t_e, "")

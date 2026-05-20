@@ -11,14 +11,16 @@ from .audio_core import SILENCE_AMPLITUDE_THRESHOLD
 from .ui_widgets import CTkReleaseButton
 
 class SpectrogramPanel:
-    def __init__(self, parent, icons, on_time_changed_callback, on_auto_detect_callback, on_export_callback):
+    def __init__(self, parent, icons, on_time_changed_callback, on_auto_detect_callback, on_export_callback, app=None):
         self.parent = parent
         self.icons = icons
         self.on_time_changed = on_time_changed_callback
         self.on_auto_detect_callback = on_auto_detect_callback
         self.on_export_callback = on_export_callback
+        self.app = app
         
         self.current_item = None
+        self.current_item_iid = None
         self.dragging = None # 取值: 'start', 'end', 或 ('inner', idx)
         self.ax = None
         self.ax2 = None
@@ -177,18 +179,26 @@ class SpectrogramPanel:
                 pass
             self._update_play_button_state(playing=False)
         self.current_item = item
+        self.current_item_iid = None
+        if self.app and hasattr(self.app, 'items'):
+            for k, v in self.app.items.items():
+                if v is item:
+                    self.current_item_iid = k
+                    break
         t_start = item.get('start')
         t_end = item.get('end')
         
         # Init chars_bounds
         label = item.get('label', '')
+        from .data_utils import split_into_syllables
+        syls = split_into_syllables(label)
         if 'chars_bounds' not in item or not item.get('chars_bounds'):
             inner_splits = item.get('inner_splits', [])
             splits = [t_start] + [s for s in inner_splits if t_start < s < t_end] + [t_end]
-            if len(label) > 1 and len(splits) != len(label) + 1:
+            if len(syls) > 1 and len(splits) != len(syls) + 1:
                 import numpy as np
-                splits = np.linspace(t_start, t_end, len(label) + 1).tolist()
-            elif len(label) <= 1:
+                splits = np.linspace(t_start, t_end, len(syls) + 1).tolist()
+            elif len(syls) <= 1:
                 splits = [t_start, t_end]
 
             chars_bounds = []
@@ -294,6 +304,8 @@ class SpectrogramPanel:
         self.ax2.tick_params(axis='y', labelcolor='#3B82F6')
         self.ax.set_title(f"编辑区: {label}", pad=10)
         
+        from .data_utils import split_into_syllables
+        syls = split_into_syllables(label)
         for i, (c_start, c_end) in enumerate(chars_bounds):
             line_s = self.ax.axvline(c_start, color='#EF4444', linestyle='-', linewidth=2)
             line_e = self.ax.axvline(c_end, color='#EF4444', linestyle='-', linewidth=2)
@@ -301,9 +313,9 @@ class SpectrogramPanel:
             span = self.ax.axvspan(c_start, c_end, color='#BFDBFE', alpha=0.35)
             self.span_fills.append(span)
             
-            if i < len(label):
+            if i < len(syls):
                 cx = (c_start + c_end) / 2
-                txt = self.ax.text(cx, 4800, label[i], color='#111827', fontsize=12, ha='center', va='top', fontweight='bold', bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.7))
+                txt = self.ax.text(cx, 4800, syls[i], color='#111827', fontsize=12, ha='center', va='top', fontweight='bold', bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.7))
                 self.char_texts.append(txt)
         
         if self.cursor_x is None:
@@ -547,6 +559,14 @@ class SpectrogramPanel:
                 item['end'] = new_e
                 
             item['is_manual_edited'] = True
+            panel = None
+            if self.app:
+                if hasattr(self.app, 'tree_panel') and self.app.tree_panel:
+                    panel = self.app.tree_panel
+                elif hasattr(self.app, 'project_panel') and self.app.project_panel:
+                    panel = self.app.project_panel
+            if panel:
+                panel.update_item_icon(self.current_item_iid)
 
             self.plot_item_spectrogram()
             self.update_ui_times()
@@ -682,6 +702,10 @@ class SpectrogramPanel:
         item = self.current_item
         if not item: return
         
+        # Limit eraser interactions specifically to the pitch axis (ax2) to prevent accidental
+        # erasure when the mouse cursor is moved or dragged in the spectrogram axis (ax) or outside
+        if event.inaxes != self.ax2: return
+        
         if not item.get('pitch_data') and item.get('pitch'):
             pitch = item['pitch']
             item['pitch_data'] = {
@@ -709,6 +733,15 @@ class SpectrogramPanel:
         
         if np.any(mask_to_erase):
             freqs[mask_to_erase] = 0.0
+            item['is_manual_edited'] = True
+            panel = None
+            if self.app:
+                if hasattr(self.app, 'tree_panel') and self.app.tree_panel:
+                    panel = self.app.tree_panel
+                elif hasattr(self.app, 'project_panel') and self.app.project_panel:
+                    panel = self.app.project_panel
+            if panel:
+                panel.update_item_icon(self.current_item_iid)
             
             # Live visual update: update F0 line data in real time
             if self.ax2.lines:
@@ -744,7 +777,7 @@ class SpectrogramPanel:
                         self.canvas.draw_idle()
             return
 
-        if event is None or event.x is None or event.y is None or event.inaxes is None:
+        if event is None or event.x is None or event.y is None or event.inaxes != self.ax2:
             if self.eraser_circle:
                 self.eraser_circle.set_visible(False)
                 if self.background is not None:

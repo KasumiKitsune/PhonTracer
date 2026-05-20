@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from modules.audio_core import macroscopic_vad, core_microscopic_vowel_nucleus, auto_split_inner_word, auto_split_to_chars_bounds, batch_process_worker, recalculate_bounds_fast, extract_f0
 from modules.speaker_manager import SpeakerManager
-from modules.data_utils import parse_wordlist, fuzzy_match_word_to_path, get_export_text_for_item, build_five_point_chart
+from modules.data_utils import parse_wordlist, fuzzy_match_word_to_path, get_export_text_for_item, build_five_point_chart, split_into_syllables
 
 class LoggerOut:
     def __init__(self, original_stdout, log_file):
@@ -531,7 +531,8 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                                 inner_splits.append(overlapping_chars[j].maxTime)
                     
                     if not chars_bounds:
-                        w_len = len(lbl)
+                        syls = split_into_syllables(lbl)
+                        w_len = len(syls)
                         if w_len > 1:
                             splits = np.linspace(interval.minTime, interval.maxTime, w_len + 1).tolist()
                             chars_bounds = [[splits[j], splits[j+1]] for j in range(w_len)]
@@ -689,9 +690,10 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
 
                         inner_splits = []
                         chars_bounds = []
-                        if len(word) > 1:
-                            inner_splits = auto_split_inner_word(self.long_snd, mic_s, mic_e, len(word))
-                            chars_bounds = auto_split_to_chars_bounds(self.long_snd, mic_s, mic_e, inner_splits, len(word), self.params)
+                        syls = split_into_syllables(word)
+                        if len(syls) > 1:
+                            inner_splits = auto_split_inner_word(self.long_snd, mic_s, mic_e, len(syls))
+                            chars_bounds = auto_split_to_chars_bounds(self.long_snd, mic_s, mic_e, inner_splits, len(syls), self.params)
                         else:
                             chars_bounds = [[mic_s, mic_e]]
 
@@ -780,10 +782,12 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
 
                 # Fix word splits if batch process used filename as label initially
                 word = res['label']
-                if res.get('success') and len(word) > 1:
-                    snd = parselmouth.Sound(res['path'])
-                    res['inner_splits'] = auto_split_inner_word(snd, res['start'], res['end'], len(word))
-                    res['chars_bounds'] = auto_split_to_chars_bounds(snd, res['start'], res['end'], res['inner_splits'], len(word), self.params)
+                if res.get('success'):
+                    syls = split_into_syllables(word)
+                    if len(syls) > 1:
+                        snd = parselmouth.Sound(res['path'])
+                        res['inner_splits'] = auto_split_inner_word(snd, res['start'], res['end'], len(syls))
+                        res['chars_bounds'] = auto_split_to_chars_bounds(snd, res['start'], res['end'], res['inner_splits'], len(syls), self.params)
                 results[orig_idx] = res
             except Exception as e:
                 results[orig_idx] = {'label': tasks[orig_idx]['word'], 'group': tasks[orig_idx]['group'], 'missing': True, 'error': str(e)}
@@ -888,9 +892,10 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
 
         # Re-split inner words if needed
         label = item['label']
-        if len(label) > 1:
-            item['inner_splits'] = auto_split_inner_word(item['snd'], new_s, new_e, len(label))
-            item['chars_bounds'] = auto_split_to_chars_bounds(item['snd'], new_s, new_e, item['inner_splits'], len(label), self.params)
+        syls = split_into_syllables(label)
+        if len(syls) > 1:
+            item['inner_splits'] = auto_split_inner_word(item['snd'], new_s, new_e, len(syls))
+            item['chars_bounds'] = auto_split_to_chars_bounds(item['snd'], new_s, new_e, item['inner_splits'], len(syls), self.params)
         else:
             item['inner_splits'] = []
             item['chars_bounds'] = [[new_s, new_e]]
@@ -975,9 +980,10 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                 
                 # Recompute chars bounds with new params if word mode
                 label = item['label']
-                if len(label) > 1:
-                    item['inner_splits'] = auto_split_inner_word(item['snd'], item['start'], item['end'], len(label))
-                    item['chars_bounds'] = auto_split_to_chars_bounds(item['snd'], item['start'], item['end'], item['inner_splits'], len(label), item)
+                syls = split_into_syllables(label)
+                if len(syls) > 1:
+                    item['inner_splits'] = auto_split_inner_word(item['snd'], item['start'], item['end'], len(syls))
+                    item['chars_bounds'] = auto_split_to_chars_bounds(item['snd'], item['start'], item['end'], item['inner_splits'], len(syls), item)
                 else:
                     item['inner_splits'] = []
                     item['chars_bounds'] = [[item['start'], item['end']]]
@@ -1046,9 +1052,10 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                 item['raw_start'], item['raw_end'] = raw_s, raw_e
 
                 label = item['label']
-                if len(label) > 1:
-                    item['inner_splits'] = auto_split_inner_word(item['snd'], mic_s, mic_e, len(label))
-                    item['chars_bounds'] = auto_split_to_chars_bounds(item['snd'], mic_s, mic_e, item['inner_splits'], len(label), self.params)
+                syls = split_into_syllables(label)
+                if len(syls) > 1:
+                    item['inner_splits'] = auto_split_inner_word(item['snd'], mic_s, mic_e, len(syls))
+                    item['chars_bounds'] = auto_split_to_chars_bounds(item['snd'], mic_s, mic_e, item['inner_splits'], len(syls), self.params)
                 else:
                     item['inner_splits'] = []
                     item['chars_bounds'] = [[mic_s, mic_e]]
@@ -1093,10 +1100,11 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                         item['raw_end'] = res['raw_end']
 
                         word = item['label']
-                        if len(word) > 1:
+                        syls = split_into_syllables(word)
+                        if len(syls) > 1:
                             snd = parselmouth.Sound(res['path'])
-                            item['inner_splits'] = auto_split_inner_word(snd, res['start'], res['end'], len(word))
-                            item['chars_bounds'] = auto_split_to_chars_bounds(snd, res['start'], res['end'], item['inner_splits'], len(word), self.params)
+                            item['inner_splits'] = auto_split_inner_word(snd, res['start'], res['end'], len(syls))
+                            item['chars_bounds'] = auto_split_to_chars_bounds(snd, res['start'], res['end'], item['inner_splits'], len(syls), self.params)
                         else:
                             item['inner_splits'] = []
                             item['chars_bounds'] = [[res['start'], res['end']]]
@@ -2199,7 +2207,8 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
             group_tier.add(t_s, t_e, grp_name)
             last_group_end = t_e
 
-            if len(label) > 1:
+            syls = split_into_syllables(label)
+            if len(syls) > 1:
                 has_chars = True
                 if t_s > last_char_end:
                     char_tier.add(last_char_end, t_s, "")
@@ -2207,17 +2216,17 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                 chars_bounds = item.get('chars_bounds', [])
                 if not chars_bounds:
                     splits = [t_s] + [s for s in inner_splits if t_s < s < t_e] + [t_e]
-                    if len(splits) != len(label) + 1:
-                        splits = np.linspace(t_s, t_e, len(label) + 1).tolist()
+                    if len(splits) != len(syls) + 1:
+                        splits = np.linspace(t_s, t_e, len(syls) + 1).tolist()
                     chars_bounds = [(splits[j], splits[j+1]) for j in range(len(splits)-1)]
 
                 local_last = t_s
-                for i in range(len(label)):
+                for i in range(len(syls)):
                     if i < len(chars_bounds):
                         c_s, c_e = chars_bounds[i]
                         if c_s > local_last:
                             char_tier.add(local_last, c_s, "")
-                        char_tier.add(c_s, c_e, label[i])
+                        char_tier.add(c_s, c_e, syls[i])
                         local_last = c_e
                 if local_last < t_e:
                     char_tier.add(local_last, t_e, "")

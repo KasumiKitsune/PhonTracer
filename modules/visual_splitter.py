@@ -6,6 +6,7 @@ import parselmouth
 import sounddevice as sd
 import platform
 from .ui_widgets import CTkReleaseButton
+from .data_utils import split_into_syllables
 
 class VisualSplitter(ctk.CTkToplevel):
     def __init__(self, master, snd, icons, callback, existing_items=None, vad_segments=None):
@@ -240,12 +241,13 @@ class VisualSplitter(ctk.CTkToplevel):
                     seg['dyn_id'] = self.original_words[word_idx]['id']
                     
                     # 词语模式：初始化或补齐内部分割点
-                    if len(dyn_lbl) > 1:
-                        target_splits = len(dyn_lbl) - 1
+                    syls = split_into_syllables(dyn_lbl)
+                    if len(syls) > 1:
+                        target_splits = len(syls) - 1
                         splits = seg.get('inner_splits', [])
                         if len(splits) != target_splits:
                             dur = seg['end'] - seg['start']
-                            seg['inner_splits'] = [seg['start'] + dur * j / len(dyn_lbl) for j in range(1, len(dyn_lbl))]
+                            seg['inner_splits'] = [seg['start'] + dur * j / len(syls) for j in range(1, len(syls))]
                     else:
                         seg['inner_splits'] = []
                         
@@ -342,14 +344,15 @@ class VisualSplitter(ctk.CTkToplevel):
                     self.canvas.create_text(cx, center_y, text="✕", font=("Arial", 18, "bold"), fill="white")
                 else:
                     # 如果是词语，分离出多个标签块
-                    if len(display_label) > 1 and len(inner_splits) == len(display_label) - 1:
+                    syls = split_into_syllables(display_label)
+                    if len(syls) > 1 and len(inner_splits) == len(syls) - 1:
                         splits = [seg['start']] + inner_splits + [seg['end']]
                         char_colors = ["#3B82F6", "#10B981", "#EF4444", "#F59E0B", "#8B5CF6", "#14B8A6", "#EC4899", "#6366F1"]
-                        for char_idx, char in enumerate(display_label):
-                            c_s, c_e = splits[char_idx], splits[char_idx+1]
+                        for syl_idx, syl in enumerate(syls):
+                            c_s, c_e = splits[syl_idx], splits[syl_idx+1]
                             cx = (c_s + c_e) / 2 * self.px_per_sec
-                            color = char_colors[char_idx % len(char_colors)]
-                            bbox = create_pill_smooth(self.canvas, cx, tag_y, f"▶ {char}", color, f"btn_{i}_{char_idx}")
+                            color = char_colors[syl_idx % len(char_colors)]
+                            bbox = create_pill_smooth(self.canvas, cx, tag_y, f"▶ {syl}", color, f"btn_{i}_{syl_idx}")
                             self.play_rects.append({'idx': i, 'start': c_s, 'end': c_e, 'bbox': bbox})
                     else:
                         cx = (x1 + x2) / 2

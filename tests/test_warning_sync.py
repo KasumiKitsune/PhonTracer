@@ -1,13 +1,13 @@
 import unittest
 from unittest.mock import MagicMock, patch
 import tkinter as tk
+from tests.shared_root import get_shared_root
 from modules.project_tree import ProjectTreePanel
 
 class TestWarningSync(unittest.TestCase):
     def setUp(self):
         # Create a mock parent widget
-        self.parent = tk.Tk()
-        self.parent.withdraw()  # Hide window
+        self.parent = get_shared_root()
 
         self.icons = {}
         self.tk_icons = {'warning': 'warning_mock_image'}
@@ -45,6 +45,7 @@ class TestWarningSync(unittest.TestCase):
             self.panel.tree.selection.side_effect = self.tree_selection_mock
             self.panel.tree.index.side_effect = self.tree_index_mock
             self.panel.tree.delete.side_effect = self.tree_delete_mock
+            self.panel.tree.original_insert = self.panel.tree.insert
 
             # Provide mocks for setup_ui attributes used in tests
             self.panel.num_rule_var = MagicMock()
@@ -55,7 +56,7 @@ class TestWarningSync(unittest.TestCase):
         self.tree_selection = []
 
     def tearDown(self):
-        self.parent.destroy()
+        pass
 
     def tree_insert_mock(self, parent, index, iid=None, **kwargs):
         if iid is None:
@@ -109,13 +110,19 @@ class TestWarningSync(unittest.TestCase):
             return 0
 
     def tree_delete_mock(self, *iids):
-        for iid in iids:
+        def recursive_delete(iid):
             if iid in self.tree_nodes:
+                children = list(self.tree_nodes[iid].get('children', []))
+                for child in children:
+                    recursive_delete(child)
                 parent = self.tree_nodes[iid]['parent']
                 if parent in self.tree_nodes:
                     if iid in self.tree_nodes[parent]['children']:
                         self.tree_nodes[parent]['children'].remove(iid)
                 del self.tree_nodes[iid]
+
+        for iid in iids:
+            recursive_delete(iid)
 
     def test_warning_dual_appearance(self):
         """Test that an item with empty data stays in its group and gets a shadow item in the warning group"""
@@ -147,9 +154,10 @@ class TestWarningSync(unittest.TestCase):
 
         # Trigger update_item_icon
         self.panel.update_item_icon(item_id)
+        self.panel.rebuild_tree()
 
-        # The real item should STILL be inside 'node_group_a' (not reparented)
-        self.assertEqual(self.tree_parent_mock(item_id), 'node_group_a')
+        # The real item should STILL be inside 'GroupA's group node (not reparented)
+        self.assertEqual(self.tree_parent_mock(item_id), self.panel.group_nodes['GroupA'])
 
         # A shadow item under warning group should exist
         warning_group_id = self.panel.warning_group_id
@@ -195,6 +203,7 @@ class TestWarningSync(unittest.TestCase):
         # 4. Resolve the warning (has_empty_data = False)
         self.items_dict[item_id]['has_empty_data'] = False
         self.panel.update_item_icon(item_id)
+        self.panel.rebuild_tree()
 
         # Shadow item should be deleted
         self.assertFalse(shadow_iid in self.tree_nodes)
@@ -229,6 +238,7 @@ class TestWarningSync(unittest.TestCase):
 
         # Create shadow item
         self.panel.update_item_icon(item_id)
+        self.panel.rebuild_tree()
         shadow_iid = f"warning_{item_id}"
         self.assertTrue(shadow_iid in self.tree_nodes)
 
