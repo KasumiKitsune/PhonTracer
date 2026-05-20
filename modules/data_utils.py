@@ -80,8 +80,11 @@ def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: 
     p_floor = item.get('pitch_floor', pitch_floor)
     p_ceiling = item.get('pitch_ceiling', pitch_ceiling)
     v_thresh = item.get('voicing_threshold', voicing_threshold)
+    engine = item.get('f0_engine', 'praat')
 
-    if (not item.get('snd') or not item.get('pitch')) and item.get('path'):
+    from .audio_core import extract_f0
+
+    if (not item.get('snd') or (not item.get('pitch') and not item.get('pitch_data'))) and item.get('path'):
         if num_points == 11 and item.get('preview_f0') and not is_word_mode:
             output = f"{real_index}.{label}\n{duration:.3f}\n"
             times = np.linspace(t_s, t_e, 11)
@@ -93,7 +96,7 @@ def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: 
         else:
             try:
                 item['snd'] = parselmouth.Sound(item['path'])
-                item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=p_floor, pitch_ceiling=p_ceiling, voicing_threshold=v_thresh, very_accurate=True, octave_jump_cost=0.9)
+                item['pitch_data'] = extract_f0(item['snd'], {'f0_engine': engine, 'pitch_floor': p_floor, 'pitch_ceiling': p_ceiling, 'voicing_threshold': v_thresh})
             except Exception: return ""
 
     if duration <= 0 or not item.get('snd'): return ""
@@ -107,10 +110,6 @@ def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: 
                 splits = np.linspace(t_s, t_e, len(label) + 1).tolist()
             chars_bounds = [(splits[j], splits[j+1]) for j in range(len(splits)-1)]
             
-        pitch = item['pitch']
-        p_xs = pitch.xs()
-        p_freqs = pitch.selected_array['frequency']
-            
         for i in range(len(label)):
             char = label[i]
             if i < len(chars_bounds):
@@ -122,9 +121,9 @@ def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: 
             try:
                 if c_end - c_start <= 0.01: continue
                 c_snd = item['snd'].extract_part(from_time=c_start, to_time=c_end)
-                c_pitch = c_snd.to_pitch_ac(time_step=None, pitch_floor=p_floor, pitch_ceiling=p_ceiling, voicing_threshold=v_thresh, very_accurate=True, octave_jump_cost=0.9)
-                p_xs = c_pitch.xs() + c_start
-                p_freqs = c_pitch.selected_array['frequency']
+                c_pitch_data = extract_f0(c_snd, {'f0_engine': engine, 'pitch_floor': p_floor, 'pitch_ceiling': p_ceiling, 'voicing_threshold': v_thresh})
+                p_xs = c_pitch_data['xs'] + c_start
+                p_freqs = c_pitch_data['freqs']
             except Exception:
                 continue
             
@@ -156,9 +155,13 @@ def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: 
                     output += f"{t:.6f}   0.000000\n"
     else:
         # 单字模式同样应用此逻辑
-        pitch = item['pitch']
-        p_xs = pitch.xs()
-        p_freqs = pitch.selected_array['frequency']
+        if item.get('pitch_data'):
+            p_xs = item['pitch_data']['xs']
+            p_freqs = item['pitch_data']['freqs']
+        else:
+            pitch = item['pitch']
+            p_xs = pitch.xs()
+            p_freqs = pitch.selected_array['frequency']
         
         valid_idx = np.where((p_xs >= t_s) & (p_xs <= t_e) & (p_freqs > 0))[0]
         if len(valid_idx) >= 2:

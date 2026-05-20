@@ -8,7 +8,7 @@ import math
 import matplotlib.pyplot as plt
 import logging
 from .data_utils import get_export_text_for_item, build_five_point_chart, write_analysis_sheet_with_formulas
-from .ui_widgets import ToolTip, CTkReleaseButton, AutoScrollbar
+from .ui_widgets import CTkReleaseButton, AutoScrollbar
 
 logger = logging.getLogger(__name__)
 
@@ -421,13 +421,18 @@ class ProjectTreePanel:
         self.text_preview.insert(tk.END, text)
         
         self.text_preview.tag_config("zero", foreground="#EF4444")
-        start_idx = "1.0"
-        while True:
-            pos = self.text_preview.search("0.000000", start_idx, stopindex=tk.END)
-            if not pos: break
-            end_pos = f"{pos}+8c"
-            self.text_preview.tag_add("zero", pos, end_pos)
-            start_idx = end_pos
+        lines = text.splitlines()
+        for line_idx, line in enumerate(lines, start=1):
+            parts = line.split()
+            if len(parts) == 2 and parts[1] == "0.000000":
+                first_len = len(parts[0])
+                sub_str = line[first_len:]
+                f0_start_offset = sub_str.find("0.000000")
+                if f0_start_offset != -1:
+                    start_char = first_len + f0_start_offset
+                    pos_start = f"{line_idx}.{start_char}"
+                    pos_end = f"{line_idx}.{start_char + 8}"
+                    self.text_preview.tag_add("zero", pos_start, pos_end)
             
         self.text_preview.configure(state='disabled')
 
@@ -436,7 +441,7 @@ class ProjectTreePanel:
         if not item or item.get('start') is None: return False
         
         # 1. 如果音频和 Pitch 对象已加载，优先执行最高精度的实时重新计算，并更新缓存
-        if item.get('snd') and item.get('pitch'):
+        if item.get('snd') and (item.get('pitch') or item.get('pitch_data')):
             num_points = int(self.app_state_params.get('pts', 10))
             t_s, t_e = item['start'], item['end']
             label = item.get('label', '')
@@ -453,9 +458,13 @@ class ProjectTreePanel:
                     splits = [t_s, t_e]
                 bounds = [[splits[i], splits[i+1]] for i in range(len(splits)-1)]
                 
-            pitch = item['pitch']
-            p_xs = pitch.xs()
-            p_freqs = pitch.selected_array['frequency']
+            if item.get('pitch_data'):
+                p_xs = item['pitch_data']['xs']
+                p_freqs = item['pitch_data']['freqs']
+            else:
+                pitch = item['pitch']
+                p_xs = pitch.xs()
+                p_freqs = pitch.selected_array['frequency']
             
             has_empty = False
             for c_s, c_e in bounds:
@@ -701,17 +710,46 @@ class ProjectTreePanel:
         ctk.CTkButton(dlg, text="  📈  声调格局连贯折线图", command=lambda: do_export('line_chart'), fg_color="#EFF6FF", text_color="#1E40AF", hover_color="#DBEAFE", **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
         ctk.CTkButton(dlg, text="  🔥  词语时序密度热力图", command=lambda: do_export('kde'), fg_color="#FFF7ED", text_color="#9A3412", hover_color="#FFEDD5", **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
 
+    def _ensure_item_loaded(self, item):
+        """确保 item.snd 和 item.pitch / item.pitch_data 已正确加载或计算"""
+        if not item or not item.get('path'): return
+        
+        has_snd = item.get('snd') is not None
+        has_pitch = (item.get('pitch') is not None) or (item.get('pitch_data') is not None)
+        
+        if not has_snd or not has_pitch:
+            try:
+                if not has_snd:
+                    item['snd'] = parselmouth.Sound(item['path'])
+                if not has_pitch:
+                    from .audio_core import extract_f0
+                    pf = item.get('pitch_floor', self.app_state_params.get('pitch_floor', 75))
+                    pc = item.get('pitch_ceiling', self.app_state_params.get('pitch_ceiling', 600))
+                    vt = item.get('voicing_threshold', self.app_state_params.get('voicing_threshold', 0.25))
+                    engine = item.get('f0_engine', self.app_state_params.get('f0_engine', 'praat'))
+                    
+                    if engine == 'praat':
+                        item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=pf, pitch_ceiling=pc, voicing_threshold=vt, very_accurate=True, octave_jump_cost=0.9)
+                    else:
+                        item['pitch_data'] = extract_f0(item['snd'], {'f0_engine': engine, 'pitch_floor': pf, 'pitch_ceiling': pc, 'voicing_threshold': vt})
+            except Exception as e:
+                logger.error(f"Error lazy loading sound/pitch for {item.get('path')}: {e}", exc_info=True)
+
     def _extract_syl_data(self, item, num_points):
         """提取项目中每个字的真实发音段(收缩后)的 11 点 F0 数据和时长。返回 (总时长, [(字时长, [F0数组]), ...])"""
-        if item.get('start') is None or not item.get('snd') or not item.get('pitch'): return 0, []
+        if item.get('start') is None or not item.get('snd') or (not item.get('pitch') and not item.get('pitch_data')): return 0, []
         t_s, t_e = item['start'], item['end']
         if t_e <= t_s: return 0, []
         
         label = item.get('label', '')
         inner_splits = item.get('inner_splits', [])
-        pitch = item['pitch']
-        p_xs = pitch.xs()
-        p_freqs = pitch.selected_array['frequency']
+        if item.get('pitch_data'):
+            p_xs = item['pitch_data']['xs']
+            p_freqs = item['pitch_data']['freqs']
+        else:
+            pitch = item['pitch']
+            p_xs = pitch.xs()
+            p_freqs = pitch.selected_array['frequency']
         
         chars_bounds = item.get('chars_bounds', [])
         if chars_bounds and len(chars_bounds) == len(label):
@@ -796,16 +834,9 @@ class ProjectTreePanel:
             if not is_continuous: global_idx = 1
             for child in children:
                 item = self.items[child]
-                if (not item.get('snd') or not item.get('pitch')) and item.get('path'):
-                    try:
-                        item['snd'] = parselmouth.Sound(item['path'])
-                        pf = item.get('pitch_floor', self.app_state_params.get('pitch_floor', 75))
-                        pc = item.get('pitch_ceiling', self.app_state_params.get('pitch_ceiling', 600))
-                        vt = item.get('voicing_threshold', self.app_state_params.get('voicing_threshold', 0.25))
-                        item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=pf, pitch_ceiling=pc, voicing_threshold=vt, very_accurate=True, octave_jump_cost=0.9)
-                    except Exception as e:
-                        logger.error(f"Error loading sound or pitch for {item['path']}: {e}", exc_info=True)
-                        continue
+                self._ensure_item_loaded(item)
+                if not item.get('snd') or (not item.get('pitch') and not item.get('pitch_data')):
+                    continue
                     
                 total_dur, syl_data = self._extract_syl_data(item, num_points)
                 if total_dur <= 0: continue
@@ -902,14 +933,9 @@ class ProjectTreePanel:
                     item = self.items[child]
                     lbl = item.get('label', '')
                     if len(lbl) > max_syls: max_syls = len(lbl)
-                    if (not item.get('snd') or not item.get('pitch')) and item.get('path'):
-                        try:
-                            item['snd'] = parselmouth.Sound(item['path'])
-                            pf = item.get('pitch_floor', self.app_state_params.get('pitch_floor', 75))
-                            pc = item.get('pitch_ceiling', self.app_state_params.get('pitch_ceiling', 600))
-                            vt = item.get('voicing_threshold', self.app_state_params.get('voicing_threshold', 0.25))
-                            item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=pf, pitch_ceiling=pc, voicing_threshold=vt, very_accurate=True, octave_jump_cost=0.9)
-                        except Exception as e: continue
+                    self._ensure_item_loaded(item)
+                    if not item.get('snd') or (not item.get('pitch') and not item.get('pitch_data')):
+                        continue
                     total_dur, syl_data = self._extract_syl_data(item, num_points)
                     if total_dur <= 0: continue
                     rows.append({'group': grp_name, 'label': lbl, 'total_dur': total_dur, 'syl_data': syl_data, 'raw_item': item})
@@ -1120,14 +1146,9 @@ class ProjectTreePanel:
                 lbl = self.items[child].get('label', '')
                 if len(lbl) > max_syls: max_syls = len(lbl)
                 item = self.items[child]
-                if (not item.get('snd') or not item.get('pitch')) and item.get('path'):
-                    try:
-                        item['snd'] = parselmouth.Sound(item['path'])
-                        pf = item.get('pitch_floor', self.app_state_params.get('pitch_floor', 75))
-                        pc = item.get('pitch_ceiling', self.app_state_params.get('pitch_ceiling', 600))
-                        vt = item.get('voicing_threshold', self.app_state_params.get('voicing_threshold', 0.25))
-                        item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=pf, pitch_ceiling=pc, voicing_threshold=vt, very_accurate=True, octave_jump_cost=0.9)
-                    except Exception: continue
+                self._ensure_item_loaded(item)
+                if not item.get('snd') or (not item.get('pitch') and not item.get('pitch_data')):
+                    continue
                 total_dur, syl_data = self._extract_syl_data(item, num_points)
                 if total_dur <= 0: continue
                 
@@ -1230,14 +1251,9 @@ class ProjectTreePanel:
                     item = self.items[child]
                     lbl = item.get('label', '')
                     if len(lbl) > max_syls: max_syls = len(lbl)
-                    if (not item.get('snd') or not item.get('pitch')) and item.get('path'):
-                        try:
-                            item['snd'] = parselmouth.Sound(item['path'])
-                            pf = item.get('pitch_floor', self.app_state_params.get('pitch_floor', 75))
-                            pc = item.get('pitch_ceiling', self.app_state_params.get('pitch_ceiling', 600))
-                            vt = item.get('voicing_threshold', self.app_state_params.get('voicing_threshold', 0.25))
-                            item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=pf, pitch_ceiling=pc, voicing_threshold=vt, very_accurate=True, octave_jump_cost=0.9)
-                        except: continue
+                    self._ensure_item_loaded(item)
+                    if not item.get('snd') or (not item.get('pitch') and not item.get('pitch_data')):
+                        continue
                     total_dur, syl_data = self._extract_syl_data(item, num_points)
                     if total_dur <= 0: continue
                     
@@ -1337,15 +1353,8 @@ class ProjectTreePanel:
                     
                 if child not in self.items: continue
                 item = self.items[child]
-                if (not item.get('snd') or not item.get('pitch')) and item.get('path'):
-                    try:
-                        item['snd'] = parselmouth.Sound(item['path'])
-                        pf = item.get('pitch_floor', self.app_state_params.get('pitch_floor', 75))
-                        pc = item.get('pitch_ceiling', self.app_state_params.get('pitch_ceiling', 600))
-                        vt = item.get('voicing_threshold', self.app_state_params.get('voicing_threshold', 0.25))
-                        item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=pf, pitch_ceiling=pc, voicing_threshold=vt, very_accurate=True, octave_jump_cost=0.9)
-                    except Exception: continue
-                if item.get('start') is None or not item.get('snd') or not item.get('pitch'): continue
+                self._ensure_item_loaded(item)
+                if item.get('start') is None or not item.get('snd') or (not item.get('pitch') and not item.get('pitch_data')): continue
 
                 t_s, t_e = item['start'], item['end']
                 label = item.get('label', '')
@@ -1355,8 +1364,13 @@ class ProjectTreePanel:
                 if len(splits) != len(label) + 1: splits = np.linspace(t_s, t_e, len(label) + 1).tolist()
                 if len(label) <= 1: splits = [t_s, t_e]
                 
-                pitch = item['pitch']
-                p_xs, p_freqs = pitch.xs(), pitch.selected_array['frequency']
+                if item.get('pitch_data'):
+                    p_xs = item['pitch_data']['xs']
+                    p_freqs = item['pitch_data']['freqs']
+                else:
+                    pitch = item['pitch']
+                    p_xs = pitch.xs()
+                    p_freqs = pitch.selected_array['frequency']
                 
                 for k in range(len(splits) - 1):
                     c_s, c_e = splits[k], splits[k+1]
@@ -1525,15 +1539,9 @@ class ProjectTreePanel:
                     item = self.items[child]
                     lbl = item.get('label', '')
                     if len(lbl) > max_syls: max_syls = len(lbl)
-                    if (not item.get('snd') or not item.get('pitch')) and item.get('path'):
-                        try:
-                            item['snd'] = parselmouth.Sound(item['path'])
-                            pf = item.get('pitch_floor', self.app_state_params.get('pitch_floor', 75))
-                            pc = item.get('pitch_ceiling', self.app_state_params.get('pitch_ceiling', 600))
-                            vt = item.get('voicing_threshold', self.app_state_params.get('voicing_threshold', 0.25))
-                            item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=pf, pitch_ceiling=pc, voicing_threshold=vt, very_accurate=True, octave_jump_cost=0.9)
-                        except: continue
-                    if item.get('start') is None or not item.get('snd') or not item.get('pitch'): continue
+                    self._ensure_item_loaded(item)
+                    if item.get('start') is None or not item.get('snd') or (not item.get('pitch') and not item.get('pitch_data')):
+                        continue
                     t_s, t_e = item['start'], item['end']
                     label = item.get('label', '')
                     inner_splits = item.get('inner_splits', [])
@@ -1542,8 +1550,13 @@ class ProjectTreePanel:
                     if len(splits) != len(label) + 1: splits = np.linspace(t_s, t_e, len(label) + 1).tolist()
                     if len(label) <= 1: splits = [t_s, t_e]
                     
-                    pitch = item['pitch']
-                    p_xs, p_freqs = pitch.xs(), pitch.selected_array['frequency']
+                    if item.get('pitch_data'):
+                        p_xs = item['pitch_data']['xs']
+                        p_freqs = item['pitch_data']['freqs']
+                    else:
+                        pitch = item['pitch']
+                        p_xs = pitch.xs()
+                        p_freqs = pitch.selected_array['frequency']
                     
                     for k in range(len(splits) - 1):
                         c_s, c_e = splits[k], splits[k+1]

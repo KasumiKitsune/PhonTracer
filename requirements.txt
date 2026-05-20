@@ -9,3 +9,4 @@ windnd; sys_platform == 'win32'
 xlsxwriter
 scipy
 textgrid
+pyreaper

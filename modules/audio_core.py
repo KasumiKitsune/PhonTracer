@@ -133,10 +133,13 @@ def macroscopic_vad(snd: parselmouth.Sound) -> List[List[float]]:
     return [s for s in merged if s[1]-s[0] > VAD_MIN_DURATION]
 
 
-def core_microscopic_vowel_nucleus(snd: parselmouth.Sound, global_pitch_or_arrays: Union[parselmouth.Pitch, Tuple[np.ndarray, np.ndarray]], t_min: float, t_max: float, drop_db: float, skip_front: float, trim_silence: bool) -> Tuple[float, float, float, float]:
+def core_microscopic_vowel_nucleus(snd: parselmouth.Sound, global_pitch_or_arrays: Union[parselmouth.Pitch, Tuple[np.ndarray, np.ndarray], Dict[str, Any]], t_min: float, t_max: float, drop_db: float, skip_front: float, trim_silence: bool) -> Tuple[float, float, float, float]:
     """微观韵母提取核心算法"""
     try:
-        if isinstance(global_pitch_or_arrays, tuple):
+        if isinstance(global_pitch_or_arrays, dict):
+            xs = global_pitch_or_arrays['xs']
+            freqs = global_pitch_or_arrays['freqs']
+        elif isinstance(global_pitch_or_arrays, tuple):
             xs, freqs = global_pitch_or_arrays
         else:
             xs = global_pitch_or_arrays.xs()
@@ -207,10 +210,13 @@ def core_microscopic_vowel_nucleus(snd: parselmouth.Sound, global_pitch_or_array
         return t_min, t_max, t_min, t_max
 
 
-def recalculate_bounds_fast(snd: parselmouth.Sound, global_pitch_or_arrays: Union[parselmouth.Pitch, Tuple[np.ndarray, np.ndarray]], temp_s: float, temp_e: float, trim_silence: bool) -> Tuple[float, float]:
+def recalculate_bounds_fast(snd: parselmouth.Sound, global_pitch_or_arrays: Union[parselmouth.Pitch, Tuple[np.ndarray, np.ndarray], Dict[str, Any]], temp_s: float, temp_e: float, trim_silence: bool) -> Tuple[float, float]:
     """仅重新计算静音裁切和基频收缩，不重新跑振幅分析"""
     try:
-        if isinstance(global_pitch_or_arrays, tuple):
+        if isinstance(global_pitch_or_arrays, dict):
+            xs = global_pitch_or_arrays['xs']
+            freqs = global_pitch_or_arrays['freqs']
+        elif isinstance(global_pitch_or_arrays, tuple):
             xs, freqs = global_pitch_or_arrays
         else:
             xs = global_pitch_or_arrays.xs()
@@ -283,6 +289,109 @@ def auto_split_inner_word(snd: parselmouth.Sound, t_min: float, t_max: float, wo
         
     return fallback_splits
 
+def extract_f0(snd: parselmouth.Sound, params: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    统一的基频提取工厂函数，支持 Parselmouth (Praat) 与 REAPER 双引擎。
+    返回结构:
+    {
+        "xs": np.ndarray,      # 时间点的一维 Numpy 数组
+        "freqs": np.ndarray,   # 基频值的一维 Numpy 数组 (0.0 表示无声段)
+        "engine": str          # 提取引擎类型: "praat" 或 "reaper"
+    }
+    """
+    engine = params.get('f0_engine', 'praat')
+    pitch_floor = int(params.get('pitch_floor', 75))
+    pitch_ceiling = int(params.get('pitch_ceiling', 600))
+    voicing_threshold = float(params.get('voicing_threshold', 0.25))
+
+    if engine == 'reaper':
+        import pyreaper
+        # REAPER 推荐使用 16000Hz 采样率
+        sr_reaper = 16000
+        original_samples = snd.values.shape[1]
+        
+        # 极速且无素数性能陷阱的线性插值重采样
+        if snd.sampling_frequency != sr_reaper:
+            new_samples = int(original_samples * sr_reaper / snd.sampling_frequency)
+            if new_samples > 2:
+                original_times = np.arange(original_samples) / snd.sampling_frequency
+                new_times = np.arange(new_samples) / sr_reaper
+                resampled = np.interp(new_times, original_times, snd.values[0])
+            else:
+                resampled = snd.values[0]
+        else:
+            resampled = snd.values[0]
+
+        # 转换并裁剪为 16-bit 整数输入 pyreaper
+        x_int = (np.clip(resampled, -1.0, 1.0) * 32767).astype(np.int16)
+        
+        # 将 Praat 浊音阈值映射为 REAPER 的 unvoiced_cost (方向相反)
+        # default voicing_threshold = 0.25 -> unvoiced_cost = 0.90
+        # clamping to safe range [0.1, 1.5]
+        unvoiced_cost = np.clip(1.15 - voicing_threshold, 0.1, 1.5)
+        
+        # 执行 REAPER 提取
+        pm_times, pm, f0_times, f0, corr = pyreaper.reaper(
+            x_int, 
+            sr_reaper, 
+            minf0=float(pitch_floor), 
+            maxf0=float(pitch_ceiling),
+            unvoiced_cost=float(unvoiced_cost)
+        )
+        
+        # 将无声段标记 -1.0 转换为 0.0
+        f0_clean = np.where(f0 < 0, 0.0, f0)
+        
+        # 针对 REAPER 整数周期点带来的阶梯状硬阶跃（quantization steps）进行高精度边缘自适应平滑
+        # 采用归一化掩码（Mask Normalization）消除静音交界处的出血效应
+        if len(f0_clean) > 0:
+            voiced_mask = f0_clean > 0
+            if np.any(voiced_mask):
+                try:
+                    from scipy.ndimage import gaussian_filter1d
+                    float_mask = voiced_mask.astype(float)
+                    smoothed_values = gaussian_filter1d(f0_clean, sigma=1.2)
+                    smoothed_mask = gaussian_filter1d(float_mask, sigma=1.2)
+                    smoothed_mask = np.where(smoothed_mask < 1e-5, 1.0, smoothed_mask)
+                    f0_smooth = smoothed_values / smoothed_mask
+                    f0_clean = np.where(voiced_mask, f0_smooth, 0.0)
+                except Exception:
+                    # 极速且鲁棒的滑动均值备用平滑器
+                    window_len = 3
+                    window = np.ones(window_len) / window_len
+                    float_mask = voiced_mask.astype(float)
+                    smoothed_values = np.convolve(f0_clean, window, mode='same')
+                    smoothed_mask = np.convolve(float_mask, window, mode='same')
+                    smoothed_mask = np.where(smoothed_mask < 1e-5, 1.0, smoothed_mask)
+                    f0_smooth = smoothed_values / smoothed_mask
+                    f0_clean = np.where(voiced_mask, f0_smooth, 0.0)
+        
+        return {
+            "xs": f0_times.astype(np.float64),
+            "freqs": f0_clean.astype(np.float64),
+            "engine": "reaper"
+        }
+    else:
+        # Praat 引擎提取
+        pitch = snd.to_pitch_ac(
+            time_step=None, 
+            pitch_floor=pitch_floor, 
+            pitch_ceiling=pitch_ceiling, 
+            voicing_threshold=voicing_threshold, 
+            very_accurate=True, 
+            octave_jump_cost=0.9
+        )
+        xs = pitch.xs()
+        freqs = pitch.selected_array['frequency']
+        # 确保无声段是 0.0
+        freqs_clean = np.where(np.isnan(freqs) | (freqs <= 0), 0.0, freqs)
+        
+        return {
+            "xs": xs.astype(np.float64),
+            "freqs": freqs_clean.astype(np.float64),
+            "engine": "praat"
+        }
+
 def auto_split_to_chars_bounds(snd: parselmouth.Sound, mic_s: float, mic_e: float, inner_splits: List[float], label_len: int, params: Dict[str, float]) -> List[List[float]]:
     splits = [mic_s] + [s for s in inner_splits if mic_s < s < mic_e] + [mic_e]
     if len(splits) != label_len + 1:
@@ -294,9 +403,9 @@ def auto_split_to_chars_bounds(snd: parselmouth.Sound, mic_s: float, mic_e: floa
         try:
             if c_e - c_s > 0.01:
                 c_snd = snd.extract_part(from_time=c_s, to_time=c_e)
-                c_pitch = c_snd.to_pitch_ac(time_step=None, pitch_floor=params.get('pitch_floor', 75), pitch_ceiling=params.get('pitch_ceiling', 600), voicing_threshold=params.get('voicing_threshold', 0.25), very_accurate=True, octave_jump_cost=0.9)
-                p_xs = c_pitch.xs() + c_s
-                p_freqs = c_pitch.selected_array['frequency']
+                c_pitch_data = extract_f0(c_snd, params)
+                p_xs = c_pitch_data['xs'] + c_s
+                p_freqs = c_pitch_data['freqs']
                 valid_idx = np.where(p_freqs > 0)[0]
                 if len(valid_idx) >= 2:
                     v_start, v_end = p_xs[valid_idx[0]], p_xs[valid_idx[-1]]
@@ -313,17 +422,29 @@ def auto_split_to_chars_bounds(snd: parselmouth.Sound, mic_s: float, mic_e: floa
 def batch_process_worker(path: str, params: Dict[str, float], trim_silence: bool, word_label: str = "") -> Dict[str, Any]:
     try:
         snd = parselmouth.Sound(path)
-        pitch = snd.to_pitch_ac(time_step=None, pitch_floor=params.get('pitch_floor', 75), pitch_ceiling=params.get('pitch_ceiling', 600), voicing_threshold=params.get('voicing_threshold', 0.25), very_accurate=True, octave_jump_cost=0.9)
+        pitch_data = extract_f0(snd, params)
         mac_s, mac_e = 0.0, snd.get_total_duration()
         
         mic_s, mic_e, raw_s, raw_e = core_microscopic_vowel_nucleus(
-            snd, pitch, mac_s, mac_e, 
+            snd, pitch_data, mac_s, mac_e, 
             params['db'], params['skip_front'], trim_silence
         )
         
         preview_times = np.linspace(mic_s, mic_e, 11)
-        preview_f0 = [pitch.get_value_at_time(t) for t in preview_times]
-        preview_f0 = [0.0 if np.isnan(f) else f for f in preview_f0]
+        p_xs = pitch_data['xs']
+        p_freqs = pitch_data['freqs']
+        preview_f0 = np.interp(preview_times, p_xs, p_freqs).tolist()
+        
+        # 修正：跨越静音区（>25ms）时强制归零，避免产生假数据桥接
+        for j, t in enumerate(preview_times):
+            valid_indices = np.where(p_freqs > 0)[0]
+            if len(valid_indices) == 0:
+                preview_f0[j] = 0.0
+                continue
+            valid_xs = p_xs[valid_indices]
+            if np.min(np.abs(valid_xs - t)) > 0.025:
+                preview_f0[j] = 0.0
+                
         has_empty_data = any(f == 0.0 for f in preview_f0)
         
         name = os.path.splitext(os.path.basename(path))[0]
@@ -351,6 +472,7 @@ def batch_process_worker(path: str, params: Dict[str, float], trim_silence: bool
             'inner_splits': inner_splits,
             'chars_bounds': chars_bounds,
             'preview_f0': preview_f0,
+            'pitch_data': pitch_data,
             'success': True,
             'has_empty_data': has_empty_data
         }

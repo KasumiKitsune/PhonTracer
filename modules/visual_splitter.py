@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, ttk
 import customtkinter as ctk
 import numpy as np
 import parselmouth
@@ -177,7 +177,23 @@ class VisualSplitter(ctk.CTkToplevel):
         self.envelope_data = full_values[::step]
 
     def on_zoom_change(self, val):
-        self.px_per_sec = round(float(val) / 25) * 25
+        old_zoom = self.px_per_sec
+        new_zoom = round(float(val) / 25) * 25
+        if new_zoom == old_zoom:
+            return
+            
+        # 1. 计算当前视口中心的时间点
+        viewport_width = self.canvas.winfo_width()
+        center_canvas_x = self.canvas.canvasx(0) + viewport_width / 2
+        time_at_center = center_canvas_x / old_zoom
+        
+        # 2. 存储缩放中心目标：保持 time_at_center 在屏幕中心位置不变
+        self.zoom_target = {
+            'time': time_at_center,
+            'widget_x': viewport_width / 2
+        }
+        
+        self.px_per_sec = new_zoom
         self.update_zoom_label()
         if hasattr(self, '_zoom_timer'):
             self.after_cancel(self._zoom_timer)
@@ -189,8 +205,22 @@ class VisualSplitter(ctk.CTkToplevel):
 
     def on_ctrl_mousewheel(self, event):
         delta = event.delta if platform.system() == 'Darwin' else event.delta / 120
-        new_zoom = self.px_per_sec * (1.2 if delta > 0 else 0.8)
+        old_zoom = self.px_per_sec
+        new_zoom = old_zoom * (1.2 if delta > 0 else 0.8)
         new_zoom = max(25, min(2000, round(new_zoom / 25) * 25))
+        if new_zoom == old_zoom:
+            return
+            
+        # 1. 计算当前鼠标指针所在的时间点
+        canvas_x = self.canvas.canvasx(event.x)
+        time_at_mouse = canvas_x / old_zoom
+        
+        # 2. 存储缩放中心目标：保持 time_at_mouse 在 event.x 位置不变
+        self.zoom_target = {
+            'time': time_at_mouse,
+            'widget_x': event.x
+        }
+        
         self.px_per_sec = new_zoom
         self.zoom_slider.set(new_zoom)
         self.update_zoom_label()
@@ -325,6 +355,15 @@ class VisualSplitter(ctk.CTkToplevel):
                         cx = (x1 + x2) / 2
                         bbox = create_pill_smooth(self.canvas, cx, tag_y, f"▶ {display_label}", "#3B82F6", f"btn_{i}")
                         self.play_rects.append({'idx': i, 'start': seg['start'], 'end': seg['end'], 'bbox': bbox})
+
+        # 6. 在绘制完毕后，如果存在 zoom_target，则执行视口精确滚动
+        if hasattr(self, 'zoom_target') and self.zoom_target:
+            target_time = self.zoom_target['time']
+            widget_x = self.zoom_target['widget_x']
+            new_left_x = target_time * self.px_per_sec - widget_x
+            fraction = max(0.0, min(1.0, new_left_x / self.canvas_width))
+            self.canvas.xview_moveto(fraction)
+            self.zoom_target = None
 
     def draw_cut_line(self, time_sec):
         x = time_sec * self.px_per_sec
