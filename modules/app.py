@@ -495,6 +495,7 @@ class PhoneticsApp:
         self.tabview = ctk.CTkTabview(left_scrollable, height=170, corner_radius=12, fg_color="white", 
                                       segmented_button_selected_color="#3B82F6", segmented_button_fg_color="#F3F4F6")
         self.tabview.pack(fill=tk.X, pady=(0, 10))
+        self.tabview._segmented_button.configure(corner_radius=20)
 
         # 基频提取引擎 (药丸型按钮)
         self.engine_frame = ctk.CTkFrame(left_scrollable, fg_color="white", corner_radius=10)
@@ -546,19 +547,19 @@ class PhoneticsApp:
 
         # 头部折叠栏（支持手势点击与手型悬停）
         header_frame = ctk.CTkFrame(card_params, fg_color="transparent", cursor="hand2")
-        header_frame.pack(fill=tk.X, padx=15, pady=(12, 10))
+        header_frame.pack(fill=tk.X, padx=15, pady=(12, 12))
 
         self.lbl_card_title = ctk.CTkLabel(header_frame, text="全局算法与导出参数", font=self.font_title, text_color="#111827", cursor="hand2")
         self.lbl_card_title.pack(side=tk.LEFT)
 
-        self.lbl_card_toggle = ctk.CTkLabel(header_frame, text="▼", font=self.font_title, text_color="#6B7280", cursor="hand2")
+        self.lbl_card_toggle = ctk.CTkLabel(header_frame, text="▶", font=self.font_title, text_color="#6B7280", cursor="hand2")
         self.lbl_card_toggle.pack(side=tk.RIGHT)
 
         # 折叠容器
         self.params_content_frame = ctk.CTkFrame(card_params, fg_color="transparent")
-        self.params_content_frame.pack(fill=tk.X)
+        # 默认折叠，不进行pack
 
-        self.params_expanded = True
+        self.params_expanded = False
         def toggle_params(event=None):
             if self.params_expanded:
                 self.params_content_frame.pack_forget()
