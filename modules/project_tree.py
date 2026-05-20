@@ -176,6 +176,7 @@ class ProjectTreePanel:
         self.parent.after(50, lambda: self.start_inline_edit(gid))
 
     def start_inline_edit(self, iid):
+        if iid == self.warning_group_id: return
         bbox = self.tree.bbox(iid, "#0")
         if not bbox: return
         x, y, w, h = bbox
@@ -207,8 +208,13 @@ class ProjectTreePanel:
                 for child in self.tree.get_children(iid):
                     if child in self.items: self.items[child]['group'] = new_name
             elif 'item' in self.tree.item(iid, 'tags'):
-                self.tree.item(iid, text=new_name)
-                self.items[iid]['label'] = new_name
+                real_iid = iid[8:] if str(iid).startswith('warning_') else iid
+                w_iid = f"warning_{real_iid}"
+                if self.tree.exists(real_iid):
+                    self.tree.item(real_iid, text=new_name)
+                if self.tree.exists(w_iid):
+                    self.tree.item(w_iid, text=new_name)
+                self.items[real_iid]['label'] = new_name
             
             self.update_preview()
             self._debounce_zebra_stripes()
@@ -230,11 +236,12 @@ class ProjectTreePanel:
         iid = selection[0]
         if 'item' not in self.tree.item(iid, 'tags'): return
         
-        self.current_iid = iid
+        real_iid = iid[8:] if str(iid).startswith('warning_') else iid
+        self.current_iid = real_iid
         if self.app and hasattr(self.app, 'active_speaker'):
-            self.app.active_speaker.last_selected_iid = iid
+            self.app.active_speaker.last_selected_iid = real_iid
         if self.on_item_selected:
-            self.on_item_selected(iid)
+            self.on_item_selected(real_iid)
         self.update_preview()
 
     def on_tree_double_click(self, event):
@@ -254,26 +261,44 @@ class ProjectTreePanel:
                 for gid in groups_to_del:
                     group_name = self.tree.item(gid, 'text')
                     for child in self.tree.get_children(gid):
-                        self.items.pop(child, None)
-                        if child in self.warning_iids:
-                            w_iid = self.warning_iids.pop(child)
-                            if self.tree.exists(w_iid): self.tree.delete(w_iid)
-                        if self.current_iid == child:
+                        real_child = child[8:] if str(child).startswith('warning_') else child
+                        self.items.pop(real_child, None)
+                        w_iid = f"warning_{real_child}"
+                        if self.tree.exists(w_iid):
+                            self.tree.delete(w_iid)
+                        if self.tree.exists(real_child):
+                            self.tree.delete(real_child)
+                        self.warning_iids.pop(real_child, None)
+                        
+                        if self.current_iid == real_child:
                             self.current_iid = None
                             if self.on_clear_canvas: self.on_clear_canvas()
-                    self.tree.delete(gid)
-                    if group_name in self.project_groups: self.project_groups.remove(group_name)
-                    self.group_nodes.pop(group_name, None)
                     
-        real_items_to_del = set(items_to_del)
+                    if gid != self.warning_group_id:
+                        self.tree.delete(gid)
+                        if group_name in self.project_groups: self.project_groups.remove(group_name)
+                        self.group_nodes.pop(group_name, None)
+                    else:
+                        self.tree.delete(self.warning_group_id)
+                        self.warning_group_id = None
+                        
+        real_items_to_del = set()
+        for iid in items_to_del:
+            real_iid = iid[8:] if str(iid).startswith('warning_') else iid
+            real_items_to_del.add(real_iid)
                 
         for iid in real_items_to_del:
+            self.items.pop(iid, None)
+            w_iid = f"warning_{iid}"
+            if self.tree.exists(w_iid):
+                self.tree.delete(w_iid)
             if self.tree.exists(iid):
-                self.items.pop(iid, None)
                 self.tree.delete(iid)
-                if self.current_iid == iid:
-                    self.current_iid = None
-                    if self.on_clear_canvas: self.on_clear_canvas()
+            self.warning_iids.pop(iid, None)
+            
+            if self.current_iid == iid:
+                self.current_iid = None
+                if self.on_clear_canvas: self.on_clear_canvas()
                     
         if self.warning_group_id and self.tree.exists(self.warning_group_id):
             if not self.tree.get_children(self.warning_group_id):
@@ -300,7 +325,7 @@ class ProjectTreePanel:
                 if iid not in sel:
                     self.tree.selection_set(iid)
                     sel = (iid,)
-                self.tree_drag_items = [item for item in sel if 'item' in self.tree.item(item, 'tags')]
+                self.tree_drag_items = [item for item in sel if 'item' in self.tree.item(item, 'tags') and not str(item).startswith('warning_')]
         
         if not self.tree_drag_items: return
         
@@ -347,7 +372,7 @@ class ProjectTreePanel:
             else:
                 parent_grp = None
 
-            if parent_grp:
+            if parent_grp and parent_grp != self.warning_group_id:
                 group_name = self.tree.item(parent_grp, 'text')
                 for drag_item in reversed(self.tree_drag_items):
                     self.tree.move(drag_item, parent_grp, target_idx)
@@ -389,18 +414,19 @@ class ProjectTreePanel:
         return structure
 
     def _get_item_index(self, target_iid):
+        real_iid = target_iid[8:] if str(target_iid).startswith('warning_') else target_iid
         is_continuous = (self.num_rule_var.get() == "continuous")
         if not is_continuous:
-            return self.tree.index(target_iid) + 1
+            return self.tree.index(real_iid) + 1
 
-        target_group = self.items[target_iid]['group']
+        target_group = self.items[real_iid]['group']
         idx = 0
         for grp_name in self.project_groups:
             if grp_name == target_group: break
             grp_node = self.group_nodes.get(grp_name)
             if grp_node: idx += len(self.tree.get_children(grp_node))
 
-        return idx + self.tree.index(target_iid) + 1
+        return idx + self.tree.index(real_iid) + 1
 
     def update_preview(self):
         if self.current_iid not in self.items:
@@ -517,20 +543,22 @@ class ProjectTreePanel:
         except tk.TclError:
             pass
 
+        w_iid = f"warning_{iid}"
         if has_empty:
             if not self.warning_group_id or not self.tree.exists(self.warning_group_id):
                 self.warning_group_id = self.tree.insert("", 0, text="⚠️ 需要检查", open=True, tags=('group', 'warning_group'))
             
-            self.tree.move(iid, self.warning_group_id, 'end')
+            lbl = item.get('label', '')
+            if not self.tree.exists(w_iid):
+                self.tree.insert(self.warning_group_id, 'end', iid=w_iid, text=lbl, image=img, tags=('item', 'warning_item'))
+                self.warning_iids[iid] = w_iid
+            else:
+                self.tree.item(w_iid, text=lbl, image=img)
         else:
-            if self.warning_group_id and self.tree.parent(iid) == self.warning_group_id:
-                orig_group = item.get('group', '导入内容')
-                if orig_group in self.group_nodes:
-                    self.tree.move(iid, self.group_nodes[orig_group], 'end')
-                else:
-                    gid = self.ensure_group(orig_group)
-                    self.tree.move(iid, gid, 'end')
-                
+            if self.tree.exists(w_iid):
+                self.tree.delete(w_iid)
+            self.warning_iids.pop(iid, None)
+            
             if self.warning_group_id and self.tree.exists(self.warning_group_id):
                 if not self.tree.get_children(self.warning_group_id):
                     self.tree.delete(self.warning_group_id)

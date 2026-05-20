@@ -139,3 +139,49 @@ def test_get_export_text_for_item_with_pitch_data():
             
     assert len(freq_values) == 11
     assert any(f > 0 for f in freq_values)
+
+def test_get_export_text_for_item_with_eraser_sync():
+    # Multi-word item with parent pitch_data representing manual edits
+    parent_xs = np.linspace(0.1, 0.9, 10)
+    parent_freqs = np.array([150.0, 152.0, 154.0, 0.0, 0.0, 156.0, 158.0, 160.0, 162.0, 164.0]) # Erasure at indices 3 and 4
+    
+    item = {
+        'start': 0.1,
+        'end': 0.9,
+        'label': 'AB',
+        'snd': MockSound(duration=1.0),
+        'pitch_data': {
+            'xs': parent_xs,
+            'freqs': parent_freqs,
+            'engine': 'reaper'
+        },
+        'chars_bounds': [[0.1, 0.5], [0.5, 0.9]],
+        'pitch_floor': 75,
+        'pitch_ceiling': 500,
+        'voicing_threshold': 0.25,
+        'f0_engine': 'reaper'
+    }
+
+    # Mock extract_f0 inside get_export_text_for_item to return F0 points that would normally be non-zero
+    # to prove that our erasure mapping sets them to 0.0
+    mock_child_pitch = {
+        'xs': np.linspace(0.01, 0.39, 10), # Will be offset by c_start
+        'freqs': np.array([150.0] * 10),
+        'engine': 'reaper'
+    }
+
+    with patch('modules.audio_core.extract_f0', return_value=mock_child_pitch) as mock_extract:
+        result = get_export_text_for_item(item, 1, 11)
+        
+    assert "1_1.A (AB)" in result
+    assert "1_2.B (AB)" in result
+    
+    lines = result.strip().split('\n')
+    # For A: bounds [0.1, 0.5].
+    # Child xs (offset by 0.1): np.linspace(0.11, 0.49, 10)
+    # The parent has erasures at parent_xs = [0.1, 0.188, 0.277, 0.366, 0.455, 0.544, ...]
+    # So around 0.366 and 0.455 the parent_freqs are 0.0.
+    # The child F0 array points close to these should be mapped to 0.0.
+    zero_lines = [line for line in lines if "0.000000" in line]
+    assert len(zero_lines) > 0, "Eraser synchronization should map erased parent F0 to 0.0 in exported text"
+

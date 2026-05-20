@@ -40,6 +40,13 @@ class SpectrogramPanel:
         self.cursor_line = None
         self.cursor_text = None
         self._playback_job = None
+        
+        # Eraser mode state
+        self.eraser_mode = False
+        self.erasing = False
+        self.erase_radius = 15.0  # Default pixel radius
+        self.eraser_circle = None # Matplotlib patch for displaying the eraser scope
+        self.background = None
 
         self.setup_ui()
         
@@ -85,6 +92,23 @@ class SpectrogramPanel:
         
         CTkReleaseButton(frame_actions, text="自动识别", image=self.icons.get("bulb"), compound="left", command=self.apply_auto_detect, corner_radius=20, height=36, width=110, fg_color="#FEE2E2", text_color="#DC2626", hover_color="#FCA5A5").pack(side=tk.LEFT, padx=(0, 20))
         
+        # 橡皮擦模式按钮
+        self.btn_eraser = CTkReleaseButton(
+            frame_actions, 
+            text="橡皮擦", 
+            image=self.icons.get("eraser"), 
+            compound="left", 
+            command=self.toggle_eraser_mode, 
+            corner_radius=20, 
+            height=36, 
+            width=100, 
+            fg_color="#E5E7EB", 
+            text_color="#1F2937", 
+            hover_color="#D1D5DB",
+            font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold")
+        )
+        self.btn_eraser.pack(side=tk.LEFT, padx=(0, 20))
+        
         # 导出按钮 (使用 ctk.CTkButton，实现即时按键响应)
         ctk.CTkButton(frame_actions, text=" 导出", image=self.icons.get("save"), compound="left", command=self.on_export_callback, font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), corner_radius=20, height=36, width=60, fg_color="#10B981", hover_color="#059669").pack(side=tk.RIGHT)
         
@@ -100,6 +124,9 @@ class SpectrogramPanel:
         self.canvas.mpl_connect('button_press_event', self.on_press)
         self.canvas.mpl_connect('motion_notify_event', self.on_motion)
         self.canvas.mpl_connect('button_release_event', self.on_release)
+        self.canvas.mpl_connect('scroll_event', self.on_scroll)
+        self.canvas.mpl_connect('figure_leave_event', self.on_leave_fig)
+        self.canvas.mpl_connect('draw_event', self.on_draw)
 
     def setup_entry_behavior(self, entry, param_key):
         def on_enter(e): entry.configure(border_color="#3B82F6", border_width=2)
@@ -190,6 +217,7 @@ class SpectrogramPanel:
         
         self.ax.clear()
         self.ax2.clear()
+        self.eraser_circle = None
 
         if hasattr(self, 'bound_lines'):
             self.bound_lines.clear()
@@ -297,6 +325,13 @@ class SpectrogramPanel:
             except Exception:
                 pass
             self.is_playing = False
+            self._update_play_button_state(playing=False)
+            return
+
+        if self.eraser_mode:
+            self.erasing = True
+            if event.xdata is not None:
+                self.erase_points_near(event)
             return
 
         item = self.current_item
@@ -356,7 +391,19 @@ class SpectrogramPanel:
         self.canvas.draw_idle()
 
     def on_motion(self, event):
-        if not self.ax or not self.current_item or event.xdata is None: return
+        if not self.ax or not self.current_item: return
+        
+        if self.eraser_mode:
+            self.canvas.get_tk_widget().config(cursor="crosshair")
+            if event.x is not None and event.y is not None:
+                self.update_eraser_circle(event)
+            else:
+                self.update_eraser_circle(None)
+                
+            if self.erasing and event.xdata is not None:
+                self.erase_points_near(event)
+            return
+
         item = self.current_item
         chars_bounds = item.get('chars_bounds', [])
         
@@ -417,6 +464,22 @@ class SpectrogramPanel:
         self.update_lines()
 
     def on_release(self, event):
+        if self.eraser_mode:
+            if self.erasing:
+                self.erasing = False
+                item = self.current_item
+                if item:
+                    if 'preview_f0' in item:
+                        item.pop('preview_f0')
+                    if 'has_empty_data' in item:
+                        item.pop('has_empty_data')
+                self.update_ui_times()
+                self.plot_item_spectrogram()
+                # Re-draw the eraser circle since plot_item_spectrogram cleared the axes
+                if event.x is not None and event.y is not None:
+                    self.update_eraser_circle(event)
+            return
+
         if self.dragging:
             self.dragging = None
             for line_s, line_e in self.bound_lines:
@@ -595,3 +658,144 @@ class SpectrogramPanel:
     def apply_auto_detect(self):
         if self.on_auto_detect_callback:
             self.on_auto_detect_callback()
+
+    def toggle_eraser_mode(self):
+        self.eraser_mode = not self.eraser_mode
+        if self.eraser_mode:
+            self.btn_eraser.configure(
+                fg_color="#FEE2E2", 
+                text_color="#DC2626", 
+                hover_color="#FCA5A5"
+            )
+            self.canvas.get_tk_widget().config(cursor="crosshair")
+        else:
+            self.btn_eraser.configure(
+                fg_color="#E5E7EB", 
+                text_color="#1F2937", 
+                hover_color="#D1D5DB"
+            )
+            self.canvas.get_tk_widget().config(cursor="arrow")
+            # 清理橡皮擦圆圈
+            self.update_eraser_circle(None)
+
+    def erase_points_near(self, event):
+        item = self.current_item
+        if not item: return
+        
+        if not item.get('pitch_data') and item.get('pitch'):
+            pitch = item['pitch']
+            item['pitch_data'] = {
+                'xs': pitch.xs(),
+                'freqs': pitch.selected_array['frequency'].copy()
+            }
+            if 'pitch' in item:
+                del item['pitch']
+                
+        if not item.get('pitch_data'): return
+        
+        xs = item['pitch_data']['xs']
+        freqs = item['pitch_data']['freqs']
+        if len(xs) == 0: return
+        
+        # Transform data to screen coordinates
+        pts_data = np.column_stack((xs, freqs))
+        pts_pixels = self.ax2.transData.transform(pts_data)
+        
+        # Calculate Euclidean distances in pixels
+        dists = np.hypot(pts_pixels[:, 0] - event.x, pts_pixels[:, 1] - event.y)
+        
+        erase_radius = self.erase_radius  # pixels
+        mask_to_erase = (dists <= erase_radius) & (freqs > 0)
+        
+        if np.any(mask_to_erase):
+            freqs[mask_to_erase] = 0.0
+            
+            # Live visual update: update F0 line data in real time
+            if self.ax2.lines:
+                f0_line = self.ax2.lines[0]
+                view_s, view_e = self.ax.get_xlim()
+                mask = (xs >= view_s) & (xs <= view_e)
+                p_vals = freqs[mask].copy()
+                p_vals[p_vals == 0] = np.nan
+                
+                # Verify that masked shape matches plotted F0 line y-data length
+                if len(p_vals) == len(f0_line.get_ydata()):
+                    f0_line.set_ydata(p_vals)
+                    self.canvas.draw_idle()
+                else:
+                    self.plot_item_spectrogram()
+
+    def on_draw(self, event):
+        self.background = self.canvas.copy_from_bbox(self.fig.bbox)
+
+    def update_eraser_circle(self, event=None):
+        if not self.eraser_mode or not self.ax2:
+            if self.eraser_circle:
+                try:
+                    self.eraser_circle.remove()
+                except Exception:
+                    pass
+                self.eraser_circle = None
+                if self.background is not None:
+                    try:
+                        self.canvas.restore_region(self.background)
+                        self.canvas.blit(self.fig.bbox)
+                    except Exception:
+                        self.canvas.draw_idle()
+            return
+
+        if event is None or event.x is None or event.y is None or event.inaxes is None:
+            if self.eraser_circle:
+                self.eraser_circle.set_visible(False)
+                if self.background is not None:
+                    try:
+                        self.canvas.restore_region(self.background)
+                        self.canvas.blit(self.fig.bbox)
+                    except Exception:
+                        self.canvas.draw_idle()
+            return
+
+        # If circle doesn't exist or was cleared, create a new one
+        if self.eraser_circle is None or self.eraser_circle not in self.ax2.patches:
+            from matplotlib.patches import Circle
+            self.eraser_circle = Circle(
+                (event.x, event.y), 
+                radius=self.erase_radius, 
+                fill=True, 
+                facecolor='#FEE2E2', 
+                edgecolor='#EF4444', 
+                alpha=0.4, 
+                linewidth=1.5,
+                transform=None,
+                zorder=100,
+                animated=True
+            )
+            self.ax2.add_patch(self.eraser_circle)
+        else:
+            self.eraser_circle.set_center((event.x, event.y))
+            self.eraser_circle.set_radius(self.erase_radius)
+            self.eraser_circle.set_visible(True)
+
+        if self.background is not None:
+            try:
+                self.canvas.restore_region(self.background)
+                self.ax2.draw_artist(self.eraser_circle)
+                self.canvas.blit(self.fig.bbox)
+            except Exception:
+                self.canvas.draw_idle()
+        else:
+            self.canvas.draw_idle()
+
+    def on_scroll(self, event):
+        if not self.eraser_mode: return
+        if event.step is None: return
+        
+        delta = 2.0 * event.step
+        self.erase_radius = max(3.0, min(100.0, self.erase_radius + delta))
+        
+        if event.x is not None and event.y is not None and event.inaxes is not None:
+            self.update_eraser_circle(event)
+
+    def on_leave_fig(self, event):
+        if self.eraser_mode:
+            self.update_eraser_circle(None)

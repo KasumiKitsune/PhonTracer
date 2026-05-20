@@ -164,5 +164,43 @@ class TestUISyncBugs(unittest.TestCase):
             self.assertEqual(splitter.segments[1]['end'], 3.25)   # 3.0 + 0.25
             self.assertEqual(splitter.segments[2]['start'], 4.0)
 
+    def test_spectrogram_panel_eraser_blitting_and_warning_fix(self):
+        """Test that the eraser circle is created without warnings and uses blitting for high performance"""
+        with patch.object(SpectrogramPanel, 'setup_ui'):
+            panel = SpectrogramPanel(self.root, {}, None, None, None)
+            panel.eraser_mode = True
+            panel.ax2 = MagicMock()
+            panel.fig = MagicMock()
+            panel.canvas = MagicMock()
+            
+            # Mock the background for blitting
+            mock_bg = MagicMock()
+            panel.background = mock_bg
+            
+            # Simulate a motion event inside axes
+            mock_event = MagicMock()
+            mock_event.x = 200
+            mock_event.y = 300
+            mock_event.inaxes = panel.ax2
+            
+            # The circle is originally None, it should be created
+            self.assertIsNone(panel.eraser_circle)
+            panel.update_eraser_circle(mock_event)
+            
+            # Circle should be created, animated=True, and added to ax2.patches
+            self.assertIsNotNone(panel.eraser_circle)
+            self.assertTrue(panel.eraser_circle.get_animated())
+            panel.ax2.add_patch.assert_called_once_with(panel.eraser_circle)
+            
+            # Calling restore_region, draw_artist, and blit should be invoked for high-performance blitting
+            panel.canvas.restore_region.assert_called_once_with(mock_bg)
+            panel.ax2.draw_artist.assert_called_once_with(panel.eraser_circle)
+            panel.canvas.blit.assert_called_once_with(panel.fig.bbox)
+            
+            # Test that on_draw updates background
+            draw_event = MagicMock()
+            panel.on_draw(draw_event)
+            panel.canvas.copy_from_bbox.assert_called_once_with(panel.fig.bbox)
+
 if __name__ == '__main__':
     unittest.main()

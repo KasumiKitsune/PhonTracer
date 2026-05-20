@@ -339,7 +339,7 @@ class PhoneticsApp:
             "warning": "warning.png",
             "import": "import_file.png", "ai_prompt": "ai_prompt.png", "copy": "copy_icon.png",
             "import_white": "import_white.png", "copy_white": "copy_white.png", "check_white": "check_white.png",
-            "pause": "pause.png"
+            "pause": "pause.png", "eraser": "eraser.png"
         }
         from PIL import ImageTk
         self.tk_icons = {}
@@ -757,6 +757,16 @@ class PhoneticsApp:
         item = self.spectrogram_panel.current_item
         if not item: return
         snd = item['snd']
+        
+        # 重新提取 F0，以还原橡皮擦抹去的所有数据点
+        from .audio_core import extract_f0
+        try:
+            item['pitch_data'] = extract_f0(snd, self.last_params)
+            if 'pitch' in item:
+                del item['pitch']
+        except Exception:
+            pass
+            
         pitch = item.get('pitch_data', item.get('pitch'))
         mac_s, mac_e = item['macro_start'], item['macro_end']
         
@@ -1216,6 +1226,9 @@ class PhoneticsApp:
                                             target_item['raw_end'] = res['raw_end']
                                             target_item['inner_splits'] = res.get('inner_splits', [])
                                             target_item['chars_bounds'] = res.get('chars_bounds', [])
+                                        target_item['pitch_data'] = res['pitch_data']
+                                        if 'pitch' in target_item:
+                                            del target_item['pitch']
                                         target_item['has_empty_data'] = res.get('has_empty_data', False)
                                         target_item['preview_f0'] = res.get('preview_f0', [])
                                         # 如果是独立音频，还需要把 Cache 也更新了，防止下次加载又是旧的

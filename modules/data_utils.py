@@ -124,6 +124,19 @@ def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: 
                 c_pitch_data = extract_f0(c_snd, {'f0_engine': engine, 'pitch_floor': p_floor, 'pitch_ceiling': p_ceiling, 'voicing_threshold': v_thresh})
                 p_xs = c_pitch_data['xs'] + c_start
                 p_freqs = c_pitch_data['freqs']
+                
+                # 如果有全局已编辑的 pitch_data，将对应的抹除点同步到独立提取的结果中
+                if item.get('pitch_data'):
+                    parent_xs = item['pitch_data']['xs']
+                    parent_freqs = item['pitch_data']['freqs']
+                    indices = np.searchsorted(parent_xs, p_xs)
+                    indices = np.clip(indices, 0, len(parent_xs) - 1)
+                    for idx, (t, p_idx) in enumerate(zip(p_xs, indices)):
+                        best_idx = p_idx
+                        if p_idx > 0 and abs(parent_xs[p_idx-1] - t) < abs(parent_xs[p_idx] - t):
+                            best_idx = p_idx - 1
+                        if abs(parent_xs[best_idx] - t) < 0.015 and parent_freqs[best_idx] == 0.0:
+                            p_freqs[idx] = 0.0
             except Exception:
                 continue
             
