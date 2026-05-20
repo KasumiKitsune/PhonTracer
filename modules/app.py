@@ -347,18 +347,19 @@ class PhoneticsApp:
             path = os.path.join(icon_path, filename)
             if os.path.exists(path):
                 img = Image.open(path)
+                
+                # 将 自动识别 (bulb) 的黑色图标染色为对应红色（#DC2626），与删除按钮风格高度统一
                 if key == "bulb":
                     try:
-                        import numpy as np
-                        # 将接近黑色的像素修改为 #DC2626，同时完美保留 alpha 透明度
-                        rgba = np.array(img.convert("RGBA"))
-                        mask = (rgba[:, :, 0] < 50) & (rgba[:, :, 1] < 50) & (rgba[:, :, 2] < 50)
-                        rgba[mask, 0] = 220
-                        rgba[mask, 1] = 38
-                        rgba[mask, 2] = 38
-                        img = Image.fromarray(rgba)
+                        img_rgba = img.convert("RGBA")
+                        data = np.array(img_rgba)
+                        data[:,:,0] = 220 # R
+                        data[:,:,1] = 38  # G
+                        data[:,:,2] = 38  # B
+                        img = Image.fromarray(data)
                     except Exception:
                         pass
+                
                 self.icons[key] = ctk.CTkImage(light_image=img, dark_image=img, size=(20, 20))
                 # Resize for ttk.Treeview
                 img_tk = img.resize((16, 16), Image.Resampling.LANCZOS)
@@ -491,7 +492,7 @@ class PhoneticsApp:
         self.switch_unified_wordlist.select()
 
 
-        self.tabview = ctk.CTkTabview(left_scrollable, height=185, corner_radius=12, fg_color="white", 
+        self.tabview = ctk.CTkTabview(left_scrollable, height=170, corner_radius=12, fg_color="white", 
                                       segmented_button_selected_color="#3B82F6", segmented_button_fg_color="#F3F4F6")
         self.tabview.pack(fill=tk.X, pady=(0, 10))
 

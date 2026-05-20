@@ -125,6 +125,7 @@ class SpectrogramPanel:
         if self.is_playing:
             self.is_playing = False
             try:
+                import sounddevice as sd
                 sd.stop()
             except Exception:
                 pass
@@ -143,6 +144,7 @@ class SpectrogramPanel:
         if self.is_playing:
             self.is_playing = False
             try:
+                import sounddevice as sd
                 sd.stop()
             except Exception:
                 pass
@@ -574,8 +576,9 @@ class SpectrogramPanel:
             self._update_play_button_state(playing=False)
             return
         elapsed = time.time() - self.play_start_sys_time
+        current_audio_time = self.play_start_audio_time + elapsed
 
-        if elapsed + self.play_start_audio_time >= self.play_end_audio_time:
+        if current_audio_time >= self.play_end_audio_time:
             self.is_playing = False
             if getattr(self, 'play_is_selection', False):
                 self.cursor_x = getattr(self, 'play_selection_start', self.current_item['start'])
@@ -585,7 +588,7 @@ class SpectrogramPanel:
             self._update_play_button_state(playing=False)
             return
 
-        self.cursor_x = self.play_start_audio_time + elapsed
+        self.cursor_x = current_audio_time
         self.update_cursor_graphics()
         self.canvas.get_tk_widget().after(16, self._playback_update_loop)
 
