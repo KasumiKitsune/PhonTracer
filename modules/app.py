@@ -542,10 +542,40 @@ class PhoneticsApp:
         CTkReleaseButton(row_mode2_btns, text="导入字表", image=self.icons.get("list"), compound="left", command=lambda: self.open_text_dialog('batch'), **btn_kwargs_secondary, width=110).pack(side=tk.RIGHT, expand=True, padx=(5, 0))
 
         card_params = ctk.CTkFrame(left_scrollable, fg_color="white", corner_radius=10)
-        card_params.pack(fill=tk.X, pady=10)
-        ctk.CTkLabel(card_params, text="全局算法与导出参数", font=self.font_title, text_color="#111827").pack(anchor=tk.W, padx=15, pady=(15, 5))
-        
-        row_pts = ctk.CTkFrame(card_params, fg_color="transparent")
+        card_params.pack(fill=tk.X, pady=(0, 10))
+
+        # 头部折叠栏（支持手势点击与手型悬停）
+        header_frame = ctk.CTkFrame(card_params, fg_color="transparent", cursor="hand2")
+        header_frame.pack(fill=tk.X, padx=15, pady=(12, 10))
+
+        self.lbl_card_title = ctk.CTkLabel(header_frame, text="全局算法与导出参数", font=self.font_title, text_color="#111827", cursor="hand2")
+        self.lbl_card_title.pack(side=tk.LEFT)
+
+        self.lbl_card_toggle = ctk.CTkLabel(header_frame, text="▼", font=self.font_title, text_color="#6B7280", cursor="hand2")
+        self.lbl_card_toggle.pack(side=tk.RIGHT)
+
+        # 折叠容器
+        self.params_content_frame = ctk.CTkFrame(card_params, fg_color="transparent")
+        self.params_content_frame.pack(fill=tk.X)
+
+        self.params_expanded = True
+        def toggle_params(event=None):
+            if self.params_expanded:
+                self.params_content_frame.pack_forget()
+                self.lbl_card_toggle.configure(text="▶")
+                header_frame.pack(fill=tk.X, padx=15, pady=(12, 12))
+                self.params_expanded = False
+            else:
+                self.params_content_frame.pack(fill=tk.X)
+                self.lbl_card_toggle.configure(text="▼")
+                header_frame.pack(fill=tk.X, padx=15, pady=(12, 10))
+                self.params_expanded = True
+
+        header_frame.bind("<Button-1>", toggle_params)
+        self.lbl_card_title.bind("<Button-1>", toggle_params)
+        self.lbl_card_toggle.bind("<Button-1>", toggle_params)
+
+        row_pts = ctk.CTkFrame(self.params_content_frame, fg_color="transparent")
         row_pts.pack(fill=tk.X, padx=15, pady=5)
         lbl_pts = ctk.CTkLabel(row_pts, text=" 等分点 (N):", image=self.icons.get("points"), compound="left", text_color="#374151", font=self.font_main)
         lbl_pts.pack(side=tk.LEFT)
@@ -559,7 +589,7 @@ class PhoneticsApp:
         self.entry_points.pack(side=tk.RIGHT)
         self.setup_entry_behavior(self.entry_points, 'pts')
 
-        row_db = ctk.CTkFrame(card_params, fg_color="transparent")
+        row_db = ctk.CTkFrame(self.params_content_frame, fg_color="transparent")
         row_db.pack(fill=tk.X, padx=15, pady=5)
         lbl_db = ctk.CTkLabel(row_db, text=" 能量落差:", image=self.icons.get("energy"), compound="left", text_color="#374151", font=self.font_main)
         lbl_db.pack(side=tk.LEFT)
@@ -573,7 +603,7 @@ class PhoneticsApp:
         self.entry_drop_db.pack(side=tk.RIGHT)
         self.setup_entry_behavior(self.entry_drop_db, 'db')
 
-        row_dur = ctk.CTkFrame(card_params, fg_color="transparent")
+        row_dur = ctk.CTkFrame(self.params_content_frame, fg_color="transparent")
         row_dur.pack(fill=tk.X, padx=15, pady=5)
         lbl_dur = ctk.CTkLabel(row_dur, text=" 排除声母:", image=self.icons.get("duration"), compound="left", text_color="#374151", font=self.font_main)
         lbl_dur.pack(side=tk.LEFT)
@@ -588,7 +618,7 @@ class PhoneticsApp:
         self.setup_entry_behavior(self.entry_min_dur, 'skip_front')
 
         # Pitch 范围参数
-        row_pitch = ctk.CTkFrame(card_params, fg_color="transparent")
+        row_pitch = ctk.CTkFrame(self.params_content_frame, fg_color="transparent")
         row_pitch.pack(fill=tk.X, padx=15, pady=5)
         ctk.CTkLabel(row_pitch, text=" F0 范围 (Hz):", image=self.icons.get("points"), compound="left", text_color="#374151", font=self.font_main).pack(side=tk.LEFT)
         self.entry_pitch_ceiling = ctk.CTkEntry(row_pitch, width=55, justify="center", corner_radius=20, height=26)
@@ -600,17 +630,17 @@ class PhoneticsApp:
         self.entry_pitch_floor.insert(0, str(self.last_params['pitch_floor']))
         self.entry_pitch_floor.pack(side=tk.RIGHT)
         self.setup_entry_behavior(self.entry_pitch_floor, 'pitch_floor')
-        
+
         # 浊音阈值参数
-        row_voicing = ctk.CTkFrame(card_params, fg_color="transparent")
+        row_voicing = ctk.CTkFrame(self.params_content_frame, fg_color="transparent")
         row_voicing.pack(fill=tk.X, padx=15, pady=5)
         ctk.CTkLabel(row_voicing, text=" 浊音阈值:", image=self.icons.get("points"), compound="left", text_color="#374151", font=self.font_main).pack(side=tk.LEFT)
         self.entry_voicing_threshold = ctk.CTkEntry(row_voicing, width=55, justify="center", corner_radius=20, height=26)
         self.entry_voicing_threshold.insert(0, f"{self.last_params['voicing_threshold']:.2f}")
         self.entry_voicing_threshold.pack(side=tk.RIGHT)
         self.setup_entry_behavior(self.entry_voicing_threshold, 'voicing_threshold')
-        
-        row_trim = ctk.CTkFrame(card_params, fg_color="transparent")
+
+        row_trim = ctk.CTkFrame(self.params_content_frame, fg_color="transparent")
         row_trim.pack(fill=tk.X, padx=15, pady=(10, 15))
         self.lbl_trim_icon = ctk.CTkLabel(row_trim, text="", image=self.icons.get("trim"))
         self.lbl_trim_icon.pack(side=tk.LEFT, padx=(0, 5))
