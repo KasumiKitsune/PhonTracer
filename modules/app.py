@@ -552,7 +552,7 @@ class PhoneticsApp:
         self.lbl_card_title = ctk.CTkLabel(header_frame, text="全局算法与导出参数", font=self.font_title, text_color="#111827", cursor="hand2")
         self.lbl_card_title.pack(side=tk.LEFT)
 
-        self.lbl_card_toggle = ctk.CTkLabel(header_frame, text="▲", font=self.font_title, text_color="#6B7280", cursor="hand2")
+        self.lbl_card_toggle = ctk.CTkLabel(header_frame, text="▶", font=self.font_title, text_color="#6B7280", cursor="hand2")
         self.lbl_card_toggle.pack(side=tk.RIGHT)
 
         # 折叠容器
@@ -563,7 +563,7 @@ class PhoneticsApp:
         def toggle_params(event=None):
             if self.params_expanded:
                 self.params_content_frame.pack_forget()
-                self.lbl_card_toggle.configure(text="▲")
+                self.lbl_card_toggle.configure(text="▶")
                 header_frame.pack(fill=tk.X, padx=15, pady=(12, 12))
                 self.params_expanded = False
             else:
