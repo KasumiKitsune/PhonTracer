@@ -17,7 +17,7 @@ class SpectrogramPanel:
         self.on_time_changed = on_time_changed_callback
         self.on_auto_detect_callback = on_auto_detect_callback
         self.on_export_callback = on_export_callback
-        
+
         self.current_item = None
         self.dragging = None # 取值: 'start', 'end', 或 ('inner', idx)
         self.ax = None
@@ -30,7 +30,7 @@ class SpectrogramPanel:
             self.font_title = ctk.CTkFont(family="Microsoft YaHei", size=15, weight="bold")
         except Exception:
             self.font_title = ("Microsoft YaHei", 15, "bold")
-        
+
         self.is_eraser_mode = False
 
         # Cursor and playback state
@@ -44,14 +44,14 @@ class SpectrogramPanel:
         self._playback_job = None
 
         self.setup_ui()
-        
+
     def setup_ui(self):
         center_frame = ctk.CTkFrame(self.parent, fg_color="white", corner_radius=10)
         center_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, pady=10)
-        
+
         top_bar = ctk.CTkFrame(center_frame, fg_color="transparent")
         top_bar.pack(side=tk.TOP, fill=tk.X, padx=15, pady=(15, 5))
-        
+
         frame_tune = ctk.CTkFrame(top_bar, fg_color="#F9FAFB", corner_radius=8)
         frame_tune.pack(side=tk.TOP, fill=tk.X, pady=(0, 10))
         ctk.CTkLabel(frame_tune, text="区间(s):", font=self.font_title, text_color="#111827").pack(side=tk.LEFT, padx=(10, 10), pady=10)
@@ -60,13 +60,13 @@ class SpectrogramPanel:
         self.entry_t_start = ctk.CTkEntry(frame_tune, textvariable=self.var_t_start, width=70, corner_radius=20, height=28)
         self.entry_t_start.pack(side=tk.LEFT, padx=(5, 10))
         self.setup_entry_behavior(self.entry_t_start, 'start_manual')
-        
+
         ctk.CTkLabel(frame_tune, text="止:").pack(side=tk.LEFT)
         self.var_t_end = ctk.StringVar(value="0.000")
         self.entry_t_end = ctk.CTkEntry(frame_tune, textvariable=self.var_t_end, width=70, corner_radius=20, height=28)
         self.entry_t_end.pack(side=tk.LEFT, padx=(5, 15))
         self.setup_entry_behavior(self.entry_t_end, 'end_manual')
-        
+
         self.btn_eraser = CTkReleaseButton(
             frame_tune,
             text=" 橡皮擦",
@@ -84,32 +84,32 @@ class SpectrogramPanel:
 
         # 将 “应用” 按钮放置在右上角，与区间在同一行
         CTkReleaseButton(
-            frame_tune, 
-            text="应用", 
-            image=self.icons.get("check"), 
-            compound="left", 
-            command=self.apply_manual_time, 
-            corner_radius=14, 
-            height=28, 
-            width=70, 
-            fg_color="#E5E7EB", 
-            text_color="#1F2937", 
+            frame_tune,
+            text="应用",
+            image=self.icons.get("check"),
+            compound="left",
+            command=self.apply_manual_time,
+            corner_radius=14,
+            height=28,
+            width=70,
+            fg_color="#E5E7EB",
+            text_color="#1F2937",
             hover_color="#D1D5DB"
         ).pack(side=tk.RIGHT, padx=(0, 10), pady=10)
-        
+
         frame_actions = ctk.CTkFrame(top_bar, fg_color="transparent")
         frame_actions.pack(side=tk.TOP, fill=tk.X, pady=(5, 0))
-        
+
         CTkReleaseButton(frame_actions, text="自动识别", image=self.icons.get("bulb"), compound="left", command=self.apply_auto_detect, corner_radius=20, height=36, width=110, fg_color="#FEE2E2", text_color="#DC2626", hover_color="#FCA5A5").pack(side=tk.LEFT, padx=(0, 20))
-        
+
         # 导出按钮 (使用 ctk.CTkButton，实现即时按键响应)
         ctk.CTkButton(frame_actions, text=" 导出", image=self.icons.get("save"), compound="left", command=self.on_export_callback, font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), corner_radius=20, height=36, width=60, fg_color="#10B981", hover_color="#059669").pack(side=tk.RIGHT)
-        
+
         # 播放/暂停按钮 (使用 ctk.CTkButton，实现即时按键响应)
         self.btn_play = ctk.CTkButton(frame_actions, text=" 播放", image=self.icons.get("play"), compound="left", command=self.play_selected, font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), corner_radius=20, height=36, width=60, fg_color="#E5E7EB", text_color="#1F2937", hover_color="#D1D5DB")
         self.btn_play.pack(side=tk.RIGHT, padx=(0, 20))
 
-        self.fig = plt.Figure(figsize=(7, 5), facecolor='white') 
+        self.fig = plt.Figure(figsize=(7, 5), facecolor='white')
         self.ax = self.fig.add_subplot(111)
         self.ax2 = self.ax.twinx()
         self.canvas = FigureCanvasTkAgg(self.fig, master=center_frame)
@@ -177,7 +177,7 @@ class SpectrogramPanel:
         self.current_item = item
         t_start = item.get('start')
         t_end = item.get('end')
-        
+
         # Init chars_bounds
         label = item.get('label', '')
         if 'chars_bounds' not in item or not item.get('chars_bounds'):
@@ -204,7 +204,7 @@ class SpectrogramPanel:
 
         self.var_t_start.set(f"{t_start:.3f}" if t_start is not None else "0.000")
         self.var_t_end.set(f"{t_end:.3f}" if t_end is not None else "0.000")
-        
+
         self.cursor_x = t_start # Reset cursor position when loading new item
         self.plot_item_spectrogram()
 
@@ -212,7 +212,7 @@ class SpectrogramPanel:
         item = self.current_item
         if not item: return
         if not item.get('snd') or item.get('start') is None: return
-        
+
         self.ax.clear()
         self.ax2.clear()
 
@@ -232,12 +232,12 @@ class SpectrogramPanel:
         self.char_texts.clear()
         self.cursor_line = None
         self.cursor_text = None
-        
+
         snd = item['snd']
         t_s, t_e = item['start'], item['end']
         chars_bounds = item.get('chars_bounds', [])
         label = item.get('label', '')
-        
+
         if self.switch_trim_silence and self.switch_trim_silence.get():
             mac_part = snd.extract_part(from_time=item['macro_start'], to_time=item['macro_end'])
             vals = mac_part.values[0]
@@ -253,16 +253,16 @@ class SpectrogramPanel:
         else:
             view_s = max(item['macro_start'] - 0.2, 0)
             view_e = min(item['macro_end'] + 0.2, snd.get_total_duration())
-        
+
         part = snd.extract_part(from_time=view_s, to_time=view_e)
         spectrogram = part.to_spectrogram(window_length=0.005, maximum_frequency=5000)
-        X = spectrogram.x_grid() + view_s 
+        X = spectrogram.x_grid() + view_s
         Y = spectrogram.y_grid()
         vals = np.where(spectrogram.values > 0, spectrogram.values, 1e-10)
         sg_db = 10 * np.log10(vals)
-        
+
         self.ax.pcolormesh(X, Y, sg_db, vmin=sg_db.max()-50, vmax=sg_db.max(), cmap='Greys')
-        
+
         if item.get('pitch_data'):
             p_xs = item['pitch_data']['xs']
             p_freqs = item['pitch_data']['freqs']
@@ -282,7 +282,7 @@ class SpectrogramPanel:
             p_xs = np.array([])
             p_vals = np.array([])
         self.ax2.plot(p_xs, p_vals, '-o', markersize=4, linewidth=1.5, color='#3B82F6', zorder=5)
-        
+
         self.ax.set_ylim([0, 5000])
         self.ax.set_xlim([view_s, view_e])
         self.ax.set_ylabel("Frequency (Hz)")
@@ -290,19 +290,19 @@ class SpectrogramPanel:
         self.ax2.set_ylabel("F0 (Hz)", color='#3B82F6')
         self.ax2.tick_params(axis='y', labelcolor='#3B82F6')
         self.ax.set_title(f"编辑区: {label}", pad=10)
-        
+
         for i, (c_start, c_end) in enumerate(chars_bounds):
             line_s = self.ax.axvline(c_start, color='#EF4444', linestyle='-', linewidth=2)
             line_e = self.ax.axvline(c_end, color='#EF4444', linestyle='-', linewidth=2)
             self.bound_lines.append((line_s, line_e))
             span = self.ax.axvspan(c_start, c_end, color='#BFDBFE', alpha=0.35)
             self.span_fills.append(span)
-            
+
             if i < len(label):
                 cx = (c_start + c_end) / 2
                 txt = self.ax.text(cx, 4800, label[i], color='#111827', fontsize=12, ha='center', va='top', fontweight='bold', bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.7))
                 self.char_texts.append(txt)
-        
+
         if self.cursor_x is None:
             self.cursor_x = t_s
         self.cursor_line = self.ax.axvline(self.cursor_x, color='#1B5E20', linestyle='--', linewidth=1.5, zorder=10)
@@ -310,40 +310,6 @@ class SpectrogramPanel:
 
         self.fig.tight_layout()
         self.canvas.draw()
-
-    def _update_pitch_line(self):
-        if not self.ax2 or not self.current_item: return
-        item = self.current_item
-        p_xs = item['pitch_data']['xs']
-        p_freqs = item['pitch_data']['freqs']
-
-        if self.switch_trim_silence and self.switch_trim_silence.get():
-            mac_part = item['snd'].extract_part(from_time=item['macro_start'], to_time=item['macro_end'])
-            vals = mac_part.values[0]
-            mac_xs = mac_part.xs()
-            valid_idx = np.where(np.abs(vals) > SILENCE_AMPLITUDE_THRESHOLD)[0]
-            if len(valid_idx) > 0:
-                view_s = item['macro_start'] + mac_xs[valid_idx[0]]
-                view_e = item['macro_start'] + mac_xs[valid_idx[-1]]
-            else:
-                view_s, view_e = item['macro_start'], item['macro_end']
-            view_s = min(view_s, item['start'])
-            view_e = max(view_e, item['end'])
-        else:
-            view_s = max(item['macro_start'] - 0.2, 0)
-            view_e = min(item['macro_end'] + 0.2, item['snd'].get_total_duration())
-
-        mask = (p_xs >= view_s) & (p_xs <= view_e)
-        p_xs = p_xs[mask]
-        p_vals = p_freqs[mask].copy()
-        p_vals[p_vals == 0] = np.nan
-
-        # Clear existing lines and plot new ones
-        for line in self.ax2.lines:
-            line.remove()
-
-        self.ax2.plot(p_xs, p_vals, '-o', markersize=4, linewidth=1.5, color='#3B82F6', zorder=5)
-        self.canvas.draw_idle()
 
     def _erase_pitch_point(self, event):
         item = self.current_item
@@ -369,13 +335,10 @@ class SpectrogramPanel:
         if event.ydata is not None and event.inaxes == self.ax2:
             y_dist = np.abs(p_freqs - event.ydata)
             erase_mask = erase_mask & (y_dist < 50)
-        elif event.inaxes == self.ax:
-            # Prevent erasing all pitch values vertically if clicked on ax instead of ax2
-            erase_mask = erase_mask & False
 
-        if np.any(erase_mask) and np.any(p_freqs[erase_mask] != 0.0):
+        if np.any(erase_mask):
             p_freqs[erase_mask] = 0.0
-            self._update_pitch_line()
+            self.plot_item_spectrogram()
 
     def on_press(self, event):
         if not self.ax or not self.ax2 or not self.current_item: return
@@ -397,10 +360,10 @@ class SpectrogramPanel:
 
         item = self.current_item
         chars_bounds = item.get('chars_bounds', [])
-        
+
         closest = None
         min_dist = 15 # px threshold
-        
+
         for i, (c_s, c_e) in enumerate(chars_bounds):
             s_px = self.ax.transData.transform((c_s, 0))[0]
             if abs(event.x - s_px) < min_dist:
@@ -411,7 +374,7 @@ class SpectrogramPanel:
             if abs(event.x - e_px) < min_dist:
                 closest = ('end', i)
                 min_dist = abs(event.x - e_px)
-        
+
         if self.cursor_x is not None:
             c_px = self.ax.transData.transform((self.cursor_x, 0))[0]
             if abs(event.x - c_px) < min_dist:
@@ -433,7 +396,7 @@ class SpectrogramPanel:
         elif closest == 'cursor':
             self.cursor_line.set_color('#064E3B')
             self.cursor_line.set_linewidth(2.5)
-            
+
         if self.dragging:
             self.canvas.draw_idle()
         else:
@@ -460,7 +423,7 @@ class SpectrogramPanel:
 
         item = self.current_item
         chars_bounds = item.get('chars_bounds', [])
-        
+
         if not self.dragging:
             is_hovering = False
             if getattr(self, 'is_eraser_mode', False):
@@ -469,7 +432,7 @@ class SpectrogramPanel:
             for i, (c_s, c_e) in enumerate(chars_bounds):
                 s_px = self.ax.transData.transform((c_s, 0))[0]
                 e_px = self.ax.transData.transform((c_e, 0))[0]
-                
+
                 if abs(event.x - s_px) < 15:
                     self.bound_lines[i][0].set_linewidth(4); self.bound_lines[i][0].set_color('#B91C1C')
                     is_hovering = True
@@ -481,7 +444,7 @@ class SpectrogramPanel:
                     is_hovering = True
                 else:
                     self.bound_lines[i][1].set_linewidth(2); self.bound_lines[i][1].set_color('#EF4444')
-                
+
             if self.cursor_x is not None:
                 c_px = self.ax.transData.transform((self.cursor_x, 0))[0]
                 if abs(event.x - c_px) < 15:
@@ -493,7 +456,7 @@ class SpectrogramPanel:
             self.canvas.get_tk_widget().config(cursor="sb_h_double_arrow" if is_hovering else "arrow")
             self.canvas.draw_idle()
             return
-            
+
         if isinstance(self.dragging, tuple):
             bound_type, idx = self.dragging
             if bound_type == 'start':
@@ -517,7 +480,7 @@ class SpectrogramPanel:
             self.cursor_x = event.xdata
             self.update_cursor_graphics()
             return
-            
+
         self.update_lines()
 
     def on_release(self, event):
@@ -531,7 +494,7 @@ class SpectrogramPanel:
             if self.cursor_line:
                 self.cursor_line.set_color('#1B5E20')
                 self.cursor_line.set_linewidth(1.5)
-                
+
             self.plot_item_spectrogram()
             self.update_ui_times()
             self.canvas.get_tk_widget().config(cursor="arrow")
@@ -541,12 +504,12 @@ class SpectrogramPanel:
         item = self.current_item
         chars_bounds = item.get('chars_bounds', [])
         if not chars_bounds or len(self.bound_lines) != len(chars_bounds): return
-        
+
         for fill in self.span_fills:
             try: fill.remove()
             except: pass
         self.span_fills.clear()
-        
+
         for i, (c_s, c_e) in enumerate(chars_bounds):
             self.bound_lines[i][0].set_xdata([c_s, c_s])
             self.bound_lines[i][1].set_xdata([c_e, c_e])
@@ -556,7 +519,7 @@ class SpectrogramPanel:
             if i < len(self.char_texts):
                 cx = (c_s + c_e) / 2
                 self.char_texts[i].set_position((cx, 4800))
-                
+
         self.canvas.draw_idle()
 
     def update_ui_times(self):
@@ -574,7 +537,7 @@ class SpectrogramPanel:
             t1, t2 = float(self.var_t_start.get()), float(self.var_t_end.get())
             old_s, old_e = item['start'], item['end']
             new_s, new_e = min(t1, t2), max(t1, t2)
-            
+
             chars_bounds = item.get('chars_bounds', [])
             if chars_bounds:
                 ratio = (new_e - new_s) / (old_e - old_s) if old_e > old_s else 1
@@ -586,12 +549,12 @@ class SpectrogramPanel:
             else:
                 item['start'] = new_s
                 item['end'] = new_e
-                
+
             item['is_manual_edited'] = True
 
             self.plot_item_spectrogram()
             self.update_ui_times()
-        except ValueError: 
+        except ValueError:
             messagebox.showerror("错误", "请输入有效的数字")
 
     def _update_play_button_state(self, playing=False):

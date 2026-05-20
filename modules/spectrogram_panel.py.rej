@@ -1,0 +1,17 @@
+--- modules/spectrogram_panel.py
++++ modules/spectrogram_panel.py
+@@ -337,10 +340,13 @@
+         # Erase points within a small radius (e.g. 0.02s) and within reasonable Y bounds
+         erase_mask = (x_dist < 0.02)
+         if event.ydata is not None and event.inaxes == self.ax2:
+             y_dist = np.abs(p_freqs - event.ydata)
+             erase_mask = erase_mask & (y_dist < 50)
++        elif event.inaxes == self.ax:
++            # Prevent erasing all pitch values vertically if clicked on ax instead of ax2
++            erase_mask = erase_mask & False
+
+-        if np.any(erase_mask):
++        if np.any(erase_mask) and np.any(p_freqs[erase_mask] != 0.0):
+             p_freqs[erase_mask] = 0.0
+-            self.plot_item_spectrogram()
++            self._update_pitch_line()
