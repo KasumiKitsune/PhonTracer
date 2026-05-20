@@ -11,13 +11,32 @@ from PIL import Image
 import queue
 
 # 导入拆分后的模块
-from .ui_widgets import ToolTip, CTkReleaseButton
+from .ui_widgets import CTkReleaseButton
 from .data_utils import parse_wordlist, fuzzy_match_word_to_path
 from .audio_core import core_microscopic_vowel_nucleus, batch_process_worker, macroscopic_vad, check_audio_segments, long_process_worker, recalculate_bounds_fast, auto_split_inner_word, extract_f0
 from .visual_splitter import VisualSplitter
 from .spectrogram_panel import SpectrogramPanel
 from .project_tree import ProjectTreePanel
 from .speaker_manager import SpeakerManager
+import sys
+
+# Monkey patch CTkScrollableFrame._mouse_wheel_all to increase scroll speed on Windows by a factor of 3.0
+orig_mouse_wheel_all = ctk.CTkScrollableFrame._mouse_wheel_all
+def patched_mouse_wheel_all(self, event):
+    if self.check_if_master_is_canvas(event.widget):
+        if sys.platform.startswith("win"):
+            if self._shift_pressed:
+                if self._parent_canvas.xview() != (0.0, 1.0):
+                    self._parent_canvas.xview("scroll", -int(event.delta / 2), "units")
+            else:
+                if self._parent_canvas.yview() != (0.0, 1.0):
+                    self._parent_canvas.yview("scroll", -int(event.delta / 2), "units")
+        else:
+            orig_mouse_wheel_all(self, event)
+    else:
+        orig_mouse_wheel_all(self, event)
+ctk.CTkScrollableFrame._mouse_wheel_all = patched_mouse_wheel_all
+
 
 class PhoneticsApp:
     def __init__(self, root, initial_files=None):
@@ -567,7 +586,6 @@ class PhoneticsApp:
         self.entry_min_dur = ctk.CTkEntry(row_dur, textvariable=self.var_min_dur, width=60, justify="center", corner_radius=20, height=26)
         self.entry_min_dur.pack(side=tk.RIGHT)
         self.setup_entry_behavior(self.entry_min_dur, 'skip_front')
-        ToolTip(lbl_dur, "切除有效波形最前方的时长(秒)，用于排除声母(辅音)的干扰。")
 
         # Pitch 范围参数
         row_pitch = ctk.CTkFrame(card_params, fg_color="transparent")
@@ -582,7 +600,6 @@ class PhoneticsApp:
         self.entry_pitch_floor.insert(0, str(self.last_params['pitch_floor']))
         self.entry_pitch_floor.pack(side=tk.RIGHT)
         self.setup_entry_behavior(self.entry_pitch_floor, 'pitch_floor')
-        ToolTip(row_pitch, "Praat pitch 分析的频率范围。\n男声建议 30~300 (嘎裂声设为30或40)，女声/儿童建议 100~500。")
         
         # 浊音阈值参数
         row_voicing = ctk.CTkFrame(card_params, fg_color="transparent")
@@ -592,7 +609,6 @@ class PhoneticsApp:
         self.entry_voicing_threshold.insert(0, f"{self.last_params['voicing_threshold']:.2f}")
         self.entry_voicing_threshold.pack(side=tk.RIGHT)
         self.setup_entry_behavior(self.entry_voicing_threshold, 'voicing_threshold')
-        ToolTip(row_voicing, "浊音阈值 (Voicing Threshold)，默认 0.25。\n数值越低对嘎裂声 (气泡音) 等不规则波形越宽容。")
         
         row_trim = ctk.CTkFrame(card_params, fg_color="transparent")
         row_trim.pack(fill=tk.X, padx=15, pady=(10, 15))
@@ -601,8 +617,7 @@ class PhoneticsApp:
         self.switch_trim_silence = ctk.CTkSwitch(row_trim, text="开启边缘静音裁切", font=self.font_main, 
                                                  progress_color="#10B981", text_color="#374151", command=self.on_trim_silence_toggle)
         self.switch_trim_silence.pack(side=tk.LEFT)
-        self.switch_trim_silence.select() 
-        ToolTip(self.switch_trim_silence, "开启后将在图表上自动忽略首尾低于 -50dB 的绝对静音区域，\n让有效波形占满屏幕。")
+        self.switch_trim_silence.select()
 
         # 全局应用按钮 (固定在底部)
         self.btn_apply_all = CTkReleaseButton(sidebar_frame, text="  全局应用", image=self.icons.get("check_white"), compound="left", 

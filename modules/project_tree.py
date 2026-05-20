@@ -8,7 +8,7 @@ import math
 import matplotlib.pyplot as plt
 import logging
 from .data_utils import get_export_text_for_item, build_five_point_chart, write_analysis_sheet_with_formulas
-from .ui_widgets import ToolTip, CTkReleaseButton, AutoScrollbar
+from .ui_widgets import CTkReleaseButton, AutoScrollbar
 
 logger = logging.getLogger(__name__)
 
