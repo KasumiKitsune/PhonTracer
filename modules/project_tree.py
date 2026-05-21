@@ -9,8 +9,105 @@ import matplotlib.pyplot as plt
 import logging
 from .data_utils import get_export_text_for_item, build_five_point_chart, write_analysis_sheet_with_formulas, split_into_syllables
 from .ui_widgets import CTkReleaseButton, AutoScrollbar
+from PIL import Image, ImageDraw, ImageTk
 
 logger = logging.getLogger(__name__)
+
+
+class CanvasButton(tk.Canvas):
+    def __init__(self, parent, size=32, image=None, bg_color="white", active_bg="#3B82F6", hover_bg="#F3F4F6", active_hover="#2563EB", border_color="#E5E7EB", is_active=False, command=None):
+        super().__init__(parent, width=size, height=size, bg=bg_color, highlightthickness=0, cursor="hand2")
+        self.size = size
+        self.image = image
+        self.bg_color = bg_color
+        self.active_bg = active_bg
+        self.hover_bg = hover_bg
+        self.active_hover = active_hover
+        self.border_color = border_color
+        self.is_active = is_active
+        self.command = command
+        
+        self.hovered = False
+        self._bg_images = {}  # Cache pre-rendered anti-aliased backgrounds
+        
+        # Pre-cache backgrounds for states to avoid rendering on the fly
+        self.precache_backgrounds()
+        
+        self.draw()
+        
+        self.bind("<Enter>", self.on_enter)
+        self.bind("<Leave>", self.on_leave)
+        self.bind("<ButtonPress-1>", self.on_press)
+        self.bind("<ButtonRelease-1>", self.on_release)
+        
+    def precache_backgrounds(self):
+        # We render circular backgrounds using PIL draw supersampling for perfect anti-aliasing
+        scale = 4
+        canvas_size = self.size * scale
+        
+        states = [
+            ("normal", "white", self.border_color),
+            ("hover", self.hover_bg, self.border_color),
+            ("active", self.active_bg, None),
+            ("active_hover", self.active_hover, None)
+        ]
+        
+        for name, fill_color, border_color in states:
+            img = Image.new("RGBA", (canvas_size, canvas_size), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(img)
+            
+            x0, y0 = 2, 2
+            x1, y1 = canvas_size - 2, canvas_size - 2
+            
+            if border_color:
+                b_width = 1 * scale
+                draw.ellipse([x0, y0, x1, y1], fill=fill_color)
+                draw.ellipse([x0, y0, x1, y1], outline=border_color, width=b_width)
+            else:
+                draw.ellipse([x0, y0, x1, y1], fill=fill_color)
+                
+            resized_img = img.resize((self.size, self.size), Image.Resampling.LANCZOS)
+            self._bg_images[name] = ImageTk.PhotoImage(resized_img)
+            
+    def draw(self):
+        self.delete("all")
+        
+        # Determine which pre-cached background image to use
+        if self.is_active:
+            bg_name = "active_hover" if self.hovered else "active"
+        else:
+            bg_name = "hover" if self.hovered else "normal"
+            
+        bg_img = self._bg_images.get(bg_name)
+        if bg_img:
+            self.create_image(self.size//2, self.size//2, image=bg_img)
+            
+        # Draw the icon in the center
+        if self.image:
+            self.create_image(self.size//2, self.size//2, image=self.image)
+            
+    def configure_button(self, image=None, is_active=None):
+        if image is not None:
+            self.image = image
+        if is_active is not None:
+            self.is_active = is_active
+        self.draw()
+        
+    def on_enter(self, event):
+        self.hovered = True
+        self.draw()
+        
+    def on_leave(self, event):
+        self.hovered = False
+        self.draw()
+        
+    def on_press(self, event):
+        pass
+        
+    def on_release(self, event):
+        if self.hovered and self.command:
+            self.command()
+
 
 class ProjectTreePanel:
     def __init__(self, parent, icons, items_dict, app_state_params, on_item_selected_callback, on_clear_canvas_callback, tk_icons=None, app=None):
@@ -31,6 +128,8 @@ class ProjectTreePanel:
         
         self.warning_group_id = None
         self.warning_iids = {}
+        self._rebuild_timer = None
+        self._rebuilding = False
         
         try:
             self.font_title = ctk.CTkFont(family="Microsoft YaHei", size=15, weight="bold")
@@ -57,6 +156,69 @@ class ProjectTreePanel:
         frame_list.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(0, 5))
         ctk.CTkLabel(frame_list, text="项目目录", font=self.font_title, text_color="#111827").pack(pady=(15, 5))
         
+        # 1. 展开/折叠/新增组 药丸型按钮行
+        ctrl_bar = ctk.CTkFrame(frame_list, fg_color="transparent")
+        ctrl_bar.pack(fill=tk.X, padx=15, pady=(0, 5))
+        
+        btn_expand_all = ctk.CTkButton(
+            ctrl_bar, text="展开全部", width=60, height=26, corner_radius=13,
+            font=("Microsoft YaHei", 11), fg_color="#F3F4F6", text_color="#374151",
+            hover_color="#E5E7EB", command=self.expand_all
+        )
+        btn_expand_all.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 4))
+        
+        btn_collapse_all = ctk.CTkButton(
+            ctrl_bar, text="折叠全部", width=60, height=26, corner_radius=13,
+            font=("Microsoft YaHei", 11), fg_color="#F3F4F6", text_color="#374151",
+            hover_color="#E5E7EB", command=self.collapse_all
+        )
+        btn_collapse_all.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 4))
+        
+        btn_add_group = CTkReleaseButton(
+            ctrl_bar, text="新增组", image=self.icons.get("plus"), compound="left",
+            width=60, height=26, corner_radius=13, command=self.add_new_group,
+            fg_color="#F3F4F6", text_color="#374151", hover_color="#E5E7EB"
+        )
+        btn_add_group.pack(side=tk.LEFT, expand=True, fill=tk.X)
+        
+        # 2. 搜索框与圆形筛选按钮行
+        search_filter_frame = ctk.CTkFrame(frame_list, fg_color="transparent")
+        search_filter_frame.pack(fill=tk.X, padx=15, pady=(5, 5))
+        
+        self.search_var = tk.StringVar()
+        self.search_var.trace_add("write", lambda *args: self.filter_tree())
+        
+        self.entry_search = ctk.CTkEntry(
+            search_filter_frame, textvariable=self.search_var, placeholder_text="搜索...",
+            font=("Microsoft YaHei", 12), height=32, fg_color="white", text_color="#1F2937",
+            border_width=1, border_color="#E5E7EB", corner_radius=16, width=100
+        )
+        self.entry_search.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
+        
+        self.filter_var = ctk.StringVar(value="全部")
+        
+        self.btn_filter_all = CanvasButton(
+            search_filter_frame, size=32,
+            image=self.tk_icons.get("filter_all_black"),
+            command=lambda: self._on_filter_btn_click("全部")
+        )
+        self.btn_filter_all.pack(side=tk.LEFT, padx=(0, 4))
+        
+        self.btn_filter_warning = CanvasButton(
+            search_filter_frame, size=32,
+            image=self.tk_icons.get("filter_warning_black"),
+            command=lambda: self._on_filter_btn_click("需检查")
+        )
+        self.btn_filter_warning.pack(side=tk.LEFT, padx=(0, 4))
+        
+        self.btn_filter_check = CanvasButton(
+            search_filter_frame, size=32,
+            image=self.tk_icons.get("filter_check_black"),
+            command=lambda: self._on_filter_btn_click("已修改")
+        )
+        self.btn_filter_check.pack(side=tk.LEFT)
+        
+        # 3. 目录树容器
         tree_container = ctk.CTkFrame(frame_list, fg_color="transparent")
         tree_container.pack(fill=tk.BOTH, expand=True, padx=15, pady=(5, 10))
         tree_container.grid_columnconfigure(0, weight=1)
@@ -72,10 +234,8 @@ class ProjectTreePanel:
         self.drag_indicator = tk.Frame(self.tree, height=2, bg="#3B82F6") 
         self.tree.tag_configure('hover', background='#F3F4F6')
         self.tree.tag_configure('drag_target', background='#DBEAFE')
+        self.tree.tag_configure('group', background='#F3F4F6')
         
-        btn_add_group = CTkReleaseButton(frame_list, text=" 新增组", image=self.icons.get("plus"), compound="left", width=120, height=30, corner_radius=8, command=self.add_new_group, fg_color="#F3F4F6", text_color="#374151", hover_color="#E5E7EB")
-        btn_add_group.pack(pady=(0, 15))
-
         self.tree.bind('<Double-1>', self.on_tree_double_click)
         self.tree.bind('<BackSpace>', self.on_tree_backspace)
         self.tree.bind('<Delete>', self.on_tree_backspace)
@@ -87,6 +247,11 @@ class ProjectTreePanel:
         self.tree.bind('<ButtonRelease-1>', self.on_tree_drag_release, add='+')
         self.tree.bind('<<TreeviewOpen>>', self._debounce_zebra_stripes)
         self.tree.bind('<<TreeviewClose>>', self._debounce_zebra_stripes)
+        self.tree.bind('<Button-3>', self.on_right_click)
+        self.tree.bind('<Button-2>', self.on_right_click)
+        self.tree.bind('<Key-F2>', self.on_f2_press)
+        
+        self._update_filter_buttons()
 
         frame_rule = ctk.CTkFrame(right_sidebar, fg_color="white", corner_radius=10)
         frame_rule.pack(fill=tk.X, pady=5)
@@ -121,12 +286,19 @@ class ProjectTreePanel:
         visible = get_visible_items()
         self.tree.tag_configure('even', background='#F9FAFB')
         self.tree.tag_configure('odd', background='#FFFFFF')
+        self.tree.tag_configure('group', background='#F3F4F6')
         
-        for i, item in enumerate(visible):
+        leaf_count = 0
+        for item in visible:
             tags = list(self.tree.item(item, 'tags'))
-            tags = [t for t in tags if t not in ('even', 'odd', 'hover', 'drag_target')]
-            tags.append('even' if i % 2 == 0 else 'odd')
-            self.tree.item(item, tags=tags)
+            if 'group' in tags:
+                tags = [t for t in tags if t not in ('even', 'odd', 'hover', 'drag_target')]
+                self.tree.item(item, tags=tags)
+            else:
+                tags = [t for t in tags if t not in ('even', 'odd', 'hover', 'drag_target')]
+                tags.append('even' if leaf_count % 2 == 0 else 'odd')
+                self.tree.item(item, tags=tags)
+                leaf_count += 1
 
     def clear_ui_only(self):
         self.tree.delete(*self.tree.get_children())
@@ -532,8 +704,131 @@ class ProjectTreePanel:
             
         return False
 
+    def _schedule_rebuild(self):
+        if self._rebuild_timer:
+            self.parent.after_cancel(self._rebuild_timer)
+        self._rebuild_timer = self.parent.after(10, self.rebuild_tree)
+
+    def filter_tree(self):
+        self._schedule_rebuild()
+
+    def _on_filter_btn_click(self, mode):
+        self.filter_var.set(mode)
+        self._update_filter_buttons()
+        self.filter_tree()
+        
+    def _update_filter_buttons(self):
+        current_mode = self.filter_var.get()
+        
+        self.btn_filter_all.configure_button(
+            image=self.tk_icons.get("filter_all_white" if current_mode == "全部" else "filter_all_black"),
+            is_active=(current_mode == "全部")
+        )
+        self.btn_filter_warning.configure_button(
+            image=self.tk_icons.get("filter_warning_white" if current_mode == "需检查" else "filter_warning_black"),
+            is_active=(current_mode == "需检查")
+        )
+        self.btn_filter_check.configure_button(
+            image=self.tk_icons.get("filter_check_white" if current_mode == "已修改" else "filter_check_black"),
+            is_active=(current_mode == "已修改")
+        )
+
+    def expand_all(self):
+        for gid in self.group_nodes.values():
+            try:
+                if self.tree.exists(gid):
+                    self.tree.item(gid, open=True)
+            except tk.TclError:
+                pass
+        if self.warning_group_id:
+            try:
+                if self.tree.exists(self.warning_group_id):
+                    self.tree.item(self.warning_group_id, open=True)
+            except tk.TclError:
+                pass
+        self._debounce_zebra_stripes()
+
+    def collapse_all(self):
+        for gid in self.group_nodes.values():
+            try:
+                if self.tree.exists(gid):
+                    self.tree.item(gid, open=False)
+            except tk.TclError:
+                pass
+        if self.warning_group_id:
+            try:
+                if self.tree.exists(self.warning_group_id):
+                    self.tree.item(self.warning_group_id, open=False)
+            except tk.TclError:
+                pass
+        self._debounce_zebra_stripes()
+
+    def on_f2_press(self, event=None):
+        sel = self.tree.selection()
+        if sel:
+            self.start_inline_edit(sel[0])
+
+    def on_right_click(self, event):
+        iid = self.tree.identify_row(event.y)
+        
+        if iid:
+            sel = self.tree.selection()
+            if iid not in sel:
+                self.tree.selection_set(iid)
+                
+        menu = tk.Menu(self.tree, tearoff=0, font=("Microsoft YaHei", 11))
+        
+        if iid and self.tree.exists(iid):
+            tags = self.tree.item(iid, 'tags')
+            if 'item' in tags:
+                menu.add_command(label="重命名 (F2)", command=lambda: self.start_inline_edit(iid))
+                menu.add_command(label="删除选中项 (Delete)", command=lambda: self.on_tree_backspace(None))
+            elif 'group' in tags and iid != self.warning_group_id:
+                menu.add_command(label="重命名组", command=lambda: self.start_inline_edit(iid))
+                menu.add_command(label="清空此组中所有项", command=lambda: self.clear_group_items(iid))
+                menu.add_separator()
+                menu.add_command(label="删除组及其所有项", command=lambda: self.delete_group_and_items(iid))
+        else:
+            menu.add_command(label="新建组别", command=self.add_new_group)
+            
+        menu.post(event.x_root, event.y_root)
+
+    def clear_group_items(self, gid):
+        if not self.tree.exists(gid): return
+        group_name = self.tree.item(gid, 'text').split(' (')[0]
+        if messagebox.askyesno("清空确认", f"确定要清空组【{group_name}】中的所有音频和数据吗？"):
+            iids_to_del = [iid for iid, item in list(self.items.items()) if item.get('group') == group_name]
+            for iid in iids_to_del:
+                self.items.pop(iid, None)
+                if iid == self.current_iid:
+                    self.current_iid = None
+                    if self.on_clear_canvas: self.on_clear_canvas()
+            
+            messagebox.showinfo("成功", f"组【{group_name}】中的 {len(iids_to_del)} 个项已清空。")
+            self.rebuild_tree()
+            self.update_preview()
+
+    def delete_group_and_items(self, gid):
+        if not self.tree.exists(gid): return
+        group_name = self.tree.item(gid, 'text').split(' (')[0]
+        if messagebox.askyesno("删除确认", f"确定要彻底删除组【{group_name}】及其中的所有音频和数据吗？"):
+            iids_to_del = [iid for iid, item in list(self.items.items()) if item.get('group') == group_name]
+            for iid in iids_to_del:
+                self.items.pop(iid, None)
+                if iid == self.current_iid:
+                    self.current_iid = None
+                    if self.on_clear_canvas: self.on_clear_canvas()
+            
+            if group_name in self.project_groups:
+                self.project_groups.remove(group_name)
+            self.group_nodes.pop(group_name, None)
+            
+            self.rebuild_tree()
+            self.update_preview()
+
     def rebuild_tree(self):
-        # 1. 保存当前展开状态
+        # 1. 保存当前选择和展开状态
+        sel = self.tree.selection()
         expanded_groups = set()
         for g_name, gid in self.group_nodes.items():
             try:
@@ -621,9 +916,19 @@ class ProjectTreePanel:
                 elif item.get('is_manual_edited'):
                     img = self.tk_icons.get('blue_dot', '') if self.tk_icons else ''
                 else:
-                    img = self.tk_icons.get('audio_wave', '') if self.tk_icons else ''
+                    img = ''  # Removed sound wave icon
 
                 self.tree.insert(gid, 'end', iid=iid, text=display, tags=('item',), image=img)
+
+        # 7. 恢复选择和可见性
+        if sel:
+            valid_sel = [s for s in sel if self.tree.exists(s)]
+            if valid_sel:
+                try:
+                    self.tree.selection_set(valid_sel)
+                    self.tree.see(valid_sel[0])
+                except tk.TclError:
+                    pass
 
         self._debounce_zebra_stripes()
 
@@ -632,34 +937,8 @@ class ProjectTreePanel:
         item = self.items.get(iid)
         if not item or item.get('start') is None: return
         
-        has_empty = self._check_item_has_empty_data(item)
-        img = self.tk_icons.get('warning', '') if has_empty else ''
-        try:
-            self.tree.item(iid, image=img)
-        except tk.TclError:
-            pass
-
-        w_iid = f"warning_{iid}"
-        if has_empty:
-            if not self.warning_group_id or not self.tree.exists(self.warning_group_id):
-                self.warning_group_id = self.tree.insert("", 0, text="⚠️ 需要检查", open=True, tags=('group', 'warning_group'))
-            
-            lbl = item.get('label', '')
-            if not self.tree.exists(w_iid):
-                self.tree.insert(self.warning_group_id, 'end', iid=w_iid, text=lbl, image=img, tags=('item', 'warning_item'))
-                self.warning_iids[iid] = w_iid
-            else:
-                self.tree.item(w_iid, text=lbl, image=img)
-        else:
-            if self.tree.exists(w_iid):
-                self.tree.delete(w_iid)
-            self.warning_iids.pop(iid, None)
-            
-            if self.warning_group_id and self.tree.exists(self.warning_group_id):
-                if not self.tree.get_children(self.warning_group_id):
-                    self.tree.delete(self.warning_group_id)
-                    self.warning_group_id = None
-        self._debounce_zebra_stripes()
+        self._check_item_has_empty_data(item)
+        self._schedule_rebuild()
 
     def export_project(self):
         sm = getattr(self.app, 'speaker_manager', None)

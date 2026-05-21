@@ -345,7 +345,17 @@ class PhoneticsApp:
             "warning": "warning.png",
             "import": "import_file.png", "ai_prompt": "ai_prompt.png", "copy": "copy_icon.png",
             "import_white": "import_white.png", "copy_white": "copy_white.png", "check_white": "check_white.png",
-            "pause": "pause.png", "eraser": "eraser.png"
+            "pause": "pause.png", "eraser": "eraser.png",
+            "blue_dot": "blue_dot.png",
+            "folder_close": "folder_close.png",
+            "folder_open": "folder_open.png",
+            "audio_wave": "audio_wave.png",
+            "filter_all_black": "filter_all_black.png",
+            "filter_all_white": "filter_all_white.png",
+            "filter_warning_black": "filter_warning_black.png",
+            "filter_warning_white": "filter_warning_white.png",
+            "filter_check_black": "filter_check_black.png",
+            "filter_check_white": "filter_check_white.png"
         }
         from PIL import ImageTk
         self.tk_icons = {}
@@ -366,9 +376,24 @@ class PhoneticsApp:
                     except Exception:
                         pass
                 
-                self.icons[key] = ctk.CTkImage(light_image=img, dark_image=img, size=(20, 20))
-                # Resize for ttk.Treeview
-                img_tk = img.resize((16, 16), Image.Resampling.LANCZOS)
+                if key == "blue_dot":
+                    try:
+                        # Resize the blue dot to 8x8
+                        img_small = img.resize((8, 8), Image.Resampling.LANCZOS)
+                        # Create a 16x16 transparent image
+                        new_img = Image.new("RGBA", (16, 16), (0, 0, 0, 0))
+                        # Paste the small blue dot in the center (4, 4)
+                        new_img.paste(img_small, (4, 4))
+                        img_tk = new_img
+                    except Exception:
+                        img_tk = img.resize((16, 16), Image.Resampling.LANCZOS)
+                else:
+                    img_tk = img.resize((16, 16), Image.Resampling.LANCZOS)
+                
+                if "filter_" in key:
+                    self.icons[key] = ctk.CTkImage(light_image=img, dark_image=img, size=(16, 16))
+                else:
+                    self.icons[key] = ctk.CTkImage(light_image=img, dark_image=img, size=(20, 20))
                 self.tk_icons[key] = ImageTk.PhotoImage(img_tk)
             else:
                 self.icons[key] = None
