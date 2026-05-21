@@ -59,3 +59,4 @@ Test/
 # 9. 本地打包与测试输出文件夹
 PhonTracer_reaper/
 Cli_test/
+!PhonTracer_学术可用性论证.md
