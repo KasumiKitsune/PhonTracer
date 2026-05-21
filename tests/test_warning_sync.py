@@ -253,5 +253,22 @@ class TestWarningSync(unittest.TestCase):
         self.assertNotIn(item_id, self.panel.warning_iids)
         self.assertIsNone(self.panel.warning_group_id)
 
+    def test_get_item_index_fallback(self):
+        """Test that _get_item_index handles missing tree nodes gracefully without raising TclError"""
+        item_id = "test_item_missing"
+        self.items_dict[item_id] = {
+            'label': 'MissingWord',
+            'group': 'GroupC',
+            'start': 0.1,
+            'end': 0.9,
+            'has_empty_data': False
+        }
+        
+        # Verify that calling _get_item_index on a missing item (not in tree_nodes / tree)
+        # falls back and returns a valid 1-based index based on items_dict insertion order.
+        idx = self.panel._get_item_index(item_id)
+        self.assertEqual(idx, 1)
+
 if __name__ == '__main__':
     unittest.main()
+

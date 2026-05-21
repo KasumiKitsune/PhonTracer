@@ -999,12 +999,8 @@ class PhoneticsApp:
             unique_groups = set()
             for item in self.items.values(): unique_groups.add(item.get('group', '导入内容'))
             for g in unique_groups: self.tree_panel.ensure_group(g)
-            for iid, item in self.items.items():
-                gid = self.tree_panel.group_nodes.get(item.get('group', '导入内容'))
-                if gid:
-                    img = self.tk_icons.get('warning', '') if item.get('has_empty_data', False) else ''
-                    text = item.get('label', '') + (" (失败)" if 'missing' in iid else "")
-                    self.tree_panel.tree.insert(gid, tk.END, iid=iid, text=text, tags=('item',), image=img)
+            # 使用 rebuild_tree 重新构建，确保所有项的警告状态被精准重新评估
+            self.tree_panel.rebuild_tree()
                     
             if hasattr(self.active_speaker, 'last_selected_iid') and self.active_speaker.last_selected_iid in self.items:
                 try:
@@ -1261,7 +1257,7 @@ class PhoneticsApp:
                                         target_item['pitch_data'] = res['pitch_data']
                                         if 'pitch' in target_item:
                                             del target_item['pitch']
-                                        target_item['has_empty_data'] = res.get('has_empty_data', False)
+                                        target_item.pop('has_empty_data', None)
                                         target_item['preview_f0'] = res.get('preview_f0', [])
                                         # 如果是独立音频，还需要把 Cache 也更新了，防止下次加载又是旧的
                                         if target_item.get('path'):
@@ -1275,7 +1271,7 @@ class PhoneticsApp:
                                             target_item['raw_end'] = res['raw_e']
                                             target_item['inner_splits'] = res.get('inner_splits', [])
                                             target_item['chars_bounds'] = res.get('chars_bounds', [])
-                                        target_item['has_empty_data'] = res.get('has_empty_data', False)
+                                        target_item.pop('has_empty_data', None)
                                         target_item['preview_f0'] = res.get('preview_f0', [])
                             except Exception: pass
                             
@@ -1395,7 +1391,8 @@ class PhoneticsApp:
                         preview_f0 = [item['pitch'].get_value_at_time(t) for t in preview_times]
                         preview_f0 = [0.0 if (np.isnan(hz) or hz <= 0) else hz for hz in preview_f0]
                     item['preview_f0'] = preview_f0
-                    item['has_empty_data'] = any(f == 0.0 for f in item['preview_f0'])
+                    # 清除缓存标记，让后续 update_item_icon 通过 _check_item_has_empty_data 精准重算
+                    item.pop('has_empty_data', None)
                             
                 def finalize():
                     self.spectrogram_panel.plot_item_spectrogram()

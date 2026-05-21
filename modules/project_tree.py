@@ -587,18 +587,43 @@ class ProjectTreePanel:
 
     def _get_item_index(self, target_iid):
         real_iid = target_iid[8:] if str(target_iid).startswith('warning_') else target_iid
+        
+        # 安全退保：如果节点在树中不存在（例如过滤状态下项被移除了），直接返回基于 items 字典顺序的索引
+        if not self.tree.exists(real_iid):
+            keys = list(self.items.keys())
+            if real_iid in keys:
+                return keys.index(real_iid) + 1
+            return 1
+
         is_continuous = (self.num_rule_var.get() == "continuous")
         if not is_continuous:
-            return self.tree.index(real_iid) + 1
+            try:
+                return self.tree.index(real_iid) + 1
+            except tk.TclError:
+                keys = list(self.items.keys())
+                if real_iid in keys:
+                    return keys.index(real_iid) + 1
+                return 1
 
-        target_group = self.items[real_iid]['group']
+        target_group = self.items[real_iid].get('group', '导入内容')
         idx = 0
         for grp_name in self.project_groups:
             if grp_name == target_group: break
             grp_node = self.group_nodes.get(grp_name)
-            if grp_node: idx += len(self.tree.get_children(grp_node))
+            if grp_node:
+                try:
+                    idx += len(self.tree.get_children(grp_node))
+                except tk.TclError:
+                    pass
 
-        return idx + self.tree.index(real_iid) + 1
+        try:
+            return idx + self.tree.index(real_iid) + 1
+        except tk.TclError:
+            keys = list(self.items.keys())
+            if real_iid in keys:
+                return keys.index(real_iid) + 1
+            return 1
+
 
     def update_preview(self):
         if self.current_iid not in self.items:
@@ -638,8 +663,9 @@ class ProjectTreePanel:
         """精准检测子音节区间的11点中是否含有0/NaN值（已应用智能边界收缩防误报）"""
         if not item or item.get('start') is None: return False
         
-        # 1. 如果音频和 Pitch 对象已加载，优先执行最高精度的实时重新计算，并更新缓存
-        if item.get('snd') and (item.get('pitch') or item.get('pitch_data')):
+        # 1. 如果 Pitch 数据已加载，优先执行最高精度的实时重新计算，并更新缓存
+        # 注：此分支仅使用 pitch 数组进行检测，不需要 snd 对象
+        if item.get('pitch') or item.get('pitch_data'):
             num_points = int(self.app_state_params.get('pts', 10))
             t_s, t_e = item['start'], item['end']
             label = item.get('label', '')
