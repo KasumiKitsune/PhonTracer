@@ -532,6 +532,101 @@ class ProjectTreePanel:
             
         return False
 
+    def rebuild_tree(self):
+        # 1. 保存当前展开状态
+        expanded_groups = set()
+        for g_name, gid in self.group_nodes.items():
+            try:
+                if self.tree.exists(gid) and self.tree.item(gid, 'open'):
+                    expanded_groups.add(g_name)
+            except tk.TclError:
+                pass
+        if self.warning_group_id:
+            try:
+                if self.tree.exists(self.warning_group_id) and self.tree.item(self.warning_group_id, 'open'):
+                    expanded_groups.add('__warning__')
+            except tk.TclError:
+                pass
+
+        # 2. 清空 Tree
+        for node in list(self.tree.get_children()):
+            self.tree.delete(node)
+        self.group_nodes.clear()
+        self.warning_group_id = None
+        self.warning_iids.clear()
+
+        # 3. 读取搜索和过滤条件
+        search_query = ""
+        if hasattr(self, 'search_var') and self.search_var:
+            search_query = self.search_var.get().strip().lower()
+
+        status_filter = "全部"
+        if hasattr(self, 'filter_var') and self.filter_var:
+            status_filter = self.filter_var.get()
+
+        # 4. 分组过滤数据
+        groups_in_use = list(self.project_groups)
+        for iid, item in self.items.items():
+            g = item.get('group', '导入内容')
+            if g not in groups_in_use:
+                groups_in_use.append(g)
+
+        group_items = {g: [] for g in groups_in_use}
+        warning_items = []
+
+        for iid, item in self.items.items():
+            lbl = item.get('label', '')
+            if search_query and search_query not in lbl.lower():
+                continue
+
+            has_empty = self._check_item_has_empty_data(item)
+            if status_filter == "需检查" and not has_empty:
+                continue
+            if status_filter == "已修改" and not item.get('is_manual_edited', False):
+                continue
+
+            grp = item.get('group', '导入内容')
+            group_items[grp].append((iid, item))
+            if has_empty:
+                warning_items.append((iid, item))
+
+        # 5. 插入“需要检查”组
+        if warning_items:
+            w_count = len(warning_items)
+            w_text = f"需要检查 ({w_count})"
+            is_open = '__warning__' in expanded_groups or not expanded_groups
+            self.warning_group_id = self.tree.insert("", 0, text=w_text, open=is_open, tags=('group', 'warning_group'))
+            for iid, item in warning_items:
+                w_iid = f"warning_{iid}"
+                img = self.tk_icons.get('warning', '') if self.tk_icons else ''
+                self.tree.insert(self.warning_group_id, 'end', iid=w_iid, text=item.get('label', ''), image=img, tags=('item', 'warning_item'))
+                self.warning_iids[iid] = w_iid
+
+        # 6. 插入常规组
+        for grp in groups_in_use:
+            items_in_grp = group_items.get(grp, [])
+            if not items_in_grp and (search_query or status_filter != "全部"):
+                continue
+
+            g_text = f"{grp} ({len(items_in_grp)})"
+            is_open = grp in expanded_groups or not expanded_groups
+            gid = self.tree.insert("", 'end', text=g_text, open=is_open, tags=('group',))
+            self.group_nodes[grp] = gid
+
+            for iid, item in items_in_grp:
+                display = item.get('label', '')
+                has_empty = self._check_item_has_empty_data(item)
+                if has_empty:
+                    img = self.tk_icons.get('warning', '') if self.tk_icons else ''
+                elif item.get('is_manual_edited'):
+                    img = self.tk_icons.get('blue_dot', '') if self.tk_icons else ''
+                else:
+                    img = self.tk_icons.get('audio_wave', '') if self.tk_icons else ''
+
+                self.tree.insert(gid, 'end', iid=iid, text=display, tags=('item',), image=img)
+
+        self._debounce_zebra_stripes()
+
     def update_item_icon(self, iid):
         if str(iid).startswith('warning_'): return
         item = self.items.get(iid)
@@ -659,6 +754,10 @@ class ProjectTreePanel:
         btn_kwargs = {"corner_radius": 12, "height": 44, "font": self.font_main, "anchor": "w", "compound": "left"}
 
         def do_export(format_mode):
+            if format_mode == 'kde':
+                dlg.destroy()
+                self._show_kde_params_dialog(mode=mode, tree_structure=tree_structure, all_speakers=all_speakers)
+                return
             dlg.destroy()
             def execute_export(out_path, inc_chart=False):
                 try:
@@ -1338,129 +1437,161 @@ class ProjectTreePanel:
         if not data: return messagebox.showwarning("提示", "没有有效数据可供绘图。")
         self._draw_line_chart(data, max_syls, out_file)
 
-    def _export_kde_heatmap(self, out_file, tree_structure=None):
-        from scipy.interpolate import interp1d
-        from scipy.signal import savgol_filter
-        from scipy.stats import gaussian_kde
-
-        N_DENSE = 100  
-        group_syl_contours = {} 
+    def _show_kde_params_dialog(self, mode='single', tree_structure=None, all_speakers=None):
+        param_dlg = ctk.CTkToplevel(self.parent)
+        param_dlg.title("词语时序密度热力图参数设置")
+        param_dlg.geometry("450x380")
+        param_dlg.attributes('-topmost', True)
+        param_dlg.resizable(False, False)
         
-        prog_dlg = ctk.CTkToplevel(self.parent)
-        prog_dlg.title("正在导出")
-        prog_dlg.geometry("300x120")
-        prog_dlg.attributes('-topmost', True)
-        prog_dlg.resizable(False, False)
-        
-        prog_dlg.update_idletasks()
+        param_dlg.update_idletasks()
         main_win = self.parent.winfo_toplevel()
-        prog_dlg.geometry(f"+{main_win.winfo_rootx() + (main_win.winfo_width() - 300) // 2}+{main_win.winfo_rooty() + (main_win.winfo_height() - 120) // 2}")
+        x = main_win.winfo_rootx() + (main_win.winfo_width() - 450) // 2
+        y = main_win.winfo_rooty() + (main_win.winfo_height() - 380) // 2
+        param_dlg.geometry(f"+{x}+{y}")
         
-        lbl_status = ctk.CTkLabel(prog_dlg, text="正在处理数据，请稍候...", font=self.font_main)
-        lbl_status.pack(pady=(20, 5))
-        pbar = ctk.CTkProgressBar(prog_dlg, width=250)
-        pbar.pack()
-        pbar.set(0)
-        prog_dlg.update()
-
-        if tree_structure is None: tree_structure = self._get_all_items_by_group()
+        ctk.CTkLabel(param_dlg, text="词语时序密度热力图参数设置", font=self.font_title).pack(pady=(15, 10))
         
-        max_syls = 1
-        for grp_name, children in tree_structure:
-            group_syl_contours[grp_name] = {}
-            for child in children:
-                lbl = self.items[child].get('label', '')
-                if len(lbl) > max_syls: max_syls = len(lbl)
-
-        total_items = sum(len(c) for _, c in tree_structure)
-        processed = 0
-
-        for grp_name, children in tree_structure:
-            for child in children:
-                processed += 1
-                pbar.set(0.7 * (processed / max(1, total_items)))
-                prog_dlg.update()
+        bw_frame = ctk.CTkFrame(param_dlg, fg_color="transparent")
+        bw_frame.pack(fill=tk.X, padx=30, pady=5)
+        
+        ctk.CTkLabel(bw_frame, text="核密度带宽 (Bandwidth):", font=self.font_main).pack(side=tk.LEFT)
+        
+        bw_val_lbl = ctk.CTkLabel(bw_frame, text="0.15", font=self.font_main, width=40)
+        
+        def on_slider_change(val):
+            bw_val_lbl.configure(text=f"{float(val):.2f}")
+            
+        bw_slider = ctk.CTkSlider(bw_frame, from_=0.05, to=0.50, number_of_steps=45, command=on_slider_change)
+        bw_slider.set(0.15)
+        bw_slider.pack(side=tk.RIGHT, padx=(10, 0))
+        bw_val_lbl.pack(side=tk.RIGHT)
+        
+        f0_frame = ctk.CTkFrame(param_dlg, fg_color="transparent")
+        f0_frame.pack(fill=tk.X, padx=30, pady=10)
+        
+        ctk.CTkLabel(f0_frame, text="基频 T值归一化范围:", font=self.font_main).pack(anchor="w", pady=(0, 5))
+        
+        f0_mode_var = ctk.StringVar(value="percentile")
+        
+        pct_frame = ctk.CTkFrame(param_dlg, fg_color="transparent")
+        manual_frame = ctk.CTkFrame(param_dlg, fg_color="transparent")
+        
+        def update_f0_mode_ui():
+            val = f0_mode_var.get()
+            if val == "percentile":
+                pct_frame.pack(fill=tk.X, padx=50, pady=2)
+                manual_frame.pack_forget()
+            elif val == "manual":
+                manual_frame.pack(fill=tk.X, padx=50, pady=2)
+                pct_frame.pack_forget()
+            else:
+                pct_frame.pack_forget()
+                manual_frame.pack_forget()
+                
+        r_pct = ctk.CTkRadioButton(f0_frame, text="分位数自动截断 (推荐, 消除极端值压缩)", variable=f0_mode_var, value="percentile", font=self.font_main, command=update_f0_mode_ui)
+        r_pct.pack(anchor="w", pady=2)
+        
+        r_minmax = ctk.CTkRadioButton(f0_frame, text="极值自动范围 (Min ~ Max)", variable=f0_mode_var, value="minmax", font=self.font_main, command=update_f0_mode_ui)
+        r_minmax.pack(anchor="w", pady=2)
+        
+        r_manual = ctk.CTkRadioButton(f0_frame, text="手动指定范围 (Hz)", variable=f0_mode_var, value="manual", font=self.font_main, command=update_f0_mode_ui)
+        r_manual.pack(anchor="w", pady=2)
+        
+        ctk.CTkLabel(pct_frame, text="分位区间 (Low % ~ High %):", font=self.font_main).pack(side=tk.LEFT)
+        pct_low_ent = ctk.CTkEntry(pct_frame, width=50, font=self.font_main)
+        pct_low_ent.insert(0, "5")
+        pct_low_ent.pack(side=tk.LEFT, padx=5)
+        ctk.CTkLabel(pct_frame, text="~", font=self.font_main).pack(side=tk.LEFT)
+        pct_high_ent = ctk.CTkEntry(pct_frame, width=50, font=self.font_main)
+        pct_high_ent.insert(0, "95")
+        pct_high_ent.pack(side=tk.LEFT, padx=5)
+        
+        ctk.CTkLabel(manual_frame, text="基频范围 (Min Hz ~ Max Hz):", font=self.font_main).pack(side=tk.LEFT)
+        min_hz_ent = ctk.CTkEntry(manual_frame, width=60, font=self.font_main)
+        min_hz_ent.insert(0, "75")
+        min_hz_ent.pack(side=tk.LEFT, padx=5)
+        ctk.CTkLabel(manual_frame, text="~", font=self.font_main).pack(side=tk.LEFT)
+        max_hz_ent = ctk.CTkEntry(manual_frame, width=60, font=self.font_main)
+        max_hz_ent.insert(0, "600")
+        max_hz_ent.pack(side=tk.LEFT, padx=5)
+        
+        update_f0_mode_ui()
+        
+        def on_confirm():
+            bw = float(bw_slider.get())
+            f0_mode = f0_mode_var.get()
+            
+            p_low = 5.0
+            p_high = 95.0
+            m_min = 75.0
+            m_max = 600.0
+            
+            if f0_mode == 'percentile':
+                try:
+                    p_low = float(pct_low_ent.get())
+                    p_high = float(pct_high_ent.get())
+                    if not (0 <= p_low < p_high <= 100): raise ValueError
+                except ValueError:
+                    return messagebox.showerror("错误", "请输入有效的百分比 (0 到 100) 且低分位数必须小于高分位数。")
+            elif f0_mode == 'manual':
+                try:
+                    m_min = float(min_hz_ent.get())
+                    m_max = float(max_hz_ent.get())
+                    if not (0 < m_min < m_max): raise ValueError
+                except ValueError:
+                    return messagebox.showerror("错误", "请输入有效的基频范围 (Hz)。")
                     
-                if child not in self.items: continue
-                item = self.items[child]
-                self._ensure_item_loaded(item)
-                if item.get('start') is None or not item.get('snd') or (not item.get('pitch') and not item.get('pitch_data')): continue
-
-                t_s, t_e = item['start'], item['end']
-                label = item.get('label', '')
-                inner_splits = item.get('inner_splits', [])
-                
-                splits = [t_s] + [s for s in inner_splits if t_s < s < t_e] + [t_e]
-                if len(splits) != len(label) + 1: splits = np.linspace(t_s, t_e, len(label) + 1).tolist()
-                if len(label) <= 1: splits = [t_s, t_e]
-                
-                if item.get('pitch_data'):
-                    p_xs = item['pitch_data']['xs']
-                    p_freqs = item['pitch_data']['freqs']
-                else:
-                    pitch = item['pitch']
-                    p_xs = pitch.xs()
-                    p_freqs = pitch.selected_array['frequency']
-                
-                for k in range(len(splits) - 1):
-                    c_s, c_e = splits[k], splits[k+1]
-                    # 智能边界收缩：只画有真实发音的高密度区！
-                    valid_idx = np.where((p_xs >= c_s) & (p_xs <= c_e) & (p_freqs > 0))[0]
-                    if len(valid_idx) >= 2:
-                        v_s, v_e = p_xs[valid_idx[0]], p_xs[valid_idx[-1]]
-                        mask = (p_xs >= v_s) & (p_xs <= v_e) & (p_freqs > 0)
-                        valid_freqs = p_freqs[mask]
-                        if len(valid_freqs) < 3: continue
-    
-                        win = len(valid_freqs) // 3
-                        if win % 2 == 0: win += 1
-                        win = max(win, 3)
-                        smoothed = savgol_filter(valid_freqs, win, 2) if len(valid_freqs) > win else valid_freqs
-    
-                        x_orig = np.linspace(0, 1, len(smoothed))
-                        f_interp = interp1d(x_orig, smoothed, kind='linear')
-                        y_dense = f_interp(np.linspace(0, 1, N_DENSE))
+            param_dlg.destroy()
+            
+            out = filedialog.askdirectory(title="选择热力图导出文件夹") if mode == 'separate' else filedialog.asksaveasfilename(title="导出热力图", defaultextension=".png", initialfile="tone_heatmap", filetypes=[("PNG 图片", "*.png")])
+            if not out: return
+            
+            params = {
+                'bw_method': bw,
+                'f0_mode': f0_mode,
+                'percentile_low': p_low,
+                'percentile_high': p_high,
+                'manual_min': m_min,
+                'manual_max': m_max
+            }
+            
+            try:
+                if mode == 'single':
+                    success = self._export_kde_heatmap(out, tree_structure=tree_structure, params=params)
+                elif mode == 'separate':
+                    import os
+                    success = True
+                    for s in all_speakers:
+                        s_struct = self._get_items_by_group_for_dict(s.items)
+                        orig_items = self.items
+                        self.items = s.items
+                        if os.path.isdir(out):
+                            s_out = os.path.join(out, f"{s.name}.png")
+                        else:
+                            base, ext = os.path.splitext(out)
+                            s_out = f"{base}_{s.name}{ext}"
                         
-                        if k not in group_syl_contours[grp_name]: group_syl_contours[grp_name][k] = []
-                        group_syl_contours[grp_name][k].append(y_dense)
-
-        all_mean_vals = []
-        for name, syls_dict in group_syl_contours.items():
-            for k, y_arrays in syls_dict.items():
-                if y_arrays:
-                    mean_contour = np.mean(y_arrays, axis=0)
-                    all_mean_vals.extend(mean_contour.tolist())
+                        ret = self._export_kde_heatmap(s_out, tree_structure=s_struct, params=params)
+                        self.items = orig_items
+                        if not ret: success = False
+                else:
+                    success = self._export_kde_heatmap_integrated(out, all_speakers, params=params)
                     
-        if not all_mean_vals:
-            prog_dlg.destroy()
-            return messagebox.showwarning("提示", "没有有效数据可供绘制热力图。")
-            
-        min_f0, max_f0 = min(all_mean_vals), max(all_mean_vals)
-
-        lbl_status.configure(text="正在进行数据归一化...")
-        pbar.set(0.75)
-        prog_dlg.update()
-
-        def hz_to_5_scale(hz):
-            if max_f0 == min_f0: return 3.0
-            return 5 * (np.log(hz) - np.log(min_f0)) / (np.log(max_f0) - np.log(min_f0))
-
-        group_norm_points = {} 
-        for name, syls_dict in group_syl_contours.items():
-            X_all, Y_all = [], []
-            for k, y_arrays in syls_dict.items():
-                x_dense = np.linspace(k * 100, (k + 1) * 100, N_DENSE)
-                for y_arr in y_arrays:
-                    X_all.extend(x_dense.tolist())
-                    Y_all.extend([hz_to_5_scale(h) for h in y_arr])
-            group_norm_points[name] = (np.array(X_all), np.array(Y_all))
-            
-        pbar.set(0.8)
-        prog_dlg.update()
+                if success:
+                    messagebox.showinfo("成功", f"热力图已导出至:\n{out}")
+            except Exception as e:
+                messagebox.showerror("错误", f"导出热力图失败: {e}")
+                import logging
+                logging.getLogger(__name__).error(f"KDE Heatmap Export error: {e}", exc_info=True)
+                
+        btn_frame = ctk.CTkFrame(param_dlg, fg_color="transparent")
+        btn_frame.pack(side=tk.BOTTOM, pady=15)
         
-        self._draw_kde_heatmap(group_norm_points, max_syls, out_file, prog_dlg, pbar, lbl_status)
+        ctk.CTkButton(btn_frame, text="取消", width=90, fg_color="#E5E7EB", text_color="#374151", hover_color="#D1D5DB", command=param_dlg.destroy).pack(side=tk.LEFT, padx=10)
+        ctk.CTkButton(btn_frame, text="确定并选择路径", width=120, command=on_confirm).pack(side=tk.LEFT, padx=10)
 
-    def _draw_kde_heatmap(self, group_norm_points, max_syls, out_file, prog_dlg, pbar, lbl_status):
+    def _draw_kde_heatmap(self, group_norm_points, max_syls, out_file, prog_dlg, pbar, lbl_status, bw_method=0.15):
         import math
         from scipy.stats import gaussian_kde
         plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
@@ -1490,7 +1621,7 @@ class ProjectTreePanel:
             
             positions = np.vstack([X_all, Y_all])
             try:
-                kernel = gaussian_kde(positions, bw_method=0.15) 
+                kernel = gaussian_kde(positions, bw_method=bw_method) 
                 xi, yi = np.mgrid[xmin:xmax:200j, ymin:ymax:100j]
                 zi = kernel(np.vstack([xi.flatten(), yi.flatten()]))
                 zi = zi.reshape(xi.shape)
@@ -1500,7 +1631,8 @@ class ProjectTreePanel:
                     levels = np.linspace(vmax * 0.05, vmax, 30)
                     ax.contourf(xi, yi, zi, levels=levels, cmap="YlOrRd", extend='neither')
             except Exception as e:
-                logger.error(f"KDE drawing failed for {grp_name}: {e}")
+                import logging
+                logging.getLogger(__name__).error(f"KDE drawing failed for {grp_name}: {e}")
 
             for k in range(1, max_syls):
                 ax.axvline(k * 100, color='gray', linestyle='--', alpha=0.8)
@@ -1526,8 +1658,150 @@ class ProjectTreePanel:
         fig.savefig(out_file, dpi=300, bbox_inches='tight')
         plt.close(fig)
         prog_dlg.destroy()
+        return True
 
-    def _export_kde_heatmap_integrated(self, out_file, all_speakers):
+    def _export_kde_heatmap(self, out_file, tree_structure=None, params=None):
+        from scipy.interpolate import interp1d
+        from scipy.signal import savgol_filter
+        from scipy.stats import gaussian_kde
+        import os
+
+        if tree_structure is None:
+            tree_structure = self._get_all_items_by_group()
+
+        N_DENSE = 100
+        max_syls = 1
+        aggregated_syl_contours = {}
+
+        prog_dlg = ctk.CTkToplevel(self.parent)
+        prog_dlg.title("正在导出热力图")
+        prog_dlg.geometry("300x120")
+        prog_dlg.attributes('-topmost', True)
+        prog_dlg.resizable(False, False)
+        prog_dlg.update_idletasks()
+        main_win = self.parent.winfo_toplevel()
+        prog_dlg.geometry(f"+{main_win.winfo_rootx() + (main_win.winfo_width() - 300) // 2}+{main_win.winfo_rooty() + (main_win.winfo_height() - 120) // 2}")
+        
+        lbl_status = ctk.CTkLabel(prog_dlg, text="正在处理数据，请稍候...", font=self.font_main)
+        lbl_status.pack(pady=(20, 5))
+        pbar = ctk.CTkProgressBar(prog_dlg, width=250)
+        pbar.pack()
+        pbar.set(0)
+        prog_dlg.update()
+
+        pbar.set(0.2)
+        prog_dlg.update()
+
+        speaker_contours = {}
+        for grp_name, children in tree_structure:
+            speaker_contours[grp_name] = {}
+            for child in children:
+                item = self.items[child]
+                lbl = item.get('label', '')
+                if len(lbl) > max_syls: max_syls = len(lbl)
+                self._ensure_item_loaded(item)
+                if item.get('start') is None or not item.get('snd') or (not item.get('pitch') and not item.get('pitch_data')):
+                    continue
+                t_s, t_e = item['start'], item['end']
+                label = item.get('label', '')
+                inner_splits = item.get('inner_splits', [])
+                
+                splits = [t_s] + [s for s in inner_splits if t_s < s < t_e] + [t_e]
+                if len(splits) != len(label) + 1: splits = np.linspace(t_s, t_e, len(label) + 1).tolist()
+                if len(label) <= 1: splits = [t_s, t_e]
+                
+                if item.get('pitch_data'):
+                    p_xs = item['pitch_data']['xs']
+                    p_freqs = item['pitch_data']['freqs']
+                else:
+                    pitch = item['pitch']
+                    p_xs = pitch.xs()
+                    p_freqs = pitch.selected_array['frequency']
+                
+                for k in range(len(splits) - 1):
+                    c_s, c_e = splits[k], splits[k+1]
+                    valid_idx = np.where((p_xs >= c_s) & (p_xs <= c_e) & (p_freqs > 0))[0]
+                    if len(valid_idx) >= 2:
+                        v_s, v_e = p_xs[valid_idx[0]], p_xs[valid_idx[-1]]
+                        mask = (p_xs >= v_s) & (p_xs <= v_e) & (p_freqs > 0)
+                        valid_freqs = p_freqs[mask]
+                        if len(valid_freqs) < 3: continue
+    
+                        win = len(valid_freqs) // 3
+                        if win % 2 == 0: win += 1
+                        win = max(win, 3)
+                        smoothed = savgol_filter(valid_freqs, win, 2) if len(valid_freqs) > win else valid_freqs
+    
+                        x_orig = np.linspace(0, 1, len(smoothed))
+                        f_interp = interp1d(x_orig, smoothed, kind='linear')
+                        y_dense = f_interp(np.linspace(0, 1, N_DENSE))
+                        
+                        if k not in speaker_contours[grp_name]: speaker_contours[grp_name][k] = []
+                        speaker_contours[grp_name][k].append(y_dense)
+        
+        all_mean_vals = []
+        for name, syls_dict in speaker_contours.items():
+            for k, y_arrays in syls_dict.items():
+                if y_arrays:
+                    mean_contour = np.mean(y_arrays, axis=0)
+                    all_mean_vals.extend(mean_contour.tolist())
+        if all_mean_vals:
+            if params:
+                f0_mode = params.get('f0_mode', 'minmax')
+                p_low = params.get('percentile_low', 5.0)
+                p_high = params.get('percentile_high', 95.0)
+                m_min = params.get('manual_min', 75.0)
+                m_max = params.get('manual_max', 600.0)
+            else:
+                f0_mode = 'minmax'
+                p_low, p_high, m_min, m_max = 5.0, 95.0, 75.0, 600.0
+
+            if f0_mode == 'percentile':
+                min_f0 = np.percentile(all_mean_vals, p_low)
+                max_f0 = np.percentile(all_mean_vals, p_high)
+            elif f0_mode == 'manual':
+                min_f0 = m_min
+                max_f0 = m_max
+            else:
+                min_f0 = min(all_mean_vals)
+                max_f0 = max(all_mean_vals)
+
+            def hz_to_5_scale_s(hz):
+                if max_f0 == min_f0: return 3.0
+                hz_val = np.clip(hz, min_f0, max_f0) if min_f0 > 0 else hz
+                if min_f0 <= 0 or max_f0 <= min_f0: return 3.0
+                return 5 * (np.log(hz_val) - np.log(min_f0)) / (np.log(max_f0) - np.log(min_f0))
+            
+            for name, syls_dict in speaker_contours.items():
+                if name not in aggregated_syl_contours: aggregated_syl_contours[name] = {} 
+                for k, y_arrays in syls_dict.items():
+                    if k not in aggregated_syl_contours[name]: aggregated_syl_contours[name][k] = []
+                    for y_arr in y_arrays:
+                        t_arr = [hz_to_5_scale_s(h) for h in y_arr]
+                        aggregated_syl_contours[name][k].append(t_arr)
+
+        pbar.set(0.7)
+        lbl_status.configure(text="正在汇总数据...")
+        prog_dlg.update()
+
+        group_norm_points = {}
+        for name, syls_dict in aggregated_syl_contours.items():
+            X_all, Y_all = [], []
+            for k, y_arrays in syls_dict.items():
+                x_dense = np.linspace(k * 100, (k + 1) * 100, N_DENSE)
+                for y_arr in y_arrays:
+                    X_all.extend(x_dense.tolist())
+                    Y_all.extend(y_arr)
+            group_norm_points[name] = (np.array(X_all), np.array(Y_all))
+
+        pbar.set(0.8)
+        prog_dlg.update()
+        
+        bw_method = params.get('bw_method', 0.15) if params else 0.15
+        self._draw_kde_heatmap(group_norm_points, max_syls, out_file, prog_dlg, pbar, lbl_status, bw_method=bw_method)
+        return True
+
+    def _export_kde_heatmap_integrated(self, out_file, all_speakers, params=None):
         from scipy.interpolate import interp1d
         from scipy.signal import savgol_filter
         from scipy.stats import gaussian_kde
@@ -1609,7 +1883,6 @@ class ProjectTreePanel:
                             if k not in speaker_contours[grp_name]: speaker_contours[grp_name][k] = []
                             speaker_contours[grp_name][k].append(y_dense)
             
-            # 对当前发音人内的每个组别进行组内 F0 均值化并进行该发音人自身的 T值归一化
             all_mean_vals = []
             for name, syls_dict in speaker_contours.items():
                 for k, y_arrays in syls_dict.items():
@@ -1617,10 +1890,31 @@ class ProjectTreePanel:
                         mean_contour = np.mean(y_arrays, axis=0)
                         all_mean_vals.extend(mean_contour.tolist())
             if all_mean_vals:
-                min_f0, max_f0 = min(all_mean_vals), max(all_mean_vals)
+                if params:
+                    f0_mode = params.get('f0_mode', 'minmax')
+                    p_low = params.get('percentile_low', 5.0)
+                    p_high = params.get('percentile_high', 95.0)
+                    m_min = params.get('manual_min', 75.0)
+                    m_max = params.get('manual_max', 600.0)
+                else:
+                    f0_mode = 'minmax'
+                    p_low, p_high, m_min, m_max = 5.0, 95.0, 75.0, 600.0
+
+                if f0_mode == 'percentile':
+                    min_f0 = np.percentile(all_mean_vals, p_low)
+                    max_f0 = np.percentile(all_mean_vals, p_high)
+                elif f0_mode == 'manual':
+                    min_f0 = m_min
+                    max_f0 = m_max
+                else:
+                    min_f0 = min(all_mean_vals)
+                    max_f0 = max(all_mean_vals)
+
                 def hz_to_5_scale_s(hz):
                     if max_f0 == min_f0: return 3.0
-                    return 5 * (np.log(hz) - np.log(min_f0)) / (np.log(max_f0) - np.log(min_f0))
+                    hz_val = np.clip(hz, min_f0, max_f0) if min_f0 > 0 else hz
+                    if min_f0 <= 0 or max_f0 <= min_f0: return 3.0
+                    return 5 * (np.log(hz_val) - np.log(min_f0)) / (np.log(max_f0) - np.log(min_f0))
                 
                 for name, syls_dict in speaker_contours.items():
                     if name not in aggregated_syl_contours: aggregated_syl_contours[name] = {} 
@@ -1648,7 +1942,10 @@ class ProjectTreePanel:
         pbar.set(0.8)
         prog_dlg.update()
         
-        self._draw_kde_heatmap(group_norm_points, max_syls, out_file, prog_dlg, pbar, lbl_status)
+        bw_method = params.get('bw_method', 0.15) if params else 0.15
+        self._draw_kde_heatmap(group_norm_points, max_syls, out_file, prog_dlg, pbar, lbl_status, bw_method=bw_method)
+        return True
+
 
     def _export_textgrid_long(self, out_file, tree_structure=None):
         import textgrid

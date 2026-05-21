@@ -591,3 +591,128 @@ def process_single_long_word(snd_values: np.ndarray, snd_sf: float, word: str, m
             'success': False,
             'error': res.get('error', 'Unknown error')
         }
+
+
+def batch_process_worker_with_textgrid(path: str, tg_path: str, params: Dict[str, float], trim_silence: bool) -> Dict[str, Any]:
+    try:
+        import textgrid
+        tg = textgrid.TextGrid.fromFile(tg_path)
+        
+        words_tier = None
+        chars_tier = None
+        groups_tier = None
+        for t in tg.tiers:
+            if t.name == "words":
+                words_tier = t
+            elif t.name == "chars":
+                chars_tier = t
+            elif t.name in ["groups", "group"]:
+                groups_tier = t
+                
+        if not words_tier:
+            for t in tg.tiers:
+                if isinstance(t, textgrid.IntervalTier):
+                    words_tier = t
+                    break
+                    
+        interval = None
+        if words_tier:
+            for iv in words_tier:
+                if iv.mark.strip():
+                    interval = iv
+                    break
+                    
+        snd = parselmouth.Sound(path)
+        total_dur = snd.get_total_duration()
+        
+        if not interval:
+            lbl = os.path.splitext(os.path.basename(path))[0]
+            t_s, t_e = 0.0, total_dur
+            grp_name = "导入内容"
+            inner_splits = []
+            chars_bounds = [[0.0, total_dur]]
+        else:
+            lbl = interval.mark.strip()
+            t_s = max(0.0, interval.minTime)
+            t_e = min(total_dur, interval.maxTime)
+            
+            grp_name = "导入内容"
+            if groups_tier:
+                center = (t_s + t_e) / 2.0
+                for g_interval in groups_tier:
+                    if g_interval.minTime <= center <= g_interval.maxTime:
+                        g_lbl = g_interval.mark.strip()
+                        if g_lbl:
+                            grp_name = g_lbl
+                            break
+                            
+            chars_bounds = []
+            inner_splits = []
+            if chars_tier:
+                overlapping_chars = []
+                for c_interval in chars_tier:
+                    c_lbl = c_interval.mark.strip()
+                    if c_lbl:
+                        center = (c_interval.minTime + c_interval.maxTime) / 2.0
+                        if t_s <= center <= t_e:
+                            overlapping_chars.append(c_interval)
+                overlapping_chars.sort(key=lambda c: c.minTime)
+                if overlapping_chars:
+                    for c in overlapping_chars:
+                        chars_bounds.append([c.minTime, c.maxTime])
+                    for j in range(len(overlapping_chars) - 1):
+                        inner_splits.append(overlapping_chars[j].maxTime)
+                        
+            if not chars_bounds:
+                from .data_utils import split_into_syllables
+                syls = split_into_syllables(lbl)
+                w_len = len(syls)
+                if w_len > 1:
+                    splits = np.linspace(t_s, t_e, w_len + 1).tolist()
+                    chars_bounds = [[splits[j], splits[j+1]] for j in range(w_len)]
+                    inner_splits = splits[1:-1]
+                else:
+                    chars_bounds = [[t_s, t_e]]
+                    inner_splits = []
+                    
+        pitch_data = extract_f0(snd, params)
+        mic_s, mic_e, raw_s, raw_e = core_microscopic_vowel_nucleus(
+            snd, pitch_data, t_s, t_e,
+            params['db'], params['skip_front'], trim_silence
+        )
+        
+        preview_times = np.linspace(mic_s, mic_e, 11)
+        p_xs = pitch_data['xs']
+        p_freqs = pitch_data['freqs']
+        preview_f0 = np.interp(preview_times, p_xs, p_freqs).tolist()
+        
+        for j, t in enumerate(preview_times):
+            valid_indices = np.where(p_freqs > 0)[0]
+            if len(valid_indices) == 0:
+                preview_f0[j] = 0.0
+                continue
+            valid_xs = p_xs[valid_indices]
+            if np.min(np.abs(valid_xs - t)) > 0.025:
+                preview_f0[j] = 0.0
+                
+        has_empty_data = any(f == 0.0 for f in preview_f0)
+        
+        return {
+            'label': lbl,
+            'path': path,
+            'group': grp_name,
+            'macro_start': t_s,
+            'macro_end': t_e,
+            'start': mic_s,
+            'end': mic_e,
+            'raw_start': raw_s,
+            'raw_end': raw_e,
+            'inner_splits': inner_splits,
+            'chars_bounds': chars_bounds,
+            'preview_f0': preview_f0,
+            'pitch_data': pitch_data,
+            'success': True,
+            'has_empty_data': has_empty_data
+        }
+    except Exception as e:
+        return {'success': False, 'error': str(e), 'path': path}

@@ -148,7 +148,7 @@ def test_get_export_text_for_item_with_eraser_sync():
     item = {
         'start': 0.1,
         'end': 0.9,
-        'label': 'AB',
+        'label': 'A/B',
         'snd': MockSound(duration=1.0),
         'pitch_data': {
             'xs': parent_xs,
@@ -173,8 +173,8 @@ def test_get_export_text_for_item_with_eraser_sync():
     with patch('modules.audio_core.extract_f0', return_value=mock_child_pitch) as mock_extract:
         result = get_export_text_for_item(item, 1, 11)
         
-    assert "1_1.A (AB)" in result
-    assert "1_2.B (AB)" in result
+    assert "1_1.A (A/B)" in result
+    assert "1_2.B (A/B)" in result
     
     lines = result.strip().split('\n')
     # For A: bounds [0.1, 0.5].

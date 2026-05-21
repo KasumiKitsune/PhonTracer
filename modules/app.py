@@ -13,7 +13,7 @@ import queue
 # 导入拆分后的模块
 from .ui_widgets import CTkReleaseButton
 from .data_utils import parse_wordlist, fuzzy_match_word_to_path, split_into_syllables, has_cjk
-from .audio_core import core_microscopic_vowel_nucleus, batch_process_worker, macroscopic_vad, check_audio_segments, long_process_worker, recalculate_bounds_fast, auto_split_inner_word, extract_f0
+from .audio_core import core_microscopic_vowel_nucleus, batch_process_worker, macroscopic_vad, check_audio_segments, long_process_worker, recalculate_bounds_fast, auto_split_inner_word, extract_f0, batch_process_worker_with_textgrid
 from .visual_splitter import VisualSplitter
 from .spectrogram_panel import SpectrogramPanel
 from .project_tree import ProjectTreePanel
@@ -154,6 +154,11 @@ class PhoneticsApp:
         tg_files = [p for p in decoded_paths if p.lower().endswith('.textgrid')]
         
         if tg_files:
+            if self.active_import_mode == 'batch':
+                dlg = self.active_import_dlg
+                dlg.destroy()
+                self.process_batch_with_textgrid(tg_files)
+                return
             path = tg_files[0]
             if self.active_import_mode != 'long':
                 messagebox.showwarning("提示", "目前仅在“单条长音频”模式下支持导入 TextGrid 词表。", parent=self.active_import_dlg)
@@ -1983,6 +1988,12 @@ class PhoneticsApp:
         btn_import.pack(side=tk.LEFT)
 
         def load_textgrid():
+            if mode == 'batch':
+                paths = filedialog.askopenfilenames(filetypes=[("TextGrid Files", "*.TextGrid"), ("All Files", "*.*")])
+                if not paths: return
+                dlg.destroy()
+                self.process_batch_with_textgrid(list(paths))
+                return
             path = filedialog.askopenfilename(filetypes=[("TextGrid Files", "*.TextGrid"), ("All Files", "*.*")])
             if not path: return
             try:
@@ -2228,11 +2239,10 @@ class PhoneticsApp:
         btn_row = ctk.CTkFrame(dlg, fg_color="transparent")
         btn_row.pack(fill=tk.X, padx=20, pady=(5, 15))
 
-        if mode == 'long':
-            btn_import_tg = ctk.CTkButton(btn_row, text="导入 .TextGrid",
-                                          width=120, height=40, corner_radius=20, fg_color="#8B5CF6", text_color="white",
-                                          hover_color="#7C3AED", command=load_textgrid, font=self.font_main)
-            btn_import_tg.pack(side=tk.LEFT)
+        btn_import_tg = ctk.CTkButton(btn_row, text="导入 .TextGrid",
+                                      width=120, height=40, corner_radius=20, fg_color="#8B5CF6", text_color="white",
+                                      hover_color="#7C3AED", command=load_textgrid, font=self.font_main)
+        btn_import_tg.pack(side=tk.LEFT)
 
         CTkReleaseButton(btn_row, text="开始匹配提取", command=process, corner_radius=20, height=40, font=self.font_main).pack(side=tk.RIGHT)
         
@@ -2250,6 +2260,143 @@ class PhoneticsApp:
         except Exception as e:
             import logging
             logging.getLogger(__name__).warning(f"Failed to hook dropfiles on import dialog: {e}")
+
+    def process_batch_with_textgrid(self, tg_paths):
+        if not self.pending_batch_paths:
+            return messagebox.showwarning("提示", "请先选择多个音频文件。")
+        if not tg_paths: return
+
+        def run():
+            self.root.after(0, lambda: self.start_loading("正在并行匹配并分析 TextGrid..."))
+            self.root.after(0, self.tree_panel.clear_all)
+
+            audio_paths = self.pending_batch_paths
+
+            import re
+            def natural_sort_key(s):
+                return [int(text) if text.isdigit() else text.lower()
+                        for text in re.split('([0-9]+)', s)]
+
+            sorted_audios = sorted(audio_paths, key=natural_sort_key)
+            sorted_tgs = sorted(tg_paths, key=natural_sort_key)
+
+            matched_audio_to_tg = {}
+            matched_tg_to_audio = {}
+
+            # 1. Exact match
+            tg_base_map = {os.path.splitext(os.path.basename(tp))[0].lower(): tp for tp in sorted_tgs}
+            for ap in sorted_audios:
+                abase = os.path.splitext(os.path.basename(ap))[0].lower()
+                if abase in tg_base_map:
+                    tp = tg_base_map[abase]
+                    matched_audio_to_tg[ap] = tp
+                    matched_tg_to_audio[tp] = ap
+
+            # 2. Fuzzy match
+            for ap in sorted_audios:
+                if ap in matched_audio_to_tg: continue
+                abase = os.path.splitext(os.path.basename(ap))[0].lower()
+                for tp in sorted_tgs:
+                    if tp in matched_tg_to_audio: continue
+                    tbase = os.path.splitext(os.path.basename(tp))[0].lower()
+                    if abase in tbase or tbase in abase:
+                        matched_audio_to_tg[ap] = tp
+                        matched_tg_to_audio[tp] = ap
+                        break
+
+            # 3. Order match
+            remaining_audios = [ap for ap in sorted_audios if ap not in matched_audio_to_tg]
+            remaining_tgs = [tp for tp in sorted_tgs if tp not in matched_tg_to_audio]
+            for ap, tp in zip(remaining_audios, remaining_tgs):
+                matched_audio_to_tg[ap] = tp
+                matched_tg_to_audio[tp] = ap
+
+            total = len(sorted_audios)
+            results = [None] * total
+
+            params = {'db': self.last_params['db'], 'skip_front': self.last_params['skip_front'], 'pitch_floor': self.last_params['pitch_floor'], 'pitch_ceiling': self.last_params['pitch_ceiling'], 'voicing_threshold': self.last_params.get('voicing_threshold', 0.25)}
+            trim = self.switch_trim_silence.get()
+
+            futures = {}
+            for i, ap in enumerate(sorted_audios):
+                tp = matched_audio_to_tg.get(ap)
+                if tp:
+                    futures[self.executor.submit(batch_process_worker_with_textgrid, ap, tp, params, trim)] = i
+                else:
+                    word_lbl = os.path.splitext(os.path.basename(ap))[0]
+                    futures[self.executor.submit(batch_process_worker, ap, params, trim, word_lbl)] = i
+
+            total_futures = len(futures) if futures else 1
+            done_count = 0
+            if futures:
+                for future in concurrent.futures.as_completed(futures):
+                    orig_idx = futures[future]
+                    try:
+                        res = future.result()
+                        results[orig_idx] = res
+                    except Exception as e:
+                        ap = sorted_audios[orig_idx]
+                        lbl = os.path.splitext(os.path.basename(ap))[0]
+                        results[orig_idx] = {'label': lbl, 'group': '导入内容', 'success': False, 'error': str(e), 'path': ap}
+                    done_count += 1
+                    self.root.after(0, lambda v=done_count/total_futures: self.set_progress(v))
+            else:
+                self.root.after(0, lambda: self.set_progress(1.0))
+
+            def finalize():
+                self.tree_panel.clear_all()
+                self.items.clear()
+                matched_count = 0
+
+                unique_groups = []
+                for res in results:
+                    if res:
+                        g = res.get('group', '导入内容')
+                        if g not in unique_groups:
+                            unique_groups.append(g)
+
+                for g in unique_groups:
+                    if g not in self.tree_panel.project_groups:
+                        self.tree_panel.project_groups.append(g)
+                    iid_grp = f"group_{g}"
+                    self.tree_panel.tree.insert("", tk.END, iid=iid_grp, text=g, tags=('group',), open=True)
+                    self.tree_panel.group_nodes[g] = iid_grp
+
+                for res in results:
+                    if not res: continue
+                    grp_name = res.get('group', '导入内容')
+                    gid = self.tree_panel.group_nodes.get(grp_name)
+                    if res.get('success'):
+                        res['group'] = grp_name
+                        if 'pitch_floor' not in res:
+                            res['pitch_floor'] = params['pitch_floor']
+                            res['pitch_ceiling'] = params['pitch_ceiling']
+                            res['voicing_threshold'] = params['voicing_threshold']
+
+                        tp = matched_audio_to_tg.get(res['path'])
+                        if tp:
+                            display = f"{res['label']} ← {os.path.basename(tp)}"
+                        else:
+                            display = res['label']
+
+                        iid = f"batch_tg_{res['label']}_{id(res)}"
+                        has_empty = res.get('has_empty_data', False)
+                        img = self.tk_icons.get('warning', '') if has_empty else ''
+                        self.tree_panel.tree.insert(gid, tk.END, iid=iid, text=display, tags=('item',), image=img)
+                        self.items[iid] = res
+                        self.tree_panel.update_item_icon(iid)
+                        matched_count += 1
+                    else:
+                        iid = f"missing_{res['label']}_{id(res)}"
+                        self.tree_panel.tree.insert(gid, tk.END, iid=iid, text=res['label'] + " (失败)", tags=('item',))
+                        self.items[iid] = {'label': res['label'], 'group': grp_name, 'snd': None, 'start': None, 'end': None, 'inner_splits': []}
+
+                self.stop_loading(f"TextGrid 导入并匹配完成: {matched_count}/{total}")
+                self.tree_panel.select_first_item()
+
+            self.root.after(0, finalize)
+
+        threading.Thread(target=run, daemon=True).start()
 
     def process_long_with_textgrid(self, tg_intervals):
         if not tg_intervals: return

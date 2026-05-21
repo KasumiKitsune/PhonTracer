@@ -85,7 +85,7 @@ def test_word_mode_missing_f0():
     freqs = np.zeros(100)
     pitch = MockPitch(freqs)
 
-    item = {'start': 0.1, 'end': 0.9, 'label': 'AB', 'inner_splits': [0.5], 'snd': MockSound(), 'pitch': pitch}
+    item = {'start': 0.1, 'end': 0.9, 'label': 'A/B', 'inner_splits': [0.5], 'snd': MockSound(), 'pitch': pitch}
     item['snd'].mock_pitch = pitch
     result = get_export_text_for_item(item, 1, 11)
 
@@ -97,10 +97,10 @@ def test_word_mode_partial_missing_f0():
     freqs[10:40] = 150.0 # Valid F0 only in the first character part
     pitch = MockPitch(freqs)
 
-    item = {'start': 0.1, 'end': 0.9, 'label': 'AB', 'inner_splits': [0.5], 'snd': MockSound(), 'pitch': pitch}
+    item = {'start': 0.1, 'end': 0.9, 'label': 'A/B', 'inner_splits': [0.5], 'snd': MockSound(), 'pitch': pitch}
     item['snd'].mock_pitch = pitch
     result = get_export_text_for_item(item, 1, 11)
 
     # Should include A but not B
-    assert "1_1.A (AB)" in result
+    assert "1_1.A (A/B)" in result
     assert "1_2.B" not in result

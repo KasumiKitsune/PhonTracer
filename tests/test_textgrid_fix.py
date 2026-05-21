@@ -243,12 +243,12 @@ class TestTextGridFix(unittest.TestCase):
         icons = {}
         items_dict = {
             'item1': {
-                'label': 'ma',
+                'label': 'ma/ma',
                 'group': 'MyCustomGroup',
                 'start': 0.1,
                 'end': 0.9,
-                'inner_splits': [],
-                'chars_bounds': [[0.1, 0.9]],
+                'inner_splits': [0.5],
+                'chars_bounds': [[0.1, 0.5], [0.5, 0.9]],
             }
         }
         app_params = {}
@@ -266,7 +266,7 @@ class TestTextGridFix(unittest.TestCase):
             panel._export_textgrid_long('C:/output.TextGrid', tree_structure=tree_structure)
 
             # Verify that group tier is added
-            self.assertEqual(mock_tg_instance.append.call_count, 3) # words, groups, chars (because length of 'ma' > 1)
+            self.assertEqual(mock_tg_instance.append.call_count, 3) # words, groups, chars (because syllables of 'mama' > 1)
 
 if __name__ == '__main__':
     unittest.main()
