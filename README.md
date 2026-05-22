@@ -7,7 +7,7 @@
     <img src="https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white" alt="Python">
     <img src="https://img.shields.io/badge/Platform-macOS%20|%20Windows-000000" alt="Platform">
     <img src="https://img.shields.io/badge/UI-CustomTkinter-blue" alt="UI">
-    <img src="https://img.shields.io/badge/Release-v1.1.1-10B981" alt="Release">
+    <img src="https://img.shields.io/badge/Release-v1.0.0-10B981" alt="Release">
   </p>
 </div>
 
