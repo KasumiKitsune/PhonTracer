@@ -1,0 +1,1224 @@
+
+<!DOCTYPE html>
+<html lang="zh-CN" class="scroll-smooth">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PhonTracer 使用手册 - 全流程语音学实验处理工作站</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Inter & Playfair Display / Noto Serif Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Serif+SC:wght@400;700&display=swap" rel="stylesheet">
+    <!-- Lucide Icons CDN -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
+                        serif: ['Noto Serif SC', 'Georgia', 'serif'],
+                    },
+                    fontSize: {
+                        xs: ['0.85rem', { lineHeight: '1.3rem' }],     // ~13.6px
+                        sm: ['0.95rem', { lineHeight: '1.45rem' }],    // ~15.2px
+                        base: ['1.05rem', { lineHeight: '1.6rem' }],    // ~16.8px
+                        lg: ['1.2rem', { lineHeight: '1.75rem' }],      // ~19.2px
+                        xl: ['1.4rem', { lineHeight: '2rem' }],         // ~22.4px
+                        '2xl': ['1.75rem', { lineHeight: '2.25rem' }],  // ~28px
+                        '3xl': ['2.2rem', { lineHeight: '2.5rem' }],    // ~35.2px
+                    },
+                    colors: {
+                        brand: {
+                            50: '#f4f6fa',
+                            100: '#e9edf5',
+                            500: '#3b60a8',
+                            600: '#2c4a85',
+                            700: '#1f3562',
+                            900: '#111e3b',
+                        },
+                        accent: {
+                            50: '#fdf2f2',
+                            500: '#de4343',
+                            600: '#b82d2d',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* Override arbitrary micro font sizes to improve readability */
+        .text-\[10px\] {
+            font-size: 0.8rem !important; /* ~12.8px */
+        }
+        .text-\[11px\] {
+            font-size: 0.825rem !important; /* ~13.2px */
+        }
+        .pitch-grid {
+            background-size: 40px 40px;
+            background-image: linear-gradient(to right, rgba(226, 232, 240, 0.5) 1px, transparent 1px),
+                              linear-gradient(to bottom, rgba(226, 232, 240, 0.5) 1px, transparent 1px);
+        }
+        .code-glow {
+            box-shadow: 0 0 30px rgba(59, 96, 168, 0.1) inset;
+        }
+    </style>
+    <!-- MathJax for LaTeX parsing -->
+    <script>
+        window.MathJax = {
+            tex: {
+                inlineMath: [['\\(', '\\)']],
+                displayMath: [['\\[', '\\]'], ['$$', '$$']]
+            },
+            svg: {
+                fontCache: 'global'
+            }
+        };
+    </script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+</head>
+<body class="bg-stone-50/50 text-slate-800 font-sans antialiased selection:bg-brand-100 selection:text-brand-900">
+
+    <!-- Global Progress Bar -->
+    <div id="scrollProgress" class="fixed top-0 left-0 h-1 bg-brand-500 z-50 transition-all duration-150" style="width: 0%;"></div>
+
+    <!-- Navigation Bar -->
+    <nav class="sticky top-0 z-40 bg-white/80 backdrop-blur-md border-b border-slate-100 px-6 py-4">
+        <div class="max-w-7xl mx-auto flex items-center justify-between">
+            <div class="flex items-center space-x-3">
+                <div class="bg-brand-600 text-white p-2 rounded-lg">
+                    <i data-lucide="activity" class="w-6 h-6"></i>
+                </div>
+                <div>
+                    <span class="font-bold text-lg tracking-tight text-slate-900">PhonTracer</span>
+                    <span class="text-xs block text-slate-500 font-medium">语音学实验全流程工作站</span>
+                </div>
+            </div>
+            <div class="hidden lg:flex items-center space-x-8 text-sm font-medium text-slate-600">
+                <a href="#concepts" class="hover:text-brand-600 transition">核心概念</a>
+                <a href="#quickstart" class="hover:text-brand-600 transition">快速起步</a>
+                <a href="#interface" class="hover:text-brand-600 transition">界面指南</a>
+                <a href="#workflows" class="hover:text-brand-600 transition">工作流</a>
+                <a href="#algorithms" class="hover:text-brand-600 transition">算法参数</a>
+                <a href="#export" class="hover:text-brand-600 transition">数据导出</a>
+                <a href="#cli" class="hover:text-brand-600 transition">CLI与AI</a>
+                <a href="#faq" class="hover:text-brand-600 transition">疑难解答</a>
+            </div>
+            <a href="#quickstart" class="bg-brand-600 hover:bg-brand-700 text-white text-sm font-semibold px-4 py-2 rounded-lg transition shadow-sm inline-flex items-center space-x-1.5">
+                <i data-lucide="terminal" class="w-4 h-4"></i>
+                <span>立即上手</span>
+            </a>
+        </div>
+    </nav>
+
+    <!-- Poster-grade Hero Header -->
+    <header class="relative overflow-hidden bg-white border-b border-slate-100 py-20 lg:py-28">
+        <div class="absolute inset-0 pitch-grid opacity-70"></div>
+        <div class="absolute right-0 top-1/2 -translate-y-1/2 w-1/2 h-full hidden lg:flex items-center justify-center opacity-90">
+            <!-- Simulated F0 Spectrogram Graphic -->
+            <div class="relative w-[500px] h-[300px] border border-slate-200/80 bg-slate-50/80 rounded-2xl p-6 shadow-xl backdrop-blur-sm overflow-hidden">
+                <div class="absolute top-4 left-4 text-xs font-mono text-slate-400">SPECTRUM & F0 CONTOUR (Hz)</div>
+                <!-- Waveform decoration -->
+                <div class="absolute bottom-6 left-6 right-6 h-16 flex items-end space-x-1 opacity-20">
+                    <div class="bg-brand-500 w-full h-[30%] rounded-t"></div>
+                    <div class="bg-brand-500 w-full h-[45%] rounded-t"></div>
+                    <div class="bg-brand-500 w-full h-[60%] rounded-t"></div>
+                    <div class="bg-brand-500 w-full h-[85%] rounded-t"></div>
+                    <div class="bg-brand-500 w-full h-[95%] rounded-t"></div>
+                    <div class="bg-brand-500 w-full h-[70%] rounded-t"></div>
+                    <div class="bg-brand-500 w-full h-[40%] rounded-t"></div>
+                    <div class="bg-brand-500 w-full h-[55%] rounded-t"></div>
+                    <div class="bg-brand-500 w-full h-[75%] rounded-t"></div>
+                    <div class="bg-brand-500 w-full h-[90%] rounded-t"></div>
+                    <div class="bg-brand-500 w-full h-[65%] rounded-t"></div>
+                    <div class="bg-brand-500 w-full h-[35%] rounded-t"></div>
+                </div>
+                <!-- Interactive Pitch Curve -->
+                <svg class="absolute inset-0 w-full h-full p-6" viewBox="0 0 450 250" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <!-- Grid Lines -->
+                    <line x1="0" y1="50" x2="450" y2="50" stroke="#e2e8f0" stroke-dasharray="4 4" />
+                    <line x1="0" y1="110" x2="450" y2="110" stroke="#e2e8f0" stroke-dasharray="4 4" />
+                    <line x1="0" y1="170" x2="450" y2="170" stroke="#e2e8f0" stroke-dasharray="4 4" />
+                    
+                    <!-- Syllable divider -->
+                    <line x1="225" y1="20" x2="225" y2="230" stroke="#3b60a8" stroke-dasharray="4 4" stroke-width="1.5" />
+                    <text x="112" y="30" fill="#3b60a8" class="text-xs font-semibold" text-anchor="middle">Syllable 1</text>
+                    <text x="337" y="30" fill="#3b60a8" class="text-xs font-semibold" text-anchor="middle">Syllable 2</text>
+
+                    <!-- Pitch Line Curve 1 -->
+                    <path d="M 40 180 Q 112 80 185 130" stroke="#de4343" stroke-width="3" stroke-linecap="round"/>
+                    <!-- Pitch Line Curve 2 -->
+                    <path d="M 265 110 T 410 60" stroke="#de4343" stroke-width="3" stroke-linecap="round"/>
+
+                    <!-- Standard 11 Sampling points -->
+                    <circle cx="40" cy="180" r="4" fill="#de4343" class="transition-all duration-300 hover:r-6 cursor-pointer" />
+                    <circle cx="69" cy="155" r="4" fill="#de4343" />
+                    <circle cx="98" cy="130" r="4" fill="#de4343" />
+                    <circle cx="127" cy="115" r="4" fill="#de4343" />
+                    <circle cx="156" cy="118" r="4" fill="#de4343" />
+                    <circle cx="185" cy="130" r="4" fill="#de4343" />
+
+                    <circle cx="265" cy="110" r="4" fill="#de4343" />
+                    <circle cx="294" cy="98" r="4" fill="#de4343" />
+                    <circle cx="323" cy="85" r="4" fill="#de4343" />
+                    <circle cx="352" cy="74" r="4" fill="#de4343" />
+                    <circle cx="381" cy="65" r="4" fill="#de4343" />
+                    <circle cx="410" cy="60" r="4" fill="#de4343" />
+                </svg>
+            </div>
+        </div>
+        <div class="max-w-7xl mx-auto px-6 relative z-10">
+            <div class="lg:w-1/2">
+                <div class="inline-flex items-center space-x-2 bg-brand-50 border border-brand-100 text-brand-700 text-xs px-3 py-1.5 rounded-full font-semibold mb-6">
+                    <i data-lucide="sparkles" class="w-3.5 h-3.5"></i>
+                    <span>专业的语音学实验全流程工作站</span>
+                </div>
+                <h1 class="text-4xl lg:text-6xl font-extrabold text-slate-900 tracking-tight font-serif mb-6 leading-tight">
+                    不仅是提取曲线<br>
+                    更是<span class="text-brand-600 border-b-4 border-brand-100 pb-1">科研生产力</span>
+                </h1>
+                <p class="text-lg text-slate-600 leading-relaxed max-w-lg mb-8">
+                    PhonTracer 将录音、字表匹配、音节切分、基频数据采样、人工可视化修正、最终数据导出全链条打通，让枯燥的数据处理可控、直观且可复查。
+                </p>
+                <div class="flex flex-wrap gap-4">
+                    <a href="#quickstart" class="bg-brand-600 hover:bg-brand-700 text-white font-semibold px-6 py-3 rounded-xl transition shadow-lg shadow-brand-600/10 inline-flex items-center space-x-2">
+                        <i data-lucide="play" class="w-5 h-5"></i>
+                        <span>快速开始</span>
+                    </a>
+                    <a href="#concepts" class="bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 font-semibold px-6 py-3 rounded-xl transition inline-flex items-center space-x-2">
+                        <i data-lucide="book-open" class="w-5 h-5"></i>
+                        <span>阅读概念</span>
+                    </a>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Container Layout with sticky Sidebar TOC -->
+    <div class="max-w-7xl mx-auto px-6 py-12 lg:py-16">
+        <div class="flex flex-col lg:flex-row gap-12">
+            
+            <!-- Sidebar Navigation -->
+            <aside class="lg:w-64 shrink-0 lg:sticky lg:top-28 lg:h-[calc(100vh-10rem)] overflow-y-auto hidden lg:block scrollbar-thin">
+                <div class="space-y-8">
+                    <div>
+                        <h4 class="text-xs uppercase tracking-wider font-semibold text-slate-400 mb-4">目录结构</h4>
+                        <ul class="space-y-3 text-sm font-medium text-slate-600">
+                            <li><a href="#concepts" class="flex items-center space-x-2 hover:text-brand-600 transition"><i data-lucide="compass" class="w-4 h-4"></i><span>1. 核心概念与术语</span></a></li>
+                            <li><a href="#quickstart" class="flex items-center space-x-2 hover:text-brand-600 transition"><i data-lucide="zap" class="w-4 h-4"></i><span>2. 快速起步</span></a></li>
+                            <li><a href="#interface" class="flex items-center space-x-2 hover:text-brand-600 transition"><i data-lucide="layout" class="w-4 h-4"></i><span>3. 主界面漫游</span></a></li>
+                            <li><a href="#workflows" class="flex items-center space-x-2 hover:text-brand-600 transition"><i data-lucide="git-branch" class="w-4 h-4"></i><span>4. 两大核心工作流</span></a></li>
+                            <li><a href="#algorithms" class="flex items-center space-x-2 hover:text-brand-600 transition"><i data-lucide="sliders" class="w-4 h-4"></i><span>5. 算法与参数调优</span></a></li>
+                            <li><a href="#export" class="flex items-center space-x-2 hover:text-brand-600 transition"><i data-lucide="download" class="w-4 h-4"></i><span>6. 数据导出与项目</span></a></li>
+                            <li><a href="#audiotoolkit" class="flex items-center space-x-2 hover:text-brand-600 transition"><i data-lucide="music" class="w-4 h-4"></i><span>7. AudioToolkit</span></a></li>
+                            <li><a href="#cli" class="flex items-center space-x-2 hover:text-brand-600 transition"><i data-lucide="terminal" class="w-4 h-4"></i><span>8. CLI与AI助手</span></a></li>
+                            <li><a href="#faq" class="flex items-center space-x-2 hover:text-brand-600 transition"><i data-lucide="help-circle" class="w-4 h-4"></i><span>9. 常见排雷指南</span></a></li>
+                        </ul>
+                    </div>
+                    <!-- Clever Detail: Mini Live T-Value Calculator inside Sidebar -->
+                    <div class="bg-brand-50 border border-brand-100 rounded-xl p-4">
+                        <div class="flex items-center space-x-1.5 text-brand-800 font-semibold text-xs uppercase tracking-wider mb-2">
+                            <i data-lucide="calculator" class="w-4 h-4"></i>
+                            <span>T值实时估算器</span>
+                        </div>
+                        <p class="text-[11px] text-slate-500 mb-3">输入基频数值，自动归一化到 0 - 5 的范围。</p>
+                        <div class="space-y-2 text-xs">
+                            <div class="flex justify-between items-center">
+                                <span class="text-slate-500">当前 F0 (Hz)</span>
+                                <input id="calcHz" type="number" value="220" class="w-16 px-1.5 py-0.5 rounded border border-slate-200 text-right font-mono">
+                            </div>
+                            <div class="flex justify-between items-center">
+                                <span class="text-slate-500">发音人 Min Hz</span>
+                                <input id="calcMin" type="number" value="100" class="w-16 px-1.5 py-0.5 rounded border border-slate-200 text-right font-mono">
+                            </div>
+                            <div class="flex justify-between items-center">
+                                <span class="text-slate-500">发音人 Max Hz</span>
+                                <input id="calcMax" type="number" value="350" class="w-16 px-1.5 py-0.5 rounded border border-slate-200 text-right font-mono">
+                            </div>
+                            <div class="pt-2 border-t border-brand-100/60 flex justify-between items-center font-semibold text-brand-900">
+                                <span>计算结果 T 值</span>
+                                <span id="calcResult" class="font-mono text-brand-600 text-sm">2.87</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </aside>
+
+            <!-- Main Document Body -->
+            <main class="flex-1 max-w-4xl space-y-24">
+                
+                <!-- Section 1: Core Concepts -->
+                <section id="concepts" class="scroll-mt-24">
+                    <div class="flex items-center space-x-2 text-slate-400 text-sm font-semibold uppercase mb-3">
+                        <span>01 / 核心概念</span>
+                    </div>
+                    <h2 class="text-3xl font-extrabold text-slate-900 tracking-tight font-serif mb-8 border-b pb-3">1. 核心概念与术语速查</h2>
+                    
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <!-- Term Card -->
+                        <div class="bg-white border border-slate-100 rounded-xl p-6 shadow-sm hover:shadow-md transition">
+                            <div class="flex items-center space-x-2 text-brand-600 font-semibold mb-3">
+                                <i data-lucide="waves" class="w-5 h-5"></i>
+                                <span>基频 (Fundamental Frequency, F0)</span>
+                            </div>
+                            <p class="text-sm text-slate-600 leading-relaxed">
+                                物理声学中反映声音高低的指标，单位是赫兹 (Hz)。语音学中常说的“声调起伏”，在声学层面主要就是通过提取 F0 曲线来体现的。
+                            </p>
+                        </div>
+                        <!-- Term Card -->
+                        <div class="bg-white border border-slate-100 rounded-xl p-6 shadow-sm hover:shadow-md transition">
+                            <div class="flex items-center space-x-2 text-brand-600 font-semibold mb-3">
+                                <i data-lucide="scissors" class="w-5 h-5"></i>
+                                <span>VAD (语音活动检测)</span>
+                            </div>
+                            <p class="text-sm text-slate-600 leading-relaxed">
+                                计算机算法，自动判断录音中哪段有人说话，哪段是环境底噪。PhonTracer 处理长录音的第一步，就是靠它将大段录音“切萝卜”般分成有声片段。
+                            </p>
+                        </div>
+                        <!-- Term Card -->
+                        <div class="bg-white border border-slate-100 rounded-xl p-6 shadow-sm hover:shadow-md transition">
+                            <div class="flex items-center space-x-2 text-brand-600 font-semibold mb-3">
+                                <i data-lucide="users" class="w-5 h-5"></i>
+                                <span>发音人 (Speaker)</span>
+                            </div>
+                            <p class="text-sm text-slate-600 leading-relaxed">
+                                实验中录音的具体对象。软件支持同时管理多个发音人，各自的音频、修改进度和参数彼此隔离，互不干扰。
+                            </p>
+                        </div>
+                        <!-- Term Card -->
+                        <div class="bg-white border border-slate-100 rounded-xl p-6 shadow-sm hover:shadow-md transition">
+                            <div class="flex items-center space-x-2 text-brand-600 font-semibold mb-3">
+                                <i data-lucide="blocks" class="w-5 h-5"></i>
+                                <span>词项 (Item) 与音节 (Syllable)</span>
+                            </div>
+                            <p class="text-sm text-slate-600 leading-relaxed">
+                                数据处理的基本层级。“词项”对应字表中的一行（一个词、短语或句子），软件会根据规则将其拆分成“音节”，并在每个音节内部均匀采集基频数据（默认 11 点）。
+                            </p>
+                        </div>
+                        <!-- Term Card -->
+                        <div class="bg-white border border-slate-100 rounded-xl p-6 shadow-sm hover:shadow-md transition">
+                            <div class="flex items-center space-x-2 text-brand-600 font-semibold mb-3">
+                                <i data-lucide="file-audio" class="w-5 h-5"></i>
+                                <span>TextGrid 格式</span>
+                            </div>
+                            <p class="text-sm text-slate-600 leading-relaxed">
+                                语音学界常用分析软件 Praat 的标准标注格式，记录录音的时间段与字词对应关系。PhonTracer 支持无缝导入和导出。
+                            </p>
+                        </div>
+                        <!-- Term Card -->
+                        <div class="bg-white border border-slate-100 rounded-xl p-6 shadow-sm hover:shadow-md transition">
+                            <div class="flex items-center space-x-2 text-brand-600 font-semibold mb-3">
+                                <i data-lucide="percent" class="w-5 h-5"></i>
+                                <span>T 值 (T-value)</span>
+                            </div>
+                            <p class="text-sm text-slate-600 leading-relaxed">
+                                消除发音人个体差异的数据归一化方法。通过对数转换，将不同声音高低范围映射到 0 到 5 的区间，使不同人声调走势可以直接对比。
+                            </p>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Section 2: Quick Start -->
+                <section id="quickstart" class="scroll-mt-24">
+                    <div class="flex items-center space-x-2 text-slate-400 text-sm font-semibold uppercase mb-3">
+                        <span>02 / 快速起步</span>
+                    </div>
+                    <h2 class="text-3xl font-extrabold text-slate-900 tracking-tight font-serif mb-8 border-b pb-3">2. 快速起步：选对入口，跑通流程</h2>
+                    
+                    <div class="space-y-6">
+                        <p class="text-slate-600 leading-relaxed">
+                            PhonTracer 包含三个独立的入口，分别适应不同阶段的需求：
+                        </p>
+                        
+                        <!-- Three Entrances Graphic Grid -->
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                            <div class="bg-slate-50 border border-slate-200 rounded-xl p-5 relative overflow-hidden">
+                                <div class="absolute top-0 right-0 bg-brand-500 text-white text-[10px] uppercase font-semibold px-2 py-0.5 rounded-bl">主力</div>
+                                <div class="text-brand-600 mb-3"><i data-lucide="layout-template" class="w-8 h-8"></i></div>
+                                <h3 class="font-bold text-slate-900 mb-2">1. 软件主体</h3>
+                                <p class="text-xs text-slate-500">图形化精修。最核心交互，支持参数微调、声谱图精细修改与图表导出。</p>
+                            </div>
+                            <div class="bg-slate-50 border border-slate-200 rounded-xl p-5">
+                                <div class="text-brand-600 mb-3"><i data-lucide="hammer" class="w-8 h-8"></i></div>
+                                <h3 class="font-bold text-slate-900 mb-2">2. 音频工具箱</h3>
+                                <p class="text-xs text-slate-500">音频前处理套件。在导入核心程序前，用于极长音频切片或零碎音频拼接。</p>
+                            </div>
+                            <div class="bg-slate-50 border border-slate-200 rounded-xl p-5">
+                                <div class="text-brand-600 mb-3"><i data-lucide="terminal" class="w-8 h-8"></i></div>
+                                <h3 class="font-bold text-slate-900 mb-2">3. 命令行界面</h3>
+                                <p class="text-xs text-slate-500">纯文本交互。专门为批处理、写自动化脚本或让 AI 工具辅助而设计。</p>
+                            </div>
+                        </div>
+
+                        <!-- Code Start Card -->
+                        <div class="bg-slate-900 text-slate-200 rounded-xl p-6 shadow-lg font-mono text-sm code-glow">
+                            <div class="flex items-center justify-between border-b border-slate-800 pb-3 mb-4">
+                                <div class="flex items-center space-x-2">
+                                    <span class="w-3 h-3 rounded-full bg-rose-500"></span>
+                                    <span class="w-3 h-3 rounded-full bg-amber-500"></span>
+                                    <span class="w-3 h-3 rounded-full bg-emerald-500"></span>
+                                    <span class="text-xs text-slate-500 ml-2">Terminal / Commands</span>
+                                </div>
+                                <i data-lucide="terminal" class="w-4 h-4 text-slate-500"></i>
+                            </div>
+                            <div class="space-y-4">
+                                <div>
+                                    <span class="text-slate-500"># 启动软件主体图形界面</span><br>
+                                    <span class="text-brand-400">python</span> main.py
+                                </div>
+                                <div>
+                                    <span class="text-slate-500"># 启动音频工具箱</span><br>
+                                    <span class="text-brand-400">python</span> audio_toolkit.py
+                                </div>
+                                <div>
+                                    <span class="text-slate-500"># 启动命令行交互工具</span><br>
+                                    <span class="text-brand-400">python</span> cli.py
+                                </div>
+                            </div>
+                            <p class="text-xs text-slate-500 mt-6 pt-4 border-t border-slate-800">
+                                注：若使用的是打包完成的版本 (Windows/macOS)，直接双击对应的 <code>.exe</code> 或 <code>.app</code> 运行即可。
+                            </p>
+                        </div>
+
+                        <!-- One Minute Step Flowchart -->
+                        <div class="bg-white border border-slate-100 rounded-xl p-6 shadow-sm">
+                            <div class="flex items-center space-x-2 text-slate-900 font-bold mb-6">
+                                <i data-lucide="compass" class="w-5 h-5 text-brand-600"></i>
+                                <span>一分钟最小可行性演示</span>
+                            </div>
+                            <div class="grid grid-cols-1 md:grid-cols-7 gap-4 relative">
+                                <div class="relative flex flex-col items-center text-center p-3">
+                                    <div class="bg-brand-50 text-brand-700 w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs mb-2 shadow-sm">1</div>
+                                    <span class="text-xs font-semibold text-slate-800">运行主体</span>
+                                    <span class="text-[10px] text-slate-400 mt-1">启动软件界面</span>
+                                </div>
+                                <div class="relative flex flex-col items-center text-center p-3">
+                                    <div class="bg-brand-50 text-brand-700 w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs mb-2 shadow-sm">2</div>
+                                    <span class="text-xs font-semibold text-slate-800">模式切换</span>
+                                    <span class="text-[10px] text-slate-400 mt-1">选择“长音频模式”</span>
+                                </div>
+                                <div class="relative flex flex-col items-center text-center p-3">
+                                    <div class="bg-brand-50 text-brand-700 w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs mb-2 shadow-sm">3</div>
+                                    <span class="text-xs font-semibold text-slate-800">导入音频</span>
+                                    <span class="text-[10px] text-slate-400 mt-1">拖入 WAV/MP3 录音</span>
+                                </div>
+                                <div class="relative flex flex-col items-center text-center p-3">
+                                    <div class="bg-brand-50 text-brand-700 w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs mb-2 shadow-sm">4</div>
+                                    <span class="text-xs font-semibold text-slate-800">导入字表</span>
+                                    <span class="text-[10px] text-slate-400 mt-1">导入 TXT 字表</span>
+                                </div>
+                                <div class="relative flex flex-col items-center text-center p-3">
+                                    <div class="bg-brand-50 text-brand-700 w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs mb-2 shadow-sm">5</div>
+                                    <span class="text-xs font-semibold text-slate-800">边界检查</span>
+                                    <span class="text-[10px] text-slate-400 mt-1">排查并修正需检查项</span>
+                                </div>
+                                <div class="relative flex flex-col items-center text-center p-3">
+                                    <div class="bg-brand-50 text-brand-700 w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs mb-2 shadow-sm">6</div>
+                                    <span class="text-xs font-semibold text-slate-800">导出表格</span>
+                                    <span class="text-[10px] text-slate-400 mt-1">输出 XLSX 文件</span>
+                                </div>
+                                <div class="relative flex flex-col items-center text-center p-3">
+                                    <div class="bg-brand-600 text-white w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs mb-2 shadow-sm">7</div>
+                                    <span class="text-xs font-semibold text-slate-800">保存工程</span>
+                                    <span class="text-[10px] text-slate-400 mt-1">导出 .teproj 进度</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Section 3: Interface -->
+                <section id="interface" class="scroll-mt-24">
+                    <div class="flex items-center space-x-2 text-slate-400 text-sm font-semibold uppercase mb-3">
+                        <span>03 / 界面漫游</span>
+                    </div>
+                    <h2 class="text-3xl font-extrabold text-slate-900 tracking-tight font-serif mb-8 border-b pb-3">3. 软件主界面漫游指南</h2>
+                    
+                    <div class="space-y-8">
+                        <p class="text-slate-600 leading-relaxed">
+                            主界面布局划分为三个明确的区域，分别在宏观管理、精细微调和成果存储方面发挥作用：
+                        </p>
+
+                        <div class="space-y-6">
+                            <!-- Left panel -->
+                            <div class="flex gap-4 items-start bg-white border border-slate-100 p-6 rounded-xl shadow-sm">
+                                <div class="bg-brand-50 p-3 rounded-lg text-brand-600 shrink-0">
+                                    <i data-lucide="sliders" class="w-6 h-6"></i>
+                                </div>
+                                <div>
+                                    <h3 class="font-bold text-slate-900 mb-1">左侧面板：全局指挥中心</h3>
+                                    <p class="text-sm text-slate-600 mb-3">管理项目的运行状态。</p>
+                                    <ul class="space-y-2 text-xs text-slate-500 list-disc list-inside">
+                                        <li><strong class="text-slate-700">发音人管理：</strong> 添加、切换和管理发音人工作区。开启“统一字表”后免去重复导入流程。</li>
+                                        <li><strong class="text-slate-700">模式与引擎切换：</strong> 切换长音频/批量音频处理，选择 Praat 或 REAPER 测音算法。</li>
+                                        <li><strong class="text-slate-700">全局参数调整：</strong> 设定基频上下限、采样点数等核心参数。</li>
+                                    </ul>
+                                </div>
+                            </div>
+
+                            <!-- Middle panel -->
+                            <div class="flex gap-4 items-start bg-white border border-slate-100 p-6 rounded-xl shadow-sm">
+                                <div class="bg-accent-50 p-3 rounded-lg text-accent-500 shrink-0">
+                                    <i data-lucide="eye" class="w-6 h-6"></i>
+                                </div>
+                                <div>
+                                    <h3 class="font-bold text-slate-900 mb-1">中间面板：可视化精修车间</h3>
+                                    <p class="text-sm text-slate-600 mb-3">显示被选中词项的声谱图与 F0 音高曲线，进行精细修剪。</p>
+                                    <ul class="space-y-2 text-xs text-slate-500 list-disc list-inside">
+                                        <li><strong class="text-slate-700">红线与蓝线：</strong> 红色线条表示词项起点和终点，蓝色虚线表示音节分界线。直接用鼠标拖动即可校正。</li>
+                                        <li><strong class="text-slate-700">橡皮擦工具：</strong> 擦除由于环境噪声产生的异常高频杂点（抹除后 F0 值归零，不参与后续计算）。</li>
+                                        <li><strong class="text-slate-700">试听播放：</strong> 绿色竖线播放游标，随时可以听取当前被框选的音频范围。</li>
+                                    </ul>
+                                </div>
+                            </div>
+
+                            <!-- Right panel -->
+                            <div class="flex gap-4 items-start bg-white border border-slate-100 p-6 rounded-xl shadow-sm">
+                                <div class="bg-emerald-50 p-3 rounded-lg text-emerald-600 shrink-0">
+                                    <i data-lucide="folder-tree" class="w-6 h-6"></i>
+                                </div>
+                                <div>
+                                    <h3 class="font-bold text-slate-900 mb-1">右侧面板：项目树与成果仓库</h3>
+                                    <p class="text-sm text-slate-600 mb-3">用于管理、组织与一键导出最终数据。</p>
+                                    <ul class="space-y-2 text-xs text-slate-500 list-disc list-inside">
+                                        <li><strong class="text-slate-700">分组与词项管理：</strong> 树状图展现词项结构，支持直接双击重命名和跨分组拖拽。</li>
+                                        <li><strong class="text-slate-700">智能筛查机制：</strong> 可单独过滤“需检查”与“已修改”项。对于缺少音高数据（多点为 0）或存在异常值（NaN）的词项，系统会自动标红警示。</li>
+                                        <li><strong class="text-slate-700">一键导出：</strong> 快速在导出菜单选择合适的输出格式。</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Section 4: Workflows -->
+                <section id="workflows" class="scroll-mt-24">
+                    <div class="flex items-center space-x-2 text-slate-400 text-sm font-semibold uppercase mb-3">
+                        <span>04 / 核心工作流</span>
+                    </div>
+                    <h2 class="text-3xl font-extrabold text-slate-900 tracking-tight font-serif mb-8 border-b pb-3">4. 两大核心工作流与发音人管理</h2>
+                    
+                    <div class="space-y-10">
+                        <!-- Wordlist Rules -->
+                        <div class="space-y-4">
+                            <h3 class="text-xl font-bold text-slate-900 flex items-center space-x-2">
+                                <span class="bg-brand-100 text-brand-800 text-xs px-2.5 py-1 rounded">理论保障</span>
+                                <span>字表格式与音节拆分规则</span>
+                            </h3>
+                            <p class="text-sm text-slate-600 leading-relaxed">
+                                字表支持 TXT 格式，亦可从已有的 TextGrid 转换而来。支持多种形式的语法分词及分组标记。
+                            </p>
+                            
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div class="bg-stone-100/60 rounded-xl p-4">
+                                    <h4 class="text-xs font-bold text-slate-500 uppercase mb-2">字表格式范例</h4>
+                                    <pre class="text-xs font-mono text-slate-700 bg-stone-50 p-3 rounded border border-slate-200/60 leading-relaxed">
+【普通话】
+北京
+上海
+
+【英语】
+bro/ther
+sys/tem</pre>
+                                </div>
+                                <div class="bg-stone-100/60 rounded-xl p-4 flex flex-col justify-between">
+                                    <div>
+                                        <h4 class="text-xs font-bold text-slate-500 uppercase mb-2">说明</h4>
+                                        <p class="text-xs text-slate-600 leading-relaxed">
+                                            可使用中文括号 <code>【分组名】</code>、英文括号 <code>[分组名]</code> 或 Markdown 样式的 <code># 分组名</code> 自定义分组。同一行写多个词时可采用空格、逗号或顿号。
+                                        </p>
+                                    </div>
+                                    <div class="bg-amber-50 border border-amber-100 p-2.5 rounded-lg text-amber-900 text-[11px] leading-relaxed flex items-start space-x-1.5 mt-2">
+                                        <i data-lucide="alert-circle" class="w-3.5 h-3.5 mt-0.5 shrink-0 text-amber-700"></i>
+                                        <span>警告：字表中只推荐保留最纯净的文本，不推荐包含 <code>001_北京</code> 类似标记，以免在斜杠拆分时干扰规则判定。</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Splitting Rule Table -->
+                            <div class="overflow-x-auto border border-slate-100 rounded-xl shadow-sm bg-white">
+                                <table class="min-w-full text-left text-sm">
+                                    <thead class="bg-slate-50 border-b border-slate-100 text-slate-600 font-semibold">
+                                        <tr>
+                                            <th class="p-4">规则</th>
+                                            <th class="p-4">输入字表文本</th>
+                                            <th class="p-4">音节拆分结果</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="divide-y divide-slate-100 text-slate-600">
+                                        <tr>
+                                            <td class="p-4 font-semibold text-slate-800">1. 强行拆分符 (斜杠)</td>
+                                            <td class="p-4"><code class="bg-stone-100 text-stone-700 px-1.5 py-0.5 rounded text-xs">bro/ther</code></td>
+                                            <td class="p-4"><code class="bg-brand-50 text-brand-700 px-1.5 py-0.5 rounded text-xs">bro</code>、<code class="bg-brand-50 text-brand-700 px-1.5 py-0.5 rounded text-xs">ther</code></td>
+                                        </tr>
+                                        <tr>
+                                            <td class="p-4 font-semibold text-slate-800">2. 中文汉字自动拆分</td>
+                                            <td class="p-4"><code class="bg-stone-100 text-stone-700 px-1.5 py-0.5 rounded text-xs">北京</code></td>
+                                            <td class="p-4"><code class="bg-brand-50 text-brand-700 px-1.5 py-0.5 rounded text-xs">北</code>、<code class="bg-brand-50 text-brand-700 px-1.5 py-0.5 rounded text-xs">京</code></td>
+                                        </tr>
+                                        <tr>
+                                            <td class="p-4 font-semibold text-slate-800">3. 外文单音节默认整体</td>
+                                            <td class="p-4"><code class="bg-stone-100 text-stone-700 px-1.5 py-0.5 rounded text-xs">computer</code></td>
+                                            <td class="p-4"><code class="bg-brand-50 text-brand-700 px-1.5 py-0.5 rounded text-xs">computer</code> (作为一整个音节)</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="p-4 font-semibold text-slate-800">4. 复合形式混合判定</td>
+                                            <td class="p-4"><code class="bg-stone-100 text-stone-700 px-1.5 py-0.5 rounded text-xs">天安/门</code></td>
+                                            <td class="p-4"><code class="bg-brand-50 text-brand-700 px-1.5 py-0.5 rounded text-xs">天安</code>、<code class="bg-brand-50 text-brand-700 px-1.5 py-0.5 rounded text-xs">门</code></td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- Long Audio Workflow -->
+                        <div class="space-y-4">
+                            <h3 class="text-xl font-bold text-slate-900 flex items-center space-x-2">
+                                <span class="bg-brand-100 text-brand-800 text-xs px-2.5 py-1 rounded">流程 A</span>
+                                <span>长音频工作流：大批量有序采集</span>
+                            </h3>
+                            <p class="text-sm text-slate-600 leading-relaxed">
+                                适用于发音人连续不间断朗读长字表的录音场景。程序通过自动 VAD 将大文件“一刀切切分”，并自动将词项按照顺序扣在有声片段上。
+                            </p>
+                            
+                            <!-- Visual Splitter Feature Block -->
+                            <div class="bg-white border border-slate-200/80 rounded-xl p-6 shadow-sm">
+                                <h4 class="text-sm font-bold text-slate-900 mb-3 flex items-center"><i data-lucide="scissors" class="w-4 h-4 text-brand-600 mr-1.5"></i> 可视化切分器的操控与手动调整</h4>
+                                <p class="text-xs text-slate-500 leading-relaxed mb-4">
+                                    VAD 有时可能出现断句错误、噪音多检或吞字。调出“可视化切分器”，即可通过图形界面修正不平整的切片：
+                                </p>
+                                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs text-slate-600">
+                                    <div class="bg-stone-50 border border-slate-100 p-3 rounded-lg">
+                                        <span class="font-bold text-slate-800 block mb-1">1. 删除误检</span>
+                                        对准误检出的噪音区域段点击鼠标右键，直接将其移除。
+                                    </div>
+                                    <div class="bg-stone-50 border border-slate-100 p-3 rounded-lg">
+                                        <span class="font-bold text-slate-800 block mb-1">2. 手动框选</span>
+                                        在空白没有被自动标上的波形区域右键，可选择直接手动新增片段。
+                                    </div>
+                                    <div class="bg-stone-50 border border-slate-100 p-3 rounded-lg">
+                                        <span class="font-bold text-slate-800 block mb-1">3. 边界微调</span>
+                                        直接用鼠标左右拖拽有色边界，对准首尾起止点重新对齐。
+                                    </div>
+                                </div>
+                                <div class="bg-slate-50 border-l-2 border-brand-500 p-3 rounded-r-lg text-[11px] text-slate-600 mt-4 leading-relaxed">
+                                    <strong>TextGrid 无缝对接：</strong> 如果您已经有经由 Praat 人工细筛过的标注 <code>TextGrid</code> 文件，可以直接导入，程序会优先调用其层级（支持 words 词边界层、chars 音节层以及 groups 分组层），自动跳过不确定的 VAD 自动切分阶段。
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Batch Audio Workflow -->
+                        <div class="space-y-4">
+                            <h3 class="text-xl font-bold text-slate-900 flex items-center space-x-2">
+                                <span class="bg-brand-100 text-brand-800 text-xs px-2.5 py-1 rounded">流程 B</span>
+                                <span>批量音频工作流：零碎小文件整合</span>
+                            </h3>
+                            <p class="text-sm text-slate-600 leading-relaxed">
+                                适用于已被分切成若干独立小文件的录音材料。直接导入文件夹即可全量处理。为了精确标注，推荐导入字表对音频和词项进行“联姻”。
+                            </p>
+
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <div class="bg-white border border-slate-100 rounded-xl p-5 shadow-sm">
+                                    <div class="flex items-center space-x-1.5 text-slate-900 font-semibold text-xs uppercase mb-3">
+                                        <i data-lucide="eye" class="w-4 h-4 text-brand-600"></i>
+                                        <span>模式 1. 模糊匹配</span>
+                                    </div>
+                                    <p class="text-xs text-slate-500 leading-relaxed mb-2">
+                                        当文件名本身杂乱，包含序号或临时后缀（例如：<code>001-北京(重录).wav</code>）时，系统将智能剔除无关字符，主动寻找最接近字表的拼音或汉字。
+                                    </p>
+                                    <span class="bg-brand-50 text-brand-700 text-[10px] px-2 py-0.5 rounded font-mono inline-block">001-北京(重录).wav → 北京</span>
+                                </div>
+                                <div class="bg-white border border-slate-100 rounded-xl p-5 shadow-sm">
+                                    <div class="flex items-center space-x-1.5 text-slate-900 font-semibold text-xs uppercase mb-3">
+                                        <i data-lucide="list-ordered" class="w-4 h-4 text-brand-600"></i>
+                                        <span>模式 2. 顺序匹配</span>
+                                    </div>
+                                    <p class="text-xs text-slate-500 leading-relaxed mb-2">
+                                        如果文件名完全不包含词语信息，但在导入排序时已和字表顺序严格对应。系统将放弃文本识别，按照队列顺序强行生套匹配。
+                                    </p>
+                                    <span class="bg-brand-50 text-brand-700 text-[10px] px-2 py-0.5 rounded font-mono inline-block">1.wav, 2.wav → 对应字表 1、2 行</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Multi-speaker -->
+                        <div class="bg-brand-50/50 border border-brand-100 p-6 rounded-2xl">
+                            <h4 class="font-bold text-brand-900 text-sm mb-2 flex items-center">
+                                <i data-lucide="users" class="w-4.5 h-4.5 mr-1.5 text-brand-600"></i>
+                                <span>发音人多维管理与“统一字表”</span>
+                            </h4>
+                            <p class="text-xs text-slate-600 leading-relaxed">
+                                研究中往往涉及多位受试发音人。左侧的发音人面板就是工作隔离区。每一位发音人都相当于一份独立且安全的沙盒进度。
+                                如果所有受试发音人朗读的是同一套材料，请务必在面板顶部启用 <strong>“统一字表”</strong>。开启该功能后，仅需在第一个发音人中导入一次字表，切换或添加其他发音人导入音频时即可直接继承字表以及相关的分音节规则，大幅提升大样本处理效率。
+                            </p>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Section 5: Algorithms -->
+                <section id="algorithms" class="scroll-mt-24">
+                    <div class="flex items-center space-x-2 text-slate-400 text-sm font-semibold uppercase mb-3">
+                        <span>05 / 算法揭秘</span>
+                    </div>
+                    <h2 class="text-3xl font-extrabold text-slate-900 tracking-tight font-serif mb-8 border-b pb-3">5. 算法原理与关键参数调优</h2>
+                    
+                    <div class="space-y-8">
+                        <p class="text-slate-600 leading-relaxed">
+                            为了使导出的声调轨迹具有科学性和说服力，必须知晓每一项参数底层的运作机理，以便在各种噪杂环境或极端发音特征下进行弹性干预。
+                        </p>
+
+                        <!-- Macro vs Micro -->
+                        <div class="bg-white border border-slate-100 rounded-xl p-6 shadow-sm">
+                            <h3 class="font-bold text-slate-950 text-base mb-4 flex items-center">
+                                <i data-lucide="compass" class="w-5 h-5 text-brand-600 mr-2"></i>
+                                <span>两级切分的算法路径</span>
+                            </h3>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 text-xs text-slate-600 leading-relaxed">
+                                <div class="bg-stone-50 p-4 rounded-lg">
+                                    <strong class="text-slate-800 text-sm block mb-1">宏观定位（大范围锁定）</strong>
+                                    长音频 VAD 阶段。算法通过分析录音的声音强度基底，计算动态噪声门槛，并标记出存在浊音振动的区域，界定“这个时间段对应字表第几行”。
+                                </div>
+                                <div class="bg-stone-50 p-4 rounded-lg">
+                                    <strong class="text-slate-800 text-sm block mb-1">微观定位（核定元音位置）</strong>
+                                    由于阻碍音、爆破音没有基频表现，真正的声调仅依附于元音与响辅音上。微观阶段即综合声强峰值、声能衰减落差去搜寻元音的分布边界，作为最终数据采样的提取区。
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Parameter Dictionary -->
+                        <div class="space-y-4">
+                            <h3 class="font-bold text-slate-950 text-base flex items-center">
+                                <i data-lucide="sliders" class="w-5 h-5 text-brand-600 mr-2"></i>
+                                <span>核心参数详解</span>
+                            </h3>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <!-- Param Card -->
+                                <div class="bg-stone-50 border border-stone-200/60 rounded-xl p-5 text-xs">
+                                    <div class="flex justify-between items-center mb-2">
+                                        <span class="font-mono font-bold text-slate-900 text-sm">pts (采样点数)</span>
+                                        <span class="bg-brand-100 text-brand-800 px-2 py-0.5 rounded font-semibold text-[10px]">默认：11</span>
+                                    </div>
+                                    <p class="text-slate-500 leading-relaxed">
+                                        在每个音节内部均匀采集 F0 频点的个数。通常声调起伏研究设置为 11 点已经能精准描摹轮廓；若需做更微观的时序过渡变化研究，可调大至 20 之间。
+                                    </p>
+                                </div>
+                                <!-- Param Card -->
+                                <div class="bg-stone-50 border border-stone-200/60 rounded-xl p-5 text-xs">
+                                    <div class="flex justify-between items-center mb-2">
+                                        <span class="font-mono font-bold text-slate-900 text-sm">db (能量下降阈值)</span>
+                                        <span class="bg-brand-100 text-brand-800 px-2 py-0.5 rounded font-semibold text-[10px]">默认：60</span>
+                                    </div>
+                                    <p class="text-slate-500 leading-relaxed">
+                                        微观划分元音核心区域的尺子。数值越大对能量衰落越宽容，更容易把一些弱声尾音或送气摩擦声划入范围；数值越小则框线收缩得越紧，边界较窄。
+                                    </p>
+                                </div>
+                                <!-- Param Card -->
+                                <div class="bg-stone-50 border border-stone-200/60 rounded-xl p-5 text-xs">
+                                    <div class="flex justify-between items-center mb-2">
+                                        <span class="font-mono font-bold text-slate-900 text-sm">skip_front (排除声母)</span>
+                                        <span class="bg-brand-100 text-brand-800 px-2 py-0.5 rounded font-semibold text-[10px]">默认：0 秒</span>
+                                    </div>
+                                    <p class="text-slate-500 leading-relaxed">
+                                        并不简单粗暴割裂音频，而是给“元音起点搜寻算法”强行划出时间盲区。对于爆破送气音重的辅音字母开头，设为 0.05s - 0.1s 可以规避声响干扰。
+                                    </p>
+                                </div>
+                                <!-- Param Card -->
+                                <div class="bg-stone-50 border border-stone-200/60 rounded-xl p-5 text-xs">
+                                    <div class="flex justify-between items-center mb-2">
+                                        <span class="font-mono font-bold text-slate-900 text-sm">Pitch Floor/Ceiling</span>
+                                        <span class="bg-brand-100 text-brand-800 px-2 py-0.5 rounded font-semibold text-[10px]">默认：75 - 600 Hz</span>
+                                    </div>
+                                    <p class="text-slate-500 leading-relaxed">
+                                        算法测高下限。嗓音浑厚的男低音可调至 50/60；高亢女高音或儿童发音，Ceiling 可提至高值，Floor 设得过低容易错误识别成环境的低频嗡嗡声。
+                                    </p>
+                                </div>
+                                <!-- Param Card -->
+                                <div class="bg-stone-50 border border-stone-200/60 rounded-xl p-5 text-xs">
+                                    <div class="flex justify-between items-center mb-2">
+                                        <span class="font-mono font-bold text-slate-900 text-sm">voicing_threshold</span>
+                                        <span class="bg-brand-100 text-brand-800 px-2 py-0.5 rounded font-semibold text-[10px]">默认：0.25</span>
+                                    </div>
+                                    <p class="text-slate-500 leading-relaxed">
+                                        判定发声是否有声带振动的判定。数值设低较易识别一些低沉、气声或嘎吱音 (creaky voice)；数值越高越保守，不满足阈值的倾向于判零值。
+                                    </p>
+                                </div>
+                                <!-- Param Card -->
+                                <div class="bg-stone-50 border border-stone-200/60 rounded-xl p-5 text-xs">
+                                    <div class="flex justify-between items-center mb-2">
+                                        <span class="font-mono font-bold text-slate-900 text-sm">trim_silence (边缘切除)</span>
+                                        <span class="bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded font-semibold text-[10px]">默认开启</span>
+                                    </div>
+                                    <p class="text-slate-500 leading-relaxed">
+                                        在词的边缘把低于 -50 dB 的微弱声响区域进行精细过滤。
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Engine Switch Comparison -->
+                        <div class="bg-white border border-slate-100 rounded-xl p-6 shadow-sm">
+                            <h4 class="text-sm font-bold text-slate-900 mb-3 flex items-center"><i data-lucide="cpu" class="w-4.5 h-4.5 text-brand-600 mr-1.5"></i> F0 基频提取算法引擎的差异</h4>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs text-slate-600 leading-relaxed">
+                                <div class="border border-slate-100 p-4 rounded-lg">
+                                    <strong class="text-brand-600 text-sm block mb-1">1. Praat 引擎 (推荐)</strong>
+                                    使用最经典的自相关 (Autocorrelation) 算法，是目前学术界进行语音声学分析最认可且具有高解释度的基石算法。
+                                </div>
+                                <div class="border border-slate-100 p-4 rounded-lg">
+                                    <strong class="text-brand-600 text-sm block mb-1">2. REAPER 引擎</strong>
+                                    由 Google 开源并维护的一种高效算法方案。针对环境低噪强抗扰、重采样 16kHz 并进行平滑，对不平整的声音（边缘颤动）处理优于 Praat。
+                                </div>
+                            </div>
+                            <div class="bg-amber-50 text-amber-950 p-3 rounded-lg text-[11px] mt-4 flex items-start space-x-1.5">
+                                <i data-lucide="alert-triangle" class="w-4 h-4 text-amber-600 shrink-0"></i>
+                                <span>在同一个对比实验中，一旦选定其中一个基频引擎后，务必保持一致，切勿在分析过程中混合调换引擎类型，以免结果产生差异。</span>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Section 6: Data Export -->
+                <section id="export" class="scroll-mt-24">
+                    <div class="flex items-center space-x-2 text-slate-400 text-sm font-semibold uppercase mb-3">
+                        <span>06 / 数据导出</span>
+                    </div>
+                    <h2 class="text-3xl font-extrabold text-slate-900 tracking-tight font-serif mb-8 border-b pb-3">6. 数据导出与实验备份记录</h2>
+                    
+                    <div class="space-y-8">
+                        <p class="text-slate-600 leading-relaxed">
+                            修剪和采样完毕后，数据需要无缝对接 R 语言、Python 或 SPSS 等统计工具中，PhonTracer 提供了丰富的导出文件类型。
+                        </p>
+
+                        <!-- Format Grid -->
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 text-slate-600 text-xs">
+                            <div class="bg-white border border-slate-100 rounded-xl p-5 shadow-sm">
+                                <span class="font-bold text-slate-900 text-sm block mb-1">TXT (基础)</span>
+                                纯文本数据流，适合习惯自编脚本二次提取分析的用户。
+                            </div>
+                            <div class="bg-white border border-slate-100 rounded-xl p-5 shadow-sm border-l-4 border-l-brand-600">
+                                <span class="font-bold text-slate-900 text-sm block mb-1">XLSX (Excel 表格) [推荐]</span>
+                                不仅包含基础采样数据矩阵，还特别预设了<strong class="text-brand-600 font-semibold">“分析结果”</strong>工作表：直接按对数公式完成了最大值、最小值、均值的计算，并直接计算出了统一的 T 值。
+                            </div>
+                            <div class="bg-white border border-slate-100 rounded-xl p-5 shadow-sm">
+                                <span class="font-bold text-slate-900 text-sm block mb-1">TextGrid</span>
+                                支持导出标注，能在 Praat 中复核。长音频导出一个大文件，批量音频导出对应每个音频小文件的文件夹。
+                            </div>
+                            <div class="bg-white border border-slate-100 rounded-xl p-5 shadow-sm">
+                                <span class="font-bold text-slate-900 text-sm block mb-1">折线图与 KDE 热力图</span>
+                                导出矢量图/分析图。KDE 运用核密度估算，以时间为横轴，并提供 5%-95% 分位数范围，自动过滤两端偶发极值点，是论文中展现走势分布的高清图表。
+                            </div>
+                        </div>
+
+                        <!-- T-value formula card -->
+                        <div class="bg-slate-50 border border-slate-200 rounded-xl p-6 text-center">
+                            <span class="text-xs uppercase font-bold tracking-widest text-slate-400 block mb-2">音高归一化 T值对数转化计算公式</span>
+                            <div class="text-lg md:text-xl font-serif text-slate-800 font-semibold mb-2">
+                                \( \displaystyle T = 5 \times \frac{\log(Hz) - \log(minHz)}{\log(maxHz) - \log(minHz)} \)
+                            </div>
+                            <p class="text-[11px] text-slate-500 max-w-md mx-auto">
+                                该公式可有效拉平由于男低音和女高音在原始物理声学音域（赫兹高度）上的性别和个体物理差异，还原调形。
+                            </p>
+                        </div>
+
+                        <!-- Export rules table -->
+                        <div class="border border-slate-100 rounded-xl bg-white overflow-hidden shadow-sm">
+                            <table class="min-w-full text-left text-xs leading-relaxed text-slate-600">
+                                <thead class="bg-slate-50 border-b border-slate-100 font-semibold text-slate-700">
+                                    <tr>
+                                        <th class="p-4">规则/多发音人设置</th>
+                                        <th class="p-4">参数选项</th>
+                                        <th class="p-4">具体表现行为</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-slate-100">
+                                    <tr>
+                                        <td class="p-4 font-semibold text-slate-800">编号规则</td>
+                                        <td class="p-4">连续编号 (Continuous) / 组内编号 (Per Group)</td>
+                                        <td class="p-4">连续即无论哪一组，全局统一递增序列 (1-100)；组内则是每个分组独立的重新计数，以对应实验原始字表。</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="p-4 font-semibold text-slate-800">多受试整合</td>
+                                        <td class="p-4">独立导出 / 整合导出 (Integrated)</td>
+                                        <td class="p-4">整合导出将全受试、全发音人的所有采样曲线揉合在同一个 Excel 矩阵或折线分布图内（注：TextGrid 不支持整合）。</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <!-- Project File Note -->
+                        <div class="bg-brand-900 text-slate-100 rounded-2xl p-6 relative overflow-hidden">
+                            <div class="absolute -right-12 -bottom-12 opacity-10">
+                                <i data-lucide="archive" class="w-48 h-48"></i>
+                            </div>
+                            <h3 class="font-bold text-white text-base mb-2 flex items-center">
+                                <i data-lucide="box" class="w-5 h-5 mr-1.5 text-brand-400"></i>
+                                <span>工程保存的核心：.teproj 文件</span>
+                            </h3>
+                            <p class="text-xs text-slate-300 leading-relaxed mb-4">
+                                日常备份至关重要。仅仅导出 XLSX 或图片只能保留计算成果。正式退出或下班前，请务必在右侧点击“导出项目 (.teproj)”。
+                                <code>.teproj</code> 是压缩包格式，打包了您的音符修改边界、引擎参数、甚至包括<strong>原始音频的无损副本和 F0 数据缓存</strong>。即使今后物理磁盘中的原始素材丢失或路径产生变化，只需在另一台电脑上直接拉入 <code>.teproj</code> 工程即可无损还原实验现场。
+                            </p>
+                            <div class="bg-slate-800/80 p-3 rounded-lg text-[11px] text-slate-300">
+                                <strong>论文写作与研究记录推荐：</strong> 在论文中记录声学分析方法时，推荐详细记录：
+                                PhonTracer 版本、检测引擎(Praat/REAPER)、最低基频/最高基频限值 (Pitch Floor/Ceiling)、清浊判定阈值 (Voicing Threshold)、采样点数、以及是否进行人工复核调校。
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Section 7: AudioToolkit -->
+                <section id="audiotoolkit" class="scroll-mt-24">
+                    <div class="flex items-center space-x-2 text-slate-400 text-sm font-semibold uppercase mb-3">
+                        <span>07 / 独立工具箱</span>
+                    </div>
+                    <h2 class="text-3xl font-extrabold text-slate-900 tracking-tight font-serif mb-8 border-b pb-3">7. 进阶：AudioToolkit 音频前处理工具箱</h2>
+                    
+                    <div class="space-y-6">
+                        <p class="text-slate-600 leading-relaxed">
+                            当面对混乱无序的实验音频时（如时长一个多小时且语速多变的整轨、或是数百个命名杂乱的碎片文件），建议在载入核心软件前，使用 <code>AudioToolkit</code> 进行批量化的整理。
+                        </p>
+
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <!-- Merge -->
+                            <div class="bg-white border border-slate-100 rounded-xl p-6 shadow-sm">
+                                <h3 class="font-bold text-slate-900 mb-3 flex items-center text-sm">
+                                    <i data-lucide="combine" class="w-4.5 h-4.5 text-brand-600 mr-1.5"></i>
+                                    <span>合并音频：碎片文件缝合</span>
+                                </h3>
+                                <ol class="space-y-2 text-xs text-slate-500 list-decimal list-inside leading-relaxed mb-4">
+                                    <li>拖入大批次 <code>WAV</code> 或 <code>MP3</code> 小碎片。</li>
+                                    <li>在面板内用鼠标自由拖曳文件调整先后播放队列。</li>
+                                    <li>设定拼接时的“静音间隔”（默认 0.5s，作为让 VAD 切分的缓冲）。</li>
+                                    <li>一键合并，程序在拼接时会自动重采样到 44100 Hz，生成大整轨。</li>
+                                </ol>
+                                <span class="bg-brand-50 border border-brand-100 text-[10px] text-brand-800 p-2.5 rounded block leading-relaxed">
+                                    <strong>独家功能：</strong> “导入字表自动排序”功能，只要录音文件名中模糊包含字表里的词，程序就会极速把文件按字表重新排序，无法对应的音频扔到尾端，极大加速后续处理流程。
+                                </span>
+                            </div>
+                            <!-- Split -->
+                            <div class="bg-white border border-slate-100 rounded-xl p-6 shadow-sm flex flex-col justify-between">
+                                <div>
+                                    <h3 class="font-bold text-slate-900 mb-3 flex items-center text-sm">
+                                        <i data-lucide="split" class="w-4.5 h-4.5 text-brand-600 mr-1.5"></i>
+                                        <span>拆分音频：长音频快速切割</span>
+                                    </h3>
+                                    <ol class="space-y-2 text-xs text-slate-500 list-decimal list-inside leading-relaxed mb-4">
+                                        <li>加载整条长音频，粘贴或读取待对应的逐行字表。</li>
+                                        <li>系统运用 VAD 进行初步有声边界判定，支持在分段编辑器微调。</li>
+                                        <li>设置切割边界的前后缓冲时间 (默认 0.1s 以保留完整的元音开头)。</li>
+                                        <li>生成按序号与文本完美命名的文件夹，如：<code>001_北京.wav</code>、<code>002_上海.wav</code>。</li>
+                                    </ol>
+                                </div>
+                                <span class="bg-stone-50 border border-stone-200/60 text-[10px] text-slate-500 p-2.5 rounded block">
+                                    <strong>文件名保护：</strong> 如果字表文本中包含系统物理磁盘不允许的保留字或非法字符，程序在输出小文件时会将其进行自动修正。
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Section 8: CLI -->
+                <section id="cli" class="scroll-mt-24">
+                    <div class="flex items-center space-x-2 text-slate-400 text-sm font-semibold uppercase mb-3">
+                        <span>08 / 自动化与命令行</span>
+                    </div>
+                    <h2 class="text-3xl font-extrabold text-slate-900 tracking-tight font-serif mb-8 border-b pb-3">8. 极客批处理与 AI 助手：CLI 命令行指南</h2>
+                    
+                    <div class="space-y-8">
+                        <p class="text-slate-600 leading-relaxed">
+                            为了满足极客用户、Python 程序联动以及时下流行的大语言模型（LLM / AI，例如 Cursor, Trae, Codex）对自动化生产的需求，PhonTracer 内置了完整的纯文本交互 CLI 引擎，所有返回与输出均被规范为结构化 JSON，便于机器读取与流水线作业。
+                        </p>
+
+                        <!-- CLI syntax and Dictionary -->
+                        <div class="space-y-4">
+                            <h3 class="font-bold text-slate-950 text-base flex items-center"><i data-lucide="terminal" class="w-5 h-5 text-brand-600 mr-2"></i> 常用 CLI 指令词典</h3>
+                            
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                                <!-- Command Doc -->
+                                <div class="bg-white border border-slate-100 p-4 rounded-xl shadow-sm">
+                                    <span class="font-bold text-brand-700 block mb-1">全局设置</span>
+                                    <ul class="space-y-2 text-slate-500 font-mono">
+                                        <li><strong class="text-slate-800">lang zh / lang en :</strong> 设定返回信息的中英文语言环境。</li>
+                                        <li><strong class="text-slate-800">speakers :</strong> 输出全局已经建档的发音人档案。</li>
+                                        <li><strong class="text-slate-800">add_speaker 发音人B :</strong> 增设发音人隔离工作区。</li>
+                                        <li><strong class="text-slate-800">set_params pts=11 f0_engine=praat :</strong> 调整核心算法参数。</li>
+                                    </ul>
+                                </div>
+                                <!-- Command Doc -->
+                                <div class="bg-white border border-slate-100 p-4 rounded-xl shadow-sm">
+                                    <span class="font-bold text-brand-700 block mb-1">加载与修改</span>
+                                    <ul class="space-y-2 text-slate-500 font-mono">
+                                        <li><strong class="text-slate-800">load_long "path/audio.wav" :</strong> 调取载入长录音。</li>
+                                        <li><strong class="text-slate-800">apply_wordlist "path/list.txt" fuzzy :</strong> 匹配字表。</li>
+                                        <li><strong class="text-slate-800">list_items warnings :</strong> 列出所有异常、零频和报错的条目。</li>
+                                        <li><strong class="text-slate-800">modify_bounds 3 1.25 1.82 :</strong> 精准指定3号词的边界。</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- PowerShell Pipeline examples -->
+                        <div class="space-y-4">
+                            <h3 class="font-bold text-slate-950 text-base flex items-center">
+                                <i data-lucide="code" class="w-5 h-5 text-brand-600 mr-2"></i>
+                                <span>PowerShell 管道与批处理示例</span>
+                            </h3>
+
+                            <div class="space-y-3">
+                                <div class="bg-slate-900 rounded-xl overflow-hidden shadow-lg border border-slate-800 font-mono text-xs code-glow">
+                                    <div class="bg-slate-950 px-4 py-2 flex items-center justify-between border-b border-slate-800">
+                                        <span class="text-slate-400">示例 1: 长音频全流程管道提取</span>
+                                        <button class="text-slate-400 hover:text-white transition inline-flex items-center space-x-1" onclick="copyCode('codeBlock1')">
+                                            <i data-lucide="copy" class="w-3.5 h-3.5"></i>
+                                            <span>Copy</span>
+                                        </button>
+                                    </div>
+                                    <pre id="codeBlock1" class="p-4 text-slate-200 overflow-x-auto leading-relaxed">
+@'
+lang zh
+load_long "我的录音/多语言.wav"
+apply_wordlist "我的字表/多语言.txt"
+export txt "自动化测试/long_results.txt" active
+export xlsx "自动化测试/long_results.xlsx" per_group active
+export textgrid "自动化测试/long_results.TextGrid"
+project_export "自动化测试/保存的项目.teproj"
+exit
+'@ | python cli.py</pre>
+                                </div>
+
+                                <div class="bg-slate-900 rounded-xl overflow-hidden shadow-lg border border-slate-800 font-mono text-xs code-glow">
+                                    <div class="bg-slate-950 px-4 py-2 flex items-center justify-between border-b border-slate-800">
+                                        <span class="text-slate-400">示例 2: 批量音频模糊匹配与提取</span>
+                                        <button class="text-slate-400 hover:text-white transition inline-flex items-center space-x-1" onclick="copyCode('codeBlock2')">
+                                            <i data-lucide="copy" class="w-3.5 h-3.5"></i>
+                                            <span>Copy</span>
+                                        </button>
+                                    </div>
+                                    <pre id="codeBlock2" class="p-4 text-slate-200 overflow-x-auto leading-relaxed">
+@'
+lang zh
+load_batch "散音频/001_北京.wav" "散音频/002_上海.wav" "散音频/003_广州.wav"
+apply_wordlist "我的字表/字表.txt" fuzzy
+export xlsx "自动化测试/batch_results.xlsx" continuous active
+exit
+'@ | python cli.py</pre>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- AI Prompt Card -->
+                        <div class="bg-brand-50 border border-brand-200/60 rounded-2xl p-6 shadow-sm">
+                            <div class="flex items-center justify-between mb-4">
+                                <div class="flex items-center space-x-2">
+                                    <div class="bg-brand-600 text-white p-1.5 rounded-lg">
+                                        <i data-lucide="cpu" class="w-5 h-5"></i>
+                                    </div>
+                                    <h4 class="font-bold text-slate-950 text-sm">给 AI 助手的专属提示词 (Prompt Template)</h4>
+                                </div>
+                                <button class="text-brand-600 hover:text-brand-800 text-xs font-semibold inline-flex items-center space-x-1" onclick="copyCode('promptContent')">
+                                    <i data-lucide="copy" class="w-4 h-4"></i>
+                                    <span>Copy Template</span>
+                                </button>
+                            </div>
+                            <p class="text-xs text-slate-500 mb-4 leading-relaxed">
+                                如果让 AI 帮您批量提取实验数据，可以直接将以下指令提示词发送给 Cursor / Trae 或 Codex 窗口，让其通过正规的 CLI 通道完成作业。
+                            </p>
+                            <div class="bg-white border border-slate-200/80 rounded-xl p-4 font-mono text-xs text-slate-600 leading-relaxed max-h-56 overflow-y-auto" id="promptContent">请在当前项目目录中使用 PhonTracer CLI 完成处理，绝对不要直接修改源码或手动篡改 .teproj 内部缓存文件。
+你的执行步骤如下：
+1. 运行 `python cli.py` 开启控制台。
+2. 使用 `load_long` 或 `load_batch` 指令导入我指定的音频。
+3. 使用 `apply_wordlist` 应用标注。
+4. 必须使用 `status` 和 `list_items warnings` 来检查结果。
+5. 如果有警告，尝试用 `modify_bounds` 修正。
+6. 导出 xlsx。
+7. 只要 CLI 返回的 JSON 里出现 `success: false`，立刻停止后续导出，先根据 `message` 字段排查路径和参数的错误，最后把你完成的操作总结给我。</div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Section 9: FAQ -->
+                <section id="faq" class="scroll-mt-24">
+                    <div class="flex items-center space-x-2 text-slate-400 text-sm font-semibold uppercase mb-3">
+                        <span>09 / 疑难解答</span>
+                    </div>
+                    <h2 class="text-3xl font-extrabold text-slate-900 tracking-tight font-serif mb-8 border-b pb-3">9. 常见故障排雷与应急指南</h2>
+                    
+                    <div class="space-y-4">
+                        <!-- Accordion 1 -->
+                        <div class="bg-white border border-slate-100 rounded-xl shadow-sm overflow-hidden transition">
+                            <button class="w-full text-left p-5 flex justify-between items-center font-bold text-slate-900 text-sm hover:bg-slate-50/50" onclick="toggleFaq('faq1')">
+                                <span>Q1：自动切分出来的片段数量，怎么跟我的字表对不上？</span>
+                                <i data-lucide="chevron-down" class="w-4 h-4 text-slate-400 transform transition-transform" id="faq1-icon"></i>
+                            </button>
+                            <div class="p-5 pt-0 text-xs text-slate-600 leading-relaxed border-t border-slate-50 hidden" id="faq1">
+                                <strong>症状：</strong> 软件提示某些词“缺失 (Missing)”，或者后面的词段全部产生了位移偏差。<br>
+                                <strong>急救：</strong> 造成该问题通常是因为发音人出现了吞音（两个词连续朗读且无边界停顿）或者录音中途掺杂了咳嗽、翻书等严重白噪音被误判为发音片段。此时双击打开界面中间的“可视化切分器”，在误检的有声块上右键选择直接删除，或在缺失片段的空白波形区域右键选择添加。确认排序并重新应用对齐，即可复原。
+                            </div>
+                        </div>
+
+                        <!-- Accordion 2 -->
+                        <div class="bg-white border border-slate-100 rounded-xl shadow-sm overflow-hidden transition" onclick="toggleFaq('faq2')">
+                            <button class="w-full text-left p-5 flex justify-between items-center font-bold text-slate-900 text-sm hover:bg-slate-50/50">
+                                <span>Q2：提取出来的 F0 曲线断断续续，数据表格中存在大量的 0？</span>
+                                <i data-lucide="chevron-down" class="w-4 h-4 text-slate-400 transform transition-transform" id="faq2-icon"></i>
+                            </button>
+                            <div class="p-5 pt-0 text-xs text-slate-600 leading-relaxed border-t border-slate-50 hidden" id="faq2">
+                                <strong>症状：</strong> 表格和可视化绘图中曲线多处空缺，均值受到极大扭曲。<br>
+                                <strong>急救：</strong> 首先确认该片段是否是真正的浊音（声带产生明显振动），清辅音由于物理原理本就不含基频。如果是浊音但算法不予捕捉，可以在左侧全局参数设置中适当将 <strong>Pitch Floor (最低基频)</strong> 調低；再将 <strong>Voicing Threshold (清浊判定阈值)</strong> 调低（如调成 0.15/0.2 ），让算法的提取门槛更加宽泛；如果Praat不佳，果断切成 REAPER 引擎一试。
+                            </div>
+                        </div>
+
+                        <!-- Accordion 3 -->
+                        <div class="bg-white border border-slate-100 rounded-xl shadow-sm overflow-hidden transition" onclick="toggleFaq('faq3')">
+                            <button class="w-full text-left p-5 flex justify-between items-center font-bold text-slate-900 text-sm hover:bg-slate-50/50">
+                                <span>Q3：音高曲线本是平缓的，但突然某一点飞上了天，或猛然扎向地面？</span>
+                                <i data-lucide="chevron-down" class="w-4 h-4 text-slate-400 transform transition-transform" id="faq3-icon"></i>
+                            </button>
+                            <div class="p-5 pt-0 text-xs text-slate-600 leading-relaxed border-t border-slate-50 hidden" id="faq3">
+                                <strong>症状：</strong> 数据出现物理学上的倍频或半频判定错误。<br>
+                                <strong>急救：</strong> 男低音易产生高飞杂点，女高音易产生掉落半频点。如果是偶发的零星点异常，无需大费周章修改全局参数，直接用鼠标点击中间可视化区域工具栏的 <strong>“橡皮擦” (Eraser)</strong> 工具，鼠标变成十字，拖曳在异常点上轻轻抹擦，即可将杂点直接置零，不参与后续计算。如果是大面积倍频，调小 Pitch Ceiling 能强行切除压制。
+                            </div>
+                        </div>
+
+                        <!-- Accordion 4 -->
+                        <div class="bg-white border border-slate-100 rounded-xl shadow-sm overflow-hidden transition" onclick="toggleFaq('faq4')">
+                            <button class="w-full text-left p-5 flex justify-between items-center font-bold text-slate-900 text-sm hover:bg-slate-50/50">
+                                <span>Q4：批量导入匹配时，总是找不对音频，对应关系全部错乱？</span>
+                                <i data-lucide="chevron-down" class="w-4 h-4 text-slate-400 transform transition-transform" id="faq4-icon"></i>
+                            </button>
+                            <div class="p-5 pt-0 text-xs text-slate-600 leading-relaxed border-t border-slate-50 hidden" id="faq4">
+                                <strong>症状：</strong> 匹配出的词项名称与音频代表的读音完全不同。<br>
+                                <strong>急救：</strong> 检查音频文件命名。在模糊匹配下，系统会主动滤掉类似 <code>001</code> 等干扰项，但若命名仅写有 <code>a.wav</code>、<code>b.wav</code>，算法无法通过拼音与文字进行联系。在您能够百分之百保证文件导入队列排序与字表完全一行的前提下，请直接在匹配弹窗内选择 <strong>“顺序匹配 (Order Matching)”</strong>，可以绝防错。
+                            </div>
+                        </div>
+
+                        <!-- Accordion 5 -->
+                        <div class="bg-white border border-slate-100 rounded-xl shadow-sm overflow-hidden transition" onclick="toggleFaq('faq5')">
+                            <button class="w-full text-left p-5 flex justify-between items-center font-bold text-slate-900 text-sm hover:bg-slate-50/50">
+                                <span>Q5：导出的 TextGrid 怎么长得跟我想象的不一样？</span>
+                                <i data-lucide="chevron-down" class="w-4 h-4 text-slate-400 transform transition-transform" id="faq5-icon"></i>
+                            </button>
+                            <div class="p-5 pt-0 text-xs text-slate-600 leading-relaxed border-t border-slate-50 hidden" id="faq5">
+                                <strong>症状：</strong> 原以为会获得大一统标注，结果切散成许多零星小文件夹或者只有单层信息。<br>
+                                <strong>急救：</strong> 检查您当前运行的工作流模式。在“批量音频”模式下，软件本就不会强行拼接出大 TextGrid，而是会对每个独立的 wav 音频在其目录下生成一个同名的 TextGrid。若需要大整轨 TextGrid，建议首先使用 AudioToolkit 进行音频缝合，进而采用长音频工作流提取。另外注意，在多发音人模式下，无法合并导出同一张 TextGrid 标注层。
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Appendix Section -->
+                <section class="border-t border-slate-200/80 pt-16">
+                    <h3 class="font-serif font-bold text-xl text-slate-950 mb-6 flex items-center">
+                        <i data-lucide="code-2" class="w-5.5 h-5.5 text-brand-600 mr-2"></i>
+                        <span>附录：对于有二次开发意向极客的代码架构参考</span>
+                    </h3>
+                    
+                    <div class="border border-slate-100 bg-white rounded-xl overflow-hidden shadow-sm">
+                        <table class="min-w-full text-left text-xs text-slate-600 leading-relaxed">
+                            <thead class="bg-slate-50 border-b border-slate-100 font-semibold text-slate-700">
+                                <tr>
+                                    <th class="p-4">核心程序模块</th>
+                                    <th class="p-4">掌控的核心功能与底层逻辑说明</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-100 font-mono">
+                                <tr>
+                                    <td class="p-4 font-semibold text-slate-900">main.py & cli.py</td>
+                                    <td class="p-4">应用的主入口。分别对图形程序(GUI)和交互式终端控制台(CLI)进行指令流映射分配。</td>
+                                </tr>
+                                <tr>
+                                    <td class="p-4 font-semibold text-slate-900">modules/audio_core.py</td>
+                                    <td class="p-4">PhonTracer 的“大脑”。蕴藏着 F0 提取引擎 Praat / REAPER 的参数封装、VAD 判定核心以及微元音核提取等底层逻辑。</td>
+                                </tr>
+                                <tr>
+                                    <td class="p-4 font-semibold text-slate-900">modules/app.py & spectrogram_panel.py</td>
+                                    <td class="p-4">图形化控制流程。承载声谱图渲染、动态多层网格绘制以及人工鼠标拖曳红蓝边界、橡皮擦擦除等画布交互。</td>
+                                </tr>
+                                <tr>
+                                    <td class="p-4 font-semibold text-slate-900">modules/data_utils.py</td>
+                                    <td class="p-4">数据底层清洗工具。专长于字表的字符串分割、拼音模糊正则匹配以及将计算值格式化转换导出。</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+            </main>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="bg-white border-t border-slate-100 py-12 mt-20">
+        <div class="max-w-7xl mx-auto px-6 flex flex-col md:flex-row items-center justify-between text-slate-400 text-xs">
+            <div class="flex items-center space-x-2 mb-4 md:mb-0">
+                <i data-lucide="activity" class="w-5 h-5 text-brand-500"></i>
+                <span class="font-bold text-slate-600 text-sm">PhonTracer Working Station</span>
+            </div>
+            <p>© 2026 PhonTracer. 保留所有权利。专为语音学学术研究与实验流程打造。</p>
+        </div>
+    </footer>
+
+    <!-- Scripts for Icons and interactivity -->
+    <script>
+        // Init Lucide Icons
+        lucide.createIcons();
+
+        // Scroll Progress Bar
+        window.addEventListener('scroll', () => {
+            const totalScroll = document.documentElement.scrollHeight - window.innerHeight;
+            const progress = (window.pageYOffset / totalScroll) * 100;
+            document.getElementById('scrollProgress').style.width = progress + '%';
+        });
+
+        // Clever Detail: Realtime T-Value calculation
+        const calcHzInput = document.getElementById('calcHz');
+        const calcMinInput = document.getElementById('calcMin');
+        const calcMaxInput = document.getElementById('calcMax');
+        const calcResult = document.getElementById('calcResult');
+
+        function updateTValue() {
+            const hz = parseFloat(calcHzInput.value);
+            const min = parseFloat(calcMinInput.value);
+            const max = parseFloat(calcMaxInput.value);
+
+            if (isNaN(hz) || isNaN(min) || isNaN(max) || min >= max || hz < min) {
+                calcResult.innerText = "输入异常";
+                return;
+            }
+
+            // Formula: T = 5 * (ln(Hz) - ln(minHz)) / (ln(maxHz) - ln(minHz))
+            const t = 5 * (Math.log(hz) - Math.log(min)) / (Math.log(max) - Math.log(min));
+            calcResult.innerText = t.toFixed(2);
+        }
+
+        calcHzInput.addEventListener('input', updateTValue);
+        calcMinInput.addEventListener('input', updateTValue);
+        calcMaxInput.addEventListener('input', updateTValue);
+
+        // Toggle Accordion function for FAQ
+        function toggleFaq(id) {
+            const element = document.getElementById(id);
+            const icon = document.getElementById(id + '-icon');
+            if (element.classList.contains('hidden')) {
+                element.classList.remove('hidden');
+                icon.style.transform = 'rotate(180deg)';
+            } else {
+                element.classList.add('hidden');
+                icon.style.transform = 'rotate(0deg)';
+            }
+        }
+
+        // Copy Code Functionality
+        function copyCode(id) {
+            const codeText = document.getElementById(id).innerText;
+            navigator.clipboard.writeText(codeText).then(() => {
+                alert("已成功复制到剪贴板。");
+            }).catch(err => {
+                console.error("复制失败: ", err);
+            });
+        }
+    </script>
+</body>
+</html>

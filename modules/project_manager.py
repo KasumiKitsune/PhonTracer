@@ -4,7 +4,6 @@ import uuid
 import zipfile
 import shutil
 import numpy as np
-from tkinter import messagebox
 import threading
 import traceback
 import time
@@ -60,6 +59,7 @@ class ProjectManager:
     def _show_error(self, title, message):
         root = getattr(self.app, "root", None)
         if root and hasattr(root, "after"):
+            from tkinter import messagebox
             root.after(0, lambda: messagebox.showerror(title, message))
         else:
             print(f"{title}: {message}")

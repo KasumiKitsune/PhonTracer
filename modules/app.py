@@ -11,7 +11,7 @@ from PIL import Image
 import queue
 
 # 导入拆分后的模块
-from .ui_widgets import CTkReleaseButton
+from .ui_widgets import CTkReleaseButton, ToolTip
 from .data_utils import parse_wordlist, fuzzy_match_word_to_path, split_into_syllables, has_cjk
 from .audio_core import core_microscopic_vowel_nucleus, batch_process_worker, macroscopic_vad, check_audio_segments, long_process_worker, recalculate_bounds_fast, auto_split_inner_word, extract_f0, batch_process_worker_with_textgrid
 from .visual_splitter import VisualSplitter
@@ -95,6 +95,9 @@ class PhoneticsApp:
         # 处理初始传入的文件（例如“打开方式”或拖动到图标）
         if initial_files:
             self.root.after(1500, lambda: self.on_files_dropped(initial_files))
+            
+        # 启动时后台静默检查更新
+        self.root.after(3000, lambda: self.check_update(is_manual=False))
 
 
     @property
@@ -449,11 +452,15 @@ class PhoneticsApp:
                                 "fg_color": "#E5E7EB", "text_color": "#1F2937", "hover_color": "#D1D5DB"}
         
         if self.icons.get("brand_logo"):
-            logo_lbl = ctk.CTkLabel(header_frame, text="", image=self.icons.get("brand_logo"))
-            logo_lbl.pack(side=tk.LEFT, padx=(10, 15))
+            self.logo_lbl = ctk.CTkLabel(header_frame, text="", image=self.icons.get("brand_logo"), cursor="hand2")
+            self.logo_lbl.pack(side=tk.LEFT, padx=(10, 15))
         else:
-            logo_lbl = ctk.CTkLabel(header_frame, text="PhonTracer", font=ctk.CTkFont(family="Segoe UI", size=26, weight="bold"), text_color="#1F2937")
-            logo_lbl.pack(side=tk.LEFT, padx=(10, 15))
+            self.logo_lbl = ctk.CTkLabel(header_frame, text="PhonTracer", font=ctk.CTkFont(family="Segoe UI", size=26, weight="bold"), text_color="#1F2937", cursor="hand2")
+            self.logo_lbl.pack(side=tk.LEFT, padx=(10, 15))
+            
+        # 绑定点击事件与悬停提示
+        self.logo_lbl.bind("<Button-1>", lambda e: self.open_about_dialog())
+        ToolTip(self.logo_lbl, "关于 PhonTracer")
             
         status_container = ctk.CTkFrame(header_frame, fg_color="transparent")
         status_container.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -699,7 +706,7 @@ class PhoneticsApp:
         self.btn_apply_all = CTkReleaseButton(sidebar_frame, text="  全局应用", image=self.icons.get("check_white"), compound="left", 
                                               command=self.recalculate_all_audio, corner_radius=20, height=44, font=self.font_title,
                                               fg_color="#3B82F6", hover_color="#2563EB")
-        self.btn_apply_all.pack(fill=tk.X, pady=(10, 5))
+        self.btn_apply_all.pack(fill=tk.X, pady=(10, 15))
 
         # 实例化右侧树状面板 (先于中间面板初始化以确保正确的 pack 顺序)
         self.tree_panel = ProjectTreePanel(
@@ -2626,3 +2633,39 @@ class PhoneticsApp:
             self.project_manager.trigger_auto_save()
         else:
             self.project_manager.cancel_auto_save()
+
+    def check_update(self, is_manual=False):
+        """检查程序更新"""
+        from modules.updater import check_for_updates_async
+        from modules.update_dialog import UpdateDialog
+        
+        if is_manual:
+            self.start_loading("正在检查更新...")
+            
+        def on_update_found(info):
+            if is_manual:
+                self.stop_loading()
+            UpdateDialog(self.root, info, is_manual=is_manual)
+            
+        def on_no_update():
+            if is_manual:
+                self.stop_loading()
+                messagebox.showinfo("提示", "当前已是最新版本！", parent=self.root)
+                
+        def on_error(msg):
+            if is_manual:
+                self.stop_loading()
+                messagebox.showerror("检查更新失败", msg, parent=self.root)
+                
+        check_for_updates_async(
+            self.root,
+            on_update_found=on_update_found,
+            on_no_update=on_no_update,
+            on_error=on_error,
+            is_manual=is_manual
+        )
+
+    def open_about_dialog(self):
+        """打开关于页面弹窗"""
+        from modules.about_dialog import AboutDialog
+        AboutDialog(self.root, self.check_update)
