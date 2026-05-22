@@ -18,6 +18,7 @@ from .visual_splitter import VisualSplitter
 from .spectrogram_panel import SpectrogramPanel
 from .project_tree import ProjectTreePanel
 from .speaker_manager import SpeakerManager
+from .version import APP_NAME, __version__
 import sys
 
 # Monkey patch CTkScrollableFrame._mouse_wheel_all to increase scroll speed on Windows by a factor of 3.0
@@ -41,7 +42,7 @@ ctk.CTkScrollableFrame._mouse_wheel_all = patched_mouse_wheel_all
 class PhoneticsApp:
     def __init__(self, root, initial_files=None):
         self.root = root
-        self.root.title("PhonTracer - 声调提取与分析工具")
+        self.root.title(f"{APP_NAME} v{__version__} - 声调提取与分析工具")
         self.root.geometry("1200x700")
         self.root.minsize(1100, 650)
         self.root.configure(fg_color="#F3F4F6") 

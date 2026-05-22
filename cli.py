@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from modules.audio_core import macroscopic_vad, core_microscopic_vowel_nucleus, auto_split_inner_word, auto_split_to_chars_bounds, batch_process_worker, recalculate_bounds_fast, extract_f0
 from modules.speaker_manager import SpeakerManager
 from modules.data_utils import parse_wordlist, fuzzy_match_word_to_path, get_export_text_for_item, build_five_point_chart, split_into_syllables
+from modules.version import APP_NAME, __version__
 
 class LoggerOut:
     def __init__(self, original_stdout, log_file):
@@ -38,7 +39,7 @@ class LoggerOut:
         self.log_file.flush()
 
 class PhonTracerCLI(cmd.Cmd):
-    intro = """PhonTracer CLI - AI Agent Mode
+    intro = f"""{APP_NAME} CLI v{__version__} - AI Agent Mode
 Type 'help' or '?' to list commands.
 Rules:
 - Output is optimized for token efficiency.

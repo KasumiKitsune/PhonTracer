@@ -61,9 +61,9 @@ jobs:
         files: |
           dist/PhonTracer_Suite-Windows.zip
           dist/PhonTracer_Suite-macOS.dmg
-        name: ToneExtractor ${{ github.ref_name }}
+        name: PhonTracer ${{ github.ref_name }}
         body: |
-          ### 🚀 自动化发布
+          ### 自动化发布
           - 平台: ${{ matrix.os }}
           - 自动构建可执行文件 (Windows 为 Zip, macOS 为 DMG)
           - 基于最新代码逻辑与资源路径

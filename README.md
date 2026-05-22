@@ -7,6 +7,7 @@
     <img src="https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white" alt="Python">
     <img src="https://img.shields.io/badge/Platform-macOS%20|%20Windows-000000" alt="Platform">
     <img src="https://img.shields.io/badge/UI-CustomTkinter-blue" alt="UI">
+    <img src="https://img.shields.io/badge/Release-v1.1.1-10B981" alt="Release">
   </p>
 </div>
 
@@ -252,7 +253,8 @@ sequenceDiagram
       <h4>1. Excel 深度公式化报告 (.xlsx)</h4>
       <p><i>面向数据统计与公式化建模的深度报告。</i></p>
       <ul>
-        <li>自动写入原始 Hz 频率数据与起止时间</li>
+        <li>自动写入标准汇总数据、分析公式与逐点原始基频数据</li>
+        <li>第三个工作表保留当前编辑后的 Hz 轨迹，包含橡皮擦置零点</li>
         <li>内置 <code>AVERAGEIFS/MIN/MAX</code> 原生公式，便于二次筛选</li>
         <li>应用 <code>T = 5*log</code> 经典归一化公式自动完成标调</li>
         <li>内置生成基于真实发音时长的散点连线图</li>
@@ -274,6 +276,7 @@ sequenceDiagram
       <p><i>基于 SciPy 二维核密度估计 (KDE) 的可视化。</i></p>
       <ul>
         <li>直观反映样本在不同发音时序段的基频游移规律</li>
+        <li>使用最终字段边界与当前基频缓存，忠实反映手动擦除后的数据缺口</li>
         <li>以热力图斑点深度揭示发音最集中的核心区</li>
         <li>极佳的科研配图，利于展示声调变体的离散度</li>
       </ul>

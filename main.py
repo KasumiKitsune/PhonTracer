@@ -4,6 +4,7 @@ import time
 import tkinter as tk
 import customtkinter as ctk
 import logging
+from modules.version import APP_NAME, __version__
 
 # 配置日志
 logging.basicConfig(
@@ -75,7 +76,7 @@ def show_splash_and_load():
             raise FileNotFoundError
     except Exception:
         logo_fallback = ctk.CTkLabel(
-            left_frame, text="Phon\nTracer", 
+            left_frame, text=APP_NAME.replace("Tracer", "\nTracer"),
             font=ctk.CTkFont(family="Segoe UI Black", size=36, weight="bold"), 
             text_color="#FF2A6D", justify="left"
         )
@@ -96,7 +97,7 @@ def show_splash_and_load():
     
     # 英文副标题
     en_subtitle = ctk.CTkLabel(
-        right_frame, text="PITCH EXTRACTION & ANALYSIS TOOL", 
+        right_frame, text=f"PITCH EXTRACTION & ANALYSIS TOOL  v{__version__}",
         font=ctk.CTkFont(family="Arial", size=10, weight="bold"), 
         text_color="#A3A3A3",
         anchor="w"
