@@ -89,8 +89,11 @@ def test_word_mode_missing_f0():
     item['snd'].mock_pitch = pitch
     result = get_export_text_for_item(item, 1, 11)
 
-    # In word mode, missing F0 for a character simply skips that character
-    assert result == ""
+    # In word mode, missing F0 should keep each detected sub-segment visible
+    # instead of making the preview look like a segment disappeared.
+    assert "1_1.A (A/B)" in result
+    assert "1_2.B (A/B)" in result
+    assert result.count("0.000000") >= 22
 
 def test_word_mode_partial_missing_f0():
     freqs = np.zeros(100)
@@ -101,6 +104,30 @@ def test_word_mode_partial_missing_f0():
     item['snd'].mock_pitch = pitch
     result = get_export_text_for_item(item, 1, 11)
 
-    # Should include A but not B
+    # Should include A and keep B visible with zero-filled data.
     assert "1_1.A (A/B)" in result
-    assert "1_2.B" not in result
+    assert "1_2.B (A/B)" in result
+
+def test_word_mode_short_child_uses_parent_pitch_fallback():
+    class ShortExtractionSound(MockSound):
+        def extract_part(self, from_time=0.0, to_time=1.0, *args, **kwargs):
+            child = MockSound(duration=to_time - from_time)
+            child.mock_pitch = MockPitch(np.zeros(10), xs_array=np.linspace(0, max(0.001, to_time - from_time), 10))
+            return child
+
+    parent_xs = np.linspace(0, 1.0, 100)
+    parent_freqs = np.zeros(100)
+    parent_freqs[12:38] = 155.0
+    parent_freqs[62:88] = 135.0
+    pitch = MockPitch(parent_freqs, xs_array=parent_xs)
+
+    item = {
+        'start': 0.1, 'end': 0.9, 'label': 'A/B',
+        'inner_splits': [0.5], 'snd': ShortExtractionSound(), 'pitch': pitch
+    }
+    result = get_export_text_for_item(item, 1, 11)
+
+    assert "1_1.A (A/B)" in result
+    assert "155.000000" in result
+    assert "1_2.B (A/B)" in result
+    assert "135.000000" in result

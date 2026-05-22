@@ -39,6 +39,7 @@ class SpectrogramPanel:
         self.play_start_audio_time = 0
         self.play_end_audio_time = 0
         self.cursor_x = None
+        self.cursor_char_index = None
         self.cursor_line = None
         self.cursor_text = None
         self._playback_job = None
@@ -218,7 +219,37 @@ class SpectrogramPanel:
         self.var_t_end.set(f"{t_end:.3f}" if t_end is not None else "0.000")
         
         self.cursor_x = t_start # Reset cursor position when loading new item
+        self.cursor_char_index = 0 if item.get('chars_bounds') else None
         self.plot_item_spectrogram()
+
+    def _get_char_index_for_time(self, t, prefer_right=True):
+        item = self.current_item
+        if not item or t is None:
+            return None
+        chars_bounds = item.get('chars_bounds', [])
+        if not chars_bounds:
+            return None
+
+        tol = 1e-6
+        indices = range(len(chars_bounds) - 1, -1, -1) if prefer_right else range(len(chars_bounds))
+        for idx in indices:
+            c_s, c_e = chars_bounds[idx]
+            if c_s - tol <= t <= c_e + tol:
+                return idx
+
+        nearest_idx = None
+        nearest_dist = float('inf')
+        for idx, (c_s, c_e) in enumerate(chars_bounds):
+            dist = min(abs(t - c_s), abs(t - c_e))
+            if dist < nearest_dist:
+                nearest_idx = idx
+                nearest_dist = dist
+        return nearest_idx
+
+    def _set_cursor_position(self, t, char_index=None):
+        self.cursor_x = t
+        self.cursor_char_index = char_index if char_index is not None else self._get_char_index_for_time(t)
+        self.update_cursor_graphics()
 
     def plot_item_spectrogram(self):
         item = self.current_item
@@ -351,36 +382,50 @@ class SpectrogramPanel:
         
         closest = None
         min_dist = 15 # px threshold
+        closest_priority = 99
         
         for i, (c_s, c_e) in enumerate(chars_bounds):
             s_px = self.ax.transData.transform((c_s, 0))[0]
-            if abs(event.x - s_px) < min_dist:
+            s_dist = abs(event.x - s_px)
+            # If two character boundaries overlap, prefer the start of the following
+            # character so playback begins in the character the user clicked into.
+            if s_dist < min_dist or (s_dist == min_dist and closest_priority > 0):
                 closest = ('start', i)
-                min_dist = abs(event.x - s_px)
+                min_dist = s_dist
+                closest_priority = 0
 
             e_px = self.ax.transData.transform((c_e, 0))[0]
-            if abs(event.x - e_px) < min_dist:
+            e_dist = abs(event.x - e_px)
+            if e_dist < min_dist or (e_dist == min_dist and closest_priority > 1):
                 closest = ('end', i)
-                min_dist = abs(event.x - e_px)
+                min_dist = e_dist
+                closest_priority = 1
         
         if self.cursor_x is not None:
             c_px = self.ax.transData.transform((self.cursor_x, 0))[0]
-            if abs(event.x - c_px) < min_dist:
+            c_dist = abs(event.x - c_px)
+            if c_dist < min_dist:
                 closest = 'cursor'
-                min_dist = abs(event.x - c_px)
+                min_dist = c_dist
+                closest_priority = 2
 
         self.dragging = closest
         if isinstance(closest, tuple):
             bound_type, idx = closest
             boundary_time = chars_bounds[idx][0] if bound_type == 'start' else chars_bounds[idx][1]
-            self.cursor_x = boundary_time
+            cursor_idx = idx
+            if bound_type == 'end' and idx + 1 < len(chars_bounds):
+                next_start = chars_bounds[idx + 1][0]
+                if abs(next_start - boundary_time) < 0.02:
+                    cursor_idx = idx + 1
+                    boundary_time = next_start
+            self._set_cursor_position(boundary_time, cursor_idx)
             if bound_type == 'start':
                 self.bound_lines[idx][0].set_color('#047857')
                 self.bound_lines[idx][0].set_linewidth(4)
             elif bound_type == 'end':
                 self.bound_lines[idx][1].set_color('#047857')
                 self.bound_lines[idx][1].set_linewidth(4)
-            self.update_cursor_graphics()
         elif closest == 'cursor':
             self.cursor_line.set_color('#064E3B')
             self.cursor_line.set_linewidth(2.5)
@@ -389,11 +434,10 @@ class SpectrogramPanel:
             self.canvas.draw_idle()
         else:
             if event.xdata is not None:
-                self.cursor_x = event.xdata
+                self._set_cursor_position(event.xdata)
                 self.dragging = 'cursor'
                 self.cursor_line.set_color('#064E3B')
                 self.cursor_line.set_linewidth(2.5)
-                self.update_cursor_graphics()
 
     def update_cursor_graphics(self):
         if not self.cursor_line or not self.cursor_text: return
@@ -449,14 +493,19 @@ class SpectrogramPanel:
             self.canvas.draw_idle()
             return
             
+        if event.xdata is None:
+            return
+
         if isinstance(self.dragging, tuple):
             bound_type, idx = self.dragging
             if bound_type == 'start':
                 chars_bounds[idx][0] = min(event.xdata, chars_bounds[idx][1] - 0.01)
                 self.cursor_x = chars_bounds[idx][0]
+                self.cursor_char_index = idx
             elif bound_type == 'end':
                 chars_bounds[idx][1] = max(event.xdata, chars_bounds[idx][0] + 0.01)
                 self.cursor_x = chars_bounds[idx][1]
+                self.cursor_char_index = idx
 
             if chars_bounds:
                 item['start'] = chars_bounds[0][0]
@@ -469,8 +518,7 @@ class SpectrogramPanel:
                 self.cursor_text.set_position((self.cursor_x, 5000))
                 self.cursor_text.set_text(f"{self.cursor_x:.3f}")
         elif self.dragging == 'cursor':
-            self.cursor_x = event.xdata
-            self.update_cursor_graphics()
+            self._set_cursor_position(event.xdata)
             return
             
         self.update_lines()
@@ -493,6 +541,7 @@ class SpectrogramPanel:
             return
 
         if self.dragging:
+            was_dragging = self.dragging
             self.dragging = None
             for line_s, line_e in self.bound_lines:
                 line_s.set_color('#EF4444')
@@ -502,9 +551,12 @@ class SpectrogramPanel:
             if self.cursor_line:
                 self.cursor_line.set_color('#1B5E20')
                 self.cursor_line.set_linewidth(1.5)
-                
-            self.plot_item_spectrogram()
-            self.update_ui_times()
+
+            if was_dragging == 'cursor':
+                self.update_cursor_graphics()
+            else:
+                self.plot_item_spectrogram()
+                self.update_ui_times()
             self.canvas.get_tk_widget().config(cursor="arrow")
 
     def update_lines(self):
@@ -612,13 +664,17 @@ class SpectrogramPanel:
             self.play_is_selection = False
             self.play_selection_start = 0.0
 
-            for c_s, c_e in chars_bounds:
+            char_idx = self.cursor_char_index
+            if char_idx is None or char_idx >= len(chars_bounds):
+                char_idx = self._get_char_index_for_time(self.cursor_x)
+
+            if char_idx is not None and 0 <= char_idx < len(chars_bounds):
+                c_s, c_e = chars_bounds[char_idx]
                 if c_s <= self.cursor_x <= c_e:
                     play_s = self.cursor_x
                     play_e = c_e
                     self.play_is_selection = True
                     self.play_selection_start = c_s
-                    break
 
             if play_s is None:
                 # If cursor is within the current segment, play from the cursor to the end of the segment.

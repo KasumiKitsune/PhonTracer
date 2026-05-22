@@ -202,5 +202,133 @@ class TestUISyncBugs(unittest.TestCase):
             panel.on_draw(draw_event)
             panel.canvas.copy_from_bbox.assert_called_once_with(panel.fig.bbox)
 
+    def test_spectrogram_panel_on_motion_ignores_none_coordinates(self):
+        """Test that on_motion ignores events with None xdata during dragging to prevent cursor reset"""
+        with patch.object(SpectrogramPanel, 'setup_ui'):
+            panel = SpectrogramPanel(self.root, {}, None, None, None)
+            panel.ax = MagicMock()
+            panel.current_item = self.item
+            panel.dragging = 'cursor'
+            panel.cursor_x = 0.5
+
+            mock_event = MagicMock()
+            mock_event.xdata = None
+            mock_event.x = 200
+            mock_event.y = 300
+
+            panel.on_motion(mock_event)
+
+            self.assertEqual(panel.cursor_x, 0.5)
+
+    def test_cursor_release_does_not_sync_bounds(self):
+        """Moving the green playback cursor should not be treated as a boundary edit"""
+        on_time_changed = MagicMock()
+        with patch.object(SpectrogramPanel, 'setup_ui'):
+            panel = SpectrogramPanel(self.root, {}, on_time_changed, None, None)
+            panel.current_item = self.item
+            panel.dragging = 'cursor'
+            panel.cursor_x = 0.6
+            panel.cursor_line = MagicMock()
+            panel.cursor_text = MagicMock()
+            panel.bound_lines = []
+            panel.plot_item_spectrogram = MagicMock()
+            panel.canvas = MagicMock()
+
+            mock_event = MagicMock()
+            panel.on_release(mock_event)
+
+            panel.plot_item_spectrogram.assert_not_called()
+            on_time_changed.assert_not_called()
+            self.assertEqual(panel.cursor_x, 0.6)
+
+    def test_shared_boundary_click_prefers_next_character_start(self):
+        """A shared red line should select the next character's start, not the previous end"""
+        with patch.object(SpectrogramPanel, 'setup_ui'):
+            panel = SpectrogramPanel(self.root, {}, None, None, None)
+            panel.ax = MagicMock()
+            panel.ax2 = MagicMock()
+            panel.ax.transData.transform.side_effect = lambda xy: (xy[0] * 100, 0)
+            panel.current_item = {
+                **self.item,
+                'label': 'A/B',
+                'chars_bounds': [[0.1, 0.5], [0.5, 0.9]]
+            }
+            panel.bound_lines = [(MagicMock(), MagicMock()), (MagicMock(), MagicMock())]
+            panel.cursor_line = MagicMock()
+            panel.cursor_text = MagicMock()
+            panel.canvas = MagicMock()
+
+            mock_event = MagicMock()
+            mock_event.inaxes = panel.ax
+            mock_event.button = 1
+            mock_event.x = 50
+            mock_event.xdata = 0.5
+
+            panel.on_press(mock_event)
+
+            self.assertEqual(panel.dragging, ('start', 1))
+            self.assertEqual(panel.cursor_x, 0.5)
+            self.assertEqual(panel.cursor_char_index, 1)
+            panel.bound_lines[1][0].set_color.assert_called_with('#047857')
+
+    def test_playback_at_shared_boundary_uses_next_character(self):
+        """Playback from a shared boundary should continue through the following character"""
+        with patch.object(SpectrogramPanel, 'setup_ui'):
+            panel = SpectrogramPanel(self.root, {}, None, None, None)
+            part = MagicMock()
+            part.values = np.zeros((1, 10))
+            part.sampling_frequency = 1000
+            snd = MagicMock()
+            snd.get_total_duration.return_value = 1.0
+            snd.extract_part.return_value = part
+            panel.current_item = {
+                **self.item,
+                'snd': snd,
+                'start': 0.1,
+                'end': 0.9,
+                'chars_bounds': [[0.1, 0.5], [0.5, 0.9]]
+            }
+            panel.cursor_x = 0.5
+            panel.canvas = MagicMock()
+            panel.update_cursor_graphics = MagicMock()
+            panel._update_play_button_state = MagicMock()
+
+            with patch('modules.spectrogram_panel.sd.play'):
+                panel.play_selected()
+
+            snd.extract_part.assert_called_with(from_time=0.5, to_time=0.9)
+            self.assertEqual(panel.play_selection_start, 0.5)
+            self.assertEqual(panel.play_end_audio_time, 0.9)
+
+    def test_playback_at_overlapping_boundary_prefers_stored_character(self):
+        """The cursor's remembered character should win when adjacent bounds overlap"""
+        with patch.object(SpectrogramPanel, 'setup_ui'):
+            panel = SpectrogramPanel(self.root, {}, None, None, None)
+            part = MagicMock()
+            part.values = np.zeros((1, 10))
+            part.sampling_frequency = 1000
+            snd = MagicMock()
+            snd.get_total_duration.return_value = 1.0
+            snd.extract_part.return_value = part
+            panel.current_item = {
+                **self.item,
+                'snd': snd,
+                'start': 0.1,
+                'end': 0.9,
+                'chars_bounds': [[0.1, 0.55], [0.5, 0.9]]
+            }
+            panel.cursor_x = 0.5
+            panel.cursor_char_index = 1
+            panel.canvas = MagicMock()
+            panel.update_cursor_graphics = MagicMock()
+            panel._update_play_button_state = MagicMock()
+
+            with patch('modules.spectrogram_panel.sd.play'):
+                panel.play_selected()
+
+            snd.extract_part.assert_called_with(from_time=0.5, to_time=0.9)
+            self.assertEqual(panel.play_selection_start, 0.5)
+            self.assertEqual(panel.play_end_audio_time, 0.9)
+
 if __name__ == '__main__':
     unittest.main()

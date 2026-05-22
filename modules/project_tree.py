@@ -638,6 +638,26 @@ class ProjectTreePanel:
         item = self.items[self.current_iid]
         real_idx = self._get_item_index(self.current_iid)
         text = get_export_text_for_item(item, real_idx, self.app_state_params['pts'], pitch_floor=self.app_state_params.get('pitch_floor', 75.0), pitch_ceiling=self.app_state_params.get('pitch_ceiling', 600.0), voicing_threshold=self.app_state_params.get('voicing_threshold', 0.25))
+
+        syls = split_into_syllables(item.get('label', ''))
+        expected_sections = len(syls)
+        shown_sections = 0
+        if expected_sections > 1:
+            lines = text.splitlines()
+            subsection_prefix = f"{real_idx}_"
+            single_prefix = f"{real_idx}."
+            shown_sections = sum(1 for line in lines if line.startswith(subsection_prefix))
+            if shown_sections == 0 and any(line.startswith(single_prefix) for line in lines):
+                shown_sections = 1
+
+        preview_mismatch = expected_sections > 1 and shown_sections == 1
+        prev_mismatch = item.get('preview_segment_mismatch', False)
+        item['preview_segment_mismatch'] = preview_mismatch
+        if preview_mismatch:
+            item['has_empty_data'] = True
+            text = f"[警告] 检测到 {expected_sections} 个子段，但数据预览当前只显示 1 个。请检查该段边界或基频。\n\n{text}"
+        if preview_mismatch != prev_mismatch:
+            self._schedule_rebuild()
         
         self.text_preview.configure(state='normal')
         self.text_preview.delete('1.0', tk.END)
@@ -662,6 +682,9 @@ class ProjectTreePanel:
     def _check_item_has_empty_data(self, item):
         """精准检测子音节区间的11点中是否含有0/NaN值（已应用智能边界收缩防误报）"""
         if not item or item.get('start') is None: return False
+        if item.get('preview_segment_mismatch'):
+            item['has_empty_data'] = True
+            return True
         
         # 1. 如果 Pitch 数据已加载，优先执行最高精度的实时重新计算，并更新缓存
         # 注：此分支仅使用 pitch 数组进行检测，不需要 snd 对象
@@ -1231,6 +1254,148 @@ class ProjectTreePanel:
             
         return t_e - t_s, syl_data
 
+    def _get_pitch_arrays_for_item(self, item):
+        if item.get('pitch_data'):
+            return item['pitch_data']['xs'], item['pitch_data']['freqs']
+        if item.get('pitch'):
+            pitch = item['pitch']
+            return pitch.xs(), pitch.selected_array['frequency']
+        return None, None
+
+    def _write_raw_pitch_sheet(self, workbook, rows, include_speaker=False):
+        """写入逐点 Hz 原始基频数据。这里保留 pitch_data 当前状态，包括橡皮擦置零后的点。"""
+        ws_raw = workbook.add_worksheet("原始基频数据")
+        headers = []
+        if include_speaker:
+            headers.append("发音人")
+        headers.extend([
+            "组别", "编号", "词语", "字序", "字",
+            "绝对时间(s)", "字内相对时间(s)", "基频Hz", "状态"
+        ])
+        for col, header in enumerate(headers):
+            ws_raw.write(0, col, header)
+
+        row_idx = 1
+        for entry in rows:
+            item = entry.get('item') or entry.get('raw_item')
+            if not item:
+                continue
+            self._ensure_item_loaded(item)
+            if item.get('start') is None or not item.get('snd') or (not item.get('pitch') and not item.get('pitch_data')):
+                continue
+
+            p_xs, p_freqs = self._get_pitch_arrays_for_item(item)
+            if p_xs is None or p_freqs is None:
+                continue
+
+            syls, bounds = self._get_syllables_and_bounds(item)
+            if not bounds:
+                continue
+
+            for syl_idx, (c_s, c_e) in enumerate(bounds, start=1):
+                if c_e <= c_s:
+                    continue
+                char = syls[syl_idx - 1] if syl_idx - 1 < len(syls) else ""
+                mask = (p_xs >= c_s) & (p_xs <= c_e)
+                indices = np.where(mask)[0]
+                for p_idx in indices:
+                    t = float(p_xs[p_idx])
+                    hz = float(p_freqs[p_idx]) if np.isfinite(p_freqs[p_idx]) else 0.0
+                    status = "有效" if hz > 0 else "无声/已擦除"
+
+                    values = []
+                    if include_speaker:
+                        values.append(entry.get('speaker', ''))
+                    values.extend([
+                        entry.get('group', ''),
+                        entry.get('index', ''),
+                        item.get('label', ''),
+                        syl_idx,
+                        char,
+                        round(t, 6),
+                        round(t - c_s, 6),
+                        round(hz, 6) if hz > 0 else 0.0,
+                        status
+                    ])
+                    for col, val in enumerate(values):
+                        ws_raw.write(row_idx, col, val)
+                    row_idx += 1
+
+        ws_raw.freeze_panes(1, 0)
+        ws_raw.autofilter(0, 0, max(row_idx - 1, 1), len(headers) - 1)
+        return ws_raw
+
+    def _get_syllables_and_bounds(self, item):
+        """返回与当前编辑边界一致的子段列表，优先使用 chars_bounds。"""
+        t_s, t_e = item.get('start'), item.get('end')
+        if t_s is None or t_e is None or t_e <= t_s:
+            return [], []
+
+        label = item.get('label', '')
+        syls = split_into_syllables(label)
+        if not syls and label:
+            syls = [label]
+
+        chars_bounds = item.get('chars_bounds', [])
+        if chars_bounds and len(chars_bounds) == len(syls):
+            return syls, [[float(s), float(e)] for s, e in chars_bounds]
+
+        inner_splits = item.get('inner_splits', [])
+        splits = [t_s] + [s for s in inner_splits if t_s < s < t_e] + [t_e]
+        if len(syls) > 1 and len(splits) != len(syls) + 1:
+            splits = np.linspace(t_s, t_e, len(syls) + 1).tolist()
+        elif len(syls) <= 1:
+            splits = [t_s, t_e]
+            if not syls:
+                syls = [label]
+
+        return syls, [[splits[i], splits[i + 1]] for i in range(len(splits) - 1)]
+
+    def _extract_kde_contour(self, p_xs, p_freqs, c_s, c_e, n_dense):
+        """提取 KDE 用的连续 F0 轮廓；橡皮擦/无声缺口保留为 NaN，后续绘制会跳过。"""
+        if c_e <= c_s:
+            return None
+
+        valid_idx = np.where((p_xs >= c_s) & (p_xs <= c_e) & np.isfinite(p_freqs) & (p_freqs > 0))[0]
+        if len(valid_idx) < 3:
+            return None
+
+        seg_xs = np.asarray(p_xs[valid_idx], dtype=float)
+        seg_ys = np.asarray(p_freqs[valid_idx], dtype=float)
+        order = np.argsort(seg_xs)
+        seg_xs = seg_xs[order]
+        seg_ys = seg_ys[order]
+
+        v_s, v_e = seg_xs[0], seg_xs[-1]
+        if v_e <= v_s:
+            return None
+
+        gap_threshold = 0.025
+        smoothed = seg_ys.copy()
+        try:
+            from scipy.signal import savgol_filter
+            breaks = np.where(np.diff(seg_xs) > gap_threshold)[0] + 1
+            run_ranges = np.split(np.arange(len(seg_xs)), breaks)
+            for run in run_ranges:
+                run_len = len(run)
+                if run_len < 5:
+                    continue
+                win = min(9, run_len if run_len % 2 == 1 else run_len - 1)
+                if win >= 5:
+                    smoothed[run] = savgol_filter(seg_ys[run], win, 2)
+        except Exception:
+            pass
+
+        dense_times = np.linspace(v_s, v_e, n_dense)
+        y_dense = np.interp(dense_times, seg_xs, smoothed)
+
+        nearest_right = np.searchsorted(seg_xs, dense_times, side='left')
+        nearest_left = np.clip(nearest_right - 1, 0, len(seg_xs) - 1)
+        nearest_right = np.clip(nearest_right, 0, len(seg_xs) - 1)
+        nearest_dist = np.minimum(np.abs(dense_times - seg_xs[nearest_left]), np.abs(dense_times - seg_xs[nearest_right]))
+        y_dense[nearest_dist > gap_threshold] = np.nan
+        return y_dense
+
     def _export_xlsx(self, out_file, include_chart=False, tree_structure=None):
         try:
             import xlsxwriter
@@ -1251,6 +1416,7 @@ class ProjectTreePanel:
         workbook = xlsxwriter.Workbook(out_file)
         ws_data = workbook.add_worksheet("数据")
         ws_res = workbook.add_worksheet("分析结果")
+        raw_pitch_rows = []
         
         headers = ["组别", "编号", "词语", "总时长(s)"]
         for k in range(1, max_syls + 1):
@@ -1274,6 +1440,11 @@ class ProjectTreePanel:
                     
                 total_dur, syl_data = self._extract_syl_data(item, num_points)
                 if total_dur <= 0: continue
+                raw_pitch_rows.append({
+                    'group': grp_name,
+                    'index': global_idx,
+                    'item': item
+                })
                 
                 row = [grp_name, global_idx, item['label'], float(f"{total_dur:.6f}")]
                 
@@ -1306,6 +1477,8 @@ class ProjectTreePanel:
                     
                 row_idx += 1
                 global_idx += 1
+
+        self._write_raw_pitch_sheet(workbook, raw_pitch_rows, include_speaker=False)
 
         all_avg_hz = []
         avg_points_map = {}
@@ -1386,6 +1559,7 @@ class ProjectTreePanel:
         if format_mode == 'xlsx':
             workbook = xlsxwriter.Workbook(out_file)
             ws_data = workbook.add_worksheet("整合数据(T值)")
+            ws_res = workbook.add_worksheet("分析结果")
             headers = ["发音人", "组别", "编号", "词语", "总时长(s)"]
             for k in range(1, max_syls + 1):
                 headers.append(f"字{k}_时长(s)")
@@ -1393,6 +1567,7 @@ class ProjectTreePanel:
             for col, header in enumerate(headers): ws_data.write(0, col, header)
             
             group_stats = {}
+            raw_pitch_rows = []
             row_idx = 1
             for speaker in all_speakers:
                 rows = speaker_rows.get(speaker.id, [])
@@ -1400,6 +1575,12 @@ class ProjectTreePanel:
                 diff = s_max - s_min if s_max > s_min else 1.0
                 global_idx = 1
                 for r in rows:
+                    raw_pitch_rows.append({
+                        'speaker': speaker.name,
+                        'group': r['group'],
+                        'index': global_idx,
+                        'item': r['raw_item']
+                    })
                     ws_data.write(row_idx, 0, speaker.name)
                     ws_data.write(row_idx, 1, r['group'])
                     ws_data.write(row_idx, 2, global_idx)
@@ -1441,8 +1622,6 @@ class ProjectTreePanel:
                     global_idx += 1
                     row_idx += 1
             
-            # Create ws_res worksheet for averaged results
-            ws_res = workbook.add_worksheet("分析结果")
             res_headers = ["声调类型"]
             for k in range(1, max_syls + 1):
                 res_headers.append(f"字{k}_平均时长")
@@ -1466,6 +1645,8 @@ class ProjectTreePanel:
                             ws_res.write(res_row, col, "")
                         col += 1
                 res_row += 1
+
+            self._write_raw_pitch_sheet(workbook, raw_pitch_rows, include_speaker=True)
                 
             if include_chart and group_stats:
                 try:
@@ -1966,9 +2147,6 @@ class ProjectTreePanel:
         return True
 
     def _export_kde_heatmap(self, out_file, tree_structure=None, params=None):
-        from scipy.interpolate import interp1d
-        from scipy.signal import savgol_filter
-        from scipy.stats import gaussian_kde
         import os
 
         if tree_structure is None:
@@ -2002,18 +2180,12 @@ class ProjectTreePanel:
             speaker_contours[grp_name] = {}
             for child in children:
                 item = self.items[child]
-                lbl = item.get('label', '')
-                if len(lbl) > max_syls: max_syls = len(lbl)
+                syls, bounds = self._get_syllables_and_bounds(item)
+                if syls:
+                    max_syls = max(max_syls, len(syls))
                 self._ensure_item_loaded(item)
                 if item.get('start') is None or not item.get('snd') or (not item.get('pitch') and not item.get('pitch_data')):
                     continue
-                t_s, t_e = item['start'], item['end']
-                label = item.get('label', '')
-                inner_splits = item.get('inner_splits', [])
-                
-                splits = [t_s] + [s for s in inner_splits if t_s < s < t_e] + [t_e]
-                if len(splits) != len(label) + 1: splits = np.linspace(t_s, t_e, len(label) + 1).tolist()
-                if len(label) <= 1: splits = [t_s, t_e]
                 
                 if item.get('pitch_data'):
                     p_xs = item['pitch_data']['xs']
@@ -2023,33 +2195,20 @@ class ProjectTreePanel:
                     p_xs = pitch.xs()
                     p_freqs = pitch.selected_array['frequency']
                 
-                for k in range(len(splits) - 1):
-                    c_s, c_e = splits[k], splits[k+1]
-                    valid_idx = np.where((p_xs >= c_s) & (p_xs <= c_e) & (p_freqs > 0))[0]
-                    if len(valid_idx) >= 2:
-                        v_s, v_e = p_xs[valid_idx[0]], p_xs[valid_idx[-1]]
-                        mask = (p_xs >= v_s) & (p_xs <= v_e) & (p_freqs > 0)
-                        valid_freqs = p_freqs[mask]
-                        if len(valid_freqs) < 3: continue
-    
-                        win = len(valid_freqs) // 3
-                        if win % 2 == 0: win += 1
-                        win = max(win, 3)
-                        smoothed = savgol_filter(valid_freqs, win, 2) if len(valid_freqs) > win else valid_freqs
-    
-                        x_orig = np.linspace(0, 1, len(smoothed))
-                        f_interp = interp1d(x_orig, smoothed, kind='linear')
-                        y_dense = f_interp(np.linspace(0, 1, N_DENSE))
-                        
-                        if k not in speaker_contours[grp_name]: speaker_contours[grp_name][k] = []
-                        speaker_contours[grp_name][k].append(y_dense)
+                for k, (c_s, c_e) in enumerate(bounds):
+                    y_dense = self._extract_kde_contour(p_xs, p_freqs, c_s, c_e, N_DENSE)
+                    if y_dense is None:
+                        continue
+                    if k not in speaker_contours[grp_name]: speaker_contours[grp_name][k] = []
+                    speaker_contours[grp_name][k].append(y_dense)
         
         all_mean_vals = []
         for name, syls_dict in speaker_contours.items():
             for k, y_arrays in syls_dict.items():
                 if y_arrays:
-                    mean_contour = np.mean(y_arrays, axis=0)
-                    all_mean_vals.extend(mean_contour.tolist())
+                    finite_vals = np.asarray(y_arrays, dtype=float).ravel()
+                    finite_vals = finite_vals[np.isfinite(finite_vals)]
+                    all_mean_vals.extend(finite_vals.tolist())
         if all_mean_vals:
             if params:
                 f0_mode = params.get('f0_mode', 'minmax')
@@ -2095,8 +2254,10 @@ class ProjectTreePanel:
             for k, y_arrays in syls_dict.items():
                 x_dense = np.linspace(k * 100, (k + 1) * 100, N_DENSE)
                 for y_arr in y_arrays:
-                    X_all.extend(x_dense.tolist())
-                    Y_all.extend(y_arr)
+                    y_arr = np.asarray(y_arr, dtype=float)
+                    valid = np.isfinite(y_arr)
+                    X_all.extend(x_dense[valid].tolist())
+                    Y_all.extend(y_arr[valid].tolist())
             group_norm_points[name] = (np.array(X_all), np.array(Y_all))
 
         pbar.set(0.8)
@@ -2107,10 +2268,6 @@ class ProjectTreePanel:
         return True
 
     def _export_kde_heatmap_integrated(self, out_file, all_speakers, params=None):
-        from scipy.interpolate import interp1d
-        from scipy.signal import savgol_filter
-        from scipy.stats import gaussian_kde
-
         N_DENSE = 100
         max_syls = 1
         aggregated_syl_contours = {}
@@ -2146,18 +2303,12 @@ class ProjectTreePanel:
                 speaker_contours[grp_name] = {}
                 for child in children:
                     item = self.items[child]
-                    lbl = item.get('label', '')
-                    if len(lbl) > max_syls: max_syls = len(lbl)
+                    syls, bounds = self._get_syllables_and_bounds(item)
+                    if syls:
+                        max_syls = max(max_syls, len(syls))
                     self._ensure_item_loaded(item)
                     if item.get('start') is None or not item.get('snd') or (not item.get('pitch') and not item.get('pitch_data')):
                         continue
-                    t_s, t_e = item['start'], item['end']
-                    label = item.get('label', '')
-                    inner_splits = item.get('inner_splits', [])
-                    
-                    splits = [t_s] + [s for s in inner_splits if t_s < s < t_e] + [t_e]
-                    if len(splits) != len(label) + 1: splits = np.linspace(t_s, t_e, len(label) + 1).tolist()
-                    if len(label) <= 1: splits = [t_s, t_e]
                     
                     if item.get('pitch_data'):
                         p_xs = item['pitch_data']['xs']
@@ -2167,72 +2318,66 @@ class ProjectTreePanel:
                         p_xs = pitch.xs()
                         p_freqs = pitch.selected_array['frequency']
                     
-                    for k in range(len(splits) - 1):
-                        c_s, c_e = splits[k], splits[k+1]
-                        valid_idx = np.where((p_xs >= c_s) & (p_xs <= c_e) & (p_freqs > 0))[0]
-                        if len(valid_idx) >= 2:
-                            v_s, v_e = p_xs[valid_idx[0]], p_xs[valid_idx[-1]]
-                            mask = (p_xs >= v_s) & (p_xs <= v_e) & (p_freqs > 0)
-                            valid_freqs = p_freqs[mask]
-                            if len(valid_freqs) < 3: continue
-        
-                            win = len(valid_freqs) // 3
-                            if win % 2 == 0: win += 1
-                            win = max(win, 3)
-                            smoothed = savgol_filter(valid_freqs, win, 2) if len(valid_freqs) > win else valid_freqs
-        
-                            x_orig = np.linspace(0, 1, len(smoothed))
-                            f_interp = interp1d(x_orig, smoothed, kind='linear')
-                            y_dense = f_interp(np.linspace(0, 1, N_DENSE))
-                            
-                            if k not in speaker_contours[grp_name]: speaker_contours[grp_name][k] = []
-                            speaker_contours[grp_name][k].append(y_dense)
+                    for k, (c_s, c_e) in enumerate(bounds):
+                        y_dense = self._extract_kde_contour(p_xs, p_freqs, c_s, c_e, N_DENSE)
+                        if y_dense is None:
+                            continue
+                        if k not in speaker_contours[grp_name]: speaker_contours[grp_name][k] = []
+                        speaker_contours[grp_name][k].append(y_dense)
             
-            all_mean_vals = []
             for name, syls_dict in speaker_contours.items():
+                if name not in aggregated_syl_contours: aggregated_syl_contours[name] = {}
                 for k, y_arrays in syls_dict.items():
-                    if y_arrays:
-                        mean_contour = np.mean(y_arrays, axis=0)
-                        all_mean_vals.extend(mean_contour.tolist())
-            if all_mean_vals:
-                if params:
-                    f0_mode = params.get('f0_mode', 'minmax')
-                    p_low = params.get('percentile_low', 5.0)
-                    p_high = params.get('percentile_high', 95.0)
-                    m_min = params.get('manual_min', 75.0)
-                    m_max = params.get('manual_max', 600.0)
-                else:
-                    f0_mode = 'minmax'
-                    p_low, p_high, m_min, m_max = 5.0, 95.0, 75.0, 600.0
-
-                if f0_mode == 'percentile':
-                    min_f0 = np.percentile(all_mean_vals, p_low)
-                    max_f0 = np.percentile(all_mean_vals, p_high)
-                elif f0_mode == 'manual':
-                    min_f0 = m_min
-                    max_f0 = m_max
-                else:
-                    min_f0 = min(all_mean_vals)
-                    max_f0 = max(all_mean_vals)
-
-                def hz_to_5_scale_s(hz):
-                    if max_f0 == min_f0: return 3.0
-                    hz_val = np.clip(hz, min_f0, max_f0) if min_f0 > 0 else hz
-                    if min_f0 <= 0 or max_f0 <= min_f0: return 3.0
-                    return 5 * (np.log(hz_val) - np.log(min_f0)) / (np.log(max_f0) - np.log(min_f0))
-                
-                for name, syls_dict in speaker_contours.items():
-                    if name not in aggregated_syl_contours: aggregated_syl_contours[name] = {} 
-                    for k, y_arrays in syls_dict.items():
-                        if k not in aggregated_syl_contours[name]: aggregated_syl_contours[name][k] = []
-                        for y_arr in y_arrays:
-                            t_arr = [hz_to_5_scale_s(h) for h in y_arr]
-                            aggregated_syl_contours[name][k].append(t_arr)
+                    if k not in aggregated_syl_contours[name]: aggregated_syl_contours[name][k] = []
+                    aggregated_syl_contours[name][k].extend(y_arrays)
             self.items = orig_items
 
         pbar.set(0.7)
         lbl_status.configure(text="正在汇总数据...")
         prog_dlg.update()
+
+        all_hz_vals = []
+        for syls_dict in aggregated_syl_contours.values():
+            for y_arrays in syls_dict.values():
+                finite_vals = np.asarray(y_arrays, dtype=float).ravel()
+                finite_vals = finite_vals[np.isfinite(finite_vals)]
+                all_hz_vals.extend(finite_vals.tolist())
+
+        if all_hz_vals:
+            if params:
+                f0_mode = params.get('f0_mode', 'minmax')
+                p_low = params.get('percentile_low', 5.0)
+                p_high = params.get('percentile_high', 95.0)
+                m_min = params.get('manual_min', 75.0)
+                m_max = params.get('manual_max', 600.0)
+            else:
+                f0_mode = 'minmax'
+                p_low, p_high, m_min, m_max = 5.0, 95.0, 75.0, 600.0
+
+            if f0_mode == 'percentile':
+                min_f0 = np.percentile(all_hz_vals, p_low)
+                max_f0 = np.percentile(all_hz_vals, p_high)
+            elif f0_mode == 'manual':
+                min_f0 = m_min
+                max_f0 = m_max
+            else:
+                min_f0 = min(all_hz_vals)
+                max_f0 = max(all_hz_vals)
+
+            for name, syls_dict in aggregated_syl_contours.items():
+                for k, y_arrays in syls_dict.items():
+                    normalized_arrays = []
+                    for y_arr in y_arrays:
+                        y_arr = np.asarray(y_arr, dtype=float)
+                        t_arr = np.full_like(y_arr, np.nan, dtype=float)
+                        valid = np.isfinite(y_arr)
+                        if min_f0 > 0 and max_f0 > min_f0 and np.any(valid):
+                            hz_vals = np.clip(y_arr[valid], min_f0, max_f0)
+                            t_arr[valid] = 5 * (np.log(hz_vals) - np.log(min_f0)) / (np.log(max_f0) - np.log(min_f0))
+                        elif np.any(valid):
+                            t_arr[valid] = 3.0
+                        normalized_arrays.append(t_arr)
+                    syls_dict[k] = normalized_arrays
 
         group_norm_points = {}
         for name, syls_dict in aggregated_syl_contours.items():
@@ -2240,8 +2385,10 @@ class ProjectTreePanel:
             for k, y_arrays in syls_dict.items():
                 x_dense = np.linspace(k * 100, (k + 1) * 100, N_DENSE)
                 for y_arr in y_arrays:
-                    X_all.extend(x_dense.tolist())
-                    Y_all.extend(y_arr)
+                    y_arr = np.asarray(y_arr, dtype=float)
+                    valid = np.isfinite(y_arr)
+                    X_all.extend(x_dense[valid].tolist())
+                    Y_all.extend(y_arr[valid].tolist())
             group_norm_points[name] = (np.array(X_all), np.array(Y_all))
 
         pbar.set(0.8)

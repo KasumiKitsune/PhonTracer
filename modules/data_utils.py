@@ -130,6 +130,15 @@ def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: 
                 splits = np.linspace(t_s, t_e, len(syls) + 1).tolist()
             chars_bounds = [(splits[j], splits[j+1]) for j in range(len(splits)-1)]
             
+        parent_xs = None
+        parent_freqs = None
+        if item.get('pitch_data'):
+            parent_xs = item['pitch_data']['xs']
+            parent_freqs = item['pitch_data']['freqs']
+        elif item.get('pitch'):
+            parent_xs = item['pitch'].xs()
+            parent_freqs = item['pitch'].selected_array['frequency']
+
         for i in range(len(syls)):
             char = syls[i]
             if i < len(chars_bounds):
@@ -138,8 +147,12 @@ def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: 
                 continue
             
             # 独立音频提取基频：避免全局连读造成的 Viterbi octave jump
+            seg_xs = np.array([])
+            seg_ys = np.array([])
+            valid_idx = np.array([], dtype=int)
             try:
-                if c_end - c_start <= 0.01: continue
+                if c_end - c_start <= 0.01:
+                    raise ValueError("segment too short")
                 c_snd = item['snd'].extract_part(from_time=c_start, to_time=c_end)
                 c_pitch_data = extract_f0(c_snd, {'f0_engine': engine, 'pitch_floor': p_floor, 'pitch_ceiling': p_ceiling, 'voicing_threshold': v_thresh})
                 p_xs = c_pitch_data['xs'] + c_start
@@ -157,19 +170,27 @@ def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: 
                             best_idx = p_idx - 1
                         if abs(parent_xs[best_idx] - t) < 0.015 and parent_freqs[best_idx] == 0.0:
                             p_freqs[idx] = 0.0
+                valid_idx = np.where(p_freqs > 0)[0]
             except Exception:
-                continue
+                p_xs = np.array([])
+                p_freqs = np.array([])
             
-            valid_idx = np.where(p_freqs > 0)[0]
+            if len(valid_idx) < 2 and parent_xs is not None and parent_freqs is not None:
+                mask = (parent_xs >= c_start) & (parent_xs <= c_end)
+                p_xs = parent_xs[mask]
+                p_freqs = parent_freqs[mask]
+                valid_idx = np.where(p_freqs > 0)[0]
+
             if len(valid_idx) >= 2:
                 v_start, v_end = p_xs[valid_idx[0]], p_xs[valid_idx[-1]]
                 seg_xs = p_xs[valid_idx]
                 seg_ys = p_freqs[valid_idx]
             else:
-                continue # 没有有效基频，跳过该字
+                v_start, v_end = c_start, c_end
                 
             c_dur = v_end - v_start
-            if c_dur <= 0: continue
+            if c_dur <= 0:
+                c_dur = max(0.0, c_end - c_start)
             
             times = np.linspace(v_start, v_end, num_points)
             output += f"{real_index}_{i+1}.{char} ({label})\n{c_dur:.3f}\n"

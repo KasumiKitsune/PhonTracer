@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import MagicMock, patch
 import tkinter as tk
+import numpy as np
 from tests.shared_root import get_shared_root
 from modules.project_tree import ProjectTreePanel
 
@@ -197,6 +198,32 @@ class TestProjectTreeUI(unittest.TestCase):
         children = self.tree_get_children_mock(group2_id)
         self.assertEqual(len(children), 1)
         self.assertEqual(children[0], 'item_edited')
+
+    def test_kde_uses_chars_bounds_and_syllable_splitter(self):
+        item = {
+            'label': '米汤',
+            'start': 0.1,
+            'end': 0.9,
+            'inner_splits': [0.4],
+            'chars_bounds': [[0.12, 0.33], [0.55, 0.88]]
+        }
+
+        syls, bounds = self.panel._get_syllables_and_bounds(item)
+
+        self.assertEqual(syls, ['米', '汤'])
+        self.assertEqual(bounds, [[0.12, 0.33], [0.55, 0.88]])
+
+    def test_kde_contour_preserves_erased_gap(self):
+        xs = np.linspace(0.0, 1.0, 101)
+        freqs = np.linspace(120.0, 180.0, 101)
+        freqs[(xs >= 0.45) & (xs <= 0.55)] = 0.0
+
+        contour = self.panel._extract_kde_contour(xs, freqs, 0.0, 1.0, 101)
+
+        self.assertIsNotNone(contour)
+        self.assertTrue(np.isfinite(contour[10]))
+        self.assertTrue(np.isnan(contour[50]))
+        self.assertTrue(np.isfinite(contour[90]))
 
 if __name__ == '__main__':
     unittest.main()
