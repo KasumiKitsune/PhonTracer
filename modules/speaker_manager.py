@@ -16,6 +16,7 @@ class SpeakerState:
             'f0_engine': 'praat'
         }
         self.pending_long_snd = None
+        self.long_audio_path = None
         self.pending_batch_paths = []
         self.current_macro_segments = []
         self.manual_segments = None

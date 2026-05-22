@@ -397,10 +397,17 @@ class ProjectTreePanel:
         edit_entry.bind("<Escape>", lambda e: edit_entry.destroy())
 
     def select_first_item(self):
-        if self.items:
-            first_iid = list(self.items.keys())[0]
-            self.tree.selection_set(first_iid)
-            self.on_tree_select(None)
+        for raw_iid in list(self.items.keys()):
+            for iid in (raw_iid, f"warning_{raw_iid}"):
+                if self.tree.exists(iid):
+                    try:
+                        self.tree.selection_set(iid)
+                        self.on_tree_select(None)
+                        return
+                    except Exception:
+                        pass
+        if self.on_clear_canvas:
+            self.on_clear_canvas()
 
     def on_tree_select(self, event):
         selection = self.tree.selection()

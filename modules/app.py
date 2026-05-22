@@ -18,6 +18,7 @@ from .visual_splitter import VisualSplitter
 from .spectrogram_panel import SpectrogramPanel
 from .project_tree import ProjectTreePanel
 from .speaker_manager import SpeakerManager
+from .project_manager import ProjectManager
 from .version import APP_NAME, __version__
 import sys
 
@@ -61,6 +62,7 @@ class PhoneticsApp:
         self.root.after(100, self._check_drop_queue)
         self.debounce_timer = None
         self.speaker_manager = SpeakerManager()
+        self.project_manager = ProjectManager(self)
 
         # Shared ProcessPoolExecutor for performance optimization
         max_workers = min(os.cpu_count() or 4, 8)
@@ -113,6 +115,10 @@ class PhoneticsApp:
     def pending_long_snd(self): return self.active_speaker.pending_long_snd
     @pending_long_snd.setter
     def pending_long_snd(self, v): self.active_speaker.pending_long_snd = v
+    @property
+    def long_audio_path(self): return getattr(self.active_speaker, 'long_audio_path', None)
+    @long_audio_path.setter
+    def long_audio_path(self, v): self.active_speaker.long_audio_path = v
     @property
     def pending_batch_paths(self): return self.active_speaker.pending_batch_paths
     @pending_batch_paths.setter
@@ -310,6 +316,7 @@ class PhoneticsApp:
                         else:
                             self.tabview.set("单条长音频")
                             self.pending_long_snd = snd
+                            self.long_audio_path = path
                             self.lbl_long_file.configure(text=audio_name + " (从拖拽)", text_color="#2563EB")
                             self.lbl_status.configure(text="长音频就绪", text_color="#10B981")
                             if getattr(self, 'switch_unified_wordlist', None) and self.switch_unified_wordlist.get() and getattr(self, 'global_wordlist_text', None):
@@ -336,7 +343,7 @@ class PhoneticsApp:
         icon_files = {
             "audio": "audio_file.png", "cut": "cut.png", "batch": "batch.png",
             "eye": "eye.png", "list": "list.png", "plus": "plus.png",
-            "play": "play.png", "save": "save.png", "check": "check.png",
+            "play": "play.png", "save": "save.png", "save_black": "save.png", "check": "check.png",
             "bulb": "bulb.png", "points": "points.png", "energy": "energy.png",
             "duration": "duration.png", "trim": "trim.png", "tag": "tag.png",
             "tab_single": "tab_single.png", "tab_batch": "tab_batch.png",
@@ -366,13 +373,19 @@ class PhoneticsApp:
                 img = Image.open(path)
                 
                 # 将 自动识别 (bulb) 的黑色图标染色为对应红色（#DC2626），与删除按钮风格高度统一
-                if key == "bulb":
+                if key in ["bulb", "save_black"]:
                     try:
                         img_rgba = img.convert("RGBA")
                         data = np.array(img_rgba)
-                        data[:,:,0] = 220 # R
-                        data[:,:,1] = 38  # G
-                        data[:,:,2] = 38  # B
+                        if key == "bulb":
+                            data[:,:,0] = 220 # R
+                            data[:,:,1] = 38  # G
+                            data[:,:,2] = 38  # B
+                        elif key == "save_black":
+                            mask = data[:,:,3] > 0
+                            data[mask, 0] = 31
+                            data[mask, 1] = 41
+                            data[mask, 2] = 55
                         img = Image.fromarray(data)
                     except Exception:
                         pass
@@ -706,7 +719,8 @@ class PhoneticsApp:
             icons=self.icons,
             on_time_changed_callback=self.on_spectrogram_time_changed,
             on_auto_detect_callback=self.on_spectrogram_auto_detect,
-            on_export_callback=self.on_export_callback
+            on_export_callback=self.on_export_callback,
+            app=self
         )
         self.spectrogram_panel.switch_trim_silence = self.switch_trim_silence
 
@@ -1005,7 +1019,12 @@ class PhoneticsApp:
                     
             if hasattr(self.active_speaker, 'last_selected_iid') and self.active_speaker.last_selected_iid in self.items:
                 try:
-                    self.tree_panel.tree.selection_set(self.active_speaker.last_selected_iid)
+                    iid_to_select = self.active_speaker.last_selected_iid
+                    if not self.tree_panel.tree.exists(iid_to_select):
+                        warning_iid = f"warning_{iid_to_select}"
+                        if self.tree_panel.tree.exists(warning_iid):
+                            iid_to_select = warning_iid
+                    self.tree_panel.tree.selection_set(iid_to_select)
                     self.tree_panel.on_tree_select(None)
                 except tk.TclError:
                     self.tree_panel.select_first_item()
@@ -1430,6 +1449,7 @@ class PhoneticsApp:
                 snd = parselmouth.Sound(path)
                 def done():
                     self.pending_long_snd = snd
+                    self.long_audio_path = path
                     audio_name = os.path.splitext(os.path.basename(path))[0]
                     self.lbl_long_file.configure(text=os.path.basename(path), text_color="#2563EB")
                     self.stop_loading("长音频就绪")
@@ -2550,3 +2570,59 @@ class PhoneticsApp:
 
         import threading
         threading.Thread(target=run, daemon=True).start()
+
+    # --- 工程管理回调 ---
+    def on_import_project(self):
+        path = filedialog.askopenfilename(filetypes=[("PhonTracer Project", "*.teproj *.zip")])
+        if not path: return
+        self.start_loading("正在导入工程...")
+        
+        def run():
+            success = self.project_manager.load_project(path)
+            self.root.after(0, self.stop_loading)
+            if success:
+                self.root.after(0, self._sync_ui_after_project_load)
+        import threading
+        threading.Thread(target=run, daemon=True).start()
+
+    def _sync_ui_after_project_load(self):
+        self._update_speaker_dropdown()
+        spk = self.active_speaker
+        self.speaker_option_var.set(spk.name)
+        self.tabview.set(spk.tab_mode)
+        
+        if spk.tab_mode == "多条独立音频":
+            cnt = len(spk.pending_batch_paths)
+            if cnt > 0:
+                self.lbl_batch_files.configure(text=f"已选 {cnt} 个文件", text_color="#2563EB")
+            else:
+                self.lbl_batch_files.configure(text="未选择", text_color="#6B7280")
+        else:
+            if getattr(spk, 'long_audio_path', None):
+                self.lbl_long_file.configure(text=os.path.basename(spk.long_audio_path), text_color="#2563EB")
+            else:
+                self.lbl_long_file.configure(text="未选择", text_color="#6B7280")
+                
+        self.spectrogram_panel.clear_canvas()
+        self._refresh_ui_for_speaker()
+        messagebox.showinfo("成功", "工程导入成功！")
+
+    def on_export_project(self):
+        path = filedialog.asksaveasfilename(defaultextension=".teproj", filetypes=[("PhonTracer Project", "*.teproj")])
+        if not path: return
+        self.start_loading("正在导出工程...")
+        
+        def run():
+            success = self.project_manager.export_project(path)
+            self.root.after(0, self.stop_loading)
+            if success:
+                self.root.after(0, lambda: messagebox.showinfo("成功", "工程已成功导出！"))
+        import threading
+        threading.Thread(target=run, daemon=True).start()
+
+    def on_auto_save_toggled(self, is_enabled):
+        self.project_manager.auto_save_enabled = bool(is_enabled)
+        if is_enabled:
+            self.project_manager.trigger_auto_save()
+        else:
+            self.project_manager.cancel_auto_save()

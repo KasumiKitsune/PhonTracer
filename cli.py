@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from modules.audio_core import macroscopic_vad, core_microscopic_vowel_nucleus, auto_split_inner_word, auto_split_to_chars_bounds, batch_process_worker, recalculate_bounds_fast, extract_f0
 from modules.speaker_manager import SpeakerManager
 from modules.data_utils import parse_wordlist, fuzzy_match_word_to_path, get_export_text_for_item, build_five_point_chart, split_into_syllables
+from modules.project_manager import ProjectManager
 from modules.version import APP_NAME, __version__
 
 class LoggerOut:
@@ -40,12 +41,9 @@ class LoggerOut:
 
 class PhonTracerCLI(cmd.Cmd):
     intro = f"""{APP_NAME} CLI v{__version__} - AI Agent Mode
-Type 'help' or '?' to list commands.
-Rules:
-- Output is optimized for token efficiency.
-- All actions result in 'success' or 'error' messages.
-- Use 'status' to get current project state.
-- Use 'list_items' to view extracted audio segments and warnings.
+你好，我是 PhonTracer 的命令行工作台。请 AI 优先只通过这里的 CLI 命令完成任务。
+除非用户明确要求，不要直接改源码、搬文件、删文件或绕过 CLI 操作工程数据。
+Type 'help' or '?' to list commands. Use 'agent_guide' for AI operating rules.
 """
     prompt = "(phontracer) "
 
@@ -56,6 +54,21 @@ Rules:
         self.executor = concurrent.futures.ProcessPoolExecutor(max_workers=min(os.cpu_count() or 4, 8))
         self.log_file = None
         self.original_stdout = sys.stdout
+        self.project_manager = ProjectManager(self)
+
+    def _emit(self, success=True, message="", **payload):
+        data = {"success": success}
+        if message:
+            data["message"] = message
+        data.update(payload)
+        print(json.dumps(data))
+
+    def _after_state_change(self, action="updated"):
+        if getattr(self.project_manager, "auto_save_enabled", False):
+            self.project_manager.trigger_auto_save()
+
+    def after(self, _delay, callback):
+        callback()
 
     @property
     def current_speaker(self):
@@ -86,7 +99,12 @@ Rules:
     @property
     def groups(self):
         if not hasattr(self.current_speaker, 'cli_groups'):
-            self.current_speaker.cli_groups = []
+            seen = []
+            for item in self.current_speaker.items.values():
+                group = item.get('group', '导入内容')
+                if group not in seen:
+                    seen.append(group)
+            self.current_speaker.cli_groups = seen
         return self.current_speaker.cli_groups
 
     @groups.setter
@@ -103,13 +121,14 @@ Rules:
 
     @property
     def long_snd_path(self):
-        if not hasattr(self.current_speaker, 'cli_long_snd_path'):
-            self.current_speaker.cli_long_snd_path = None
-        return self.current_speaker.cli_long_snd_path
+        if hasattr(self.current_speaker, 'cli_long_snd_path') and self.current_speaker.cli_long_snd_path:
+            return self.current_speaker.cli_long_snd_path
+        return getattr(self.current_speaker, 'long_audio_path', None)
 
     @long_snd_path.setter
     def long_snd_path(self, val):
         self.current_speaker.cli_long_snd_path = val
+        self.current_speaker.long_audio_path = val
 
     @property
     def batch_paths(self):
@@ -198,6 +217,9 @@ Rules:
 ================================================================================
                             PhonTracer 命令行手册 (AI Agent 与开发者指南)
 ================================================================================
+AI 操作守则：优先只使用本 CLI。除非用户明确要求，不要直接编辑源码、移动/删除文件、
+不要绕过 CLI 去操作工程数据。需要说明时，请先用 `status`、`list_items`、`agent_guide` 确认。
+
 PhonTracer 是一款高精度的声学声调格局分析工具。
 
 --- 工作流生命周期 ---
@@ -237,6 +259,11 @@ PhonTracer 是一款高精度的声学声调格局分析工具。
 - `modify_bounds <音节ID> <开始秒数> <结束秒数>`: 手动重写音节声学边界。
 - `modify_params <音节ID> 键=值 ...`: 手动指定单个音节专属的提取参数。
 - `recalculate`: 基于全局最新参数，批量重算整个项目。
+- `project_export <路径.teproj>` / `project_import <路径.teproj>`: 导出或导入完整工程。
+- `autosave on|off|now`: 开启、关闭或立即执行工程自动保存。
+- `tool_merge <输出.wav> <间隔秒> <音频1> <音频2> ...`: 拼接多个短音频。
+- `tool_split <长音频> <字表.txt> <输出目录> [缓冲秒] [trim]`: 按字表拆分长音频。
+- `tool_sort_batch <字表.txt> [音频路径...]`: 按字表模糊排序独立音频。
 - `lang [zh|en]`: 切换命令行显示语言为中文或英文。
 ================================================================================
 """)
@@ -245,6 +272,10 @@ PhonTracer 是一款高精度的声学声调格局分析工具。
 ================================================================================
                             PhonTracer CLI MANUAL (Agent & Developer Guide)
 ================================================================================
+AI operating rule: prefer this CLI as the control surface. Unless the user clearly
+asks for it, do not edit source files, move/delete files, or bypass the CLI to
+change project data. Use `status`, `list_items`, and `agent_guide` to orient first.
+
 PhonTracer is a high-accuracy acoustic tone analysis tool. 
 
 --- WORKFLOW LIFECYCLE ---
@@ -285,11 +316,34 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
 - `modify_bounds <item_id> <start> <end>`: Set manual time boundaries.
 - `modify_params <item_id> key=value ...`: Set item-specific custom parameters.
 - `recalculate`: Recalculate VAD boundaries & F0 curves globally.
+- `project_export <path.teproj>` / `project_import <path.teproj>`: Save or load a full project.
+- `autosave on|off|now`: Enable, disable, or immediately run project autosave.
+- `tool_merge <output.wav> <gap_sec> <audio1> <audio2> ...`: Merge short audios.
+- `tool_split <long_audio> <wordlist.txt> <output_dir> [buffer_sec] [trim]`: Split long audio by wordlist.
+- `tool_sort_batch <wordlist.txt> [audio_paths...]`: Fuzzy-sort batch audio paths by wordlist.
 - `lang [zh|en]`: Switch CLI language between Chinese and English.
 ================================================================================
 """)
         else:
             super().do_help(arg)
+
+    def do_agent_guide(self, arg):
+        """
+        Show operating rules for AI agents.
+        Usage: agent_guide
+        """
+        self._emit(
+            True,
+            "请把 CLI 当作主操作台。先观察，再执行；每一步尽量留下可读结果。",
+            rules=[
+                "优先使用 CLI 命令完成导入、分析、修改、导出、工程保存。",
+                "除非用户明确要求，不要直接修改源码、删除文件、移动工程资产或绕过 CLI 改数据。",
+                "开始前用 status/list_items 了解状态；失败时把 JSON 里的 error 原样反馈给用户。",
+                "工程保存用 project_export 或 autosave；数据结果导出用 export。",
+                "需要拼长音/拆长音时使用 tool_merge、tool_split、tool_sort_batch。",
+            ],
+            next_steps=["status", "help", "list_items all"]
+        )
 
 
     def do_speakers(self, arg):
@@ -319,6 +373,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
             print('{"success": False, "error": "Speaker name required"}')
             return
         new_speaker = self.speaker_manager.add_speaker(name)
+        self._after_state_change("add_speaker")
         print(json.dumps({"success": True, "message": f"Speaker '{name}' added", "speaker_id": new_speaker.id}))
 
     def do_switch_speaker(self, arg):
@@ -363,6 +418,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
 
         success = self.speaker_manager.remove_speaker(found_id)
         if success:
+            self._after_state_change("remove_speaker")
             print(json.dumps({"success": True, "message": f"Speaker '{target}' removed"}))
         else:
             print(json.dumps({"success": False, "error": "Cannot remove the last speaker"}))
@@ -389,7 +445,8 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
             self.batch_paths = []
             self.items.clear()
             self.groups.clear()
-            print('{"success": True, "message": "Long audio loaded"}')
+            self._after_state_change("load_long")
+            self._emit(True, "长音频已加载。下一步通常是 apply_wordlist 或 apply_textgrid。", mode=self.mode, path=filepath)
         except Exception as e:
             print(json.dumps({"success": False, "error": str(e)}))
 
@@ -417,7 +474,8 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
         self.long_snd_path = None
         self.items.clear()
         self.groups.clear()
-        print(json.dumps({"success": True, "message": f"Loaded {len(self.batch_paths)} batch files"}))
+        self._after_state_change("load_batch")
+        self._emit(True, f"已加载 {len(self.batch_paths)} 个独立音频。下一步通常是 apply_wordlist。", mode=self.mode, count=len(self.batch_paths))
 
     def do_apply_wordlist(self, arg):
         """
@@ -665,7 +723,8 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                         'missing': True
                     }
 
-            print(json.dumps({"success": True, "message": f"TextGrid applied: processed {matched_count}/{len(results)} items."}))
+            self._after_state_change("apply_textgrid")
+            self._emit(True, f"TextGrid 已应用：完成 {matched_count}/{len(results)} 项。", processed=matched_count, total=len(results))
         except Exception as e:
             print(json.dumps({"success": False, "error": str(e)}))
 
@@ -730,7 +789,8 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                             'missing': True, 'start': None, 'end': None
                         }
                     word_idx += 1
-            print(json.dumps({"success": True, "message": f"Processed long audio with {len(flat_words)} words"}))
+            self._after_state_change("apply_wordlist")
+            self._emit(True, f"长音频已按字表处理，共 {len(flat_words)} 个词/字。", total=len(flat_words))
         except Exception as e:
             print(json.dumps({"success": False, "error": str(e)}))
 
@@ -811,7 +871,8 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
             res['id'] = iid
             self.items[iid] = res
 
-        print(json.dumps({"success": True, "message": f"Processed batch files with {len(tasks)} words"}))
+        self._after_state_change("apply_wordlist")
+        self._emit(True, f"独立音频已按字表匹配处理，共 {len(tasks)} 个词/字。", total=len(tasks))
 
     def do_status(self, arg):
         """
@@ -922,7 +983,8 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
             item['preview_f0'] = preview_f0
             item['has_empty_data'] = any(f == 0.0 for f in item['preview_f0'])
 
-        print(json.dumps({"success": True, "message": f"Bounds updated for {iid}", "warning": item.get('has_empty_data', False)}))
+        self._after_state_change("modify_bounds")
+        self._emit(True, f"{iid} 的边界已更新。", item_id=iid, warning=item.get('has_empty_data', False))
 
     def do_modify_params(self, arg):
         """
@@ -1008,9 +1070,10 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                 print(json.dumps({"success": False, "error": str(e)}))
                 return
 
+        self._after_state_change("modify_params")
         print(json.dumps({
-            "success": True, 
-            "message": f"Parameters updated for {iid}", 
+            "success": True,
+            "message": f"{iid} 的专属参数已更新。",
             "item_params": {
                 "pitch_floor": item.get('pitch_floor'), 
                 "pitch_ceiling": item.get('pitch_ceiling'), 
@@ -1135,7 +1198,8 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                 except Exception:
                     pass
 
-        print('{"success": True, "message": "Recalculation complete"}')
+        self._after_state_change("recalculate")
+        print('{"success": True, "message": "重算完成。"}')
 
     def do_export(self, arg):
         """
@@ -2081,6 +2145,262 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
         fig.tight_layout()
         fig.savefig(out_file, dpi=300, bbox_inches='tight')
         plt.close(fig)
+
+    def _sync_cli_state_after_project_load(self):
+        for speaker in self.speaker_manager.get_all_speakers():
+            if getattr(speaker, 'long_audio_path', None):
+                speaker.cli_long_snd_path = speaker.long_audio_path
+            seen = []
+            for item in speaker.items.values():
+                group = item.get('group', '导入内容')
+                if group not in seen:
+                    seen.append(group)
+            speaker.cli_groups = seen
+
+    def do_project_export(self, arg):
+        """
+        Export the full CLI project as a .teproj archive.
+        Usage: project_export <output.teproj>
+        """
+        args = shlex.split(arg)
+        if len(args) != 1:
+            self._emit(False, error="Requires output .teproj path")
+            return
+
+        path = args[0]
+        ok = self.project_manager.export_project(path)
+        if ok:
+            self._emit(True, "工程已导出。这个文件包含当前发音人、项目项、音频副本和基频缓存。", path=path)
+        else:
+            self._emit(False, error="Project export failed")
+
+    def do_project_import(self, arg):
+        """
+        Import a full .teproj project archive.
+        Usage: project_import <input.teproj>
+        """
+        args = shlex.split(arg)
+        if len(args) != 1:
+            self._emit(False, error="Requires input .teproj path")
+            return
+
+        path = args[0]
+        if not os.path.exists(path):
+            self._emit(False, error=f"File not found: {path}")
+            return
+
+        ok = self.project_manager.load_project(path)
+        if ok:
+            self._sync_cli_state_after_project_load()
+            self._emit(
+                True,
+                "工程已导入。建议下一步运行 status 和 list_items all 确认内容。",
+                path=path,
+                speakers=len(self.speaker_manager.get_all_speakers()),
+                active_speaker=self.current_speaker.name,
+                total_items=len(self.items)
+            )
+        else:
+            self._emit(False, error="Project import failed")
+
+    def do_project_save(self, arg):
+        """
+        Save the current project to the internal workspace without exporting an archive.
+        Usage: project_save
+        """
+        try:
+            self.project_manager.save_to_workspace()
+            self._emit(True, "工程已保存到内部工作区。若要给别人或下次恢复，请用 project_export。")
+        except Exception as e:
+            self._emit(False, error=str(e))
+
+    def do_autosave(self, arg):
+        """
+        Enable, disable, or run project autosave.
+        Usage: autosave on|off|now
+        """
+        action = arg.strip().lower()
+        if action == "on":
+            self.project_manager.auto_save_enabled = True
+            self.project_manager.trigger_auto_save()
+            self._emit(True, "自动保存已开启。之后 CLI 状态变化会触发后台工程备份。", autosave=True)
+        elif action == "off":
+            self.project_manager.auto_save_enabled = False
+            self.project_manager.cancel_auto_save()
+            self._emit(True, "自动保存已关闭。", autosave=False)
+        elif action == "now":
+            try:
+                self.project_manager.save_to_workspace()
+                self._emit(True, "已立即保存一次当前工程。", autosave=self.project_manager.auto_save_enabled)
+            except Exception as e:
+                self._emit(False, error=str(e))
+        else:
+            self._emit(True, "自动保存状态已读取。", autosave=self.project_manager.auto_save_enabled)
+
+    def _safe_audio_label(self, label):
+        import re
+        safe = re.sub(r'[\\/*?:"<>|]', "", str(label)).strip()
+        return safe or "segment"
+
+    def do_tool_merge(self, arg):
+        """
+        Merge short audio files into a single WAV, like audio_toolkit's merge tab.
+        Usage: tool_merge <output.wav> <gap_sec> <audio1> <audio2> ...
+        """
+        args = shlex.split(arg)
+        if len(args) < 4:
+            self._emit(False, error="Requires output.wav, gap_sec, and at least two audio files")
+            return
+
+        out_path = args[0]
+        try:
+            gap_sec = float(args[1])
+        except ValueError:
+            self._emit(False, error="gap_sec must be a number")
+            return
+
+        paths = args[2:]
+        missing = [p for p in paths if not os.path.exists(p)]
+        if missing:
+            self._emit(False, error=f"File not found: {missing[0]}", missing=missing)
+            return
+
+        try:
+            target_sr = 44100
+            all_vals = []
+            gap_array = np.zeros(int(target_sr * gap_sec))
+            for path in paths:
+                snd = parselmouth.Sound(path)
+                if snd.sampling_frequency != target_sr:
+                    snd = snd.resample(target_sr)
+                all_vals.append(snd.values[0])
+                all_vals.append(gap_array)
+
+            merged_vals = np.concatenate(all_vals[:-1])
+            merged_snd = parselmouth.Sound(np.array([merged_vals]), sampling_frequency=target_sr)
+            os.makedirs(os.path.dirname(os.path.abspath(out_path)) or ".", exist_ok=True)
+            merged_snd.save(out_path, "WAV")
+            self._emit(True, f"已合并 {len(paths)} 个音频。", path=out_path, count=len(paths), gap_sec=gap_sec)
+        except Exception as e:
+            self._emit(False, error=str(e))
+
+    def do_tool_sort_batch(self, arg):
+        """
+        Fuzzy-sort batch audio paths according to a wordlist, like audio_toolkit's auto-sort.
+        Usage: tool_sort_batch <wordlist.txt> [audio1 audio2 ...]
+        If audio paths are omitted, the current loaded batch paths are used.
+        """
+        args = shlex.split(arg)
+        if not args:
+            self._emit(False, error="Requires wordlist.txt")
+            return
+
+        wordlist_path = args[0]
+        paths = args[1:] if len(args) > 1 else list(self.batch_paths)
+        if not os.path.exists(wordlist_path):
+            self._emit(False, error=f"File not found: {wordlist_path}")
+            return
+        if not paths:
+            self._emit(False, error="No audio paths provided or loaded")
+            return
+
+        with open(wordlist_path, "r", encoding="utf-8") as f:
+            groups, flat_words = parse_wordlist(f.read())
+
+        sorted_paths = []
+        used_indices = []
+        for word in flat_words:
+            idx = fuzzy_match_word_to_path(word, paths, used_indices=list(used_indices))
+            if idx is not None:
+                sorted_paths.append(paths[idx])
+                used_indices.append(idx)
+
+        leftovers = [p for i, p in enumerate(paths) if i not in used_indices]
+        result = sorted_paths + leftovers
+        self._emit(
+            True,
+            "已按字表给音频排序。需要正式载入时可把 sorted_paths 交给 load_batch。",
+            matched=len(sorted_paths),
+            total_words=len(flat_words),
+            sorted_paths=result
+        )
+
+    def do_tool_split(self, arg):
+        """
+        Split a long audio into short WAV files by a wordlist, like audio_toolkit's split tab.
+        Usage: tool_split <long_audio> <wordlist.txt> <output_dir> [buffer_sec] [trim]
+        trim accepts true/false and defaults to true.
+        """
+        args = shlex.split(arg)
+        if len(args) < 3:
+            self._emit(False, error="Requires long_audio, wordlist.txt, and output_dir")
+            return
+
+        audio_path, wordlist_path, out_dir = args[:3]
+        try:
+            buffer_sec = float(args[3]) if len(args) > 3 else 0.1
+        except ValueError:
+            self._emit(False, error="buffer_sec must be a number")
+            return
+        do_trim = True if len(args) <= 4 else args[4].lower() in ("1", "true", "yes", "y", "trim")
+
+        if not os.path.exists(audio_path):
+            self._emit(False, error=f"File not found: {audio_path}")
+            return
+        if not os.path.exists(wordlist_path):
+            self._emit(False, error=f"File not found: {wordlist_path}")
+            return
+
+        try:
+            with open(wordlist_path, "r", encoding="utf-8") as f:
+                groups, flat_words = parse_wordlist(f.read())
+            if not flat_words:
+                self._emit(False, error="No words found in wordlist")
+                return
+
+            snd = parselmouth.Sound(audio_path)
+            segs = macroscopic_vad(snd)
+            if not segs:
+                self._emit(False, error="No speech segments detected")
+                return
+
+            os.makedirs(out_dir, exist_ok=True)
+            total = min(len(segs), len(flat_words))
+            saved_files = []
+            for i in range(total):
+                start, end = segs[i]
+                word = flat_words[i]
+                if do_trim:
+                    part = snd.extract_part(from_time=start, to_time=end)
+                    vals = part.values[0]
+                    xs = part.xs()
+                    threshold = 10 ** (-50 / 20)
+                    valid_idx = np.where(np.abs(vals) > threshold)[0]
+                    if len(valid_idx) > 0:
+                        old_start = start
+                        start = old_start + xs[valid_idx[0]]
+                        end = old_start + xs[valid_idx[-1]]
+
+                start = max(0, start - buffer_sec)
+                end = min(snd.get_total_duration(), end + buffer_sec)
+                if end <= start:
+                    continue
+
+                extract = snd.extract_part(from_time=start, to_time=end)
+                out_file = os.path.join(out_dir, f"{str(i + 1).zfill(3)}_{self._safe_audio_label(word)}.wav")
+                extract.save(out_file, "WAV")
+                saved_files.append(out_file)
+
+            self._emit(
+                True,
+                f"已拆分保存 {len(saved_files)} 段音频。",
+                output_dir=out_dir,
+                saved_files=saved_files,
+                detected_segments=len(segs),
+                word_count=len(flat_words)
+            )
+        except Exception as e:
+            self._emit(False, error=str(e))
 
 
     def do_log(self, arg):

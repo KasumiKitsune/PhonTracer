@@ -131,6 +131,16 @@ class SpectrogramPanel:
         self.canvas.mpl_connect('figure_leave_event', self.on_leave_fig)
         self.canvas.mpl_connect('draw_event', self.on_draw)
 
+        # --- Bottom bar for Project Management ---
+        bottom_bar = ctk.CTkFrame(center_frame, fg_color="#F9FAFB", corner_radius=8, height=36)
+        bottom_bar.pack(side=tk.BOTTOM, fill=tk.X, padx=15, pady=(5, 5))
+        
+        CTkReleaseButton(bottom_bar, text=" 导入工程", image=self.icons.get("import"), compound="left", command=self.on_import_project_clicked, corner_radius=15, height=30, fg_color="#E5E7EB", text_color="#1F2937", hover_color="#D1D5DB").pack(side=tk.LEFT, padx=(10, 5), pady=5)
+        CTkReleaseButton(bottom_bar, text=" 导出工程", image=self.icons.get("save_black"), compound="left", command=self.on_export_project_clicked, corner_radius=15, height=30, fg_color="#E5E7EB", text_color="#1F2937", hover_color="#D1D5DB").pack(side=tk.LEFT, padx=5, pady=5)
+        
+        self.switch_auto_save = ctk.CTkSwitch(bottom_bar, text="自动保存", font=ctk.CTkFont(family="Microsoft YaHei", size=12), progress_color="#10B981", command=self.on_auto_save_toggled)
+        self.switch_auto_save.pack(side=tk.RIGHT, padx=(5, 15), pady=5)
+
     def setup_entry_behavior(self, entry, param_key):
         def on_enter(e): entry.configure(border_color="#3B82F6", border_width=2)
         def on_leave(e):
@@ -150,6 +160,18 @@ class SpectrogramPanel:
         entry.bind("<FocusIn>", on_focus_in)
         entry.bind("<FocusOut>", on_focus_out)
         entry.bind("<Return>", lambda e: entry.winfo_toplevel().focus_set())
+
+    def on_import_project_clicked(self):
+        if self.app and hasattr(self.app, 'on_import_project'):
+            self.app.on_import_project()
+
+    def on_export_project_clicked(self):
+        if self.app and hasattr(self.app, 'on_export_project'):
+            self.app.on_export_project()
+
+    def on_auto_save_toggled(self):
+        if self.app and hasattr(self.app, 'on_auto_save_toggled'):
+            self.app.on_auto_save_toggled(self.switch_auto_save.get())
 
     def clear_canvas(self):
         if self.is_playing:
@@ -613,6 +635,8 @@ class SpectrogramPanel:
             item['is_manual_edited'] = True
             panel = None
             if self.app:
+                if hasattr(self.app, 'project_manager'):
+                    self.app.project_manager.trigger_auto_save()
                 if hasattr(self.app, 'tree_panel') and self.app.tree_panel:
                     panel = self.app.tree_panel
                 elif hasattr(self.app, 'project_panel') and self.app.project_panel:
