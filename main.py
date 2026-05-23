@@ -155,9 +155,9 @@ def show_splash_and_load():
     progress_state = {"current": 0.0, "target": 0.0}
 
     def render_wave():
-        # 丝滑的声波填充缓动动画
+        # 丝滑且响应迅速的声波填充缓动动画
         if progress_state["current"] < progress_state["target"]:
-            progress_state["current"] += 0.015
+            progress_state["current"] += 0.06
             if progress_state["current"] > progress_state["target"]:
                 progress_state["current"] = progress_state["target"]
             
@@ -176,15 +176,15 @@ def show_splash_and_load():
         progress_state["target"] = val
         status_lbl.configure(text=text)
 
-    # 启动淡入动效
+    # 启动淡入动效（缩短等待时间）
     splash.attributes('-alpha', 0.0) 
-    for i in range(1, 16):
-        splash.attributes('-alpha', i / 15.0)
+    for i in range(1, 11):
+        splash.attributes('-alpha', i / 10.0)
         splash.update()
-        time.sleep(0.01)
+        time.sleep(0.005)
 
-    # 开始模拟加载流程
-    root.after(200, lambda: _load_phase_1(root, splash, set_target_progress))
+    # 开始加载流程（立即启动）
+    root.after(10, lambda: _load_phase_1(root, splash, set_target_progress))
     root.mainloop()
 
 def _load_phase_1(root, splash, set_target_progress):
@@ -196,7 +196,8 @@ def _load_phase_1(root, splash, set_target_progress):
     matplotlib.rcParams['axes.unicode_minus'] = False
     warnings.filterwarnings("ignore", category=RuntimeWarning)
     
-    root.after(400, lambda: _load_phase_2(root, splash, set_target_progress))
+    # 缩短阶段转换的人为延迟
+    root.after(10, lambda: _load_phase_2(root, splash, set_target_progress))
 
 def _load_phase_2(root, splash, set_target_progress):
     set_target_progress(0.60, "构建声学分析界面...")
@@ -205,7 +206,8 @@ def _load_phase_2(root, splash, set_target_progress):
     except ImportError:
         PhoneticsApp = None 
     
-    root.after(400, lambda: _load_phase_3(root, splash, set_target_progress, PhoneticsApp))
+    # 缩短阶段转换的人为延迟
+    root.after(10, lambda: _load_phase_3(root, splash, set_target_progress, PhoneticsApp))
 
 def _load_phase_3(root, splash, set_target_progress, PhoneticsApp):
     set_target_progress(1.0, "就绪，准备开启...")
@@ -214,17 +216,17 @@ def _load_phase_3(root, splash, set_target_progress, PhoneticsApp):
         app = PhoneticsApp(root, initial_files=sys.argv[1:])
     
     def finish():
-        # 退出淡出动效
-        for i in range(15, -1, -1):
-            splash.attributes('-alpha', i / 15.0)
+        # 退出淡出动效（缩短等待时间）
+        for i in range(10, -1, -1):
+            splash.attributes('-alpha', i / 10.0)
             splash.update()
-            time.sleep(0.01)
+            time.sleep(0.005)
         splash.destroy()
         
         root.deiconify() # 显示主窗口
 
-    # 预留 800ms 让波形动画有时间彻底填满并展示
-    root.after(800, finish)
+    # 预留极少时间（100ms）以便用户感知到 100% 载入完成
+    root.after(100, finish)
 
 def main():
     show_splash_and_load()
