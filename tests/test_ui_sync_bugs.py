@@ -330,5 +330,246 @@ class TestUISyncBugs(unittest.TestCase):
             self.assertEqual(panel.play_selection_start, 0.5)
             self.assertEqual(panel.play_end_audio_time, 0.9)
 
+    def test_dragging_empty_area_creates_playback_selection_without_editing_bounds(self):
+        """Dragging away from red lines should create a temporary playback selection only"""
+        on_time_changed = MagicMock()
+        with patch.object(SpectrogramPanel, 'setup_ui'):
+            panel = SpectrogramPanel(self.root, {}, on_time_changed, None, None)
+            panel.ax = MagicMock()
+            panel.ax2 = MagicMock()
+            panel.ax.transData.transform.side_effect = lambda xy: (xy[0] * 100, 0)
+            panel.ax.axvspan.return_value = MagicMock()
+            panel.current_item = {
+                **self.item,
+                'start': 0.1,
+                'end': 0.9,
+                'chars_bounds': [[0.1, 0.9]]
+            }
+            panel.bound_lines = [(MagicMock(), MagicMock())]
+            panel.cursor_line = MagicMock()
+            panel.cursor_text = MagicMock()
+            panel.canvas = MagicMock()
+
+            press_event = MagicMock()
+            press_event.inaxes = panel.ax
+            press_event.button = 1
+            press_event.x = 35
+            press_event.xdata = 0.35
+            panel.on_press(press_event)
+
+            motion_event = MagicMock()
+            motion_event.x = 65
+            motion_event.xdata = 0.65
+            panel.on_motion(motion_event)
+
+            release_event = MagicMock()
+            panel.on_release(release_event)
+
+            self.assertEqual(panel.dragging, None)
+            self.assertEqual(panel.playback_selection, (0.35, 0.65))
+            self.assertEqual(panel.current_item['start'], 0.1)
+            self.assertEqual(panel.current_item['end'], 0.9)
+            self.assertFalse(panel.current_item.get('is_manual_edited', False))
+            on_time_changed.assert_not_called()
+
+    def test_playback_selection_can_extend_outside_red_boundaries(self):
+        """Temporary playback selection should use the visible audio range, not the red edit bounds"""
+        with patch.object(SpectrogramPanel, 'setup_ui'):
+            panel = SpectrogramPanel(self.root, {}, None, None, None)
+            panel.ax = MagicMock()
+            panel.ax2 = MagicMock()
+            panel.ax.transData.transform.side_effect = lambda xy: (xy[0] * 100, 0)
+            panel.ax.axvspan.return_value = MagicMock()
+            panel.current_item = {
+                **self.item,
+                'start': 0.3,
+                'end': 0.7,
+                'chars_bounds': [[0.3, 0.7]]
+            }
+            panel.playback_domain_start = 0.1
+            panel.playback_domain_end = 0.9
+            panel.bound_lines = [(MagicMock(), MagicMock())]
+            panel.cursor_line = MagicMock()
+            panel.cursor_text = MagicMock()
+            panel.canvas = MagicMock()
+
+            press_event = MagicMock()
+            press_event.inaxes = panel.ax
+            press_event.button = 1
+            press_event.x = 12
+            press_event.xdata = 0.2
+            panel.on_press(press_event)
+
+            motion_event = MagicMock()
+            motion_event.x = 80
+            motion_event.xdata = 0.8
+            panel.on_motion(motion_event)
+
+            self.assertEqual(panel.playback_selection, (0.2, 0.8))
+
+    def test_play_selected_prefers_temporary_playback_selection(self):
+        """The main play button should prioritize a Praat-style temporary selection"""
+        with patch.object(SpectrogramPanel, 'setup_ui'):
+            panel = SpectrogramPanel(self.root, {}, None, None, None)
+            part = MagicMock()
+            part.values = np.zeros((1, 10))
+            part.sampling_frequency = 1000
+            snd = MagicMock()
+            snd.get_total_duration.return_value = 1.0
+            snd.extract_part.return_value = part
+            panel.current_item = {
+                **self.item,
+                'snd': snd,
+                'start': 0.1,
+                'end': 0.9,
+                'chars_bounds': [[0.1, 0.9]]
+            }
+            panel.cursor_x = 0.2
+            panel.playback_selection = (0.25, 0.55)
+            panel.cursor_line = MagicMock()
+            panel.cursor_text = MagicMock()
+            panel.canvas = MagicMock()
+            panel._update_play_button_state = MagicMock()
+
+            with patch('modules.spectrogram_panel.sd.play'):
+                panel.play_selected()
+
+            snd.extract_part.assert_called_with(from_time=0.25, to_time=0.55)
+            self.assertEqual(panel.play_selection_start, 0.25)
+            self.assertEqual(panel.play_end_audio_time, 0.55)
+
+    def test_current_char_mode_plays_whole_character_under_cursor(self):
+        """Current-character mode should play the whole character, not only after the cursor"""
+        with patch.object(SpectrogramPanel, 'setup_ui'):
+            panel = SpectrogramPanel(self.root, {}, None, None, None)
+            part = MagicMock()
+            part.values = np.zeros((1, 10))
+            part.sampling_frequency = 1000
+            snd = MagicMock()
+            snd.get_total_duration.return_value = 1.0
+            snd.extract_part.return_value = part
+            panel.current_item = {
+                **self.item,
+                'snd': snd,
+                'start': 0.1,
+                'end': 0.9,
+                'chars_bounds': [[0.1, 0.5], [0.5, 0.9]]
+            }
+            panel.cursor_x = 0.72
+            panel.playback_range_mode = "当前字"
+            panel.cursor_line = MagicMock()
+            panel.cursor_text = MagicMock()
+            panel.canvas = MagicMock()
+            panel._update_play_button_state = MagicMock()
+
+            with patch('modules.spectrogram_panel.sd.play'):
+                panel.play_selected()
+
+            snd.extract_part.assert_called_with(from_time=0.5, to_time=0.9)
+            self.assertEqual(panel.play_selection_start, 0.5)
+            self.assertEqual(panel.play_end_audio_time, 0.9)
+
+    def test_whole_segment_mode_uses_visible_audio_domain_not_red_boundaries(self):
+        """Whole-segment playback should include audio outside the red edit boundaries"""
+        with patch.object(SpectrogramPanel, 'setup_ui'):
+            panel = SpectrogramPanel(self.root, {}, None, None, None)
+            part = MagicMock()
+            part.values = np.zeros((1, 10))
+            part.sampling_frequency = 1000
+            snd = MagicMock()
+            snd.get_total_duration.return_value = 1.0
+            snd.extract_part.return_value = part
+            panel.current_item = {
+                **self.item,
+                'snd': snd,
+                'start': 0.3,
+                'end': 0.7,
+                'chars_bounds': [[0.3, 0.7]]
+            }
+            panel.playback_domain_start = 0.1
+            panel.playback_domain_end = 0.9
+            panel.playback_range_mode = "整段"
+            panel.cursor_line = MagicMock()
+            panel.cursor_text = MagicMock()
+            panel.canvas = MagicMock()
+            panel._update_play_button_state = MagicMock()
+
+            with patch('modules.spectrogram_panel.sd.play'):
+                panel.play_selected()
+
+            snd.extract_part.assert_called_with(from_time=0.1, to_time=0.9)
+            self.assertEqual(panel.play_selection_start, 0.1)
+            self.assertEqual(panel.play_end_audio_time, 0.9)
+
+    def test_play_button_uses_same_width_pause_icon_when_playing(self):
+        """The combined play/stop button should stay the same width and use the pause icon"""
+        with patch.object(SpectrogramPanel, 'setup_ui'):
+            panel = SpectrogramPanel(self.root, {'play': 'play_icon', 'pause': 'pause_icon'}, None, None, None)
+            panel.btn_play = MagicMock()
+
+            panel._update_play_button_state(True)
+            panel.btn_play.configure.assert_called_with(text=" 停止", image='pause_icon', width=76)
+
+            panel._update_play_button_state(False)
+            panel.btn_play.configure.assert_called_with(text=" 播放", image='play_icon', width=76)
+
+    def test_cursor_update_uses_blit_when_background_is_available(self):
+        """Playback cursor updates should not redraw the whole spectrogram when blitting can be used"""
+        with patch.object(SpectrogramPanel, 'setup_ui'):
+            panel = SpectrogramPanel(self.root, {}, None, None, None)
+            panel.cursor_x = 0.5
+            panel.cursor_line = MagicMock()
+            panel.cursor_text = MagicMock()
+            panel.playback_status_var = None
+            panel.background = MagicMock()
+            panel.fig = MagicMock()
+            panel.fig.bbox = MagicMock()
+            panel.ax = MagicMock()
+            panel.canvas = MagicMock()
+
+            panel.update_cursor_graphics(prefer_blit=True)
+
+            panel.canvas.restore_region.assert_called_once_with(panel.background)
+            panel.ax.draw_artist.assert_any_call(panel.cursor_line)
+            panel.ax.draw_artist.assert_any_call(panel.cursor_text)
+            panel.canvas.blit.assert_called_once_with(panel.fig.bbox)
+            panel.canvas.draw_idle.assert_not_called()
+
+    def test_draw_event_restores_animated_cursor(self):
+        """Animated cursor artists should be restored after regular canvas redraws"""
+        with patch.object(SpectrogramPanel, 'setup_ui'):
+            panel = SpectrogramPanel(self.root, {}, None, None, None)
+            panel.cursor_x = 0.5
+            panel.cursor_line = MagicMock()
+            panel.cursor_text = MagicMock()
+            panel.playback_status_var = None
+            panel.fig = MagicMock()
+            panel.fig.bbox = MagicMock()
+            panel.ax = MagicMock()
+            panel.canvas = MagicMock()
+            panel.canvas.copy_from_bbox.return_value = "background"
+
+            panel.on_draw(MagicMock())
+
+            panel.canvas.copy_from_bbox.assert_called_once_with(panel.fig.bbox)
+            panel.canvas.restore_region.assert_called_once_with("background")
+            panel.ax.draw_artist.assert_any_call(panel.cursor_line)
+            panel.ax.draw_artist.assert_any_call(panel.cursor_text)
+
+    def test_engine_switch_only_recalculates_current_item(self):
+        """Switching to REAPER should not immediately launch full-project recomputation"""
+        self.app.engine_button = MagicMock()
+        self.app.engine_button.get.return_value = "reaper"
+        self.app.engine_button._buttons_dict = {}
+        self.app.audio_cache = {}
+        self.app.recalculate_current_item = MagicMock()
+        self.app.recalculate_all_audio = MagicMock()
+
+        self.app.on_engine_change("reaper")
+
+        self.assertEqual(self.app.last_params['f0_engine'], "reaper")
+        self.app.recalculate_current_item.assert_called_once_with(recompute_pitch=True)
+        self.app.recalculate_all_audio.assert_not_called()
+
 if __name__ == '__main__':
     unittest.main()

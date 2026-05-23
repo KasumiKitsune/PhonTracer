@@ -59,7 +59,10 @@ class PhoneticsApp:
             pass
         
         self.drop_queue = queue.Queue()
-        self.root.after(100, self._check_drop_queue)
+        self._drop_queue_idle_delay = 500
+        self._drop_queue_active_delay = 50
+        self._drop_queue_job = None
+        self._schedule_drop_queue_check(self._drop_queue_idle_delay)
         self.debounce_timer = None
         self.speaker_manager = SpeakerManager()
         self.project_manager = ProjectManager(self)
@@ -69,6 +72,12 @@ class PhoneticsApp:
         self.executor = concurrent.futures.ProcessPoolExecutor(max_workers=max_workers)
 
         def on_closing():
+            if self._drop_queue_job is not None:
+                try:
+                    self.root.after_cancel(self._drop_queue_job)
+                except Exception:
+                    pass
+                self._drop_queue_job = None
             self.executor.shutdown(wait=False)
             self.root.destroy()
         self.root.protocol("WM_DELETE_WINDOW", on_closing)
@@ -135,18 +144,32 @@ class PhoneticsApp:
     @manual_segments.setter
     def manual_segments(self, v): self.active_speaker.manual_segments = v
 
+    def _schedule_drop_queue_check(self, delay, replace=False):
+        if replace and self._drop_queue_job is not None:
+            try:
+                self.root.after_cancel(self._drop_queue_job)
+            except Exception:
+                pass
+            self._drop_queue_job = None
+        if self._drop_queue_job is None:
+            self._drop_queue_job = self.root.after(delay, self._check_drop_queue)
+
     def _check_drop_queue(self):
+        self._drop_queue_job = None
+        processed = 0
         try:
             # 安全地将拖入的文件拿到主线程标准事件流中
             while True:
                 item = self.drop_queue.get_nowait()
+                processed += 1
                 if isinstance(item, tuple) and len(item) == 2 and item[0] == 'dlg':
                     self._process_dlg_dropped_files(item[1])
                 else:
                     self._process_dropped_files(item)
         except queue.Empty:
             pass
-        self.root.after(100, self._check_drop_queue)
+        delay = self._drop_queue_active_delay if processed else self._drop_queue_idle_delay
+        self._schedule_drop_queue_check(delay)
 
     def _process_dlg_dropped_files(self, files):
         if not getattr(self, 'active_import_dlg', None) or not self.active_import_dlg.winfo_exists():
@@ -1133,7 +1156,7 @@ class PhoneticsApp:
         self._update_engine_button_text_colors()
         if hasattr(self, 'audio_cache'):
             self.audio_cache.clear()
-        self.recalculate_all_audio(recompute_pitch=True)
+        self.recalculate_current_item(recompute_pitch=True)
 
     def _update_engine_button_text_colors(self):
         current_val = self.engine_button.get()
@@ -1193,7 +1216,8 @@ class PhoneticsApp:
                     'skip_front': self.last_params['skip_front'], 
                     'pitch_floor': self.last_params['pitch_floor'], 
                     'pitch_ceiling': self.last_params['pitch_ceiling'],
-                    'voicing_threshold': self.last_params.get('voicing_threshold', 0.25)
+                    'voicing_threshold': self.last_params.get('voicing_threshold', 0.25),
+                    'f0_engine': self.last_params.get('f0_engine', 'praat')
                 }
                 
                 valid_items = []
@@ -1250,7 +1274,9 @@ class PhoneticsApp:
                 
                 if tasks:
                     # 使用 ProcessPoolExecutor 进行 CPU 密集型任务
-                    with concurrent.futures.ProcessPoolExecutor(max_workers=min(os.cpu_count() or 4, 8)) as executor:
+                    engine = self.last_params.get('f0_engine', 'praat')
+                    max_workers = 2 if engine == 'reaper' else min(os.cpu_count() or 4, 8)
+                    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
                         futures = {}
                         for idx, task in enumerate(tasks):
                             if task.get('type') == 'batch':

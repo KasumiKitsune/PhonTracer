@@ -43,6 +43,18 @@ class SpectrogramPanel:
         self.cursor_line = None
         self.cursor_text = None
         self._playback_job = None
+        self.playback_selection = None
+        self.selection_patch = None
+        self.selection_anchor_x = None
+        self.selection_drag_started = False
+        self.playback_loop_enabled = False
+        self.playback_range_mode = "自动"
+        self.playback_status_var = None
+        self.playback_range_var = None
+        self.playback_loop_var = None
+        self.playback_mode_buttons = {}
+        self.playback_domain_start = None
+        self.playback_domain_end = None
         
         # Eraser mode state
         self.eraser_mode = False
@@ -112,14 +124,23 @@ class SpectrogramPanel:
         )
         self.btn_eraser.pack(side=tk.LEFT, padx=(0, 20))
         
+        self.playback_status_var = ctk.StringVar(value="0.000 / 0.000 s")
+
         # 导出按钮 (使用 ctk.CTkButton，实现即时按键响应)
         ctk.CTkButton(frame_actions, text=" 导出", image=self.icons.get("save"), compound="left", command=self.on_export_callback, font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), corner_radius=20, height=36, width=60, fg_color="#10B981", hover_color="#059669").pack(side=tk.RIGHT)
-        
-        # 播放/暂停按钮 (使用 ctk.CTkButton，实现即时按键响应)
-        self.btn_play = ctk.CTkButton(frame_actions, text=" 播放", image=self.icons.get("play"), compound="left", command=self.play_selected, font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), corner_radius=20, height=36, width=60, fg_color="#E5E7EB", text_color="#1F2937", hover_color="#D1D5DB")
-        self.btn_play.pack(side=tk.RIGHT, padx=(0, 20))
 
-        self.fig = plt.Figure(figsize=(7, 5), facecolor='white') 
+        ctk.CTkLabel(
+            frame_actions,
+            textvariable=self.playback_status_var,
+            font=ctk.CTkFont(family="Consolas", size=12),
+            text_color="#334155",
+            fg_color="#F8FAFC",
+            corner_radius=14,
+            height=30,
+            width=210
+        ).pack(side=tk.RIGHT, padx=(0, 24), pady=3)
+
+        self.fig = plt.Figure(figsize=(7, 5), facecolor='white')
         self.ax = self.fig.add_subplot(111)
         self.ax2 = self.ax.twinx()
         self.canvas = FigureCanvasTkAgg(self.fig, master=center_frame)
@@ -137,9 +158,65 @@ class SpectrogramPanel:
         
         CTkReleaseButton(bottom_bar, text=" 导入工程", image=self.icons.get("import"), compound="left", command=self.on_import_project_clicked, corner_radius=15, height=30, fg_color="#E5E7EB", text_color="#1F2937", hover_color="#D1D5DB").pack(side=tk.LEFT, padx=(10, 5), pady=5)
         CTkReleaseButton(bottom_bar, text=" 导出工程", image=self.icons.get("save_black"), compound="left", command=self.on_export_project_clicked, corner_radius=15, height=30, fg_color="#E5E7EB", text_color="#1F2937", hover_color="#D1D5DB").pack(side=tk.LEFT, padx=5, pady=5)
-        
+
         self.switch_auto_save = ctk.CTkSwitch(bottom_bar, text="自动保存", font=ctk.CTkFont(family="Microsoft YaHei", size=12), progress_color="#10B981", command=self.on_auto_save_toggled)
         self.switch_auto_save.pack(side=tk.RIGHT, padx=(5, 15), pady=5)
+
+        self.setup_playback_controls(center_frame)
+
+    def setup_playback_controls(self, center_frame):
+        playback_bar = ctk.CTkFrame(center_frame, fg_color="#F8FAFC", corner_radius=18, height=44)
+        playback_bar.pack(side=tk.BOTTOM, fill=tk.X, padx=15, pady=(2, 5))
+        playback_bar.pack_propagate(False)
+
+        self.playback_range_var = ctk.StringVar(value=self.playback_range_mode)
+        self.playback_loop_var = ctk.BooleanVar(value=False)
+        self.playback_mode_buttons = {}
+
+        self.btn_play = ctk.CTkButton(
+            playback_bar,
+            text=" 播放",
+            image=self.icons.get("play"),
+            compound="left",
+            command=self.play_selected,
+            font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"),
+            corner_radius=16,
+            height=30,
+            width=76,
+            fg_color="#E5E7EB",
+            text_color="#1F2937",
+            hover_color="#D1D5DB"
+        )
+        self.btn_play.pack(side=tk.LEFT, padx=(10, 4), pady=7)
+
+        mode_frame = ctk.CTkFrame(playback_bar, fg_color="transparent")
+        mode_frame.pack(side=tk.LEFT, padx=(10, 8), pady=7)
+        for mode in ["自动", "选区", "当前字", "整段"]:
+            btn = ctk.CTkButton(
+                mode_frame,
+                text=mode,
+                command=lambda value=mode: self.on_playback_range_changed(value),
+                corner_radius=15,
+                height=30,
+                width=58,
+                fg_color="#E5E7EB",
+                text_color="#1F2937",
+                hover_color="#D1D5DB",
+                font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold")
+            )
+            btn.pack(side=tk.LEFT, padx=3)
+            self.playback_mode_buttons[mode] = btn
+        self._update_playback_mode_buttons()
+
+        self.switch_loop = ctk.CTkSwitch(
+            playback_bar,
+            text="循环",
+            variable=self.playback_loop_var,
+            command=self.on_loop_toggled,
+            progress_color="#2563EB",
+            font=ctk.CTkFont(family="Microsoft YaHei", size=12)
+        )
+        self.switch_loop.pack(side=tk.RIGHT, padx=(6, 10), pady=8)
 
     def setup_entry_behavior(self, entry, param_key):
         def on_enter(e): entry.configure(border_color="#3B82F6", border_width=2)
@@ -175,32 +252,25 @@ class SpectrogramPanel:
 
     def clear_canvas(self):
         if self.is_playing:
-            self.is_playing = False
-            try:
-                import sounddevice as sd
-                sd.stop()
-            except Exception:
-                pass
-            self._update_play_button_state(playing=False)
+            self._stop_playback()
         self.current_item = None
         self.ax.clear()
         self.ax2.clear()
+        self.background = None
+        self.playback_domain_start = None
+        self.playback_domain_end = None
         self.bound_lines.clear()
         self.span_fills.clear()
         self.char_texts.clear()
+        self._clear_playback_selection(redraw=False)
         self.canvas.draw()
         self.var_t_start.set("0.000")
         self.var_t_end.set("0.000")
+        self._update_playback_status()
 
     def load_item(self, item):
         if self.is_playing:
-            self.is_playing = False
-            try:
-                import sounddevice as sd
-                sd.stop()
-            except Exception:
-                pass
-            self._update_play_button_state(playing=False)
+            self._stop_playback()
         self.current_item = item
         self.current_item_iid = None
         if self.app and hasattr(self.app, 'items'):
@@ -242,6 +312,9 @@ class SpectrogramPanel:
         
         self.cursor_x = t_start # Reset cursor position when loading new item
         self.cursor_char_index = 0 if item.get('chars_bounds') else None
+        self.playback_domain_start = None
+        self.playback_domain_end = None
+        self._clear_playback_selection(redraw=False)
         self.plot_item_spectrogram()
 
     def _get_char_index_for_time(self, t, prefer_right=True):
@@ -269,9 +342,118 @@ class SpectrogramPanel:
         return nearest_idx
 
     def _set_cursor_position(self, t, char_index=None):
-        self.cursor_x = t
+        self.cursor_x = self._clamp_time_to_item(t)
         self.cursor_char_index = char_index if char_index is not None else self._get_char_index_for_time(t)
         self.update_cursor_graphics()
+
+    def _clamp_time_to_item(self, t):
+        if t is None:
+            return None
+        domain = self._get_playback_domain()
+        if not domain:
+            return t
+        t_s, t_e = domain
+        return max(t_s, min(t_e, t))
+
+    def _get_playback_domain(self):
+        if self.playback_domain_start is not None and self.playback_domain_end is not None:
+            return (self.playback_domain_start, self.playback_domain_end)
+
+        item = self.current_item
+        if not item:
+            return None
+        snd = item.get('snd')
+        if snd:
+            try:
+                return (0.0, snd.get_total_duration())
+            except Exception:
+                pass
+        if item.get('start') is not None and item.get('end') is not None:
+            return (item['start'], item['end'])
+        return None
+
+    def _has_playback_selection(self):
+        return (
+            self.playback_selection is not None
+            and self.playback_selection[1] - self.playback_selection[0] > 0.005
+        )
+
+    def _set_playback_selection(self, start_t, end_t, redraw=True):
+        start_t = self._clamp_time_to_item(start_t)
+        end_t = self._clamp_time_to_item(end_t)
+        if start_t is None or end_t is None:
+            self._clear_playback_selection(redraw=redraw)
+            return
+
+        s, e = sorted((start_t, end_t))
+        self.playback_selection = (s, e) if e - s > 0.005 else None
+        self._update_selection_graphics(redraw=redraw)
+        self._update_playback_status()
+
+    def _clear_playback_selection(self, redraw=True):
+        self.playback_selection = None
+        self.selection_anchor_x = None
+        self.selection_drag_started = False
+        if self.selection_patch:
+            try:
+                self.selection_patch.remove()
+            except Exception:
+                pass
+            self.selection_patch = None
+        if redraw and self.canvas:
+            self.canvas.draw_idle()
+        self._update_playback_status()
+
+    def _update_selection_graphics(self, redraw=True):
+        if self.selection_patch:
+            try:
+                self.selection_patch.remove()
+            except Exception:
+                pass
+            self.selection_patch = None
+        if self.ax and self._has_playback_selection():
+            s, e = self.playback_selection
+            self.selection_patch = self.ax.axvspan(s, e, color="#FDE68A", alpha=0.38, zorder=4)
+        if redraw and self.canvas:
+            self.canvas.draw_idle()
+
+    def _update_playback_status(self):
+        if not self.playback_status_var:
+            return
+        item = self.current_item
+        if not item:
+            self.playback_status_var.set("0.000 / 0.000 s")
+            return
+        domain = self._get_playback_domain()
+        if domain:
+            start, end = domain
+        else:
+            start = item.get('start') or 0.0
+            end = item.get('end') or start
+        cursor = self.cursor_x if self.cursor_x is not None else start
+        cursor_rel = max(0.0, min(end - start, cursor - start))
+        if self._has_playback_selection():
+            s, e = self.playback_selection
+            self.playback_status_var.set(f"{cursor_rel:.3f} / {end - start:.3f} s  选区 {e - s:.3f} s")
+        else:
+            self.playback_status_var.set(f"{cursor_rel:.3f} / {end - start:.3f} s")
+
+    def on_playback_range_changed(self, value):
+        self.playback_range_mode = value or "自动"
+        if self.playback_range_var:
+            self.playback_range_var.set(self.playback_range_mode)
+        self._update_playback_mode_buttons()
+
+    def on_loop_toggled(self):
+        if self.playback_loop_var:
+            self.playback_loop_enabled = bool(self.playback_loop_var.get())
+
+    def _update_playback_mode_buttons(self):
+        for mode, btn in getattr(self, 'playback_mode_buttons', {}).items():
+            if mode == self.playback_range_mode:
+                btn.configure(fg_color="#2563EB", hover_color="#1D4ED8", text_color="#FFFFFF")
+            else:
+                btn.configure(fg_color="#E5E7EB", hover_color="#D1D5DB", text_color="#1F2937")
 
     def plot_item_spectrogram(self):
         item = self.current_item
@@ -298,6 +480,7 @@ class SpectrogramPanel:
         self.char_texts.clear()
         self.cursor_line = None
         self.cursor_text = None
+        self.selection_patch = None
         
         snd = item['snd']
         t_s, t_e = item['start'], item['end']
@@ -319,6 +502,8 @@ class SpectrogramPanel:
         else:
             view_s = max(item['macro_start'] - 0.2, 0)
             view_e = min(item['macro_end'] + 0.2, snd.get_total_duration())
+        self.playback_domain_start = view_s
+        self.playback_domain_end = view_e
         
         part = snd.extract_part(from_time=view_s, to_time=view_e)
         spectrogram = part.to_spectrogram(window_length=0.005, maximum_frequency=5000)
@@ -373,11 +558,32 @@ class SpectrogramPanel:
         
         if self.cursor_x is None:
             self.cursor_x = t_s
-        self.cursor_line = self.ax.axvline(self.cursor_x, color='#1B5E20', linestyle='--', linewidth=1.5, zorder=10)
-        self.cursor_text = self.ax.text(self.cursor_x, 5000, f"{self.cursor_x:.3f}", color='#1B5E20', fontsize=11, ha='center', va='bottom', fontweight='bold', zorder=10)
+        self.cursor_line = self.ax.axvline(
+            self.cursor_x,
+            color='#1B5E20',
+            linestyle='--',
+            linewidth=1.5,
+            zorder=10,
+            animated=True
+        )
+        self.cursor_text = self.ax.text(
+            self.cursor_x,
+            5000,
+            f"{self.cursor_x:.3f}",
+            color='#1B5E20',
+            fontsize=11,
+            ha='center',
+            va='bottom',
+            fontweight='bold',
+            zorder=10,
+            animated=True
+        )
+        self._update_selection_graphics(redraw=False)
+        self._update_playback_status()
 
         self.fig.tight_layout()
         self.canvas.draw()
+        self.update_cursor_graphics(prefer_blit=True)
 
     def on_press(self, event):
         if not self.ax or not self.ax2 or not self.current_item: return
@@ -457,16 +663,35 @@ class SpectrogramPanel:
         else:
             if event.xdata is not None:
                 self._set_cursor_position(event.xdata)
-                self.dragging = 'cursor'
+                self.selection_anchor_x = self.cursor_x
+                self.selection_drag_started = False
+                self.dragging = 'play_select'
                 self.cursor_line.set_color('#064E3B')
                 self.cursor_line.set_linewidth(2.5)
 
-    def update_cursor_graphics(self):
+    def update_cursor_graphics(self, prefer_blit=False):
         if not self.cursor_line or not self.cursor_text: return
         self.cursor_line.set_xdata([self.cursor_x, self.cursor_x])
         self.cursor_text.set_position((self.cursor_x, 5000))
         self.cursor_text.set_text(f"{self.cursor_x:.3f}")
+        self._update_playback_status()
+        if prefer_blit or self.is_playing:
+            if self._blit_cursor():
+                return
         self.canvas.draw_idle()
+
+    def _blit_cursor(self):
+        if self.background is None or not self.canvas or not self.ax:
+            return False
+        try:
+            self.canvas.restore_region(self.background)
+            self.ax.draw_artist(self.cursor_line)
+            self.ax.draw_artist(self.cursor_text)
+            self.canvas.blit(self.fig.bbox)
+            self.canvas.flush_events()
+            return True
+        except Exception:
+            return False
 
     def on_motion(self, event):
         if not self.ax or not self.current_item: return
@@ -516,6 +741,17 @@ class SpectrogramPanel:
             return
             
         if event.xdata is None:
+            return
+
+        if self.dragging == 'play_select':
+            current_t = self._clamp_time_to_item(event.xdata)
+            if current_t is None:
+                return
+            self._set_cursor_position(current_t)
+            anchor = self.selection_anchor_x if self.selection_anchor_x is not None else current_t
+            if abs(current_t - anchor) > 0.005:
+                self.selection_drag_started = True
+                self._set_playback_selection(anchor, current_t)
             return
 
         if isinstance(self.dragging, tuple):
@@ -574,7 +810,9 @@ class SpectrogramPanel:
                 self.cursor_line.set_color('#1B5E20')
                 self.cursor_line.set_linewidth(1.5)
 
-            if was_dragging == 'cursor':
+            if was_dragging in ('cursor', 'play_select'):
+                if was_dragging == 'play_select' and not self.selection_drag_started:
+                    self._clear_playback_selection(redraw=False)
                 self.update_cursor_graphics()
             else:
                 self.plot_item_spectrogram()
@@ -652,9 +890,92 @@ class SpectrogramPanel:
     def _update_play_button_state(self, playing=False):
         if hasattr(self, 'btn_play') and self.btn_play:
             if playing:
-                self.btn_play.configure(text=" 暂停", image=self.icons.get("pause"))
+                self.btn_play.configure(text=" 停止", image=self.icons.get("pause"), width=76)
             else:
-                self.btn_play.configure(text=" 播放", image=self.icons.get("play"))
+                self.btn_play.configure(text=" 播放", image=self.icons.get("play"), width=76)
+
+    def stop_playback(self):
+        self._stop_playback(reset_cursor=False)
+
+    def _stop_playback(self, reset_cursor=False):
+        if self._playback_job is not None and self.canvas:
+            try:
+                self.canvas.get_tk_widget().after_cancel(self._playback_job)
+            except Exception:
+                pass
+            self._playback_job = None
+        if self.is_playing:
+            try:
+                sd.stop()
+            except Exception:
+                pass
+        self.is_playing = False
+        if reset_cursor and self.current_item:
+            self.cursor_x = self.current_item.get('start')
+            self.cursor_char_index = 0 if self.current_item.get('chars_bounds') else None
+            self.update_cursor_graphics()
+        self._update_play_button_state(playing=False)
+        self._update_playback_status()
+
+    def _get_current_char_bounds(self):
+        item = self.current_item
+        if not item:
+            return None
+        chars_bounds = item.get('chars_bounds', [])
+        if not chars_bounds:
+            return None
+        char_idx = self.cursor_char_index
+        if char_idx is None or char_idx >= len(chars_bounds):
+            char_idx = self._get_char_index_for_time(self.cursor_x)
+        if char_idx is None or not (0 <= char_idx < len(chars_bounds)):
+            return None
+        return tuple(chars_bounds[char_idx])
+
+    def _get_playback_range(self, mode=None):
+        item = self.current_item
+        if not item:
+            return None
+        mode = mode or self.playback_range_mode or "自动"
+        domain = self._get_playback_domain()
+
+        if mode == "选区":
+            return self.playback_selection if self._has_playback_selection() else None
+        if mode == "当前字":
+            bounds = self._get_current_char_bounds()
+            if not bounds:
+                return None
+            return (bounds[0], bounds[1])
+        if mode == "整段":
+            return domain if domain else (item['start'], item['end'])
+
+        if self._has_playback_selection():
+            return self.playback_selection
+
+        bounds = self._get_current_char_bounds()
+        if bounds and self.cursor_x is not None and bounds[0] <= self.cursor_x <= bounds[1]:
+            return (self.cursor_x, bounds[1])
+
+        if self.cursor_x is not None and item['start'] <= self.cursor_x < item['end'] - 0.01:
+            return (self.cursor_x, item['end'])
+
+        if domain:
+            return domain
+        return (item['start'], item['end'])
+
+    def play_current_item(self):
+        self._play_range_mode("整段")
+
+    def play_current_char(self):
+        self._play_range_mode("当前字")
+
+    def _play_range_mode(self, mode):
+        if self.is_playing:
+            self._stop_playback()
+            return
+        play_range = self._get_playback_range(mode)
+        if not play_range:
+            return
+        self._start_playback_range(*play_range)
 
     def play_selected(self):
         item = self.current_item
@@ -662,13 +983,17 @@ class SpectrogramPanel:
 
         # 如果当前正在播放，则作为“暂停”功能：停止播放并恢复按钮状态
         if self.is_playing:
-            self.is_playing = False
-            try:
-                sd.stop()
-            except Exception:
-                pass
-            self._update_play_button_state(playing=False)
+            self._stop_playback()
             return
+
+        play_range = self._get_playback_range()
+        if not play_range:
+            return
+        self._start_playback_range(*play_range)
+
+    def _start_playback_range(self, play_s, play_e):
+        item = self.current_item
+        if not item: return
 
         if not item.get('snd') and item.get('path'):
             try: item['snd'] = parselmouth.Sound(item['path'])
@@ -679,52 +1004,26 @@ class SpectrogramPanel:
 
         try:
             total_duration = snd.get_total_duration()
-            if self.cursor_x is None:
-                self.cursor_x = item['start']
-
-            chars_bounds = item.get('chars_bounds', [])
-            play_s = None
-            play_e = None
-            self.play_is_selection = False
-            self.play_selection_start = 0.0
-
-            char_idx = self.cursor_char_index
-            if char_idx is None or char_idx >= len(chars_bounds):
-                char_idx = self._get_char_index_for_time(self.cursor_x)
-
-            if char_idx is not None and 0 <= char_idx < len(chars_bounds):
-                c_s, c_e = chars_bounds[char_idx]
-                if c_s <= self.cursor_x <= c_e:
-                    play_s = self.cursor_x
-                    play_e = c_e
-                    self.play_is_selection = True
-                    self.play_selection_start = c_s
-
-            if play_s is None:
-                # If cursor is within the current segment, play from the cursor to the end of the segment.
-                # Otherwise, play the entire current segment from its start.
-                if item['start'] <= self.cursor_x < item['end'] - 0.01:
-                    play_s = self.cursor_x
-                else:
-                    play_s = item['start']
-                    self.cursor_x = item['start']
-                    self.update_cursor_graphics()
-                play_e = item['end']
-                self.play_is_selection = True
-                self.play_selection_start = play_s
+            play_s = max(0.0, min(total_duration, play_s))
+            play_e = max(0.0, min(total_duration, play_e))
 
             if play_e <= play_s:
                 return
 
+            self.cursor_x = play_s
+            self.cursor_char_index = self._get_char_index_for_time(play_s)
+            self.update_cursor_graphics()
+
             part = snd.extract_part(from_time=play_s, to_time=play_e)
             audio_data = np.ascontiguousarray(part.values.T, dtype=np.float32)
 
-            sd.play(audio_data, samplerate=int(part.sampling_frequency))
+            sd.play(audio_data, samplerate=int(part.sampling_frequency), blocking=False, latency='low')
 
             self.is_playing = True
             self.play_start_sys_time = time.time()
             self.play_start_audio_time = play_s
             self.play_end_audio_time = play_e
+            self.play_selection_start = play_s
 
             self._update_play_button_state(playing=True)
             self._playback_update_loop()
@@ -736,24 +1035,26 @@ class SpectrogramPanel:
 
     def _playback_update_loop(self):
         if not self.is_playing:
+            self._playback_job = None
             self._update_play_button_state(playing=False)
             return
         elapsed = time.time() - self.play_start_sys_time
         current_audio_time = self.play_start_audio_time + elapsed
 
         if current_audio_time >= self.play_end_audio_time:
+            if self.playback_loop_enabled:
+                self._start_playback_range(self.play_start_audio_time, self.play_end_audio_time)
+                return
             self.is_playing = False
-            if getattr(self, 'play_is_selection', False):
-                self.cursor_x = getattr(self, 'play_selection_start', self.current_item['start'])
-            else:
-                self.cursor_x = self.play_end_audio_time
-            self.update_cursor_graphics()
+            self.cursor_x = getattr(self, 'play_selection_start', self.current_item['start'])
+            self._playback_job = None
+            self.update_cursor_graphics(prefer_blit=True)
             self._update_play_button_state(playing=False)
             return
 
         self.cursor_x = current_audio_time
-        self.update_cursor_graphics()
-        self.canvas.get_tk_widget().after(16, self._playback_update_loop)
+        self.update_cursor_graphics(prefer_blit=True)
+        self._playback_job = self.canvas.get_tk_widget().after(10, self._playback_update_loop)
 
     def apply_auto_detect(self):
         if self.on_auto_detect_callback:
@@ -840,6 +1141,8 @@ class SpectrogramPanel:
 
     def on_draw(self, event):
         self.background = self.canvas.copy_from_bbox(self.fig.bbox)
+        if self.cursor_line and self.cursor_text:
+            self._blit_cursor()
 
     def update_eraser_circle(self, event=None):
         if not self.eraser_mode or not self.ax2:
