@@ -82,12 +82,23 @@ class ProjectManager:
             pass
         return None
 
-    def _copy_to_workspace(self, src_path, subdir, token):
+    def _copy_to_workspace(self, src_path, subdir, token, copy_cache=None):
         if not src_path:
             return src_path
 
+        cache_key = None
+        if copy_cache is not None:
+            try:
+                cache_key = (subdir, os.path.abspath(src_path))
+                if cache_key in copy_cache:
+                    return copy_cache[cache_key]
+            except (TypeError, ValueError):
+                cache_key = None
+
         existing_rel = self._workspace_relpath(src_path)
         if existing_rel and os.path.exists(src_path):
+            if copy_cache is not None and cache_key is not None:
+                copy_cache[cache_key] = existing_rel
             return existing_rel
 
         if not os.path.exists(src_path):
@@ -99,7 +110,75 @@ class ProjectManager:
         dest = os.path.join(target_dir, dest_name)
         if os.path.abspath(src_path) != os.path.abspath(dest):
             shutil.copy2(src_path, dest)
-        return os.path.join(subdir, dest_name).replace(os.sep, "/")
+        rel_path = os.path.join(subdir, dest_name).replace(os.sep, "/")
+        if copy_cache is not None and cache_key is not None:
+            copy_cache[cache_key] = rel_path
+        return rel_path
+
+    def _add_managed_ref(self, refs, rel_path):
+        if not rel_path:
+            return
+        norm = str(rel_path).replace("\\", "/")
+        if norm.startswith("audio/") or norm.startswith("data/"):
+            refs.add(norm)
+
+    def _collect_project_file_refs(self, state):
+        refs = set()
+        for spk_data in state.get("speakers", {}).values():
+            self._add_managed_ref(refs, spk_data.get("long_audio_path"))
+            for path in spk_data.get("pending_batch_paths", []):
+                self._add_managed_ref(refs, path)
+            for item in spk_data.get("items", {}).values():
+                self._add_managed_ref(refs, item.get("path"))
+                self._add_managed_ref(refs, item.get("pitch_data_file"))
+        return refs
+
+    def _prune_unused_workspace_files(self, referenced_files):
+        for subdir in ("audio", "data"):
+            root_dir = os.path.join(self.workspace_dir, subdir)
+            if not os.path.isdir(root_dir):
+                continue
+
+            for root, dirs, files in os.walk(root_dir, topdown=False):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    rel_path = os.path.relpath(file_path, self.workspace_dir).replace(os.sep, "/")
+                    if rel_path not in referenced_files:
+                        try:
+                            os.remove(file_path)
+                        except OSError as e:
+                            print(f"Failed to remove unused workspace file {file_path}: {e}")
+
+                for dir_name in dirs:
+                    dir_path = os.path.join(root, dir_name)
+                    try:
+                        if not os.listdir(dir_path):
+                            os.rmdir(dir_path)
+                    except OSError:
+                        pass
+
+    def _iter_project_archive_files(self):
+        project_json = os.path.join(self.workspace_dir, "project.json")
+        if not os.path.exists(project_json):
+            return
+
+        yield project_json, "project.json"
+
+        try:
+            with open(project_json, "r", encoding="utf-8") as f:
+                state = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return
+
+        for rel_path in sorted(self._collect_project_file_refs(state)):
+            file_path = self._resolve_project_path(rel_path)
+            if os.path.isfile(file_path):
+                yield file_path, rel_path
+
+    def _write_project_archive(self, zip_path):
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for file_path, arcname in self._iter_project_archive_files():
+                zf.write(file_path, arcname)
 
     def _make_import_workspace(self):
         parent_dir = os.path.dirname(self.workspace_dir)
@@ -155,6 +234,7 @@ class ProjectManager:
             
             data_dir = self._get_data_dir()
             audio_dir = self._get_audio_dir()
+            copy_cache = {}
             
             for spk_id, spk in self.app.speaker_manager.speakers.items():
                 spk_data = {
@@ -173,13 +253,14 @@ class ProjectManager:
                 spk_data["long_audio_path"] = self._copy_to_workspace(
                     spk_data["long_audio_path"],
                     "audio",
-                    f"{spk_id}_long"
+                    f"{spk_id}_long",
+                    copy_cache
                 )
                 
                 # Copy batch audios to workspace
                 new_batch = []
                 for idx, p in enumerate(spk_data["pending_batch_paths"]):
-                    new_batch.append(self._copy_to_workspace(p, "audio", f"{spk_id}_batch_{idx}"))
+                    new_batch.append(self._copy_to_workspace(p, "audio", f"{spk_id}_batch_{idx}", copy_cache))
                 spk_data["pending_batch_paths"] = new_batch
                 
                 for item_id, item in spk.items.items():
@@ -196,7 +277,7 @@ class ProjectManager:
                             else:
                                 item_dict[k] = v
                         elif k == 'path':
-                            item_dict['path'] = self._copy_to_workspace(v, "audio", f"{spk_id}_{item_id}")
+                            item_dict['path'] = self._copy_to_workspace(v, "audio", f"{spk_id}_{item_id}", copy_cache)
                         else:
                             item_dict[k] = v
                     spk_data["items"][item_id] = item_dict
@@ -209,6 +290,7 @@ class ProjectManager:
             with open(tmp_json, "w", encoding="utf-8") as f:
                 json.dump(serializable_state, f, ensure_ascii=False, indent=2)
             os.replace(tmp_json, project_json)
+            self._prune_unused_workspace_files(self._collect_project_file_refs(serializable_state))
                 
             if self.auto_save_enabled:
                 self._create_backup()
@@ -216,12 +298,7 @@ class ProjectManager:
 
     def _create_backup(self):
         try:
-            with zipfile.ZipFile(self.backup_path, 'w', zipfile.ZIP_DEFLATED) as zf:
-                for root, _, files in os.walk(self.workspace_dir):
-                    for file in files:
-                        file_path = os.path.join(root, file)
-                        arcname = os.path.relpath(file_path, self.workspace_dir)
-                        zf.write(file_path, arcname)
+            self._write_project_archive(self.backup_path)
         except Exception as e:
             print(f"Failed to create backup: {e}")
 
@@ -236,12 +313,7 @@ class ProjectManager:
         
         try:
             with self._save_lock:
-                with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
-                    for root, _, files in os.walk(self.workspace_dir):
-                        for file in files:
-                            file_path = os.path.join(root, file)
-                            arcname = os.path.relpath(file_path, self.workspace_dir)
-                            zf.write(file_path, arcname)
+                self._write_project_archive(zip_path)
             
             # Delete backup after successful export
             if os.path.exists(self.backup_path):
@@ -282,6 +354,7 @@ class ProjectManager:
                     shutil.rmtree(self.workspace_dir)
                 shutil.move(temp_workspace, self.workspace_dir)
                 temp_workspace = None
+                self._prune_unused_workspace_files(self._collect_project_file_refs(state))
                 self._restore_state(state)
             
             return True

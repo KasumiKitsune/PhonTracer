@@ -1263,10 +1263,21 @@ class ProjectTreePanel:
 
     def _get_pitch_arrays_for_item(self, item):
         if item.get('pitch_data'):
-            return item['pitch_data']['xs'], item['pitch_data']['freqs']
+            p_xs = item['pitch_data'].get('xs')
+            p_freqs = item['pitch_data'].get('freqs')
+            if p_xs is None or p_freqs is None:
+                return None, None
+            return np.asarray(p_xs), np.asarray(p_freqs)
         if item.get('pitch'):
             pitch = item['pitch']
-            return pitch.xs(), pitch.selected_array['frequency']
+            try:
+                p_xs = np.asarray(pitch.xs())
+                p_freqs = np.asarray(pitch.selected_array['frequency'])
+            except (TypeError, KeyError, AttributeError):
+                return None, None
+            if p_xs.ndim != 1 or p_freqs.ndim != 1 or len(p_xs) != len(p_freqs):
+                return None, None
+            return p_xs, p_freqs
         return None, None
 
     def _write_raw_pitch_sheet(self, workbook, rows, include_speaker=False):
