@@ -276,7 +276,7 @@ AI operating rule: prefer this CLI as the control surface. Unless the user clear
 asks for it, do not edit source files, move/delete files, or bypass the CLI to
 change project data. Use `status`, `list_items`, and `agent_guide` to orient first.
 
-PhonTracer is a high-accuracy acoustic tone analysis tool. 
+PhonTracer is a high-accuracy acoustic tone analysis tool.
 
 --- WORKFLOW LIFECYCLE ---
 1. Load Audio:
@@ -581,14 +581,14 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                                 center = (c_interval.minTime + c_interval.maxTime) / 2.0
                                 if interval.minTime <= center <= interval.maxTime:
                                     overlapping_chars.append(c_interval)
-                        
+
                         overlapping_chars.sort(key=lambda c: c.minTime)
                         if overlapping_chars:
                             for c in overlapping_chars:
                                 chars_bounds.append([c.minTime, c.maxTime])
                             for j in range(len(overlapping_chars) - 1):
                                 inner_splits.append(overlapping_chars[j].maxTime)
-                    
+
                     if not chars_bounds:
                         syls = split_into_syllables(lbl)
                         w_len = len(syls)
@@ -614,7 +614,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                 return
 
             self.items.clear()
-            
+
             unique_groups = []
             for item in tg_intervals:
                 g = item.get('group', '导入内容')
@@ -660,7 +660,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                     tasks.append({'word': word, 'group': grp_name, 'missing': True})
 
             from modules.audio_core import process_single_long_word
-            
+
             with concurrent.futures.ThreadPoolExecutor(max_workers=min(os.cpu_count() or 4, 8)) as executor:
                 futures = {}
                 for i, t in enumerate(tasks):
@@ -699,7 +699,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                     res['pitch_ceiling'] = self.params['pitch_ceiling']
                     res['voicing_threshold'] = self.params.get('voicing_threshold', 0.25)
                     res['f0_engine'] = self.params.get('f0_engine', 'praat')
-                    
+
                     preview_times = np.linspace(res['start'], res['end'], 11)
                     preview_f0 = np.interp(preview_times, pitch_xs, pitch_freqs).tolist()
                     for j, t in enumerate(preview_times):
@@ -712,7 +712,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                             preview_f0[j] = 0.0
                     res['preview_f0'] = preview_f0
                     res['has_empty_data'] = any(f == 0.0 for f in res['preview_f0'])
-                    
+
                     self.items[iid] = res
                     matched_count += 1
                 else:
@@ -750,9 +750,14 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
 
                         inner_splits = []
                         chars_bounds = []
+                        split_warnings = []
+                        split_confidence = 1.0
                         syls = split_into_syllables(word)
                         if len(syls) > 1:
-                            inner_splits = auto_split_inner_word(self.long_snd, mic_s, mic_e, len(syls))
+                            meta = {}
+                            inner_splits = auto_split_inner_word(self.long_snd, mic_s, mic_e, len(syls), pitch_data=pitch_data, output_meta=meta)
+                            split_warnings = meta.get('split_warnings', [])
+                            split_confidence = meta.get('split_confidence', 1.0)
                             chars_bounds = auto_split_to_chars_bounds(self.long_snd, mic_s, mic_e, inner_splits, len(syls), self.params)
                         else:
                             chars_bounds = [[mic_s, mic_e]]
@@ -777,6 +782,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                             'start': mic_s, 'end': mic_e,
                             'raw_start': raw_s, 'raw_end': raw_e,
                             'inner_splits': inner_splits, 'chars_bounds': chars_bounds,
+                            'split_warnings': split_warnings, 'split_confidence': split_confidence,
                             'preview_f0': preview_f0, 'has_empty_data': has_empty, 'missing': False,
                             'pitch_floor': self.params['pitch_floor'],
                             'pitch_ceiling': self.params['pitch_ceiling'],
@@ -847,8 +853,15 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                     syls = split_into_syllables(word)
                     if len(syls) > 1:
                         snd = parselmouth.Sound(res['path'])
-                        res['inner_splits'] = auto_split_inner_word(snd, res['start'], res['end'], len(syls))
+                        meta = {}
+                        p_data = res.get('pitch_data')
+                        res['inner_splits'] = auto_split_inner_word(snd, res['start'], res['end'], len(syls), pitch_data=p_data, output_meta=meta)
+                        res['split_warnings'] = meta.get('split_warnings', [])
+                        res['split_confidence'] = meta.get('split_confidence', 1.0)
                         res['chars_bounds'] = auto_split_to_chars_bounds(snd, res['start'], res['end'], res['inner_splits'], len(syls), self.params)
+                    else:
+                        res['split_warnings'] = []
+                        res['split_confidence'] = 1.0
                 results[orig_idx] = res
             except Exception as e:
                 results[orig_idx] = {'label': tasks[orig_idx]['word'], 'group': tasks[orig_idx]['group'], 'missing': True, 'error': str(e)}
@@ -956,10 +969,16 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
         label = item['label']
         syls = split_into_syllables(label)
         if len(syls) > 1:
-            item['inner_splits'] = auto_split_inner_word(item['snd'], new_s, new_e, len(syls))
+            meta = {}
+            p_data = item.get('pitch_data')
+            item['inner_splits'] = auto_split_inner_word(item['snd'], new_s, new_e, len(syls), pitch_data=p_data, output_meta=meta)
+            item['split_warnings'] = meta.get('split_warnings', [])
+            item['split_confidence'] = meta.get('split_confidence', 1.0)
             item['chars_bounds'] = auto_split_to_chars_bounds(item['snd'], new_s, new_e, item['inner_splits'], len(syls), self.params)
         else:
             item['inner_splits'] = []
+            item['split_warnings'] = []
+            item['split_confidence'] = 1.0
             item['chars_bounds'] = [[new_s, new_e]]
 
         # Re-evaluate warnings
@@ -1040,17 +1059,23 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                     'pitch_ceiling': item['pitch_ceiling'],
                     'voicing_threshold': item['voicing_threshold']
                 })
-                
+
                 # Recompute chars bounds with new params if word mode
                 label = item['label']
                 syls = split_into_syllables(label)
                 if len(syls) > 1:
-                    item['inner_splits'] = auto_split_inner_word(item['snd'], item['start'], item['end'], len(syls))
+                    meta = {}
+                    p_data = item.get('pitch_data')
+                    item['inner_splits'] = auto_split_inner_word(item['snd'], item['start'], item['end'], len(syls), pitch_data=p_data, output_meta=meta)
+                    item['split_warnings'] = meta.get('split_warnings', [])
+                    item['split_confidence'] = meta.get('split_confidence', 1.0)
                     item['chars_bounds'] = auto_split_to_chars_bounds(item['snd'], item['start'], item['end'], item['inner_splits'], len(syls), item)
                 else:
                     item['inner_splits'] = []
+                    item['split_warnings'] = []
+                    item['split_confidence'] = 1.0
                     item['chars_bounds'] = [[item['start'], item['end']]]
-                    
+
                 # Re-evaluate warnings
                 preview_times = np.linspace(item['start'], item['end'], 11)
                 p_xs = item['pitch_data']['xs']
@@ -1075,11 +1100,14 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
             "success": True,
             "message": f"{iid} 的专属参数已更新。",
             "item_params": {
-                "pitch_floor": item.get('pitch_floor'), 
-                "pitch_ceiling": item.get('pitch_ceiling'), 
-                "voicing_threshold": item.get('voicing_threshold')
+                "pitch_floor": item.get('pitch_floor'),
+                "pitch_ceiling": item.get('pitch_ceiling'),
+                "voicing_threshold": item.get('voicing_threshold'),
+                "f0_engine": item.get('f0_engine')
             },
-            "warning": item.get('has_empty_data', False)
+            "warning": item.get('has_empty_data', False),
+            "split_warnings": item.get('split_warnings', []),
+            "split_confidence": item.get('split_confidence', 1.0)
         }))
 
     def do_recalculate(self, arg):
@@ -1089,40 +1117,50 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
         """
         print('{"status": "processing", "message": "Recalculating... this may take a moment."}')
 
-        recompute_pitch = True # For simplicity, always recompute pitch on full recalculate
-
         if self.mode == 'long' and self.long_snd:
-            # Recompute global pitch
             pitch_data = extract_f0(self.long_snd, self.params)
             pitch_xs = pitch_data['xs']
             pitch_freqs = pitch_data['freqs']
 
             for iid, item in self.items.items():
-                if item.get('missing') or not item.get('success', True): continue
+                if item.get('missing') or not item.get('success', True):
+                    continue
 
                 item['pitch_data'] = pitch_data
                 item['pitch_floor'] = self.params['pitch_floor']
                 item['pitch_ceiling'] = self.params['pitch_ceiling']
                 item['voicing_threshold'] = self.params.get('voicing_threshold', 0.25)
                 item['f0_engine'] = self.params.get('f0_engine', 'praat')
-                mac_s, mac_e = item['macro_start'], item['macro_end']
 
                 mic_s, mic_e, raw_s, raw_e = core_microscopic_vowel_nucleus(
-                    item['snd'], item['pitch_data'], mac_s, mac_e,
+                    item['snd'], item['pitch_data'], item['macro_start'], item['macro_end'],
                     self.params['db'], self.params['skip_front'], self.params['trim_silence']
                 )
-
-                item['start'], item['end'] = mic_s, mic_e
-                item['raw_start'], item['raw_end'] = raw_s, raw_e
 
                 label = item['label']
                 syls = split_into_syllables(label)
                 if len(syls) > 1:
-                    item['inner_splits'] = auto_split_inner_word(item['snd'], mic_s, mic_e, len(syls))
-                    item['chars_bounds'] = auto_split_to_chars_bounds(item['snd'], mic_s, mic_e, item['inner_splits'], len(syls), self.params)
+                    meta = {}
+                    item['inner_splits'] = auto_split_inner_word(
+                        item['snd'], raw_s, raw_e, len(syls),
+                        pitch_data=pitch_data, output_meta=meta
+                    )
+                    item['split_warnings'] = meta.get('split_warnings', [])
+                    item['split_confidence'] = meta.get('split_confidence', 1.0)
+                    item['chars_bounds'] = auto_split_to_chars_bounds(
+                        item['snd'], raw_s, raw_e, item['inner_splits'], len(syls), self.params
+                    )
+                    if item['chars_bounds']:
+                        mic_s = item['chars_bounds'][0][0]
+                        mic_e = item['chars_bounds'][-1][1]
                 else:
                     item['inner_splits'] = []
+                    item['split_warnings'] = []
+                    item['split_confidence'] = 1.0
                     item['chars_bounds'] = [[mic_s, mic_e]]
+
+                item['start'], item['end'] = mic_s, mic_e
+                item['raw_start'], item['raw_end'] = raw_s, raw_e
 
                 preview_times = np.linspace(mic_s, mic_e, 11)
                 preview_f0 = np.interp(preview_times, pitch_xs, pitch_freqs).tolist()
@@ -1138,17 +1176,20 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                 item['has_empty_data'] = any(f == 0.0 for f in item['preview_f0'])
 
         elif self.mode == 'batch':
-            # Use multiprocessing
             tasks = []
             iids = []
             for iid, item in self.items.items():
-                if item.get('missing') or not item.get('success', True): continue
+                if item.get('missing') or not item.get('success', True):
+                    continue
                 tasks.append({'path': item['path'], 'label': item.get('label', '')})
                 iids.append(iid)
 
             futures = {}
             for i, t in enumerate(tasks):
-                f = self.executor.submit(batch_process_worker, t['path'], self.params, self.params['trim_silence'], t['label'])
+                f = self.executor.submit(
+                    batch_process_worker,
+                    t['path'], self.params, self.params['trim_silence'], t['label']
+                )
                 futures[f] = i
 
             for future in concurrent.futures.as_completed(futures):
@@ -1156,45 +1197,27 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                 iid = iids[orig_idx]
                 try:
                     res = future.result()
-                    if res.get('success'):
-                        item = self.items[iid]
-                        item['start'] = res['start']
-                        item['end'] = res['end']
-                        item['raw_start'] = res['raw_start']
-                        item['raw_end'] = res['raw_end']
+                    if not res.get('success'):
+                        continue
 
-                        word = item['label']
-                        syls = split_into_syllables(word)
-                        if len(syls) > 1:
-                            snd = parselmouth.Sound(res['path'])
-                            item['inner_splits'] = auto_split_inner_word(snd, res['start'], res['end'], len(syls))
-                            item['chars_bounds'] = auto_split_to_chars_bounds(snd, res['start'], res['end'], item['inner_splits'], len(syls), self.params)
-                        else:
-                            item['inner_splits'] = []
-                            item['chars_bounds'] = [[res['start'], res['end']]]
+                    item = self.items[iid]
+                    item['start'] = res['start']
+                    item['end'] = res['end']
+                    item['raw_start'] = res['raw_start']
+                    item['raw_end'] = res['raw_end']
+                    item['inner_splits'] = res.get('inner_splits', [])
+                    item['chars_bounds'] = res.get('chars_bounds', [])
+                    item['split_warnings'] = res.get('split_warnings', [])
+                    item['split_confidence'] = res.get('split_confidence', 1.0)
+                    item['preview_f0'] = res.get('preview_f0', [])
+                    item['has_empty_data'] = res.get('has_empty_data', False)
 
-                        # Refresh pitch obj
-                        item['snd'] = parselmouth.Sound(res['path'])
-                        item['pitch_data'] = extract_f0(item['snd'], self.params)
-                        item['pitch_floor'] = self.params['pitch_floor']
-                        item['pitch_ceiling'] = self.params['pitch_ceiling']
-                        item['voicing_threshold'] = self.params.get('voicing_threshold', 0.25)
-                        item['f0_engine'] = self.params.get('f0_engine', 'praat')
-
-                        preview_times = np.linspace(item['start'], item['end'], 11)
-                        p_xs = item['pitch_data']['xs']
-                        p_freqs = item['pitch_data']['freqs']
-                        preview_f0 = np.interp(preview_times, p_xs, p_freqs).tolist()
-                        for j, t in enumerate(preview_times):
-                            valid_indices = np.where(p_freqs > 0)[0]
-                            if len(valid_indices) == 0:
-                                preview_f0[j] = 0.0
-                                continue
-                            valid_xs = p_xs[valid_indices]
-                            if np.min(np.abs(valid_xs - t)) > 0.025:
-                                preview_f0[j] = 0.0
-                        item['preview_f0'] = preview_f0
-                        item['has_empty_data'] = any(f == 0.0 for f in item['preview_f0'])
+                    item['snd'] = parselmouth.Sound(res['path'])
+                    item['pitch_data'] = extract_f0(item['snd'], self.params)
+                    item['pitch_floor'] = self.params['pitch_floor']
+                    item['pitch_ceiling'] = self.params['pitch_ceiling']
+                    item['voicing_threshold'] = self.params.get('voicing_threshold', 0.25)
+                    item['f0_engine'] = self.params.get('f0_engine', 'praat')
                 except Exception:
                     pass
 
@@ -1324,7 +1347,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                 item = speaker.items[child]
                 if item.get('missing') or not item.get('success', True) or not item.get('path'):
                     continue
-                
+
                 try:
                     snd = parselmouth.Sound(item['path'])
                     if snd.sampling_frequency != target_sr:
@@ -1359,7 +1382,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
 
         snd = speaker.pending_long_snd
         do_trim = speaker.last_params.get('trim_silence', True)
-        
+
         global_idx = 1
         for grp_name, children in structure:
             for child in children:
@@ -1407,7 +1430,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
 
     def _extract_syl_data(self, item, num_points):
         if item.get('start') is None or not item.get('snd'): return 0, []
-        
+
         pitch_data = item.get('pitch_data')
         if pitch_data:
             p_xs = pitch_data['xs']
@@ -2414,7 +2437,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
         if not args:
             print('{"success": False, "error": "Missing argument: on or off"}')
             return
-            
+
         action = args[0].lower()
         if action == 'on':
             if self.log_file:

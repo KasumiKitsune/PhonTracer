@@ -26,84 +26,84 @@ class CanvasButton(tk.Canvas):
         self.border_color = border_color
         self.is_active = is_active
         self.command = command
-        
+
         self.hovered = False
         self._bg_images = {}  # Cache pre-rendered anti-aliased backgrounds
-        
+
         # Pre-cache backgrounds for states to avoid rendering on the fly
         self.precache_backgrounds()
-        
+
         self.draw()
-        
+
         self.bind("<Enter>", self.on_enter)
         self.bind("<Leave>", self.on_leave)
         self.bind("<ButtonPress-1>", self.on_press)
         self.bind("<ButtonRelease-1>", self.on_release)
-        
+
     def precache_backgrounds(self):
         # We render circular backgrounds using PIL draw supersampling for perfect anti-aliasing
         scale = 4
         canvas_size = self.size * scale
-        
+
         states = [
             ("normal", "white", self.border_color),
             ("hover", self.hover_bg, self.border_color),
             ("active", self.active_bg, None),
             ("active_hover", self.active_hover, None)
         ]
-        
+
         for name, fill_color, border_color in states:
             img = Image.new("RGBA", (canvas_size, canvas_size), (0, 0, 0, 0))
             draw = ImageDraw.Draw(img)
-            
+
             x0, y0 = 2, 2
             x1, y1 = canvas_size - 2, canvas_size - 2
-            
+
             if border_color:
                 b_width = 1 * scale
                 draw.ellipse([x0, y0, x1, y1], fill=fill_color)
                 draw.ellipse([x0, y0, x1, y1], outline=border_color, width=b_width)
             else:
                 draw.ellipse([x0, y0, x1, y1], fill=fill_color)
-                
+
             resized_img = img.resize((self.size, self.size), Image.Resampling.LANCZOS)
             self._bg_images[name] = ImageTk.PhotoImage(resized_img)
-            
+
     def draw(self):
         self.delete("all")
-        
+
         # Determine which pre-cached background image to use
         if self.is_active:
             bg_name = "active_hover" if self.hovered else "active"
         else:
             bg_name = "hover" if self.hovered else "normal"
-            
+
         bg_img = self._bg_images.get(bg_name)
         if bg_img:
             self.create_image(self.size//2, self.size//2, image=bg_img)
-            
+
         # Draw the icon in the center
         if self.image:
             self.create_image(self.size//2, self.size//2, image=self.image)
-            
+
     def configure_button(self, image=None, is_active=None):
         if image is not None:
             self.image = image
         if is_active is not None:
             self.is_active = is_active
         self.draw()
-        
+
     def on_enter(self, event):
         self.hovered = True
         self.draw()
-        
+
     def on_leave(self, event):
         self.hovered = False
         self.draw()
-        
+
     def on_press(self, event):
         pass
-        
+
     def on_release(self, event):
         if self.hovered and self.command:
             self.command()
@@ -119,18 +119,22 @@ class ProjectTreePanel:
         self.app_state_params = app_state_params
         self.on_item_selected = on_item_selected_callback
         self.on_clear_canvas = on_clear_canvas_callback
-        
+        if app and hasattr(app, 'export_numbering_rule_var'):
+            self.num_rule_var = app.export_numbering_rule_var
+        else:
+            self.num_rule_var = ctk.StringVar(value="continuous")
+
         self.project_groups = []
         self.group_nodes = {}
         self.current_iid = None
         self.tree_drag_items = None
         self.last_hover = None
-        
+
         self.warning_group_id = None
         self.warning_iids = {}
         self._rebuild_timer = None
         self._rebuilding = False
-        
+
         try:
             self.font_title = ctk.CTkFont(family="Microsoft YaHei", size=15, weight="bold")
             self.font_main = ctk.CTkFont(family="Microsoft YaHei", size=13)
@@ -139,103 +143,103 @@ class ProjectTreePanel:
             self.font_title = ("Microsoft YaHei", 15, "bold")
             self.font_main = ("Microsoft YaHei", 13)
             self.font_code = ("Consolas", 13)
-        
+
         self.setup_ui()
 
     def setup_ui(self):
         right_sidebar = ctk.CTkFrame(self.parent, width=300, fg_color="transparent")
         right_sidebar.pack(side=tk.RIGHT, fill=tk.Y, padx=10, pady=10)
         right_sidebar.pack_propagate(False)
-        
+
         style = ttk.Style()
         style.theme_use("default")
         style.configure("Treeview", background="white", foreground="#374151", rowheight=34, fieldbackground="white", borderwidth=0, font=("Microsoft YaHei", 14))
         style.map('Treeview', background=[('selected', '#DBEAFE')], foreground=[('selected', '#1E3A8A')])
-        
+
         frame_list = ctk.CTkFrame(right_sidebar, fg_color="white", corner_radius=10)
         frame_list.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(0, 5))
         ctk.CTkLabel(frame_list, text="项目目录", font=self.font_title, text_color="#111827").pack(pady=(15, 5))
-        
+
         # 1. 展开/折叠/新增组 药丸型按钮行
         ctrl_bar = ctk.CTkFrame(frame_list, fg_color="transparent")
         ctrl_bar.pack(fill=tk.X, padx=15, pady=(0, 5))
-        
+
         btn_expand_all = ctk.CTkButton(
             ctrl_bar, text="展开全部", width=60, height=26, corner_radius=13,
             font=("Microsoft YaHei", 11), fg_color="#F3F4F6", text_color="#374151",
             hover_color="#E5E7EB", command=self.expand_all
         )
         btn_expand_all.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 4))
-        
+
         btn_collapse_all = ctk.CTkButton(
             ctrl_bar, text="折叠全部", width=60, height=26, corner_radius=13,
             font=("Microsoft YaHei", 11), fg_color="#F3F4F6", text_color="#374151",
             hover_color="#E5E7EB", command=self.collapse_all
         )
         btn_collapse_all.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 4))
-        
+
         btn_add_group = CTkReleaseButton(
             ctrl_bar, text="新增组", image=self.icons.get("plus"), compound="left",
             width=60, height=26, corner_radius=13, command=self.add_new_group,
             fg_color="#F3F4F6", text_color="#374151", hover_color="#E5E7EB"
         )
         btn_add_group.pack(side=tk.LEFT, expand=True, fill=tk.X)
-        
+
         # 2. 搜索框与圆形筛选按钮行
         search_filter_frame = ctk.CTkFrame(frame_list, fg_color="transparent")
         search_filter_frame.pack(fill=tk.X, padx=15, pady=(5, 5))
-        
+
         self.search_var = tk.StringVar()
         self.search_var.trace_add("write", lambda *args: self.filter_tree())
-        
+
         self.entry_search = ctk.CTkEntry(
             search_filter_frame, textvariable=self.search_var, placeholder_text="搜索...",
             font=("Microsoft YaHei", 12), height=32, fg_color="white", text_color="#1F2937",
             border_width=1, border_color="#E5E7EB", corner_radius=16, width=100
         )
         self.entry_search.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
-        
+
         self.filter_var = ctk.StringVar(value="全部")
-        
+
         self.btn_filter_all = CanvasButton(
             search_filter_frame, size=32,
             image=self.tk_icons.get("filter_all_black"),
             command=lambda: self._on_filter_btn_click("全部")
         )
         self.btn_filter_all.pack(side=tk.LEFT, padx=(0, 4))
-        
+
         self.btn_filter_warning = CanvasButton(
             search_filter_frame, size=32,
             image=self.tk_icons.get("filter_warning_black"),
             command=lambda: self._on_filter_btn_click("需检查")
         )
         self.btn_filter_warning.pack(side=tk.LEFT, padx=(0, 4))
-        
+
         self.btn_filter_check = CanvasButton(
             search_filter_frame, size=32,
             image=self.tk_icons.get("filter_check_black"),
             command=lambda: self._on_filter_btn_click("已修改")
         )
         self.btn_filter_check.pack(side=tk.LEFT)
-        
+
         # 3. 目录树容器
         tree_container = ctk.CTkFrame(frame_list, fg_color="transparent")
         tree_container.pack(fill=tk.BOTH, expand=True, padx=15, pady=(5, 10))
         tree_container.grid_columnconfigure(0, weight=1)
         tree_container.grid_rowconfigure(0, weight=1)
-        
+
         self.tree = ttk.Treeview(tree_container, show='tree', selectmode='extended')
         scroll_tree = AutoScrollbar(tree_container, command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll_tree.set)
-        
+
         self.tree.grid(row=0, column=0, sticky="nsew")
         scroll_tree.grid(row=0, column=1, sticky="ns", padx=(5, 0))
-        
-        self.drag_indicator = tk.Frame(self.tree, height=2, bg="#3B82F6") 
+
+        self.drag_indicator = tk.Frame(self.tree, height=2, bg="#3B82F6")
         self.tree.tag_configure('hover', background='#F3F4F6')
         self.tree.tag_configure('drag_target', background='#DBEAFE')
         self.tree.tag_configure('group', background='#F3F4F6')
-        
+
         self.tree.bind('<Double-1>', self.on_tree_double_click)
         self.tree.bind('<BackSpace>', self.on_tree_backspace)
         self.tree.bind('<Delete>', self.on_tree_backspace)
@@ -250,17 +254,8 @@ class ProjectTreePanel:
         self.tree.bind('<Button-3>', self.on_right_click)
         self.tree.bind('<Button-2>', self.on_right_click)
         self.tree.bind('<Key-F2>', self.on_f2_press)
-        
-        self._update_filter_buttons()
 
-        frame_rule = ctk.CTkFrame(right_sidebar, fg_color="white", corner_radius=10)
-        frame_rule.pack(fill=tk.X, pady=5)
-        ctk.CTkLabel(frame_rule, text="导出标号规则", font=self.font_title, text_color="#111827").pack(anchor=tk.W, padx=15, pady=(10, 0))
-        self.num_rule_var = ctk.StringVar(value="continuous")
-        rule_opts = ctk.CTkFrame(frame_rule, fg_color="transparent")
-        rule_opts.pack(fill=tk.X, padx=15, pady=(5, 10))
-        ctk.CTkRadioButton(rule_opts, text="全部连续 (1, 2...)", variable=self.num_rule_var, value="continuous", command=self.update_preview, font=self.font_main).pack(side=tk.LEFT, padx=(0, 10))
-        ctk.CTkRadioButton(rule_opts, text="每组重新标号", variable=self.num_rule_var, value="per_group", command=self.update_preview, font=self.font_main).pack(side=tk.LEFT)
+        self._update_filter_buttons()
 
         frame_preview = ctk.CTkFrame(right_sidebar, fg_color="white", corner_radius=10)
         frame_preview.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True, pady=(5, 0))
@@ -282,12 +277,12 @@ class ProjectTreePanel:
                 if self.tree.item(child, 'open'):
                     items.extend(get_visible_items(child))
             return items
-            
+
         visible = get_visible_items()
         self.tree.tag_configure('even', background='#F9FAFB')
         self.tree.tag_configure('odd', background='#FFFFFF')
         self.tree.tag_configure('group', background='#F3F4F6')
-        
+
         leaf_count = 0
         for item in visible:
             tags = list(self.tree.item(item, 'tags'))
@@ -337,11 +332,11 @@ class ProjectTreePanel:
         while temp_name in self.project_groups:
             temp_name = f"{base_name} {counter}"
             counter += 1
-            
+
         self.project_groups.append(temp_name)
         gid = self.tree.insert("", tk.END, text=temp_name, open=True, tags=('group',))
         self.group_nodes[temp_name] = gid
-        
+
         self.tree.see(gid)
         self.tree.selection_set(gid)
         self._debounce_zebra_stripes()
@@ -353,17 +348,17 @@ class ProjectTreePanel:
         if not bbox: return
         x, y, w, h = bbox
         old_name = self.tree.item(iid, 'text')
-        
+
         edit_entry = tk.Entry(self.tree, font=("Microsoft YaHei", 12), borderwidth=1, relief="solid")
         edit_entry.insert(0, old_name)
         edit_entry.select_range(0, tk.END)
         edit_entry.focus_set()
         edit_entry.place(x=x, y=y, width=w, height=h)
-        
+
         def save_edit(event=None):
             new_name = edit_entry.get().strip()
             if not edit_entry.winfo_exists(): return
-            
+
             if not new_name or new_name == old_name:
                 edit_entry.destroy()
                 return
@@ -387,7 +382,7 @@ class ProjectTreePanel:
                 if self.tree.exists(w_iid):
                     self.tree.item(w_iid, text=new_name)
                 self.items[real_iid]['label'] = new_name
-            
+
             self.update_preview()
             self._debounce_zebra_stripes()
             edit_entry.destroy()
@@ -414,7 +409,7 @@ class ProjectTreePanel:
         if not selection: return
         iid = selection[0]
         if 'item' not in self.tree.item(iid, 'tags'): return
-        
+
         real_iid = iid[8:] if str(iid).startswith('warning_') else iid
         self.current_iid = real_iid
         if self.app and hasattr(self.app, 'active_speaker'):
@@ -431,10 +426,10 @@ class ProjectTreePanel:
     def on_tree_backspace(self, event):
         selection = self.tree.selection()
         if not selection: return
-        
+
         groups_to_del = [iid for iid in selection if 'group' in self.tree.item(iid, 'tags')]
         items_to_del = [iid for iid in selection if 'item' in self.tree.item(iid, 'tags')]
-        
+
         if groups_to_del:
             if messagebox.askyesno("确认删除", f"确定要删除选中的 {len(groups_to_del)} 个组别吗？"):
                 for gid in groups_to_del:
@@ -448,11 +443,11 @@ class ProjectTreePanel:
                         if self.tree.exists(real_child):
                             self.tree.delete(real_child)
                         self.warning_iids.pop(real_child, None)
-                        
+
                         if self.current_iid == real_child:
                             self.current_iid = None
                             if self.on_clear_canvas: self.on_clear_canvas()
-                    
+
                     if gid != self.warning_group_id:
                         self.tree.delete(gid)
                         if group_name in self.project_groups: self.project_groups.remove(group_name)
@@ -460,12 +455,12 @@ class ProjectTreePanel:
                     else:
                         self.tree.delete(self.warning_group_id)
                         self.warning_group_id = None
-                        
+
         real_items_to_del = set()
         for iid in items_to_del:
             real_iid = iid[8:] if str(iid).startswith('warning_') else iid
             real_items_to_del.add(real_iid)
-                
+
         for iid in real_items_to_del:
             self.items.pop(iid, None)
             w_iid = f"warning_{iid}"
@@ -474,26 +469,26 @@ class ProjectTreePanel:
             if self.tree.exists(iid):
                 self.tree.delete(iid)
             self.warning_iids.pop(iid, None)
-            
+
             if self.current_iid == iid:
                 self.current_iid = None
                 if self.on_clear_canvas: self.on_clear_canvas()
-                    
+
         if self.warning_group_id and self.tree.exists(self.warning_group_id):
             if not self.tree.get_children(self.warning_group_id):
                 self.tree.delete(self.warning_group_id)
                 self.warning_group_id = None
-                
+
         self.update_preview()
         self._debounce_zebra_stripes()
 
-    def on_tree_drag_start(self, event): 
+    def on_tree_drag_start(self, event):
         self._drag_start_pos = (event.x, event.y)
         self.tree_drag_items = None
 
     def on_tree_drag_motion(self, event):
         if not hasattr(self, '_drag_start_pos'): return
-        
+
         if self.tree_drag_items is None:
             dx = abs(event.x - self._drag_start_pos[0])
             dy = abs(event.y - self._drag_start_pos[1])
@@ -505,9 +500,9 @@ class ProjectTreePanel:
                     self.tree.selection_set(iid)
                     sel = (iid,)
                 self.tree_drag_items = [item for item in sel if 'item' in self.tree.item(item, 'tags') and not str(item).startswith('warning_')]
-        
+
         if not self.tree_drag_items: return
-        
+
         target = self.tree.identify_row(event.y)
         if target:
             bbox = self.tree.bbox(target)
@@ -532,14 +527,14 @@ class ProjectTreePanel:
     def on_tree_drag_release(self, event):
         self.drag_indicator.place_forget()
         if hasattr(self, '_drag_start_pos'): del self._drag_start_pos
-        
+
         if getattr(self, 'last_drag_target', None) and self.tree.exists(self.last_drag_target):
             tags = list(self.tree.item(self.last_drag_target, 'tags'))
             if 'drag_target' in tags:
                 tags.remove('drag_target')
                 self.tree.item(self.last_drag_target, tags=tags)
         if not getattr(self, 'tree_drag_items', None): return
-            
+
         target = self.tree.identify_row(event.y)
         if target and target not in self.tree_drag_items:
             if 'group' in self.tree.item(target, 'tags'):
@@ -565,7 +560,7 @@ class ProjectTreePanel:
         iid = self.tree.identify_row(event.y)
         if getattr(self, 'last_hover', None) and self.tree.exists(self.last_hover) and self.last_hover != iid:
             tags = list(self.tree.item(self.last_hover, 'tags'))
-            if 'hover' in tags: 
+            if 'hover' in tags:
                 tags.remove('hover')
                 self.tree.item(self.last_hover, tags=tags)
         if iid and self.tree.exists(iid):
@@ -578,7 +573,7 @@ class ProjectTreePanel:
     def on_tree_leave(self, event):
         if getattr(self, 'last_hover', None) and self.tree.exists(self.last_hover):
             tags = list(self.tree.item(self.last_hover, 'tags'))
-            if 'hover' in tags: 
+            if 'hover' in tags:
                 tags.remove('hover')
                 self.tree.item(self.last_hover, tags=tags)
             self.last_hover = None
@@ -594,7 +589,7 @@ class ProjectTreePanel:
 
     def _get_item_index(self, target_iid):
         real_iid = target_iid[8:] if str(target_iid).startswith('warning_') else target_iid
-        
+
         # 安全退保：如果节点在树中不存在（例如过滤状态下项被移除了），直接返回基于 items 字典顺序的索引
         if not self.tree.exists(real_iid):
             keys = list(self.items.keys())
@@ -631,17 +626,20 @@ class ProjectTreePanel:
                 return keys.index(real_iid) + 1
             return 1
 
+    def on_export_numbering_rule_changed(self):
+        self.update_preview()
+
 
     def update_preview(self):
         if self.current_iid not in self.items:
             self.current_iid = None
-                
+
         if not self.current_iid:
             self.text_preview.configure(state='normal')
             self.text_preview.delete('1.0', tk.END)
             self.text_preview.configure(state='disabled')
             return
-            
+
         item = self.items[self.current_iid]
         real_idx = self._get_item_index(self.current_iid)
         text = get_export_text_for_item(item, real_idx, self.app_state_params['pts'], pitch_floor=self.app_state_params.get('pitch_floor', 75.0), pitch_ceiling=self.app_state_params.get('pitch_ceiling', 600.0), voicing_threshold=self.app_state_params.get('voicing_threshold', 0.25))
@@ -662,28 +660,44 @@ class ProjectTreePanel:
         item['preview_segment_mismatch'] = preview_mismatch
         if preview_mismatch:
             item['has_empty_data'] = True
-            text = f"[警告] 检测到 {expected_sections} 个子段，但数据预览当前只显示 1 个。请检查该段边界或基频。\n\n{text}"
+            text = f"[致命] 检测到 {expected_sections} 个子段，但数据预览当前只显示 1 个。请检查该段边界或基频。\n\n{text}"
         if preview_mismatch != prev_mismatch:
             self._schedule_rebuild()
-        
+
+        warnings = item.get('warnings', [])
+        if warnings:
+            warnings_text = "\n".join(warnings)
+            text = f"{warnings_text}\n\n{text}"
+
         self.text_preview.configure(state='normal')
         self.text_preview.delete('1.0', tk.END)
         self.text_preview.insert(tk.END, text)
-        
+
         self.text_preview.tag_config("zero", foreground="#EF4444")
+        self.text_preview.tag_config("fatal_msg", foreground="#EF4444")
+        self.text_preview.tag_config("warning_msg", foreground="#F59E0B")
+        self.text_preview.tag_config("tip_msg", foreground="#3B82F6")
+
         lines = text.splitlines()
         for line_idx, line in enumerate(lines, start=1):
-            parts = line.split()
-            if len(parts) == 2 and parts[1] == "0.000000":
-                first_len = len(parts[0])
-                sub_str = line[first_len:]
-                f0_start_offset = sub_str.find("0.000000")
-                if f0_start_offset != -1:
-                    start_char = first_len + f0_start_offset
-                    pos_start = f"{line_idx}.{start_char}"
-                    pos_end = f"{line_idx}.{start_char + 8}"
-                    self.text_preview.tag_add("zero", pos_start, pos_end)
-            
+            if line.startswith("[致命]"):
+                self.text_preview.tag_add("fatal_msg", f"{line_idx}.0", f"{line_idx}.end")
+            elif line.startswith("[警告]"):
+                self.text_preview.tag_add("warning_msg", f"{line_idx}.0", f"{line_idx}.end")
+            elif line.startswith("[提示]"):
+                self.text_preview.tag_add("tip_msg", f"{line_idx}.0", f"{line_idx}.end")
+            else:
+                parts = line.split()
+                if len(parts) == 2 and parts[1] == "0.000000":
+                    first_len = len(parts[0])
+                    sub_str = line[first_len:]
+                    f0_start_offset = sub_str.find("0.000000")
+                    if f0_start_offset != -1:
+                        start_char = first_len + f0_start_offset
+                        pos_start = f"{line_idx}.{start_char}"
+                        pos_end = f"{line_idx}.{start_char + 8}"
+                        self.text_preview.tag_add("zero", pos_start, pos_end)
+
         self.text_preview.configure(state='disabled')
 
     def _check_item_has_empty_data(self, item):
@@ -692,7 +706,7 @@ class ProjectTreePanel:
         if item.get('preview_segment_mismatch'):
             item['has_empty_data'] = True
             return True
-        
+
         # 1. 如果 Pitch 数据已加载，优先执行最高精度的实时重新计算，并更新缓存
         # 注：此分支仅使用 pitch 数组进行检测，不需要 snd 对象
         if item.get('pitch') or item.get('pitch_data'):
@@ -700,7 +714,7 @@ class ProjectTreePanel:
             t_s, t_e = item['start'], item['end']
             label = item.get('label', '')
             inner_splits = item.get('inner_splits', [])
-            
+
             syls = split_into_syllables(label)
             chars_bounds = item.get('chars_bounds', [])
             if chars_bounds and len(chars_bounds) == len(syls):
@@ -712,7 +726,7 @@ class ProjectTreePanel:
                 elif len(syls) <= 1:
                     splits = [t_s, t_e]
                 bounds = [[splits[i], splits[i+1]] for i in range(len(splits)-1)]
-                
+
             if item.get('pitch_data'):
                 p_xs = item['pitch_data']['xs']
                 p_freqs = item['pitch_data']['freqs']
@@ -720,11 +734,11 @@ class ProjectTreePanel:
                 pitch = item['pitch']
                 p_xs = pitch.xs()
                 p_freqs = pitch.selected_array['frequency']
-            
+
             has_empty = False
             for c_s, c_e in bounds:
                 if c_e <= c_s: continue
-                
+
                 # 智能收缩围栏，过滤Gap
                 valid_idx = np.where((p_xs >= c_s) & (p_xs <= c_e) & (p_freqs > 0))[0]
                 if len(valid_idx) >= 2:
@@ -734,11 +748,11 @@ class ProjectTreePanel:
                 else:
                     has_empty = True
                     break
-                    
-                if v_e <= v_s: 
+
+                if v_e <= v_s:
                     has_empty = True
                     break
-                    
+
                 times = np.linspace(v_s, v_e, num_points)
                 f0s = np.interp(times, seg_xs, seg_ys)
                 for t, hz in zip(times, f0s):
@@ -747,17 +761,17 @@ class ProjectTreePanel:
                         break
                 if has_empty:
                     break
-                    
+
             item['has_empty_data'] = has_empty
             return has_empty
-            
+
         # 2. 如果音频没有加载，则退回到已有缓存标记
         if 'has_empty_data' in item:
             return item['has_empty_data']
-            
+
         if item.get('preview_f0'):
             return any(hz == 0 for hz in item['preview_f0'])
-            
+
         return False
 
     def _schedule_rebuild(self):
@@ -772,10 +786,10 @@ class ProjectTreePanel:
         self.filter_var.set(mode)
         self._update_filter_buttons()
         self.filter_tree()
-        
+
     def _update_filter_buttons(self):
         current_mode = self.filter_var.get()
-        
+
         self.btn_filter_all.configure_button(
             image=self.tk_icons.get("filter_all_white" if current_mode == "全部" else "filter_all_black"),
             is_active=(current_mode == "全部")
@@ -826,14 +840,14 @@ class ProjectTreePanel:
 
     def on_right_click(self, event):
         iid = self.tree.identify_row(event.y)
-        
+
         if iid:
             sel = self.tree.selection()
             if iid not in sel:
                 self.tree.selection_set(iid)
-                
+
         menu = tk.Menu(self.tree, tearoff=0, font=("Microsoft YaHei", 11))
-        
+
         if iid and self.tree.exists(iid):
             tags = self.tree.item(iid, 'tags')
             if 'item' in tags:
@@ -846,7 +860,7 @@ class ProjectTreePanel:
                 menu.add_command(label="删除组及其所有项", command=lambda: self.delete_group_and_items(iid))
         else:
             menu.add_command(label="新建组别", command=self.add_new_group)
-            
+
         menu.post(event.x_root, event.y_root)
 
     def clear_group_items(self, gid):
@@ -859,7 +873,7 @@ class ProjectTreePanel:
                 if iid == self.current_iid:
                     self.current_iid = None
                     if self.on_clear_canvas: self.on_clear_canvas()
-            
+
             messagebox.showinfo("成功", f"组【{group_name}】中的 {len(iids_to_del)} 个项已清空。")
             self.rebuild_tree()
             self.update_preview()
@@ -874,13 +888,161 @@ class ProjectTreePanel:
                 if iid == self.current_iid:
                     self.current_iid = None
                     if self.on_clear_canvas: self.on_clear_canvas()
-            
+
             if group_name in self.project_groups:
                 self.project_groups.remove(group_name)
             self.group_nodes.pop(group_name, None)
-            
+
             self.rebuild_tree()
             self.update_preview()
+
+    def _extract_item_features(self, item):
+        t_s, t_e = item.get('start'), item.get('end')
+        if t_s is None or t_e is None or t_e <= t_s:
+            return None
+
+        duration = t_e - t_s
+        p_xs, p_freqs = self._get_pitch_arrays_for_item(item)
+        if p_xs is None or p_freqs is None or len(p_xs) == 0:
+            if item.get('preview_f0'):
+                p_freqs = np.array(item['preview_f0'])
+                active_freqs = p_freqs[~np.isnan(p_freqs) & (p_freqs > 0)]
+                mean_f0 = float(np.mean(active_freqs)) if len(active_freqs) > 0 else 0.0
+                f0_range = float(np.max(active_freqs) - np.min(active_freqs)) if len(active_freqs) > 0 else 0.0
+                active_ratio = float(len(active_freqs) / len(p_freqs)) if len(p_freqs) > 0 else 0.0
+                return {
+                    'duration': duration,
+                    'mean_f0': mean_f0,
+                    'f0_range': f0_range,
+                    'active_ratio': active_ratio
+                }
+            return None
+
+        mask = (p_xs >= t_s) & (p_xs <= t_e)
+        p_xs_slice = p_xs[mask]
+        p_freqs_slice = p_freqs[mask]
+
+        if len(p_xs_slice) == 0:
+            return {
+                'duration': duration,
+                'mean_f0': 0.0,
+                'f0_range': 0.0,
+                'active_ratio': 0.0
+            }
+
+        active_freqs = p_freqs_slice[~np.isnan(p_freqs_slice) & (p_freqs_slice > 0)]
+        if len(active_freqs) == 0:
+            return {
+                'duration': duration,
+                'mean_f0': 0.0,
+                'f0_range': 0.0,
+                'active_ratio': 0.0
+            }
+
+        mean_f0 = float(np.mean(active_freqs))
+        f0_range = float(np.max(active_freqs) - np.min(active_freqs))
+        active_ratio = float(len(active_freqs) / len(p_xs_slice))
+
+        return {
+            'duration': duration,
+            'mean_f0': mean_f0,
+            'f0_range': f0_range,
+            'active_ratio': active_ratio
+        }
+
+    def analyze_item_anomalies(self, item, group_stats=None, speaker_stats=None):
+        warnings = []
+        if not item or item.get('start') is None:
+            warnings.append("[致命] 时间边界无效或缺失")
+            return warnings
+
+        if item.get('preview_segment_mismatch'):
+            warnings.append("[致命] 子段数量与预览不匹配")
+
+        if self._check_item_has_empty_data(item):
+            warnings.append("[致命] 基频数据含有0值 (F0 缺失)")
+
+        feats = self._extract_item_features(item)
+        if feats is not None:
+            p_xs, p_freqs = self._get_pitch_arrays_for_item(item)
+            if p_xs is not None and p_freqs is not None and len(p_xs) > 0:
+                t_s, t_e = item.get('start'), item.get('end')
+                mask = (p_xs >= t_s) & (p_xs <= t_e)
+                p_xs_slice = p_xs[mask]
+                p_freqs_slice = p_freqs[mask]
+
+                jumps = []
+                _, bounds = self._get_syllables_and_bounds(item)
+                if not bounds:
+                    bounds = [[t_s, t_e]]
+
+                for b_s, b_e in bounds:
+                    inner_mask = (p_xs_slice >= b_s) & (p_xs_slice <= b_e)
+                    b_xs = p_xs_slice[inner_mask]
+                    b_freqs = p_freqs_slice[inner_mask]
+                    active_idx = np.where((b_freqs > 0) & (~np.isnan(b_freqs)))[0]
+
+                    for idx in range(1, len(active_idx)):
+                        curr_i = active_idx[idx]
+                        prev_i = active_idx[idx-1]
+                        t_diff = b_xs[curr_i] - b_xs[prev_i]
+                        if t_diff < 0.05:
+                            prev_f = b_freqs[prev_i]
+                            curr_f = b_freqs[curr_i]
+                            if prev_f <= 0:
+                                continue
+                            ratio = curr_f / prev_f
+                            abs_delta = abs(curr_f - prev_f)
+                            if abs_delta >= 45.0 and (ratio > 1.55 or ratio < 0.65):
+                                jumps.append(b_xs[curr_i])
+                if len(jumps) > 0:
+                    jump_times = ", ".join([f"{t:.2f}s" for t in jumps[:3]])
+                    suffix = "..." if len(jumps) > 3 else ""
+                    warnings.append(f"[警告] 疑似倍频/半频/噪声点 (发生在: {jump_times}{suffix})")
+
+            split_warnings = item.get('split_warnings', [])
+            for sw in split_warnings:
+                if sw == 'tiny_segment':
+                    warnings.append("[致命] 边界过短 (某个子段短于 80ms)")
+                elif sw == 'imbalanced_duration':
+                    warnings.append("[警告] 时长严重失衡 (子段时长比例不均)")
+                elif sw == 'no_clear_valley':
+                    warnings.append("[警告] 未能识别到能量谷 (子音节切分谷底不明显)")
+                elif sw == 'fallback_equal_split':
+                    warnings.append("[提示] 采用等分兜底切割")
+                elif sw == 'low_f0_coverage':
+                    warnings.append("[致命] F0 覆盖率低 (某子段有效基频点比例低于 30%)")
+
+            g = (item.get('group', '导入内容'), len(item.get('chars_bounds', [[0, 1]])))
+            if group_stats and (g in group_stats or item.get('group', '导入内容') in group_stats):
+                g_feats = group_stats.get(g) or group_stats.get(item.get('group', '导入内容'))
+                for key, (med, mad) in g_feats.items():
+                    val = feats[key]
+                    if mad > 0:
+                        deviation = abs(val - med) / mad
+                        if deviation > 4.0:
+                            if key == 'duration':
+                                warnings.append(f"[提示] 时长明显偏离同类项目 (当前 {val:.3f}s, 同类中位数 {med:.3f}s)")
+                            elif key == 'mean_f0':
+                                warnings.append(f"[提示] 基频均值明显偏离同类项目 (当前 {val:.1f}Hz, 同类中位数 {med:.1f}Hz)")
+                            elif key == 'f0_range':
+                                warnings.append(f"[提示] F0 波动范围明显偏离同类项目 (当前 {val:.1f}Hz, 同类中位数 {med:.1f}Hz)")
+                            elif key == 'active_ratio' and val < med:
+                                warnings.append(f"[提示] 有效点比例偏低 (当前 {val:.1%}, 同类中位数 {med:.1%})")
+
+            if speaker_stats:
+                spk_id = self.app.speaker_manager.active_speaker_id if self.app and hasattr(self.app, 'speaker_manager') else None
+                if spk_id and spk_id in speaker_stats:
+                    spk_info = speaker_stats[spk_id]
+                    if spk_info.get('mean_f0_outlier'):
+                        warnings.append(f"[提示] 建议检查 Pitch Floor/Ceiling 或录音质量 (发音人整体基频 {spk_info['mean_f0']:.1f}Hz 偏离其他发音人中位数)")
+                    g_feats = group_stats.get(g) if group_stats else None
+                    if g_feats and 'active_ratio' in g_feats:
+                        g_active_med = g_feats['active_ratio'][0]
+                        if g_active_med < 0.60:
+                            warnings.append(f"[提示] 建议检查 Pitch Floor/Ceiling 或录音质量 (当前组平均有效基频点比例仅 {g_active_med:.1%})")
+
+        return warnings
 
     def rebuild_tree(self):
         # 1. 保存当前选择和展开状态
@@ -898,6 +1060,80 @@ class ProjectTreePanel:
                     expanded_groups.add('__warning__')
             except tk.TclError:
                 pass
+
+        # 计算项目统计信息以用于离群值检测
+        group_stats = {}
+        groups_items_features = {}
+        for iid, item in self.items.items():
+            syl_count = len(item.get('chars_bounds', [[0, 1]]))
+            g = (item.get('group', '导入内容'), syl_count)
+            if g not in groups_items_features:
+                groups_items_features[g] = []
+            feats = self._extract_item_features(item)
+            if feats is not None:
+                groups_items_features[g].append(feats)
+
+        # 计算每组的 median and robust spread。普通统计离群只作为轻提示，
+        # 因此要求更多样本并使用较宽的下限，避免正常语速/声调差异刷屏。
+        for g, feats_list in groups_items_features.items():
+            if len(feats_list) >= 8:
+                group_stats[g] = {}
+                for key in ['duration', 'mean_f0', 'f0_range', 'active_ratio']:
+                    if key in ('mean_f0', 'f0_range'):
+                        vals = np.array([
+                            f[key] for f in feats_list
+                            if f.get('active_ratio', 0.0) >= 0.60 and f.get(key, 0.0) > 0
+                        ])
+                    else:
+                        vals = np.array([f[key] for f in feats_list])
+                    if len(vals) < 8:
+                        continue
+                    med = np.median(vals)
+                    abs_dev = np.abs(vals - med)
+                    mad = 1.4826 * np.median(abs_dev)
+                    if key == 'duration':
+                        min_spread = max(0.15, abs(med) * 0.25)
+                    elif key == 'mean_f0':
+                        min_spread = 35.0
+                    elif key == 'f0_range':
+                        min_spread = 40.0
+                    else:
+                        min_spread = 0.20
+                    mad = max(float(mad), min_spread)
+                    group_stats[g][key] = (med, mad)
+
+        # 计算发音人统计信息以用于组级检测
+        speaker_stats = {}
+        sm = getattr(self.app, 'speaker_manager', None)
+        if sm:
+            all_speakers = sm.get_all_speakers()
+            speaker_means = []
+            for spk in all_speakers:
+                spk_freqs = []
+                spk_ratios = []
+                for iid, item in spk.items.items():
+                    feats = self._extract_item_features(item)
+                    if feats is not None:
+                        if feats['mean_f0'] > 0:
+                            spk_freqs.append(feats['mean_f0'])
+                        spk_ratios.append(feats['active_ratio'])
+                mean_f0 = np.mean(spk_freqs) if spk_freqs else 0.0
+                mean_ratio = np.mean(spk_ratios) if spk_ratios else 0.0
+                speaker_stats[spk.id] = {
+                    'mean_f0': mean_f0,
+                    'mean_ratio': mean_ratio,
+                    'mean_f0_outlier': False
+                }
+                if mean_f0 > 0:
+                    speaker_means.append((spk.id, mean_f0))
+
+            if len(speaker_means) >= 3:
+                means = np.array([item[1] for item in speaker_means])
+                med_spk = np.median(means)
+                mad_spk = max(1.4826 * np.median(np.abs(means - med_spk)), 45.0)
+                for spk_id, mean_f0 in speaker_means:
+                    if abs(mean_f0 - med_spk) / mad_spk > 4.0:
+                        speaker_stats[spk_id]['mean_f0_outlier'] = True
 
         # 2. 清空 Tree
         for node in list(self.tree.get_children()):
@@ -930,15 +1166,16 @@ class ProjectTreePanel:
             if search_query and search_query not in lbl.lower():
                 continue
 
-            has_empty = self._check_item_has_empty_data(item)
-            if status_filter == "需检查" and not has_empty:
+            item['warnings'] = self.analyze_item_anomalies(item, group_stats, speaker_stats)
+            needs_check = any(w.startswith("[致命]") or w.startswith("[警告]") for w in item['warnings'])
+            if status_filter == "需检查" and not needs_check:
                 continue
             if status_filter == "已修改" and not item.get('is_manual_edited', False):
                 continue
 
             grp = item.get('group', '导入内容')
             group_items[grp].append((iid, item))
-            if has_empty:
+            if needs_check:
                 warning_items.append((iid, item))
 
         # 5. 插入“需要检查”组
@@ -966,7 +1203,7 @@ class ProjectTreePanel:
 
             for iid, item in items_in_grp:
                 display = item.get('label', '')
-                has_empty = self._check_item_has_empty_data(item)
+                has_empty = any(w.startswith("[致命]") or w.startswith("[警告]") for w in item.get('warnings', []))
                 if has_empty:
                     img = self.tk_icons.get('warning', '') if self.tk_icons else ''
                 elif item.get('is_manual_edited'):
@@ -992,7 +1229,7 @@ class ProjectTreePanel:
         if str(iid).startswith('warning_'): return
         item = self.items.get(iid)
         if not item or item.get('start') is None: return
-        
+
         self._check_item_has_empty_data(item)
         self._schedule_rebuild()
 
@@ -1176,10 +1413,10 @@ class ProjectTreePanel:
     def _ensure_item_loaded(self, item):
         """确保 item.snd 和 item.pitch / item.pitch_data 已正确加载或计算"""
         if not item or not item.get('path'): return
-        
+
         has_snd = item.get('snd') is not None
         has_pitch = (item.get('pitch') is not None) or (item.get('pitch_data') is not None)
-        
+
         if not has_snd or not has_pitch:
             try:
                 if not has_snd:
@@ -1190,7 +1427,7 @@ class ProjectTreePanel:
                     pc = item.get('pitch_ceiling', self.app_state_params.get('pitch_ceiling', 600))
                     vt = item.get('voicing_threshold', self.app_state_params.get('voicing_threshold', 0.25))
                     engine = item.get('f0_engine', self.app_state_params.get('f0_engine', 'praat'))
-                    
+
                     if engine == 'praat':
                         item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=pf, pitch_ceiling=pc, voicing_threshold=vt, very_accurate=True, octave_jump_cost=0.9)
                     else:
@@ -1203,7 +1440,7 @@ class ProjectTreePanel:
         if item.get('start') is None or not item.get('snd') or (not item.get('pitch') and not item.get('pitch_data')): return 0, []
         t_s, t_e = item['start'], item['end']
         if t_e <= t_s: return 0, []
-        
+
         label = item.get('label', '')
         inner_splits = item.get('inner_splits', [])
         if item.get('pitch_data'):
@@ -1213,7 +1450,7 @@ class ProjectTreePanel:
             pitch = item['pitch']
             p_xs = pitch.xs()
             p_freqs = pitch.selected_array['frequency']
-        
+
         syls = split_into_syllables(label)
         chars_bounds = item.get('chars_bounds', [])
         if chars_bounds and len(chars_bounds) == len(syls):
@@ -1225,13 +1462,13 @@ class ProjectTreePanel:
             elif len(syls) <= 1:
                 splits = [t_s, t_e]
             bounds = [[splits[i], splits[i+1]] for i in range(len(splits)-1)]
-            
+
         syl_data = []
         for c_s, c_e in bounds:
             if c_e <= c_s:
                 syl_data.append((0.0, [0.0]*num_points))
                 continue
-                
+
             # 智能收缩！找到真正发声的核（有效基频段）
             valid_idx = np.where((p_xs >= c_s) & (p_xs <= c_e) & (p_freqs > 0))[0]
             if len(valid_idx) >= 2:
@@ -1241,12 +1478,12 @@ class ProjectTreePanel:
             else:
                 syl_data.append((0.0, [0.0]*num_points))
                 continue
-                
+
             dur = v_e - v_s
             if dur <= 0:
                 syl_data.append((0.0, [0.0]*num_points))
                 continue
-                
+
             times = np.linspace(v_s, v_e, num_points)
             # 修复点：改用 numpy 局部插值，杜绝抓取界外的清辅音假象
             if len(seg_xs) >= 2:
@@ -1258,7 +1495,7 @@ class ProjectTreePanel:
                 syl_data.append((dur, f0s))
             else:
                 syl_data.append((dur, [0.0]*num_points))
-            
+
         return t_e - t_s, syl_data
 
     def _get_pitch_arrays_for_item(self, item):
@@ -1420,34 +1657,34 @@ class ProjectTreePanel:
         except ImportError:
             messagebox.showerror("错误", "缺少 xlsxwriter 库，请先安装：pip install xlsxwriter")
             return
-            
+
         is_continuous = (self.num_rule_var.get() == "continuous")
         num_points = self.app_state_params['pts']
         if tree_structure is None: tree_structure = self._get_all_items_by_group()
-        
+
         max_syls = 1
         for grp_name, children in tree_structure:
             for child in children:
                 lbl = self.items[child].get('label', '')
                 if len(lbl) > max_syls: max_syls = len(lbl)
-                
+
         workbook = xlsxwriter.Workbook(out_file)
         ws_data = workbook.add_worksheet("数据")
         ws_res = workbook.add_worksheet("分析结果")
         raw_pitch_rows = []
-        
+
         headers = ["组别", "编号", "词语", "总时长(s)"]
         for k in range(1, max_syls + 1):
             headers.append(f"字{k}_时长(s)")
             for i in range(1, num_points + 1):
                 headers.append(f"字{k}_T{i}(Hz)")
         for col, header in enumerate(headers): ws_data.write(0, col, header)
-            
+
         global_idx = 1
         row_idx = 1
-        
-        dict_data = {} 
-        
+
+        dict_data = {}
+
         for grp_name, children in tree_structure:
             if not is_continuous: global_idx = 1
             for child in children:
@@ -1455,7 +1692,7 @@ class ProjectTreePanel:
                 self._ensure_item_loaded(item)
                 if not item.get('snd') or (not item.get('pitch') and not item.get('pitch_data')):
                     continue
-                    
+
                 total_dur, syl_data = self._extract_syl_data(item, num_points)
                 if total_dur <= 0: continue
                 raw_pitch_rows.append({
@@ -1463,16 +1700,16 @@ class ProjectTreePanel:
                     'index': global_idx,
                     'item': item
                 })
-                
+
                 row = [grp_name, global_idx, item['label'], float(f"{total_dur:.6f}")]
-                
+
                 if grp_name not in dict_data:
                     dict_data[grp_name] = {
                         'syl_dur_sums': [0.0]*max_syls, 'syl_counts': [0]*max_syls,
                         'f0_sums': [[0.0]*num_points for _ in range(max_syls)],
                         'f0_counts': [[0]*num_points for _ in range(max_syls)]
                     }
-                
+
                 for k in range(max_syls):
                     if k < len(syl_data):
                         dur, f0s = syl_data[k]
@@ -1489,10 +1726,10 @@ class ProjectTreePanel:
                     else:
                         row.append("")
                         for _ in range(num_points): row.append("")
-                        
+
                 for col, val in enumerate(row):
                     ws_data.write(row_idx, col, val)
-                    
+
                 row_idx += 1
                 global_idx += 1
 
@@ -1500,7 +1737,7 @@ class ProjectTreePanel:
 
         all_avg_hz = []
         avg_points_map = {}
-        
+
         for grp, st in dict_data.items():
             avg_points_map[grp] = []
             for k in range(max_syls):
@@ -1511,11 +1748,11 @@ class ProjectTreePanel:
                     syl_avgs.append(avg_hz)
                     if avg_hz > 0: all_avg_hz.append(avg_hz)
                 avg_points_map[grp].append(syl_avgs)
-                
+
         if not all_avg_hz:
             workbook.close()
             return
-            
+
         min_hz, max_hz = min(all_avg_hz), max(all_avg_hz)
 
         # 写入分析结果 Sheet（全部使用 Excel 公式引用数据表）
@@ -1524,7 +1761,7 @@ class ProjectTreePanel:
         res_row, _, _ = write_analysis_sheet_with_formulas(
             workbook, ws_res, group_list, num_points, max_syls, last_data_row
         )
-            
+
         if include_chart:
             try:
                 build_five_point_chart(
@@ -1535,7 +1772,7 @@ class ProjectTreePanel:
                 )
             except Exception as chart_err:
                 logger.error(f"Error generating Excel chart: {chart_err}", exc_info=True)
-        
+
         workbook.close()
 
     def _export_integrated(self, out_file, format_mode, include_chart, all_speakers):
@@ -1583,7 +1820,7 @@ class ProjectTreePanel:
                 headers.append(f"字{k}_时长(s)")
                 for i in range(1, num_points + 1): headers.append(f"字{k}_T{i}")
             for col, header in enumerate(headers): ws_data.write(0, col, header)
-            
+
             group_stats = {}
             raw_pitch_rows = []
             row_idx = 1
@@ -1605,7 +1842,7 @@ class ProjectTreePanel:
                     ws_data.write(row_idx, 3, r['label'])
                     ws_data.write(row_idx, 4, round(r['total_dur'], 4))
                     col_idx = 5
-                    
+
                     grp_name = r['group']
                     if grp_name not in group_stats:
                         group_stats[grp_name] = {
@@ -1615,7 +1852,7 @@ class ProjectTreePanel:
                             't_counts': [[0] * num_points for _ in range(max_syls)]
                         }
                     stats = group_stats[grp_name]
-                    
+
                     for k, (s_dur, freqs) in enumerate(r['syl_data']):
                         ws_data.write(row_idx, col_idx, round(s_dur, 4))
                         col_idx += 1
@@ -1629,7 +1866,7 @@ class ProjectTreePanel:
                             if k < max_syls and f > 0:
                                 stats['t_sums'][k][i] += t_val
                                 stats['t_counts'][k][i] += 1
-                                
+
                     fill_count = max_syls - len(r['syl_data'])
                     for _ in range(fill_count):
                         ws_data.write(row_idx, col_idx, 0.0)
@@ -1639,13 +1876,13 @@ class ProjectTreePanel:
                             col_idx += 1
                     global_idx += 1
                     row_idx += 1
-            
+
             res_headers = ["声调类型"]
             for k in range(1, max_syls + 1):
                 res_headers.append(f"字{k}_平均时长")
                 for i in range(1, num_points + 1): res_headers.append(f"字{k}_T{i}")
             for col, header in enumerate(res_headers): ws_res.write(0, col, header)
-            
+
             res_row = 1
             for grp, st in group_stats.items():
                 ws_res.write(res_row, 0, grp)
@@ -1665,7 +1902,7 @@ class ProjectTreePanel:
                 res_row += 1
 
             self._write_raw_pitch_sheet(workbook, raw_pitch_rows, include_speaker=True)
-                
+
             if include_chart and group_stats:
                 try:
                     # 将 group_stats 的 t_sums/t_counts 转换为 avg_points_map 格式（Hz 平均值）
@@ -1755,7 +1992,7 @@ class ProjectTreePanel:
     def _export_txt(self, out_file, tree_structure=None):
         is_continuous = (self.num_rule_var.get() == "continuous")
         if tree_structure is None: tree_structure = self._get_all_items_by_group()
-        
+
         with open(out_file, "w", encoding="utf-8") as f:
             global_idx = 1
             for grp_name, children in tree_structure:
@@ -1771,7 +2008,7 @@ class ProjectTreePanel:
     def _collect_group_avg_data(self, tree_structure=None):
         num_points = self.app_state_params['pts']
         if tree_structure is None: tree_structure = self._get_all_items_by_group()
-        
+
         max_syls = 1
         dict_data = {}
         for grp_name, children in tree_structure:
@@ -1784,7 +2021,7 @@ class ProjectTreePanel:
                     continue
                 total_dur, syl_data = self._extract_syl_data(item, num_points)
                 if total_dur <= 0: continue
-                
+
                 if grp_name not in dict_data:
                     dict_data[grp_name] = { 'f0_sums': [[0.0]*num_points for _ in range(20)], 'f0_counts': [[0]*num_points for _ in range(20)] }
                 for k, (dur, f0s) in enumerate(syl_data):
@@ -1805,7 +2042,7 @@ class ProjectTreePanel:
                     syl_avgs.append(hz)
                     if hz > 0: all_avg_hz.append(hz)
                 avg_points_map[grp].append(syl_avgs)
-                
+
         if not all_avg_hz: return None, 1
         min_hz, max_hz = min(all_avg_hz), max(all_avg_hz)
 
@@ -1818,7 +2055,7 @@ class ProjectTreePanel:
                         flat_t_vals.append(5 * (math.log10(h) - math.log10(min_hz)) / (math.log10(max_hz) - math.log10(min_hz)))
                     else: flat_t_vals.append(None)
             result[grp] = flat_t_vals
-            
+
         return result, max_syls
 
     def _export_line_chart(self, out_file, tree_structure=None):
@@ -1836,7 +2073,7 @@ class ProjectTreePanel:
         x_vals = list(range(1, total_points + 1))
 
         colors = ['#2563EB', '#DC2626', '#16A34A', '#9333EA', '#EA580C', '#0891B2', '#CA8A04', '#6366F1']
-        
+
         for i, (name, t_vals) in enumerate(data.items()):
             valid_x = [x for x, v in zip(x_vals, t_vals) if v is not None]
             valid_y = [v for v in t_vals if v is not None]
@@ -1846,10 +2083,10 @@ class ProjectTreePanel:
         ax.set_ylim(0, 5)
         ax.set_xlim(0.5, total_points + 0.5)
         ax.set_yticks([0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5])
-        
+
         ax.set_xticks(range(1, total_points + 1))
         ax.set_xticklabels([(idx % num_points) + 1 for idx in range(total_points)])
-        
+
         for k in range(1, max_syls):
             div_x = k * num_points + 0.5
             ax.axvline(div_x, color='gray', linestyle='--', alpha=0.5)
@@ -1872,12 +2109,12 @@ class ProjectTreePanel:
         max_syls = 1
         aggregated_t_sums = {}
         aggregated_t_counts = {}
-        
+
         for speaker in all_speakers:
             s_struct = self._get_items_by_group_for_dict(speaker.items)
             orig_items = self.items
             self.items = speaker.items
-            
+
             dict_data = {}
             for grp_name, children in s_struct:
                 for child in children:
@@ -1889,7 +2126,7 @@ class ProjectTreePanel:
                         continue
                     total_dur, syl_data = self._extract_syl_data(item, num_points)
                     if total_dur <= 0: continue
-                    
+
                     if grp_name not in dict_data:
                         dict_data[grp_name] = { 'f0_sums': [[0.0]*num_points for _ in range(20)], 'f0_counts': [[0]*num_points for _ in range(20)] }
                     for k, (dur, f0s) in enumerate(syl_data):
@@ -1897,7 +2134,7 @@ class ProjectTreePanel:
                             if not np.isnan(f0) and f0 > 0:
                                 dict_data[grp_name]['f0_sums'][k][i] += f0
                                 dict_data[grp_name]['f0_counts'][k][i] += 1
-                                
+
             all_hz = []
             avg_points_map = {}
             for grp, st in dict_data.items():
@@ -1910,7 +2147,7 @@ class ProjectTreePanel:
                         syl_avgs.append(hz)
                         if hz > 0: all_hz.append(hz)
                     avg_points_map[grp].append(syl_avgs)
-            
+
             if all_hz:
                 min_hz, max_hz = min(all_hz), max(all_hz)
                 for grp, syl_avgs_list in avg_points_map.items():
@@ -1923,7 +2160,7 @@ class ProjectTreePanel:
                                 t_val = 5 * (math.log10(h) - math.log10(min_hz)) / (math.log10(max_hz) - math.log10(min_hz))
                                 aggregated_t_sums[grp][k][i] += t_val
                                 aggregated_t_counts[grp][k][i] += 1
-                                
+
             self.items = orig_items
 
         data = {}
@@ -1937,7 +2174,7 @@ class ProjectTreePanel:
                     else:
                         flat_t_vals.append(None)
             data[grp] = flat_t_vals
-            
+
         if not data: return messagebox.showwarning("提示", "没有有效数据可供绘图。")
         self._draw_line_chart(data, max_syls, out_file)
 
@@ -1947,40 +2184,40 @@ class ProjectTreePanel:
         param_dlg.geometry("450x380")
         param_dlg.attributes('-topmost', True)
         param_dlg.resizable(False, False)
-        
+
         param_dlg.update_idletasks()
         main_win = self.parent.winfo_toplevel()
         x = main_win.winfo_rootx() + (main_win.winfo_width() - 450) // 2
         y = main_win.winfo_rooty() + (main_win.winfo_height() - 380) // 2
         param_dlg.geometry(f"+{x}+{y}")
-        
+
         ctk.CTkLabel(param_dlg, text="词语时序密度热力图参数设置", font=self.font_title).pack(pady=(15, 10))
-        
+
         bw_frame = ctk.CTkFrame(param_dlg, fg_color="transparent")
         bw_frame.pack(fill=tk.X, padx=30, pady=5)
-        
+
         ctk.CTkLabel(bw_frame, text="核密度带宽 (Bandwidth):", font=self.font_main).pack(side=tk.LEFT)
-        
+
         bw_val_lbl = ctk.CTkLabel(bw_frame, text="0.15", font=self.font_main, width=40)
-        
+
         def on_slider_change(val):
             bw_val_lbl.configure(text=f"{float(val):.2f}")
-            
+
         bw_slider = ctk.CTkSlider(bw_frame, from_=0.05, to=0.50, number_of_steps=45, command=on_slider_change)
         bw_slider.set(0.15)
         bw_slider.pack(side=tk.RIGHT, padx=(10, 0))
         bw_val_lbl.pack(side=tk.RIGHT)
-        
+
         f0_frame = ctk.CTkFrame(param_dlg, fg_color="transparent")
         f0_frame.pack(fill=tk.X, padx=30, pady=10)
-        
+
         ctk.CTkLabel(f0_frame, text="基频 T值归一化范围:", font=self.font_main).pack(anchor="w", pady=(0, 5))
-        
+
         f0_mode_var = ctk.StringVar(value="percentile")
-        
+
         pct_frame = ctk.CTkFrame(param_dlg, fg_color="transparent")
         manual_frame = ctk.CTkFrame(param_dlg, fg_color="transparent")
-        
+
         def update_f0_mode_ui():
             val = f0_mode_var.get()
             if val == "percentile":
@@ -1992,16 +2229,16 @@ class ProjectTreePanel:
             else:
                 pct_frame.pack_forget()
                 manual_frame.pack_forget()
-                
+
         r_pct = ctk.CTkRadioButton(f0_frame, text="分位数自动截断 (推荐, 消除极端值压缩)", variable=f0_mode_var, value="percentile", font=self.font_main, command=update_f0_mode_ui)
         r_pct.pack(anchor="w", pady=2)
-        
+
         r_minmax = ctk.CTkRadioButton(f0_frame, text="极值自动范围 (Min ~ Max)", variable=f0_mode_var, value="minmax", font=self.font_main, command=update_f0_mode_ui)
         r_minmax.pack(anchor="w", pady=2)
-        
+
         r_manual = ctk.CTkRadioButton(f0_frame, text="手动指定范围 (Hz)", variable=f0_mode_var, value="manual", font=self.font_main, command=update_f0_mode_ui)
         r_manual.pack(anchor="w", pady=2)
-        
+
         ctk.CTkLabel(pct_frame, text="分位区间 (Low % ~ High %):", font=self.font_main).pack(side=tk.LEFT)
         pct_low_ent = ctk.CTkEntry(pct_frame, width=50, font=self.font_main)
         pct_low_ent.insert(0, "5")
@@ -2010,7 +2247,7 @@ class ProjectTreePanel:
         pct_high_ent = ctk.CTkEntry(pct_frame, width=50, font=self.font_main)
         pct_high_ent.insert(0, "95")
         pct_high_ent.pack(side=tk.LEFT, padx=5)
-        
+
         ctk.CTkLabel(manual_frame, text="基频范围 (Min Hz ~ Max Hz):", font=self.font_main).pack(side=tk.LEFT)
         min_hz_ent = ctk.CTkEntry(manual_frame, width=60, font=self.font_main)
         min_hz_ent.insert(0, "75")
@@ -2019,18 +2256,18 @@ class ProjectTreePanel:
         max_hz_ent = ctk.CTkEntry(manual_frame, width=60, font=self.font_main)
         max_hz_ent.insert(0, "600")
         max_hz_ent.pack(side=tk.LEFT, padx=5)
-        
+
         update_f0_mode_ui()
-        
+
         def on_confirm():
             bw = float(bw_slider.get())
             f0_mode = f0_mode_var.get()
-            
+
             p_low = 5.0
             p_high = 95.0
             m_min = 75.0
             m_max = 600.0
-            
+
             if f0_mode == 'percentile':
                 try:
                     p_low = float(pct_low_ent.get())
@@ -2045,12 +2282,12 @@ class ProjectTreePanel:
                     if not (0 < m_min < m_max): raise ValueError
                 except ValueError:
                     return messagebox.showerror("错误", "请输入有效的基频范围 (Hz)。")
-                    
+
             param_dlg.destroy()
-            
+
             out = filedialog.askdirectory(title="选择热力图导出文件夹") if mode == 'separate' else filedialog.asksaveasfilename(title="导出热力图", defaultextension=".png", initialfile="tone_heatmap", filetypes=[("PNG 图片", "*.png")])
             if not out: return
-            
+
             params = {
                 'bw_method': bw,
                 'f0_mode': f0_mode,
@@ -2059,7 +2296,7 @@ class ProjectTreePanel:
                 'manual_min': m_min,
                 'manual_max': m_max
             }
-            
+
             try:
                 if mode == 'single':
                     success = self._export_kde_heatmap(out, tree_structure=tree_structure, params=params)
@@ -2075,23 +2312,23 @@ class ProjectTreePanel:
                         else:
                             base, ext = os.path.splitext(out)
                             s_out = f"{base}_{s.name}{ext}"
-                        
+
                         ret = self._export_kde_heatmap(s_out, tree_structure=s_struct, params=params)
                         self.items = orig_items
                         if not ret: success = False
                 else:
                     success = self._export_kde_heatmap_integrated(out, all_speakers, params=params)
-                    
+
                 if success:
                     messagebox.showinfo("成功", f"热力图已导出至:\n{out}")
             except Exception as e:
                 messagebox.showerror("错误", f"导出热力图失败: {e}")
                 import logging
                 logging.getLogger(__name__).error(f"KDE Heatmap Export error: {e}", exc_info=True)
-                
+
         btn_frame = ctk.CTkFrame(param_dlg, fg_color="transparent")
         btn_frame.pack(side=tk.BOTTOM, pady=15)
-        
+
         ctk.CTkButton(btn_frame, text="取消", width=90, fg_color="#E5E7EB", text_color="#374151", hover_color="#D1D5DB", command=param_dlg.destroy).pack(side=tk.LEFT, padx=10)
         ctk.CTkButton(btn_frame, text="确定并选择路径", width=120, command=on_confirm).pack(side=tk.LEFT, padx=10)
 
@@ -2116,20 +2353,20 @@ class ProjectTreePanel:
             lbl_status.configure(text=f"正在绘制 {grp_name} ({idx+1}/{n_groups})...")
             pbar.set(0.8 + 0.2 * (idx / n_groups))
             prog_dlg.update()
-            
+
             ax = axes_flat[idx]
             X_all, Y_all = group_norm_points[grp_name]
-            
+
             xmin, xmax = 0, max_syls * 100
             ymin, ymax = -1, 6
-            
+
             positions = np.vstack([X_all, Y_all])
             try:
-                kernel = gaussian_kde(positions, bw_method=bw_method) 
+                kernel = gaussian_kde(positions, bw_method=bw_method)
                 xi, yi = np.mgrid[xmin:xmax:200j, ymin:ymax:100j]
                 zi = kernel(np.vstack([xi.flatten(), yi.flatten()]))
                 zi = zi.reshape(xi.shape)
-                
+
                 vmax = zi.max()
                 if vmax > 0:
                     levels = np.linspace(vmax * 0.05, vmax, 30)
@@ -2140,19 +2377,19 @@ class ProjectTreePanel:
 
             for k in range(1, max_syls):
                 ax.axvline(k * 100, color='gray', linestyle='--', alpha=0.8)
-                
+
             ax.set_title(grp_name, fontsize=16)
             ax.set_ylim(-1, 6)
             ax.set_xlim(0, max_syls * 100)
             ax.set_yticks([-1, 0, 1, 2, 3, 4, 5, 6])
-            
+
             ticks, labels = [], []
             for k in range(max_syls):
                 ticks.append(k * 100 + 50)
                 labels.append(f"第 {k+1} 字\n(0-100%)")
             ax.set_xticks(ticks)
             ax.set_xticklabels(labels)
-            
+
             if idx % n_cols == 0: ax.set_ylabel('T 值', fontsize=12)
 
         for idx in range(n_groups, len(axes_flat)): axes_flat[idx].set_visible(False)
@@ -2182,7 +2419,7 @@ class ProjectTreePanel:
         prog_dlg.update_idletasks()
         main_win = self.parent.winfo_toplevel()
         prog_dlg.geometry(f"+{main_win.winfo_rootx() + (main_win.winfo_width() - 300) // 2}+{main_win.winfo_rooty() + (main_win.winfo_height() - 120) // 2}")
-        
+
         lbl_status = ctk.CTkLabel(prog_dlg, text="正在处理数据，请稍候...", font=self.font_main)
         lbl_status.pack(pady=(20, 5))
         pbar = ctk.CTkProgressBar(prog_dlg, width=250)
@@ -2204,7 +2441,7 @@ class ProjectTreePanel:
                 self._ensure_item_loaded(item)
                 if item.get('start') is None or not item.get('snd') or (not item.get('pitch') and not item.get('pitch_data')):
                     continue
-                
+
                 if item.get('pitch_data'):
                     p_xs = item['pitch_data']['xs']
                     p_freqs = item['pitch_data']['freqs']
@@ -2212,14 +2449,14 @@ class ProjectTreePanel:
                     pitch = item['pitch']
                     p_xs = pitch.xs()
                     p_freqs = pitch.selected_array['frequency']
-                
+
                 for k, (c_s, c_e) in enumerate(bounds):
                     y_dense = self._extract_kde_contour(p_xs, p_freqs, c_s, c_e, N_DENSE)
                     if y_dense is None:
                         continue
                     if k not in speaker_contours[grp_name]: speaker_contours[grp_name][k] = []
                     speaker_contours[grp_name][k].append(y_dense)
-        
+
         all_mean_vals = []
         for name, syls_dict in speaker_contours.items():
             for k, y_arrays in syls_dict.items():
@@ -2253,9 +2490,9 @@ class ProjectTreePanel:
                 hz_val = np.clip(hz, min_f0, max_f0) if min_f0 > 0 else hz
                 if min_f0 <= 0 or max_f0 <= min_f0: return 3.0
                 return 5 * (np.log(hz_val) - np.log(min_f0)) / (np.log(max_f0) - np.log(min_f0))
-            
+
             for name, syls_dict in speaker_contours.items():
-                if name not in aggregated_syl_contours: aggregated_syl_contours[name] = {} 
+                if name not in aggregated_syl_contours: aggregated_syl_contours[name] = {}
                 for k, y_arrays in syls_dict.items():
                     if k not in aggregated_syl_contours[name]: aggregated_syl_contours[name][k] = []
                     for y_arr in y_arrays:
@@ -2280,7 +2517,7 @@ class ProjectTreePanel:
 
         pbar.set(0.8)
         prog_dlg.update()
-        
+
         bw_method = params.get('bw_method', 0.15) if params else 0.15
         self._draw_kde_heatmap(group_norm_points, max_syls, out_file, prog_dlg, pbar, lbl_status, bw_method=bw_method)
         return True
@@ -2298,7 +2535,7 @@ class ProjectTreePanel:
         prog_dlg.update_idletasks()
         main_win = self.parent.winfo_toplevel()
         prog_dlg.geometry(f"+{main_win.winfo_rootx() + (main_win.winfo_width() - 300) // 2}+{main_win.winfo_rooty() + (main_win.winfo_height() - 120) // 2}")
-        
+
         lbl_status = ctk.CTkLabel(prog_dlg, text="正在处理数据，请稍候...", font=self.font_main)
         lbl_status.pack(pady=(20, 5))
         pbar = ctk.CTkProgressBar(prog_dlg, width=250)
@@ -2327,7 +2564,7 @@ class ProjectTreePanel:
                     self._ensure_item_loaded(item)
                     if item.get('start') is None or not item.get('snd') or (not item.get('pitch') and not item.get('pitch_data')):
                         continue
-                    
+
                     if item.get('pitch_data'):
                         p_xs = item['pitch_data']['xs']
                         p_freqs = item['pitch_data']['freqs']
@@ -2335,14 +2572,14 @@ class ProjectTreePanel:
                         pitch = item['pitch']
                         p_xs = pitch.xs()
                         p_freqs = pitch.selected_array['frequency']
-                    
+
                     for k, (c_s, c_e) in enumerate(bounds):
                         y_dense = self._extract_kde_contour(p_xs, p_freqs, c_s, c_e, N_DENSE)
                         if y_dense is None:
                             continue
                         if k not in speaker_contours[grp_name]: speaker_contours[grp_name][k] = []
                         speaker_contours[grp_name][k].append(y_dense)
-            
+
             for name, syls_dict in speaker_contours.items():
                 if name not in aggregated_syl_contours: aggregated_syl_contours[name] = {}
                 for k, y_arrays in syls_dict.items():
@@ -2411,7 +2648,7 @@ class ProjectTreePanel:
 
         pbar.set(0.8)
         prog_dlg.update()
-        
+
         bw_method = params.get('bw_method', 0.15) if params else 0.15
         self._draw_kde_heatmap(group_norm_points, max_syls, out_file, prog_dlg, pbar, lbl_status, bw_method=bw_method)
         return True

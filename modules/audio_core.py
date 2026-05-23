@@ -22,29 +22,29 @@ def detect_vowel_onset(snd: parselmouth.Sound, rough_start: float, rough_end: fl
     buffer = VOP_BUFFER_SEC
     part_s = max(0, rough_start - buffer)
     part_e = min(snd.get_total_duration(), rough_end + buffer)
-    
+
     if part_e <= part_s:
         return rough_start
-        
+
     part = snd.extract_part(from_time=part_s, to_time=part_e)
     vals = part.values[0]
     sr = part.sampling_frequency
-    
+
     # 设定 10ms 窗口，2ms 步长（高分辨率时间轴）
     win_len = int(VOP_WIN_LEN_SEC * sr)
     hop_len = int(VOP_HOP_LEN_SEC * sr)
-    
+
     if len(vals) < win_len:
         return rough_start
-        
+
     num_frames = (len(vals) - win_len) // hop_len + 1
     if num_frames <= 0:
         return rough_start
-        
+
     zcr = np.zeros(num_frames)
     ste = np.zeros(num_frames)
     times = np.zeros(num_frames)
-    
+
     for i in range(num_frames):
         frame = vals[i*hop_len : i*hop_len + win_len]
         # 1. 计算过零率 (Zero-Crossing Rate) - 清辅音(s, f)特征
@@ -52,19 +52,19 @@ def detect_vowel_onset(snd: parselmouth.Sound, rough_start: float, rough_end: fl
         frame_centered = frame - np.mean(frame)
         crossings = np.sum(np.abs(np.diff(frame_centered > 0)))
         zcr[i] = crossings / max(1, (win_len - 1))
-        
+
         # 2. 计算短时能量 (Short-Time Energy: RMS) - 韵母/元音特征
         ste[i] = np.sqrt(np.mean(frame**2))
         times[i] = part_s + (i * hop_len + win_len / 2) / sr
-        
+
 
     max_ste = np.max(ste)
     if max_ste < 1e-5:  # 全是绝对静音
         return rough_start
-        
+
     # 局部能量归一化
     ste_norm = ste / max_ste
-    
+
     # 学术优化：对短时能量进行简单的平滑，消除瞬态噪声引起的伪峰
     window = np.ones(3)/3.0
     if len(ste_norm) > 3:
@@ -76,25 +76,25 @@ def detect_vowel_onset(snd: parselmouth.Sound, rough_start: float, rough_end: fl
     ste_diff = np.diff(ste_norm_smooth, prepend=ste_norm_smooth[0])
 
     ste_diff[ste_diff < 0] = 0  # 只关注能量上升阶段
-    
+
     # 4. 综合得分：能量增量越大越好，ZCR 越小越好。
     # 典型的清擦音 ZCR > 0.25，通过 clip 施加严重惩罚，让辅音段得分为 0
     zcr_penalty = np.clip(1.0 - (zcr / 0.25), 0.0, 1.0)
     vop_scores = ste_diff * zcr_penalty
-    
+
     # 5. 限定在用户指定的区间内找最高得分
     valid_mask = (times >= rough_start) & (times <= rough_end)
     if not np.any(valid_mask):
         return rough_start
-        
+
     valid_times = times[valid_mask]
     valid_scores = vop_scores[valid_mask]
-    
+
     best_idx = np.argmax(valid_scores)
     # 如果整个区间都没有能量明显的突变，退回保守的 rough_start
     if valid_scores[best_idx] < 0.01:
         return rough_start
-        
+
     return valid_times[best_idx]
 
 
@@ -115,15 +115,15 @@ def macroscopic_vad(snd: parselmouth.Sound) -> List[List[float]]:
         thresh = 50.0
 
     is_sp = vals > thresh
-    
+
     starts_idx = np.where(np.diff(is_sp.astype(int), prepend=0) == 1)[0]
     ends_idx = np.where(np.diff(is_sp.astype(int), append=0) == -1)[0]
-    
+
     segs = []
     for s_idx, e_idx in zip(starts_idx, ends_idx):
         if s_idx < len(xs) and e_idx < len(xs):
             segs.append([xs[s_idx], xs[e_idx]])
-    
+
     merged =[]
     for s in segs:
         if not merged: merged.append(s)
@@ -144,14 +144,14 @@ def core_microscopic_vowel_nucleus(snd: parselmouth.Sound, global_pitch_or_array
         else:
             xs = global_pitch_or_arrays.xs()
             freqs = global_pitch_or_arrays.selected_array['frequency']
-            
+
         part = snd.extract_part(from_time=t_min, to_time=t_max) if t_min != 0 or t_max != snd.get_total_duration() else snd
         intensity = part.to_intensity()
-        
+
 
         try: max_int = np.nanmax(intensity.values)
         except Exception: return t_min, t_max, t_min, t_max
-            
+
         best_s, best_e = 0.0, part.get_total_duration()
         thresh = max_int - drop_db
         int_xs = intensity.xs()
@@ -174,7 +174,7 @@ def core_microscopic_vowel_nucleus(snd: parselmouth.Sound, global_pitch_or_array
             best_s = valid_times[0]
             best_e = valid_times[-1]
 
-            
+
             # --- 算法升级：替换原有的 best_s += skip_front ---
             if skip_front > 0.0:
                 rough_s_abs = t_min + best_s
@@ -182,14 +182,14 @@ def core_microscopic_vowel_nucleus(snd: parselmouth.Sound, global_pitch_or_array
                 search_end_abs = min(t_min + best_e, rough_s_abs + skip_front)
                 # 稍微往前看 20ms，避免上一层基于阈值的切分切得过晚
                 search_start_abs = max(t_min, rough_s_abs - 0.02)
-                
+
                 # 调用智能 VOP 提取
                 refined_s_abs = detect_vowel_onset(snd, search_start_abs, search_end_abs)
                 best_s = min(refined_s_abs - t_min, best_e - 0.01)
-            
+
         temp_s, temp_e = t_min + best_s, t_min + best_e
         final_s, final_e = temp_s, temp_e
-        
+
         if trim_silence:
             trim_part = snd.extract_part(from_time=temp_s, to_time=temp_e)
             vals = trim_part.values[0]
@@ -198,13 +198,13 @@ def core_microscopic_vowel_nucleus(snd: parselmouth.Sound, global_pitch_or_array
             if len(valid_idx) > 0:
                 final_s = temp_s + trim_xs[valid_idx[0]]
                 final_e = temp_s + trim_xs[valid_idx[-1]]
-                
+
         # --- 算法优化：严格收缩到有效基频区间，消除头尾 0 值 ---
         valid_pitch_xs = [x for x, f in zip(xs, freqs) if f > 0 and final_s <= x <= final_e]
         if len(valid_pitch_xs) >= 2:
             final_s = valid_pitch_xs[0]
             final_e = valid_pitch_xs[-1]
-            
+
         return final_s, final_e, temp_s, temp_e
     except Exception:
         return t_min, t_max, t_min, t_max
@@ -221,9 +221,9 @@ def recalculate_bounds_fast(snd: parselmouth.Sound, global_pitch_or_arrays: Unio
         else:
             xs = global_pitch_or_arrays.xs()
             freqs = global_pitch_or_arrays.selected_array['frequency']
-            
+
         final_s, final_e = temp_s, temp_e
-        
+
         if trim_silence:
             trim_part = snd.extract_part(from_time=temp_s, to_time=temp_e) if temp_s != 0 or temp_e != snd.get_total_duration() else snd
             vals = trim_part.values[0]
@@ -232,12 +232,12 @@ def recalculate_bounds_fast(snd: parselmouth.Sound, global_pitch_or_arrays: Unio
             if len(valid_idx) > 0:
                 final_s = temp_s + trim_xs[valid_idx[0]]
                 final_e = temp_s + trim_xs[valid_idx[-1]]
-                
+
         valid_pitch_xs = [x for x, f in zip(xs, freqs) if f > 0 and final_s <= x <= final_e]
         if len(valid_pitch_xs) >= 2:
             final_s = valid_pitch_xs[0]
             final_e = valid_pitch_xs[-1]
-            
+
         return final_s, final_e
     except Exception:
         return temp_s, temp_e
@@ -249,45 +249,163 @@ def check_audio_segments(path: str) -> int:
     return len(macroscopic_vad(snd))
 
 
-def auto_split_inner_word(snd: parselmouth.Sound, t_min: float, t_max: float, word_len: int) -> List[float]:
+def auto_split_inner_word(snd: parselmouth.Sound, t_min: float, t_max: float, word_len: int, pitch_data: Dict[str, Any] = None, output_meta: Dict[str, Any] = None) -> List[float]:
     """
     词语模式内部子音节切分算法 (自动识别蓝线)：
-    基于平滑后的短时能量寻找谷底，作为字与字之间的切分点。如果失败自动退化为等比例划分。
+    基于组合成本最优搜索能量谷底点，作为字与字之间的切分点。如果失败自动退化为等比例划分。
     """
     n_splits = word_len - 1
-    if n_splits <= 0: return []
-    
+    if n_splits <= 0:
+        if output_meta is not None:
+            output_meta['split_warnings'] = []
+            output_meta['split_confidence'] = 1.0
+        return []
+
     # 兜底：等距离均分点
     fallback_splits = [t_min + (t_max - t_min) * (i / word_len) for i in range(1, word_len)]
-    
+
     if t_max - t_min < 0.1: # 小于 100ms 太短，不具备检测价值
+        if output_meta is not None:
+            output_meta['split_warnings'] = ['tiny_segment']
+            output_meta['split_confidence'] = 0.3
         return fallback_splits
-        
+
     try:
         part = snd.extract_part(from_time=t_min, to_time=t_max)
         intensity = part.to_intensity(time_step=0.01)
         vals = intensity.values[0]
         xs = intensity.xs() + t_min
-        
+
         # 平滑能量曲线
         window = np.ones(5) / 5.0
-        if len(vals) < 5: return fallback_splits
+        if len(vals) < 5:
+            if output_meta is not None:
+                output_meta['split_warnings'] = ['fallback_equal_split', 'no_clear_valley']
+                output_meta['split_confidence'] = 0.3
+            return fallback_splits
         smoothed = np.convolve(vals, window, mode='same')
-        
-        # 寻找能量谷底 (即负向能量的峰值)
+
+        # 寻找能量谷底
         import scipy.signal
         valleys, _ = scipy.signal.find_peaks(-smoothed, distance=8) # 限制字与字最小跨度为约 80ms
-        
-        if len(valleys) >= n_splits:
-            # 优先选择能量最低的核心谷底
-            sorted_valleys = sorted(valleys, key=lambda idx: smoothed[idx])
-            best_valleys = sorted_valleys[:n_splits]
-            best_valleys.sort() # 按时间流重排
-            return [float(xs[v]) for v in best_valleys]
+
+        # 过滤掉深度不足 2dB 的伪谷底
+        if len(smoothed) > 0:
+            max_val = np.max(smoothed)
+            valleys = [v for v in valleys if max_val - smoothed[v] >= 2.0]
+
+        candidates = [float(xs[v]) for v in valleys]
+
+        import itertools
+        best_combination = None
+        best_cost = float('inf')
+
+        # 过滤候选点，防止组合爆炸
+        if len(candidates) > 15:
+            def local_candidate_score(c):
+                dists = [abs(c - (t_min + (t_max - t_min) * (i / word_len))) for i in range(1, word_len)]
+                min_dist = min(dists)
+                idx = np.argmin(np.abs(xs - c))
+                energy = smoothed[idx]
+                return energy + 50.0 * (min_dist / (t_max - t_min))
+            candidates = sorted(candidates, key=local_candidate_score)[:15]
+            candidates.sort()
+
+        for combo in itertools.combinations(candidates, n_splits):
+            combo = list(combo)
+            cost = 0.0
+
+            # 时长与比例惩罚
+            splits_with_bounds = [t_min] + combo + [t_max]
+            segment_dur_penalty = 0.0
+            for k in range(len(splits_with_bounds) - 1):
+                d = splits_with_bounds[k+1] - splits_with_bounds[k]
+                ratio = d / (t_max - t_min)
+                if d < 0.08:
+                    segment_dur_penalty += 10000.0 # 极其严重的惩罚，排除此选择
+                elif ratio < (0.4 / word_len):
+                    segment_dur_penalty += 500.0
+                elif ratio < (0.5 / word_len):
+                    segment_dur_penalty += 100.0
+
+            cost += segment_dur_penalty
+
+            # 各切点个别成本
+            for i, s in enumerate(combo):
+                t_ref = t_min + (t_max - t_min) * ((i + 1) / word_len)
+                # 距离成本
+                dist_cost = 100.0 * ((s - t_ref) / (t_max - t_min)) ** 2
+                cost += dist_cost
+
+                # 能量成本
+                idx = np.argmin(np.abs(xs - s))
+                cost += smoothed[idx]
+
+                # F0 成本：如果是 voiced（有声），惩罚
+                if pitch_data is not None:
+                    p_xs = pitch_data.get('xs')
+                    p_freqs = pitch_data.get('freqs')
+                    if p_xs is not None and p_freqs is not None and len(p_xs) > 0:
+                        p_idx = np.argmin(np.abs(p_xs - s))
+                        if abs(p_xs[p_idx] - s) < 0.015 and p_freqs[p_idx] > 0:
+                            cost += 15.0 # voiced 惩罚
+
+            if cost < best_cost:
+                best_cost = cost
+                best_combination = combo
+
+        # 结果生成与警告收集
+        warnings = []
+        confidence = 1.0
+
+        if best_combination is None or best_cost >= 5000.0:
+            splits = fallback_splits
+            warnings.append('fallback_equal_split')
+            warnings.append('no_clear_valley')
+            confidence = 0.3
+        else:
+            splits = best_combination
+            splits_with_bounds = [t_min] + splits + [t_max]
+            for k in range(len(splits_with_bounds) - 1):
+                d = splits_with_bounds[k+1] - splits_with_bounds[k]
+                ratio = d / (t_max - t_min)
+                if d < 0.08:
+                    warnings.append('tiny_segment')
+                    confidence = min(confidence, 0.4)
+                if word_len == 2 and ratio < 0.20:
+                    warnings.append('imbalanced_duration')
+                    confidence = min(confidence, 0.5)
+                elif word_len > 2 and ratio < (0.4 / word_len):
+                    warnings.append('imbalanced_duration')
+                    confidence = min(confidence, 0.5)
+
+            if pitch_data is not None:
+                p_xs = pitch_data.get('xs')
+                p_freqs = pitch_data.get('freqs')
+                if p_xs is not None and p_freqs is not None and len(p_xs) > 0:
+                    for k in range(len(splits_with_bounds) - 1):
+                        c_s, c_e = splits_with_bounds[k], splits_with_bounds[k+1]
+                        mask = (p_xs >= c_s) & (p_xs <= c_e)
+                        seg_freqs = p_freqs[mask]
+                        if len(seg_freqs) > 0:
+                            active_ratio = np.sum(seg_freqs > 0) / len(seg_freqs)
+                        else:
+                            active_ratio = 0.0
+                        if active_ratio < 0.30:
+                            warnings.append('low_f0_coverage')
+                            confidence = min(confidence, 0.5)
+
+        if output_meta is not None:
+            output_meta['split_warnings'] = list(set(warnings))
+            output_meta['split_confidence'] = confidence
+
+        return splits
     except Exception:
-        pass
-        
-    return fallback_splits
+        if output_meta is not None:
+            output_meta['split_warnings'] = ['fallback_equal_split']
+            output_meta['split_confidence'] = 0.1
+        return fallback_splits
+
 
 def extract_f0(snd: parselmouth.Sound, params: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -309,7 +427,7 @@ def extract_f0(snd: parselmouth.Sound, params: Dict[str, Any]) -> Dict[str, Any]
         # REAPER 推荐使用 16000Hz 采样率
         sr_reaper = 16000
         original_samples = snd.values.shape[1]
-        
+
         # 极速且无素数性能陷阱的线性插值重采样
         if snd.sampling_frequency != sr_reaper:
             new_samples = int(original_samples * sr_reaper / snd.sampling_frequency)
@@ -324,24 +442,24 @@ def extract_f0(snd: parselmouth.Sound, params: Dict[str, Any]) -> Dict[str, Any]
 
         # 转换并裁剪为 16-bit 整数输入 pyreaper
         x_int = (np.clip(resampled, -1.0, 1.0) * 32767).astype(np.int16)
-        
+
         # 将 Praat 浊音阈值映射为 REAPER 的 unvoiced_cost (方向相反)
         # default voicing_threshold = 0.25 -> unvoiced_cost = 0.90
         # clamping to safe range [0.1, 1.5]
         unvoiced_cost = np.clip(1.15 - voicing_threshold, 0.1, 1.5)
-        
+
         # 执行 REAPER 提取
         pm_times, pm, f0_times, f0, corr = pyreaper.reaper(
-            x_int, 
-            sr_reaper, 
-            minf0=float(pitch_floor), 
+            x_int,
+            sr_reaper,
+            minf0=float(pitch_floor),
             maxf0=float(pitch_ceiling),
             unvoiced_cost=float(unvoiced_cost)
         )
-        
+
         # 将无声段标记 -1.0 转换为 0.0
         f0_clean = np.where(f0 < 0, 0.0, f0)
-        
+
         # 针对 REAPER 整数周期点带来的阶梯状硬阶跃（quantization steps）进行高精度边缘自适应平滑
         # 采用归一化掩码（Mask Normalization）消除静音交界处的出血效应
         if len(f0_clean) > 0:
@@ -365,7 +483,7 @@ def extract_f0(snd: parselmouth.Sound, params: Dict[str, Any]) -> Dict[str, Any]
                     smoothed_mask = np.where(smoothed_mask < 1e-5, 1.0, smoothed_mask)
                     f0_smooth = smoothed_values / smoothed_mask
                     f0_clean = np.where(voiced_mask, f0_smooth, 0.0)
-        
+
         return {
             "xs": f0_times.astype(np.float64),
             "freqs": f0_clean.astype(np.float64),
@@ -374,18 +492,18 @@ def extract_f0(snd: parselmouth.Sound, params: Dict[str, Any]) -> Dict[str, Any]
     else:
         # Praat 引擎提取
         pitch = snd.to_pitch_ac(
-            time_step=None, 
-            pitch_floor=pitch_floor, 
-            pitch_ceiling=pitch_ceiling, 
-            voicing_threshold=voicing_threshold, 
-            very_accurate=True, 
+            time_step=None,
+            pitch_floor=pitch_floor,
+            pitch_ceiling=pitch_ceiling,
+            voicing_threshold=voicing_threshold,
+            very_accurate=True,
             octave_jump_cost=0.9
         )
         xs = pitch.xs()
         freqs = pitch.selected_array['frequency']
         # 确保无声段是 0.0
         freqs_clean = np.where(np.isnan(freqs) | (freqs <= 0), 0.0, freqs)
-        
+
         return {
             "xs": xs.astype(np.float64),
             "freqs": freqs_clean.astype(np.float64),
@@ -396,7 +514,7 @@ def auto_split_to_chars_bounds(snd: parselmouth.Sound, mic_s: float, mic_e: floa
     splits = [mic_s] + [s for s in inner_splits if mic_s < s < mic_e] + [mic_e]
     if len(splits) != label_len + 1:
         splits = np.linspace(mic_s, mic_e, label_len + 1).tolist()
-    
+
     chars_bounds = []
     for i in range(len(splits) - 1):
         c_s, c_e = splits[i], splits[i+1]
@@ -424,17 +542,40 @@ def batch_process_worker(path: str, params: Dict[str, float], trim_silence: bool
         snd = parselmouth.Sound(path)
         pitch_data = extract_f0(snd, params)
         mac_s, mac_e = 0.0, snd.get_total_duration()
-        
+
         mic_s, mic_e, raw_s, raw_e = core_microscopic_vowel_nucleus(
-            snd, pitch_data, mac_s, mac_e, 
+            snd, pitch_data, mac_s, mac_e,
             params['db'], params['skip_front'], trim_silence
         )
-        
+
+        name = os.path.splitext(os.path.basename(path))[0]
+
+        label_for_split = word_label if word_label else name
+        from .data_utils import split_into_syllables
+        syls = split_into_syllables(label_for_split)
+
+        # 检测是否进入词语模式，预初始化蓝线
+        inner_splits = []
+        chars_bounds = []
+        split_warnings = []
+        split_confidence = 1.0
+        if len(syls) > 1:
+            meta = {}
+            inner_splits = auto_split_inner_word(snd, raw_s, raw_e, len(syls), pitch_data=pitch_data, output_meta=meta)
+            split_warnings = meta.get('split_warnings', [])
+            split_confidence = meta.get('split_confidence', 1.0)
+            chars_bounds = auto_split_to_chars_bounds(snd, raw_s, raw_e, inner_splits, len(syls), params)
+            if chars_bounds:
+                mic_s = chars_bounds[0][0]
+                mic_e = chars_bounds[-1][1]
+        else:
+            chars_bounds = [[mic_s, mic_e]]
+
         preview_times = np.linspace(mic_s, mic_e, 11)
         p_xs = pitch_data['xs']
         p_freqs = pitch_data['freqs']
         preview_f0 = np.interp(preview_times, p_xs, p_freqs).tolist()
-        
+
         # 修正：跨越静音区（>25ms）时强制归零，避免产生假数据桥接
         for j, t in enumerate(preview_times):
             valid_indices = np.where(p_freqs > 0)[0]
@@ -444,24 +585,9 @@ def batch_process_worker(path: str, params: Dict[str, float], trim_silence: bool
             valid_xs = p_xs[valid_indices]
             if np.min(np.abs(valid_xs - t)) > 0.025:
                 preview_f0[j] = 0.0
-                
+
         has_empty_data = any(f == 0.0 for f in preview_f0)
-        
-        name = os.path.splitext(os.path.basename(path))[0]
-        
-        label_for_split = word_label if word_label else name
-        from .data_utils import split_into_syllables
-        syls = split_into_syllables(label_for_split)
-        
-        # 检测是否进入词语模式，预初始化蓝线
-        inner_splits = []
-        chars_bounds = []
-        if len(syls) > 1:
-            inner_splits = auto_split_inner_word(snd, mic_s, mic_e, len(syls))
-            chars_bounds = auto_split_to_chars_bounds(snd, mic_s, mic_e, inner_splits, len(syls), params)
-        else:
-            chars_bounds = [[mic_s, mic_e]]
-            
+
         return {
             'label': name,
             'path': path,
@@ -476,7 +602,9 @@ def batch_process_worker(path: str, params: Dict[str, float], trim_silence: bool
             'preview_f0': preview_f0,
             'pitch_data': pitch_data,
             'success': True,
-            'has_empty_data': has_empty_data
+            'has_empty_data': has_empty_data,
+            'split_warnings': split_warnings,
+            'split_confidence': split_confidence
         }
     except Exception as e:
         return {'success': False, 'error': str(e), 'path': path}
@@ -509,16 +637,18 @@ def long_process_worker(snd_values: np.ndarray, snd_sf: float, pitch_xs: np.ndar
     try:
         snd_part = parselmouth.Sound(snd_values, sampling_frequency=snd_sf)
         shifted_xs = pitch_xs - ms
-        
+
         # 提取微观红线边界
         mic_s, mic_e, raw_s, raw_e = core_microscopic_vowel_nucleus(
-            snd_part, (shifted_xs, pitch_freqs), 0.0, snd_part.get_total_duration(), 
+            snd_part, (shifted_xs, pitch_freqs), 0.0, snd_part.get_total_duration(),
             params['db'], params['skip_front'], trim_silence
         )
-        
+
         # 提取内部蓝线边界
         inner_splits = []
         chars_bounds = []
+        split_warnings = []
+        split_confidence = 1.0
         from .data_utils import split_into_syllables
         syls = split_into_syllables(word_label) if word_label else []
         if syls and len(syls) > 1:
@@ -527,19 +657,26 @@ def long_process_worker(snd_values: np.ndarray, snd_sf: float, pitch_xs: np.ndar
                 local_ref_splits = [t - ms for t in ref_splits]
                 splits = [find_minimum_intensity_valley(snd_part, t_ref) for t_ref in local_ref_splits]
             else:
-                splits = auto_split_inner_word(snd_part, mic_s, mic_e, len(syls))
-                
-            local_chars_bounds = auto_split_to_chars_bounds(snd_part, mic_s, mic_e, splits, len(syls), params)
+                meta = {}
+                p_data = {'xs': shifted_xs, 'freqs': pitch_freqs}
+                splits = auto_split_inner_word(snd_part, raw_s, raw_e, len(syls), pitch_data=p_data, output_meta=meta)
+                split_warnings = meta.get('split_warnings', [])
+                split_confidence = meta.get('split_confidence', 1.0)
+
+            local_chars_bounds = auto_split_to_chars_bounds(snd_part, raw_s, raw_e, splits, len(syls), params)
             chars_bounds = [[s + ms, e + ms] for s, e in local_chars_bounds]
             inner_splits = [t + ms for t in splits]  # 复原到全局时间轴
+            if local_chars_bounds:
+                mic_s = local_chars_bounds[0][0]
+                mic_e = local_chars_bounds[-1][1]
         else:
             chars_bounds = [[mic_s + ms, mic_e + ms]]
-        
+
         mic_s += ms
         mic_e += ms
         raw_s += ms
         raw_e += ms
-        
+
         preview_times = np.linspace(mic_s, mic_e, 11)
         preview_f0 = []
         for t in preview_times:
@@ -549,9 +686,9 @@ def long_process_worker(snd_values: np.ndarray, snd_sf: float, pitch_xs: np.ndar
             else:
                 f = 0.0
             preview_f0.append(0.0 if np.isnan(f) else f)
-            
+
         has_empty_data = any(f == 0.0 for f in preview_f0)
-        
+
         return {
             'ms': ms, 'me': me,
             'mis': mic_s, 'mie': mic_e,
@@ -559,6 +696,8 @@ def long_process_worker(snd_values: np.ndarray, snd_sf: float, pitch_xs: np.ndar
             'inner_splits': inner_splits,
             'chars_bounds': chars_bounds,
             'has_empty_data': has_empty_data,
+            'split_warnings': split_warnings,
+            'split_confidence': split_confidence,
             'success': True
         }
     except Exception as e:
@@ -583,6 +722,8 @@ def process_single_long_word(snd_values: np.ndarray, snd_sf: float, word: str, m
             'inner_splits': res.get('inner_splits', []),
             'chars_bounds': res.get('chars_bounds', []),
             'has_empty_data': res.get('has_empty_data', False),
+            'split_warnings': res.get('split_warnings', []),
+            'split_confidence': res.get('split_confidence', 1.0),
             'success': True
         }
     else:
@@ -597,7 +738,7 @@ def batch_process_worker_with_textgrid(path: str, tg_path: str, params: Dict[str
     try:
         import textgrid
         tg = textgrid.TextGrid.fromFile(tg_path)
-        
+
         words_tier = None
         chars_tier = None
         groups_tier = None
@@ -608,23 +749,23 @@ def batch_process_worker_with_textgrid(path: str, tg_path: str, params: Dict[str
                 chars_tier = t
             elif t.name in ["groups", "group"]:
                 groups_tier = t
-                
+
         if not words_tier:
             for t in tg.tiers:
                 if isinstance(t, textgrid.IntervalTier):
                     words_tier = t
                     break
-                    
+
         interval = None
         if words_tier:
             for iv in words_tier:
                 if iv.mark.strip():
                     interval = iv
                     break
-                    
+
         snd = parselmouth.Sound(path)
         total_dur = snd.get_total_duration()
-        
+
         if not interval:
             lbl = os.path.splitext(os.path.basename(path))[0]
             t_s, t_e = 0.0, total_dur
@@ -635,7 +776,7 @@ def batch_process_worker_with_textgrid(path: str, tg_path: str, params: Dict[str
             lbl = interval.mark.strip()
             t_s = max(0.0, interval.minTime)
             t_e = min(total_dur, interval.maxTime)
-            
+
             grp_name = "导入内容"
             if groups_tier:
                 center = (t_s + t_e) / 2.0
@@ -645,7 +786,7 @@ def batch_process_worker_with_textgrid(path: str, tg_path: str, params: Dict[str
                         if g_lbl:
                             grp_name = g_lbl
                             break
-                            
+
             chars_bounds = []
             inner_splits = []
             if chars_tier:
@@ -662,7 +803,7 @@ def batch_process_worker_with_textgrid(path: str, tg_path: str, params: Dict[str
                         chars_bounds.append([c.minTime, c.maxTime])
                     for j in range(len(overlapping_chars) - 1):
                         inner_splits.append(overlapping_chars[j].maxTime)
-                        
+
             if not chars_bounds:
                 from .data_utils import split_into_syllables
                 syls = split_into_syllables(lbl)
@@ -674,18 +815,18 @@ def batch_process_worker_with_textgrid(path: str, tg_path: str, params: Dict[str
                 else:
                     chars_bounds = [[t_s, t_e]]
                     inner_splits = []
-                    
+
         pitch_data = extract_f0(snd, params)
         mic_s, mic_e, raw_s, raw_e = core_microscopic_vowel_nucleus(
             snd, pitch_data, t_s, t_e,
             params['db'], params['skip_front'], trim_silence
         )
-        
+
         preview_times = np.linspace(mic_s, mic_e, 11)
         p_xs = pitch_data['xs']
         p_freqs = pitch_data['freqs']
         preview_f0 = np.interp(preview_times, p_xs, p_freqs).tolist()
-        
+
         for j, t in enumerate(preview_times):
             valid_indices = np.where(p_freqs > 0)[0]
             if len(valid_indices) == 0:
@@ -694,9 +835,9 @@ def batch_process_worker_with_textgrid(path: str, tg_path: str, params: Dict[str
             valid_xs = p_xs[valid_indices]
             if np.min(np.abs(valid_xs - t)) > 0.025:
                 preview_f0[j] = 0.0
-                
+
         has_empty_data = any(f == 0.0 for f in preview_f0)
-        
+
         return {
             'label': lbl,
             'path': path,
