@@ -301,10 +301,24 @@ class PhoneticsApp:
                 except UnicodeDecodeError: decoded_paths.append(f.decode('utf-8'))
             else:
                 decoded_paths.append(str(f))
+
+        # Check for project files (.teproj, .zip)
+        teproj_files = [p for p in decoded_paths if p.lower().endswith(('.teproj', '.zip'))]
+        if teproj_files:
+            path = teproj_files[0]
+            self.start_loading("正在导入工程...")
+            def run():
+                success = self.project_manager.load_project(path)
+                self.root.after(0, self.stop_loading)
+                if success:
+                    self.root.after(0, self._sync_ui_after_project_load)
+            import threading
+            threading.Thread(target=run, daemon=True).start()
+            return
                 
         audio_paths = [p for p in decoded_paths if p.lower().endswith(('.wav', '.mp3'))]
         if not audio_paths:
-            messagebox.showwarning("提示", "拖入的文件中没有支持的音频文件 (.wav, .mp3)")
+            messagebox.showwarning("提示", "拖入的文件中没有支持的音频文件 (.wav, .mp3) 或工程文件 (.teproj)")
             return
             
         self.handle_input_files(audio_paths)
