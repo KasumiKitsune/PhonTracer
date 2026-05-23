@@ -114,6 +114,58 @@ class TestUISyncBugs(unittest.TestCase):
             if os.path.exists(f_path):
                 os.remove(f_path)
 
+    def test_main_window_drag_and_drop_txt_no_audio(self):
+        """Test that dropping a .txt file onto the main window without audio shows a warning"""
+        self.app.pending_long_snd = None
+        self.app.pending_batch_paths = []
+        self.app.tabview = MagicMock()
+        self.app.tabview.get.return_value = "单条长音频"
+        self.app.open_text_dialog = MagicMock()
+
+        with patch('tkinter.messagebox.showwarning') as mock_warning:
+            self.app.drop_queue.put([b"dummy.txt"])
+            self.app._check_drop_queue()
+            mock_warning.assert_called_once()
+            self.app.open_text_dialog.assert_not_called()
+
+    def test_main_window_drag_and_drop_txt_with_audio(self):
+        """Test that dropping a .txt file onto the main window with audio opens dialog and populates it"""
+        self.app.pending_long_snd = MagicMock()
+        self.app.tabview = MagicMock()
+        self.app.tabview.get.return_value = "单条长音频"
+
+        import tempfile
+        import os
+        with tempfile.NamedTemporaryFile(suffix='.txt', delete=False) as f:
+            f.write(b"Group1\nword1")
+            f_path = f.name
+
+        try:
+            self.app.open_text_dialog = MagicMock()
+            mock_dlg = MagicMock()
+            mock_textbox = MagicMock()
+            mock_update_stats = MagicMock()
+            
+            # Setup active import dlg references that would be set by open_text_dialog
+            def mock_open(mode):
+                self.app.active_import_dlg = mock_dlg
+                self.app.active_import_textbox = mock_textbox
+                self.app.active_import_update_stats = mock_update_stats
+                self.app.active_import_mode = mode
+
+            self.app.open_text_dialog.side_effect = mock_open
+
+            self.app.drop_queue.put([f_path.encode('utf-8')])
+            self.app._check_drop_queue()
+
+            self.app.open_text_dialog.assert_called_once_with('long')
+            mock_textbox.delete.assert_called_with("1.0", "end")
+            mock_textbox.insert.assert_called_with("1.0", "Group1\nword1")
+            mock_update_stats.assert_called_once()
+        finally:
+            if os.path.exists(f_path):
+                os.remove(f_path)
+
     def test_add_segment_by_right_click(self):
         """Test right-clicking on an empty area adds a 0.5s segment and fits it in sequence"""
         from modules.visual_splitter import VisualSplitter

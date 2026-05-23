@@ -317,9 +317,33 @@ class PhoneticsApp:
             threading.Thread(target=run, daemon=True).start()
             return
 
+        # Check for wordlist files (.txt, .csv, .textgrid)
+        wordlist_files = [p for p in decoded_paths if p.lower().endswith(('.txt', '.csv', '.textgrid'))]
+        if wordlist_files:
+            current_tab = self.tabview.get()
+            if current_tab == "单条长音频":
+                mode = 'long'
+                has_audio = self.pending_long_snd is not None
+                err_msg = "请先导入长音频后，再拖入字表文件！"
+            else:
+                mode = 'batch'
+                has_audio = bool(self.pending_batch_paths)
+                err_msg = "请先选择独立音频后，再拖入字表文件！"
+
+            if not has_audio:
+                messagebox.showwarning("提示", err_msg)
+                return
+
+            if getattr(self, 'active_import_dlg', None) and self.active_import_dlg.winfo_exists():
+                self._process_dlg_dropped_files(files)
+            else:
+                self.open_text_dialog(mode)
+                self._process_dlg_dropped_files(files)
+            return
+
         audio_paths = [p for p in decoded_paths if p.lower().endswith(('.wav', '.mp3'))]
         if not audio_paths:
-            messagebox.showwarning("提示", "拖入的文件中没有支持的音频文件 (.wav, .mp3) 或工程文件 (.teproj)")
+            messagebox.showwarning("提示", "拖入的文件中没有支持的音频文件 (.wav, .mp3)、工程文件 (.teproj) 或字表文件 (.txt, .csv)")
             return
 
         self.handle_input_files(audio_paths)
@@ -2279,11 +2303,11 @@ class PhoneticsApp:
         lbl_stats = ctk.CTkLabel(dlg, text="实时统计：已识别 0 个组别 | 0 个项", text_color="#6B7280", font=("Microsoft YaHei", 12))
         lbl_stats.pack(pady=(0, 5), padx=20, anchor="w")
 
-        # 3.5 规则说明
-        rule_frame = ctk.CTkFrame(dlg, fg_color="#EFF6FF", corner_radius=8, border_width=1, border_color="#BFDBFE")
+        # 3.5 规则说明 (折叠面板)
+        rule_frame = ctk.CTkFrame(dlg, fg_color="#EFF6FF", corner_radius=8, border_width=1, border_color="#BFDBFE", cursor="hand2")
         rule_frame.pack(padx=20, pady=(5, 5), fill=tk.X)
-        rule_title = ctk.CTkLabel(rule_frame, text="💡 匹配与音节拆分规则说明", text_color="#1E40AF", font=("Microsoft YaHei", 12, "bold"))
-        rule_title.pack(anchor=tk.W, padx=10, pady=(5, 2))
+        rule_title = ctk.CTkLabel(rule_frame, text="▶ 💡 匹配与音节拆分规则说明", text_color="#1E40AF", font=("Microsoft YaHei", 12, "bold"), cursor="hand2")
+        rule_title.pack(anchor=tk.W, padx=10, pady=5)
         rule_text = (
             "1. CJK(汉字)匹配：模糊匹配时无视数字、英文与特殊字符，仅比对汉字字符。\n"
             "2. 拉丁字母/非CJK：无视数字与特殊字符，保留英文字母进行比对。\n"
@@ -2291,7 +2315,22 @@ class PhoneticsApp:
             "   (如 bro/ther 或 北/京)，则强制按斜杠分割音节，不再按字拆分。"
         )
         rule_lbl = ctk.CTkLabel(rule_frame, text=rule_text, text_color="#1E40AF", font=("Microsoft YaHei", 11), justify=tk.LEFT)
-        rule_lbl.pack(anchor=tk.W, padx=10, pady=(0, 5))
+        
+        is_expanded = [False]
+        def toggle_rules(event=None):
+            if is_expanded[0]:
+                rule_lbl.pack_forget()
+                rule_title.configure(text="▶ 💡 匹配与音节拆分规则说明")
+                rule_title.pack(anchor=tk.W, padx=10, pady=5)
+                is_expanded[0] = False
+            else:
+                rule_title.configure(text="▼ 💡 匹配与音节拆分规则说明")
+                rule_title.pack(anchor=tk.W, padx=10, pady=(5, 2))
+                rule_lbl.pack(anchor=tk.W, padx=10, pady=(0, 5))
+                is_expanded[0] = True
+
+        rule_title.bind("<Button-1>", toggle_rules)
+        rule_frame.bind("<Button-1>", toggle_rules)
 
         def update_stats(event=None):
             raw_text = text_box.get("1.0", tk.END)
