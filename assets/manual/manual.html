@@ -1025,15 +1025,18 @@ exit
                             <p class="text-xs text-slate-500 mb-4 leading-relaxed">
                                 如果让 AI 帮您批量提取实验数据，可以直接将以下指令提示词发送给 Cursor / Trae 或 Codex 窗口，让其通过正规的 CLI 通道完成作业。
                             </p>
-                            <div class="bg-white border border-slate-200/80 rounded-xl p-4 font-mono text-xs text-slate-600 leading-relaxed max-h-56 overflow-y-auto" id="promptContent">请在当前项目目录中使用 PhonTracer CLI 完成处理，绝对不要直接修改源码或手动篡改 .teproj 内部缓存文件。
-你的执行步骤如下：
-1. 运行 `python cli.py` 开启控制台。
-2. 使用 `load_long` 或 `load_batch` 指令导入我指定的音频。
-3. 使用 `apply_wordlist` 应用标注。
-4. 必须使用 `status` 和 `list_items warnings` 来检查结果。
-5. 如果有警告，尝试用 `modify_bounds` 修正。
-6. 导出 xlsx。
-7. 只要 CLI 返回的 JSON 里出现 `success: false`，立刻停止后续导出，先根据 `message` 字段排查路径和参数的错误，最后把你完成的操作总结给我。</div>
+                            <div class="bg-white border border-slate-200/80 rounded-xl p-4 font-mono text-xs text-slate-600 leading-relaxed max-h-56 overflow-y-auto" id="promptContent">请在当前项目目录中使用 PhonTracer CLI 完成任务。优先调用打包后的 PhonTracerCLI.exe；只有在明确处于源码开发环境且没有 exe 可用时，才使用 python cli.py。
+<br>
+你必须全程通过 PhonTracer CLI 的内置命令处理音频、标注、修正、检查与导出。不要直接修改源码，不要手动改写 .teproj 内部文件或缓存文件，不要额外编写/运行第三方 Python、PowerShell、R、Praat、Parselmouth、pandas、openpyxl 等脚本来绕过 CLI。如果 CLI 暂时无法完成某一步，请停止并说明缺少的 CLI 能力，不要自行另写脚本替代。
+<br>
+工作流程要求：<br>
+1. 使用 CLI 导入用户指定的音频或批量音频。<br>
+2. 使用 CLI 内置命令完成分词/标注/边界修正/参数调整/质量检查。<br>
+3. 如果 CLI 返回 success: false，必须立即停止当前步骤，根据 message 说明问题并请求用户确认，不能继续盲目导出。<br>
+4. 最终必须导出完整 .teproj 工程包，确保后续可在 PhonTracer GUI 或 CLI 中继续打开和复现。<br>
+5. 在导出 .teproj 之后，再按用户要求导出 xlsx、TextGrid、wav、图表或其他结果文件。<br>
+6. 完成后只汇报：使用了哪些 CLI 步骤、导出了哪些文件、是否有警告或失败项、下一步需要用户确认什么。<br>
+除非用户明确授权，不要直接搬运、删除、改名原始音频文件；不要把 CLI 已经支持的功能改成外部脚本实现。</div>
                         </div>
                     </div>
                 </section>

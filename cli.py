@@ -2726,6 +2726,11 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
         self.executor.shutdown(wait=False)
         return True
 
+    def do_EOF(self, arg):
+        """Exit cleanly when the host closes stdin."""
+        print()
+        return self.do_exit(arg)
+
 
 
     def _export_textgrid(self, out_path, structure, speaker=None):
@@ -2850,5 +2855,27 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
 
         tg.write(tg_path)
 
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    cli = PhonTracerCLI()
+    try:
+        if argv:
+            first_arg = argv[0].strip().lower()
+            if first_arg in ("-h", "--help", "help", "?"):
+                cli.do_help("")
+                return 0
+            print(json.dumps({
+                "success": False,
+                "error": f"Unknown startup argument: {argv[0]}",
+                "hint": "Start PhonTracerCLI.exe without arguments, then type help at the (phontracer) prompt."
+            }))
+            return 2
+
+        cli.cmdloop()
+        return 0
+    finally:
+        cli.executor.shutdown(wait=False)
+
+
 if __name__ == '__main__':
-    PhonTracerCLI().cmdloop()
+    raise SystemExit(main())
