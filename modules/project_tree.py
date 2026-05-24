@@ -1318,7 +1318,7 @@ class ProjectTreePanel:
         y = main_win.winfo_rooty() + (main_win.winfo_height() - 330) // 2
         dlg.geometry(f"+{x}+{y}")
         ctk.CTkLabel(dlg, text="请选择导出格式", font=self.font_title, text_color="#111827").pack(pady=(20, 15))
-        btn_kwargs = {"corner_radius": 12, "height": 44, "font": self.font_main, "anchor": "w", "compound": "left"}
+        btn_kwargs = {"corner_radius": 22, "height": 44, "font": self.font_main, "anchor": "w", "compound": "left"}
 
         def do_export(format_mode):
             if format_mode == 'line_chart':

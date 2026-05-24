@@ -21,7 +21,6 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
         
         self.title("声学图表导出 - 声视化工具箱")
         self.geometry("1100x750")
-        self.attributes('-topmost', True)
         self.resizable(True, True)
         
         # Color Palette
@@ -94,7 +93,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
         self.grid_rowconfigure(0, weight=1)
         
         # --- LEFT SIDE: Scrollable Configuration Frame ---
-        self.left_scroll = ctk.CTkScrollableFrame(self, width=400, label_text="📊 图表可视化高级设置", label_font=self.font_title)
+        self.left_scroll = ctk.CTkScrollableFrame(self, width=400, label_text="📊 图表可视化高级设置", label_font=self.font_title, fg_color=("#F9FAFB", "#2D3748"))
         self.left_scroll.grid(row=0, column=0, sticky="nsew", padx=(15, 10), pady=15)
         
         self._build_settings_cards()
@@ -118,18 +117,18 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
         self.bottom_frame = ctk.CTkFrame(self.right_frame, fg_color="transparent")
         self.bottom_frame.grid(row=1, column=0, sticky="ew")
         
-        ctk.CTkButton(self.bottom_frame, text="🔄 刷新预览", width=120, fg_color="#E5E7EB", text_color="#374151", hover_color="#D1D5DB", font=self.font_main, command=self.update_preview).pack(side=tk.LEFT, padx=5)
+        ctk.CTkButton(self.bottom_frame, text="🔄 刷新预览", width=120, height=38, corner_radius=19, fg_color="#E5E7EB", text_color="#374151", hover_color="#D1D5DB", font=self.font_main, command=self.update_preview).pack(side=tk.LEFT, padx=5)
         
-        self.btn_export = ctk.CTkButton(self.bottom_frame, text="💾 导出所选图表", width=180, font=self.font_title, command=self.on_confirm)
+        self.btn_export = ctk.CTkButton(self.bottom_frame, text="💾 导出所选图表", width=180, height=38, corner_radius=19, font=self.font_title, command=self.on_confirm)
         self.btn_export.pack(side=tk.RIGHT, padx=5)
         
-        ctk.CTkButton(self.bottom_frame, text="取消", width=100, fg_color="#F3F4F6", text_color="#4B5563", hover_color="#E5E7EB", font=self.font_main, command=self.destroy).pack(side=tk.RIGHT, padx=5)
+        ctk.CTkButton(self.bottom_frame, text="取消", width=100, height=38, corner_radius=19, fg_color="#F3F4F6", text_color="#4B5563", hover_color="#E5E7EB", font=self.font_main, command=self.destroy).pack(side=tk.RIGHT, padx=5)
 
     def _build_settings_cards(self):
         card_padding = {"padx": 10, "pady": 8}
         
         # --- CARD 1: Basic Type & Scope ---
-        card1 = ctk.CTkFrame(self.left_scroll)
+        card1 = ctk.CTkFrame(self.left_scroll, fg_color=("#FFFFFF", "#1E293B"), border_width=1, border_color=("#E5E7EB", "#475569"), corner_radius=12)
         card1.pack(fill=tk.X, **card_padding)
         
         ctk.CTkLabel(card1, text="🔹 基础类型与范围", font=self.font_title).pack(anchor="w", padx=15, pady=(10, 5))
@@ -157,7 +156,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
             self.combo_scope.configure(state="disabled")
 
         # --- CARD 2: Visual Parameters ---
-        card2 = ctk.CTkFrame(self.left_scroll)
+        card2 = ctk.CTkFrame(self.left_scroll, fg_color=("#FFFFFF", "#1E293B"), border_width=1, border_color=("#E5E7EB", "#475569"), corner_radius=12)
         card2.pack(fill=tk.X, **card_padding)
         
         ctk.CTkLabel(card2, text="🔹 核心维度与尺度", font=self.font_title).pack(anchor="w", padx=15, pady=(10, 5))
@@ -181,7 +180,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
         self.combo_format.pack(fill=tk.X, padx=15, pady=(0, 15))
 
         # --- CARD 3: Dynamic Options Frame ---
-        self.dynamic_card = ctk.CTkFrame(self.left_scroll)
+        self.dynamic_card = ctk.CTkFrame(self.left_scroll, fg_color=("#FFFFFF", "#1E293B"), border_width=1, border_color=("#E5E7EB", "#475569"), corner_radius=12)
         self.dynamic_card.pack(fill=tk.X, **card_padding)
         
         self.dynamic_title = ctk.CTkLabel(self.dynamic_card, text="⚙️ 声调轮廓图专有选项", font=self.font_title)
@@ -810,7 +809,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
                     # Draw a floating range bar representing the pitch domain
                     ax.barh(idx, avg_max - avg_min, left=avg_min, height=0.5, color=color, alpha=0.7, edgecolor=color, align='center')
                     # Draw ticks for min and max
-                    ax.plot([avg_min, avg_max], [idx, idx], '|', color='black', markersize=10, weight='bold')
+                    ax.plot([avg_min, avg_max], [idx, idx], '|', color='black', markersize=10, markeredgewidth=2)
                     ax.text((avg_min + avg_max)/2, idx, f"{avg_min:.2f} ~ {avg_max:.2f}\n(调域: {avg_max-avg_min:.2f})", 
                             ha='center', va='center', color='black', fontsize=9, fontweight='bold')
                             
@@ -1202,7 +1201,6 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
             prog = ctk.CTkToplevel(self)
             prog.title("导出进行中")
             prog.geometry("300x120")
-            prog.attributes('-topmost', True)
             prog.resizable(False, False)
             prog.update_idletasks()
             
