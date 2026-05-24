@@ -331,62 +331,63 @@ class AcousticChartExporter:
             for g_color_idx, (g_name, entries) in enumerate(facet_grouped.items()):
                 color = self.colors[g_color_idx % len(self.colors)]
 
-                curves_x = []
-                curves_y = []
+                syl_indices = [f_idx] if facet == "按音节位置分面" else list(range(max_syls))
+                label_added = False
 
-                for entry in entries:
-                    y_series = []
-                    x_series = []
+                for s_idx in syl_indices:
+                    curves_x = []
+                    curves_y = []
 
-                    syl_list = entry['normalized_syl_data'] if "T 值" in scale else entry['syl_data']
-
-                    acc_dur = 0.0
-                    for s_idx, (s_dur, pts) in enumerate(syl_list):
-                        if facet == "按音节位置分面" and f_idx != s_idx:
+                    for entry in entries:
+                        syl_list = entry['normalized_syl_data'] if "T 值" in scale else entry['syl_data']
+                        if s_idx >= len(syl_list):
                             continue
+                        
+                        acc_dur = 0.0
+                        for prev_idx in range(s_idx):
+                            acc_dur += syl_list[prev_idx][0]
+                            
+                        s_dur, pts = syl_list[s_idx]
 
                         if x_axis == "归一化采样点":
                             x_pts = np.linspace(s_idx * num_points + 1, (s_idx + 1) * num_points, len(pts))
                         else:
                             x_pts = np.linspace(acc_dur, acc_dur + s_dur, len(pts))
-                            acc_dur += s_dur
 
-                        x_series.extend(x_pts)
-                        y_series.extend(pts)
+                        curves_x.append(np.array(x_pts))
+                        curves_y.append(np.array(pts))
 
-                    if len(y_series) > 0:
-                        curves_x.append(np.array(x_series))
-                        curves_y.append(np.array(y_series))
+                    if not curves_y:
+                        continue
 
-                if not curves_y:
-                    continue
+                    grid_x = np.linspace(np.min([np.min(cx) for cx in curves_x]), np.max([np.max(cx) for cx in curves_x]), num_points)
 
-                total_len = len(curves_x[0]) if curves_x else 10
-                grid_x = np.linspace(np.min([np.min(cx) for cx in curves_x]), np.max([np.max(cx) for cx in curves_x]), total_len)
+                    interpolated_ys = []
+                    for cx, cy in zip(curves_x, curves_y):
+                        valid = ~np.isnan(cy)
+                        if np.sum(valid) >= 2:
+                            iy = np.interp(grid_x, cx[valid], cy[valid])
+                            interpolated_ys.append(iy)
 
-                interpolated_ys = []
-                for cx, cy in zip(curves_x, curves_y):
-                    valid = ~np.isnan(cy)
-                    if np.sum(valid) >= 2:
-                        iy = np.interp(grid_x, cx[valid], cy[valid])
-                        interpolated_ys.append(iy)
+                    if not interpolated_ys:
+                        continue
 
-                if not interpolated_ys:
-                    continue
+                    mean_y = np.nanmean(interpolated_ys, axis=0)
+                    std_y = np.nanstd(interpolated_ys, axis=0)
 
-                mean_y = np.nanmean(interpolated_ys, axis=0)
-                std_y = np.nanstd(interpolated_ys, axis=0)
+                    if "个体浅色" in content:
+                        for cy in interpolated_ys:
+                            ax.plot(grid_x, cy, color=color, linewidth=0.6, alpha=0.18)
+                    elif "置信区间" in content:
+                        ax.fill_between(grid_x, mean_y - std_y, mean_y + std_y, color=color, alpha=0.15)
 
-                if "个体浅色" in content:
-                    for cy in interpolated_ys:
-                        ax.plot(grid_x, cy, color=color, linewidth=0.6, alpha=0.18)
-                elif "置信区间" in content:
-                    ax.fill_between(grid_x, mean_y - std_y, mean_y + std_y, color=color, alpha=0.15)
-
-                short_g_name = g_name
-                if len(g_name) > 12:
-                    short_g_name = g_name[:10] + ".."
-                ax.plot(grid_x, mean_y, '-o', color=color, linewidth=2.5, markersize=5, label=short_g_name)
+                    short_g_name = g_name
+                    if len(g_name) > 12:
+                        short_g_name = g_name[:10] + ".."
+                    
+                    lbl = short_g_name if not label_added else None
+                    ax.plot(grid_x, mean_y, '-o', color=color, linewidth=2.5, markersize=5, label=lbl)
+                    label_added = True
 
             title_text = "声调声学格局连贯图"
             if facet in ("按声调类型分面", "按音节位置分面"):
@@ -1618,24 +1619,49 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
 
         ctk.CTkLabel(self.card_filter, text="🎯 组别筛选器", font=self.font_title).pack(anchor="w", padx=15, pady=(10, 5))
 
-        # Search Entry
+        # Search Entry & Buttons Row
+        search_btn_row = ctk.CTkFrame(self.card_filter, fg_color="transparent")
+        search_btn_row.pack(fill=tk.X, padx=15, pady=(0, 5))
+
         self.search_group_var = ctk.StringVar()
         self.search_group_var.trace_add("write", lambda *args: self._filter_groups_list())
-        self.entry_search_group = ctk.CTkEntry(self.card_filter, placeholder_text="搜索组别...", textvariable=self.search_group_var, height=28, font=self.font_small)
-        self.entry_search_group.pack(fill=tk.X, padx=15, pady=(0, 5))
+
+        self.entry_search_group = ctk.CTkEntry(
+            search_btn_row, placeholder_text="搜索组别...", textvariable=self.search_group_var,
+            font=self.font_small, height=32, fg_color="white", text_color="#1F2937",
+            border_width=1, border_color="#E5E7EB", corner_radius=16
+        )
+        self.entry_search_group.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
+
+        # Select All & Invert buttons packed to the right of the search entry
+        ctk.CTkButton(
+            search_btn_row, text="全选", width=55, height=26, corner_radius=13,
+            font=self.font_small, command=self._select_all_groups
+        ).pack(side=tk.LEFT, padx=2)
+
+        ctk.CTkButton(
+            search_btn_row, text="反选", width=55, height=26, corner_radius=13,
+            font=self.font_small, command=self._reverse_groups
+        ).pack(side=tk.LEFT, padx=2)
 
         # Scrollable Frame for Group list
         self.filter_scroll = ctk.CTkScrollableFrame(self.card_filter, height=120, fg_color="transparent")
         self.filter_scroll.pack(fill=tk.X, padx=10, pady=5)
 
-        # Utility buttons
-        util_btn_frame1 = ctk.CTkFrame(self.card_filter, fg_color="transparent")
-        util_btn_frame1.pack(fill=tk.X, padx=15, pady=(5, 2))
-
-        ctk.CTkButton(util_btn_frame1, text="全选", width=70, height=24, corner_radius=12, font=self.font_small, command=self._select_all_groups).pack(side=tk.LEFT, padx=2)
-        ctk.CTkButton(util_btn_frame1, text="反选", width=70, height=24, corner_radius=12, font=self.font_small, command=self._reverse_groups).pack(side=tk.LEFT, padx=2)
-        ctk.CTkButton(util_btn_frame1, text="只选树中", width=70, height=24, corner_radius=12, font=self.font_small, command=self._select_tree_selected_groups).pack(side=tk.LEFT, padx=2)
-        ctk.CTkButton(util_btn_frame1, text="仅高频", width=70, height=24, corner_radius=12, font=self.font_small, command=self._select_high_frequency_groups).pack(side=tk.LEFT, padx=2)
+        # Bind enter/leave to self.filter_scroll to disable parent left_scroll scrolling
+        def on_enter_filter_scroll(e):
+            self.left_scroll._disable_all_bindings()
+        
+        def on_leave_filter_scroll(e):
+            x = self.filter_scroll.winfo_pointerx() - self.filter_scroll.winfo_rootx()
+            y = self.filter_scroll.winfo_pointery() - self.filter_scroll.winfo_rooty()
+            w = self.filter_scroll.winfo_width()
+            h = self.filter_scroll.winfo_height()
+            if not (0 <= x < w and 0 <= y < h):
+                self.left_scroll._enable_all_bindings()
+            
+        self.filter_scroll.bind("<Enter>", on_enter_filter_scroll, add="+")
+        self.filter_scroll.bind("<Leave>", on_leave_filter_scroll, add="+")
 
         util_btn_frame2 = ctk.CTkFrame(self.card_filter, fg_color="transparent")
         util_btn_frame2.pack(fill=tk.X, padx=15, pady=(2, 10))
@@ -2134,7 +2160,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
 
                 prog.destroy()
                 messagebox.showinfo("成功", f"批量图表成功导出至:\n{out_dir}")
-                self.destroy()
+                # self.destroy()
             except Exception as e:
                 prog.destroy()
                 messagebox.showerror("错误", f"批量图表导出失败: {e}")
@@ -2158,6 +2184,6 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
                 self._export_dataset(data, out_file, ext)
 
                 messagebox.showinfo("成功", f"图表已成功保存至:\n{out_file}")
-                self.destroy()
+                # self.destroy()
             except Exception as e:
                 messagebox.showerror("错误", f"图表导出失败: {e}")

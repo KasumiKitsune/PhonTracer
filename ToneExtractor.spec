@@ -17,7 +17,8 @@ hidden_imports = [
     'scipy.special._cdflib', # scipy 经常漏掉的底层库
     'textgrid',
     'pyreaper',
-    'pkg_resources'
+    'pkg_resources',
+    'matplotlib.backends.backend_svg'
 ]
 
 if sys.platform == 'win32':

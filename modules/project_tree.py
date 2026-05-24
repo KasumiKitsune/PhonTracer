@@ -2192,10 +2192,20 @@ class ProjectTreePanel:
         colors = ['#2563EB', '#DC2626', '#16A34A', '#9333EA', '#EA580C', '#0891B2', '#CA8A04', '#6366F1']
 
         for i, (name, t_vals) in enumerate(data.items()):
-            valid_x = [x for x, v in zip(x_vals, t_vals) if v is not None]
-            valid_y = [v for v in t_vals if v is not None]
-            if valid_x:
-                ax.plot(valid_x, valid_y, '-o', color=colors[i % len(colors)], linewidth=2, markersize=5, label=name)
+            color = colors[i % len(colors)]
+            label_added = False
+            for k in range(max_syls):
+                s_start = k * num_points
+                s_end = (k + 1) * num_points
+                s_t_vals = t_vals[s_start:s_end]
+                s_x_vals = x_vals[s_start:s_end]
+                
+                valid_x = [x for x, v in zip(s_x_vals, s_t_vals) if v is not None]
+                valid_y = [v for v in s_t_vals if v is not None]
+                if valid_x:
+                    lbl = name if not label_added else None
+                    ax.plot(valid_x, valid_y, '-o', color=color, linewidth=2, markersize=5, label=lbl)
+                    label_added = True
 
         ax.set_ylim(0, 5)
         ax.set_xlim(0.5, total_points + 0.5)
