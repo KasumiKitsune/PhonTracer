@@ -99,3 +99,106 @@ def test_project_archive_prunes_unreferenced_audio_and_data():
         }
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_project_manager_overlay():
+    import uuid
+    from modules.speaker_manager import SpeakerState
+
+    temp_dir = tempfile.mkdtemp()
+    try:
+        # Create Project A
+        workspace_a = os.path.join(temp_dir, "workspace_a")
+        os.makedirs(os.path.join(workspace_a, "audio"), exist_ok=True)
+        os.makedirs(os.path.join(workspace_a, "data"), exist_ok=True)
+        
+        sp_a = SpeakerState("发音人 A")
+        sp_a.id = "sp_a_id"
+        sp_a.tab_mode = "多条独立音频"
+        sp_a.pending_batch_paths = []
+        sp_a.items = {}
+        
+        app_a = SimpleNamespace(
+            root=None,
+            speaker_manager=SimpleNamespace(active_speaker_id="sp_a_id", speakers={"sp_a_id": sp_a})
+        )
+        manager_a = _make_project_manager(app_a, workspace_a)
+        
+        dummy_audio_a = os.path.join(workspace_a, "audio", "sp_a_id_batch_0_sample.wav")
+        with open(dummy_audio_a, "wb") as f:
+            f.write(b"wav A")
+        sp_a.pending_batch_paths = [dummy_audio_a]
+        
+        project_a_path = os.path.join(temp_dir, "project_a.teproj")
+        assert manager_a.save_to_workspace() is True
+        assert manager_a.export_project(project_a_path) is True
+
+        # Create Project B (with duplicate speaker name and colliding speaker ID)
+        workspace_b = os.path.join(temp_dir, "workspace_b")
+        os.makedirs(os.path.join(workspace_b, "audio"), exist_ok=True)
+        os.makedirs(os.path.join(workspace_b, "data"), exist_ok=True)
+        
+        sp_b = SpeakerState("发音人 A")
+        sp_b.id = "sp_a_id"
+        sp_b.tab_mode = "多条独立音频"
+        sp_b.pending_batch_paths = []
+        sp_b.items = {}
+        
+        app_b = SimpleNamespace(
+            root=None,
+            speaker_manager=SimpleNamespace(active_speaker_id="sp_a_id", speakers={"sp_a_id": sp_b})
+        )
+        manager_b = _make_project_manager(app_b, workspace_b)
+        
+        dummy_audio_b = os.path.join(workspace_b, "audio", "sp_a_id_batch_0_sample.wav")
+        with open(dummy_audio_b, "wb") as f:
+            f.write(b"wav B")
+        sp_b.pending_batch_paths = [dummy_audio_b]
+        
+        project_b_path = os.path.join(temp_dir, "project_b.teproj")
+        assert manager_b.save_to_workspace() is True
+        assert manager_b.export_project(project_b_path) is True
+
+        # Load Project A and Project B (Overlay) in a destination manager
+        workspace_dest = os.path.join(temp_dir, "workspace_dest")
+        os.makedirs(workspace_dest, exist_ok=True)
+        
+        class MockSpeakerManager:
+            def __init__(self):
+                self.speakers = {}
+                self.active_speaker_id = None
+                
+            def get_all_speakers(self):
+                return list(self.speakers.values())
+                
+        mock_sm = MockSpeakerManager()
+        app_dest = SimpleNamespace(root=None, speaker_manager=mock_sm)
+        manager_dest = _make_project_manager(app_dest, workspace_dest)
+        
+        # Load project A normally
+        assert manager_dest.load_project(project_a_path, overlay=False) is True
+        assert len(mock_sm.speakers) == 1
+        loaded_spk_a_id = list(mock_sm.speakers.keys())[0]
+        assert mock_sm.speakers[loaded_spk_a_id].name == "发音人 A"
+        assert mock_sm.active_speaker_id == loaded_spk_a_id
+        
+        # Load project B with overlay=True
+        assert manager_dest.load_project(project_b_path, overlay=True) is True
+        
+        # Verify merged state
+        assert len(mock_sm.speakers) == 2
+        
+        spk_a = mock_sm.speakers[loaded_spk_a_id]
+        other_spk_id = [sid for sid in mock_sm.speakers if sid != loaded_spk_a_id][0]
+        spk_b = mock_sm.speakers[other_spk_id]
+        
+        assert spk_a.name == "发音人 A"
+        assert spk_b.name == "发音人 A_2"
+        assert mock_sm.active_speaker_id == other_spk_id
+        
+        # Verify workspace files are copied
+        expected_audio_rel = spk_a.pending_batch_paths[0]
+        assert os.path.exists(expected_audio_rel)
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+

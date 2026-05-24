@@ -121,6 +121,9 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
         
         # Dynamic Options - Quality Check
         self.var_qc_view = ctk.StringVar(value="raw_overlay")  # raw_overlay, active_ratio, speaker_means
+        
+        # Pagination state
+        self.current_preview_page = 0
 
     def _build_gui(self):
         # Main Grid Layout: Left Column = Settings, Right Column = Preview
@@ -138,6 +141,8 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
         self.right_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.right_frame.grid(row=0, column=1, sticky="nsew", padx=(10, 15), pady=15)
         self.right_frame.grid_rowconfigure(0, weight=1)
+        self.right_frame.grid_rowconfigure(1, weight=0)
+        self.right_frame.grid_rowconfigure(2, weight=0)
         self.right_frame.grid_columnconfigure(0, weight=1)
         
         # Preview Canvas Container
@@ -149,9 +154,32 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
         self.preview_lbl = ctk.CTkLabel(self.preview_container, text="正在加载图表预览...", font=self.font_title, text_color="#6B7280")
         self.preview_lbl.grid(row=0, column=0)
         
+        # Pagination Frame (Hidden by default, shown when scope is separate)
+        self.pagination_frame = ctk.CTkFrame(self.right_frame, fg_color="transparent")
+        self.pagination_frame.grid_columnconfigure(0, weight=1)
+        self.pagination_frame.grid_columnconfigure(1, weight=0)
+        self.pagination_frame.grid_columnconfigure(2, weight=1)
+        
+        self.btn_prev_page = ctk.CTkButton(
+            self.pagination_frame, text="◀ 上一个发音人", width=120, height=30, corner_radius=15,
+            fg_color=("#F3F4F6", "#374151"), text_color=("#374151", "#E5E7EB"), hover_color=("#E5E7EB", "#4B5563"),
+            font=self.font_main, command=self._prev_page
+        )
+        self.btn_prev_page.grid(row=0, column=0, padx=10, sticky="e")
+        
+        self.lbl_page_info = ctk.CTkLabel(self.pagination_frame, text="发音人: - (0/0)", font=self.font_title)
+        self.lbl_page_info.grid(row=0, column=1, padx=20)
+        
+        self.btn_next_page = ctk.CTkButton(
+            self.pagination_frame, text="下一个发音人 ▶", width=120, height=30, corner_radius=15,
+            fg_color=("#F3F4F6", "#374151"), text_color=("#374151", "#E5E7EB"), hover_color=("#E5E7EB", "#4B5563"),
+            font=self.font_main, command=self._next_page
+        )
+        self.btn_next_page.grid(row=0, column=2, padx=10, sticky="w")
+        
         # Bottom Buttons
         self.bottom_frame = ctk.CTkFrame(self.right_frame, fg_color="transparent")
-        self.bottom_frame.grid(row=1, column=0, sticky="ew")
+        self.bottom_frame.grid(row=2, column=0, sticky="ew")
         
         ctk.CTkButton(self.bottom_frame, text="🔄 刷新预览", width=120, height=38, corner_radius=19, fg_color="#E5E7EB", text_color="#374151", hover_color="#D1D5DB", font=self.font_main, command=self.update_preview).pack(side=tk.LEFT, padx=5)
         
@@ -159,6 +187,18 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
         self.btn_export.pack(side=tk.RIGHT, padx=5)
         
         ctk.CTkButton(self.bottom_frame, text="取消", width=100, height=38, corner_radius=19, fg_color="#F3F4F6", text_color="#4B5563", hover_color="#E5E7EB", font=self.font_main, command=self.destroy).pack(side=tk.RIGHT, padx=5)
+
+    def _prev_page(self):
+        if not self.all_speakers:
+            return
+        self.current_preview_page = (self.current_preview_page - 1) % len(self.all_speakers)
+        self.update_preview()
+
+    def _next_page(self):
+        if not self.all_speakers:
+            return
+        self.current_preview_page = (self.current_preview_page + 1) % len(self.all_speakers)
+        self.update_preview()
 
     def _build_settings_cards(self):
         card_padding = {"padx": 10, "pady": 8}
@@ -258,6 +298,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
         self.update_preview()
 
     def _on_scope_changed(self, val):
+        self.current_preview_page = 0
         if "整合" in val:
             self.var_export_scope.set("integrated")
             # Force scale to T-value for integrated speaker plots
@@ -514,8 +555,16 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
         if scope == "active" or not self.all_speakers:
             # Active speaker only
             return self._extract_active_data([self.active_speaker])
+        elif scope == "separate":
+            # For separate export preview, show the speaker at self.current_preview_page
+            idx = getattr(self, 'current_preview_page', 0)
+            if idx < 0 or idx >= len(self.all_speakers):
+                idx = 0
+                self.current_preview_page = 0
+            current_speaker = self.all_speakers[idx]
+            return self._extract_active_data([current_speaker])
         else:
-            # All speakers
+            # All speakers (integrated)
             return self._extract_active_data(self.all_speakers)
 
     # --- ADVANCED SCIENTIFIC PLOTTING ENGINE ---
@@ -669,7 +718,13 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
                 # Always draw the thick bold average curve
                 ax.plot(grid_x, mean_y, '-o', color=color, linewidth=2.5, markersize=5, label=g_name)
                 
-            ax.set_title(f_key if facet != "Default" else "声调声学格局连贯图", fontsize=12, fontweight="bold")
+            title_text = "声调声学格局连贯图"
+            if facet in ("按声调类型分面", "按音节位置分面"):
+                title_text = f_key
+            else:
+                if len(set(e['speaker_name'] for e in data_entries)) == 1:
+                    title_text = f"{data_entries[0]['speaker_name']} - 声学格局连贯图"
+            ax.set_title(title_text, fontsize=12, fontweight="bold")
             
             # Setup Y bounds
             if "T 值" in scale:
@@ -1204,6 +1259,19 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
             
         self.preview_lbl = ctk.CTkLabel(self.preview_container, text="⏳ 正在实时渲染声图，请稍候...", font=self.font_title)
         self.preview_lbl.grid(row=0, column=0)
+        
+        scope = self.var_export_scope.get()
+        if scope == "separate" and len(self.all_speakers) > 1:
+            self.pagination_frame.grid(row=1, column=0, pady=(0, 10))
+            idx = getattr(self, 'current_preview_page', 0)
+            if idx < 0 or idx >= len(self.all_speakers):
+                idx = 0
+                self.current_preview_page = 0
+            spk_name = self.all_speakers[idx].name
+            self.lbl_page_info.configure(text=f"发音人: {spk_name} ({idx+1}/{len(self.all_speakers)})")
+        else:
+            self.pagination_frame.grid_forget()
+            
         self.update_idletasks()
         
         try:

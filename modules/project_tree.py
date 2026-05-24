@@ -1264,7 +1264,7 @@ class ProjectTreePanel:
             is_active = (spk.id == active_speaker.id)
             val = ctk.BooleanVar(value=is_active)
             cb = ctk.CTkCheckBox(scroll_frame, text=f"{spk.name} ({len(spk.items)}项)", variable=val, font=self.font_main, 
-                                 fg_color=("#3B82F6", "#2563EB"), hover_color=("#4B5563", "#9CA3AF"), border_color=("#9CA3AF", "#4B5563"))
+                                 fg_color=("#3B82F6", "#2563EB"), hover_color=("#9CA3AF", "#4B5563"), border_color=("#4B5563", "#9CA3AF"))
             cb.pack(anchor="w", padx=15, pady=6)
             checkboxes[spk] = val
             
@@ -1278,10 +1278,10 @@ class ProjectTreePanel:
             for val in checkboxes.values():
                 val.set(False)
                 
-        ctk.CTkButton(util_frame, text="全选", width=75, height=26, corner_radius=6, font=font_small, 
+        ctk.CTkButton(util_frame, text="全选", width=75, height=26, corner_radius=13, font=font_small, 
                       fg_color=("#F3F4F6", "#374151"), text_color=("#2563EB", "#60A5FA"), hover_color=("#E5E7EB", "#4B5563"), 
                       border_width=1, border_color=("#D1D5DB", "#475569"), command=select_all).pack(side=tk.LEFT, padx=5)
-        ctk.CTkButton(util_frame, text="全不选", width=75, height=26, corner_radius=6, font=font_small, 
+        ctk.CTkButton(util_frame, text="全不选", width=75, height=26, corner_radius=13, font=font_small, 
                       fg_color=("#F3F4F6", "#374151"), text_color=("#4B5563", "#D1D5DB"), hover_color=("#E5E7EB", "#4B5563"), 
                       border_width=1, border_color=("#D1D5DB", "#475569"), command=select_none).pack(side=tk.LEFT, padx=5)
         
@@ -1289,7 +1289,7 @@ class ProjectTreePanel:
         
         integrate_var = ctk.BooleanVar(value=False)
         cb_integrate = ctk.CTkCheckBox(dlg, text="整合选中发音人的结果 (采用 T值归一化)", variable=integrate_var, font=self.font_main,
-                                       fg_color=("#3B82F6", "#2563EB"), hover_color=("#4B5563", "#9CA3AF"), border_color=("#9CA3AF", "#4B5563"))
+                                       fg_color=("#3B82F6", "#2563EB"), hover_color=("#9CA3AF", "#4B5563"), border_color=("#4B5563", "#9CA3AF"))
         cb_integrate.pack(anchor="w", padx=40, pady=5)
         
         def on_confirm():
@@ -1304,25 +1304,41 @@ class ProjectTreePanel:
         btn_frame = ctk.CTkFrame(dlg, fg_color="transparent")
         btn_frame.pack(pady=(15, 10))
         
-        ctk.CTkButton(btn_frame, text="取消", width=90, height=36, corner_radius=10, 
+        ctk.CTkButton(btn_frame, text="取消", width=90, height=36, corner_radius=18, 
                       fg_color=("#F3F4F6", "#374151"), text_color=("#4B5563", "#D1D5DB"), hover_color=("#E5E7EB", "#4B5563"), 
                       border_width=1, border_color=("#D1D5DB", "#475569"), font=self.font_main, command=dlg.destroy).pack(side=tk.LEFT, padx=10)
-        ctk.CTkButton(btn_frame, text="下一步", width=90, height=36, corner_radius=10, 
+        ctk.CTkButton(btn_frame, text="下一步", width=90, height=36, corner_radius=18, 
                       fg_color=("#3B82F6", "#2563EB"), text_color="#FFFFFF", hover_color=("#2563EB", "#1D4ED8"), font=self.font_main, command=on_confirm).pack(side=tk.LEFT, padx=10)
 
     def _do_custom_export_preparation(self, selected_speakers, do_integrate):
-        empty_labels = []
+        anomalous_labels = []
         for s in selected_speakers:
             for grp_name, children in self._get_items_by_group_for_dict(s.items):
                 for child in children:
                     item = s.items[child]
-                    if self._check_item_has_empty_data(item):
-                        empty_labels.append(f"[{s.name}] {item['label']}")
-        if empty_labels:
-            msg = "部分项目的基频数据包含 0 值：\n\n" + "\n".join(empty_labels[:10])
-            if len(empty_labels) > 10: msg += f"\n... 等共 {len(empty_labels)} 项"
-            msg += "\n\n是否继续导出？"
-            if not messagebox.askyesno("空数据警告", msg): return
+                    warnings = item.get('warnings')
+                    if warnings is None:
+                        warnings = self.analyze_item_anomalies(item)
+                    
+                    has_anomalies = any(w.startswith("[致命]") or w.startswith("[警告]") for w in warnings)
+                    if has_anomalies:
+                        descriptions = []
+                        for w in warnings:
+                            if w.startswith("[致命]") or w.startswith("[警告]"):
+                                parts = w.split("] ", 1)
+                                desc = parts[1] if len(parts) > 1 else w
+                                descriptions.append(desc)
+                        
+                        anomaly_desc = ", ".join(descriptions)
+                        anomalous_labels.append(f"[{s.name}] {item['label']} ({anomaly_desc})")
+
+        if anomalous_labels:
+            msg = "以下项目检测到可能影响声调分析的异常（如 F0 缺失、边界无效、声母段过短、疑似噪声等）：\n\n" + "\n".join(anomalous_labels[:10])
+            if len(anomalous_labels) > 10:
+                msg += f"\n... 等共 {len(anomalous_labels)} 项"
+            msg += "\n\n是否继续强制导出？"
+            if not messagebox.askyesno("异常数据警告", msg):
+                return
             
         if len(selected_speakers) == 1 and not do_integrate:
             s = selected_speakers[0]
@@ -1330,7 +1346,7 @@ class ProjectTreePanel:
             self.items = s.items
             tree_structure = self._get_all_items_by_group()
             self.items = orig_items
-            self._check_empty_and_show_menu(tree_structure, mode='single', all_speakers=selected_speakers)
+            self._show_export_menu(tree_structure=tree_structure, mode='single', all_speakers=selected_speakers)
         else:
             if do_integrate:
                 self._show_export_menu(mode='integrated', all_speakers=selected_speakers)
@@ -1348,18 +1364,20 @@ class ProjectTreePanel:
             groups[g].append(k)
         return [(g, groups[g]) for g in groups]
 
-    def _check_empty_and_show_menu(self, tree_structure, mode='single'):
+    def _check_empty_and_show_menu(self, tree_structure, mode='single', all_speakers=None):
         empty_labels = []
+        items_dict = all_speakers[0].items if (all_speakers and len(all_speakers) == 1) else self.items
         for grp_name, children in tree_structure:
             for child in children:
-                item = self.items[child]
-                if self._check_item_has_empty_data(item): empty_labels.append(f"[{grp_name}] {item['label']}")
+                item = items_dict.get(child)
+                if item and self._check_item_has_empty_data(item):
+                    empty_labels.append(f"[{grp_name}] {item['label']}")
         if empty_labels:
             msg = "以下项目的基频数据包含 0 值（可能无法提取有效声调）：\n\n" + "\n".join(empty_labels[:10])
             if len(empty_labels) > 10: msg += f"\n... 等共 {len(empty_labels)} 项"
             msg += "\n\n是否继续导出？"
             if not messagebox.askyesno("空数据警告", msg): return
-        self._show_export_menu(tree_structure=tree_structure, mode=mode)
+        self._show_export_menu(tree_structure=tree_structure, mode=mode, all_speakers=all_speakers)
 
     def _show_export_menu(self, tree_structure=None, mode='single', all_speakers=None):
         dlg = ctk.CTkToplevel(self.parent)

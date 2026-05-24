@@ -328,7 +328,7 @@ class ProjectManager:
             self._show_error("导出失败", str(e))
             return False
 
-    def load_project(self, zip_path):
+    def load_project(self, zip_path, overlay=False):
         temp_workspace = None
         try:
             if not zipfile.is_zipfile(zip_path):
@@ -350,12 +350,26 @@ class ProjectManager:
                 raise ValueError("工程文件损坏：未找到发音人数据")
 
             with self._save_lock:
-                if os.path.exists(self.workspace_dir):
-                    shutil.rmtree(self.workspace_dir)
-                shutil.move(temp_workspace, self.workspace_dir)
-                temp_workspace = None
-                self._prune_unused_workspace_files(self._collect_project_file_refs(state))
-                self._restore_state(state)
+                if not overlay:
+                    if os.path.exists(self.workspace_dir):
+                        shutil.rmtree(self.workspace_dir)
+                    shutil.move(temp_workspace, self.workspace_dir)
+                    temp_workspace = None
+                    self._prune_unused_workspace_files(self._collect_project_file_refs(state))
+                else:
+                    # Overlay mode: merge files to existing workspace
+                    if not os.path.exists(self.workspace_dir):
+                        os.makedirs(self.workspace_dir)
+                    for subdir in ("audio", "data"):
+                        src_sub = os.path.join(temp_workspace, subdir)
+                        if os.path.isdir(src_sub):
+                            dst_sub = os.path.join(self.workspace_dir, subdir)
+                            if not os.path.exists(dst_sub):
+                                os.makedirs(dst_sub)
+                            for file_name in os.listdir(src_sub):
+                                shutil.copy2(os.path.join(src_sub, file_name), os.path.join(dst_sub, file_name))
+                
+                self._restore_state(state, overlay=overlay)
             
             return True
         except Exception as e:
@@ -382,14 +396,37 @@ class ProjectManager:
             return os.path.join(self.workspace_dir, *norm.split("/"))
         return path
 
-    def _restore_state(self, state):
+    def _restore_state(self, state, overlay=False):
         import parselmouth
         from .speaker_manager import SpeakerState
 
         restored = {}
-        for spk_id, spk_data in state.get("speakers", {}).items():
-            spk = SpeakerState(spk_data.get("name", "发音人"))
-            spk.id = spk_data.get("id", spk_id)
+        id_mapping = {}
+        
+        current_speakers = self.app.speaker_manager.speakers
+        existing_names = {s.name for s in current_speakers.values()} if overlay else set()
+
+        for old_spk_id, spk_data in state.get("speakers", {}).items():
+            name = spk_data.get("name", "发音人")
+            if overlay:
+                if name in existing_names:
+                    base_name = name
+                    counter = 2
+                    while f"{base_name}_{counter}" in existing_names:
+                        counter += 1
+                    name = f"{base_name}_{counter}"
+                existing_names.add(name)
+
+            spk = SpeakerState(name)
+            
+            orig_id = spk_data.get("id", old_spk_id)
+            if overlay and orig_id in current_speakers:
+                spk.id = str(uuid.uuid4())
+            else:
+                spk.id = orig_id
+                
+            id_mapping[orig_id] = spk.id
+            
             spk.last_params = spk_data.get("last_params", spk.last_params)
             spk.tab_mode = spk_data.get("tab_mode", "多条独立音频")
 
@@ -427,9 +464,18 @@ class ProjectManager:
 
             restored[spk.id] = spk
 
-        self.app.speaker_manager.speakers.clear()
-        self.app.speaker_manager.speakers.update(restored)
-        active_id = state.get("active_speaker_id")
-        if active_id not in restored:
-            active_id = next(iter(restored))
-        self.app.speaker_manager.active_speaker_id = active_id
+        if not overlay:
+            self.app.speaker_manager.speakers.clear()
+            self.app.speaker_manager.speakers.update(restored)
+            active_id = state.get("active_speaker_id")
+            if active_id not in restored:
+                active_id = next(iter(restored)) if restored else None
+            self.app.speaker_manager.active_speaker_id = active_id
+        else:
+            self.app.speaker_manager.speakers.update(restored)
+            imported_active_id = state.get("active_speaker_id")
+            new_active_id = id_mapping.get(imported_active_id)
+            if not new_active_id and restored:
+                new_active_id = next(iter(restored))
+            if new_active_id:
+                self.app.speaker_manager.active_speaker_id = new_active_id
