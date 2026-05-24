@@ -50,9 +50,11 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
         
         # Variables Setup
         self._init_variables()
+        self._init_group_filters()
         
         # GUI Structure
         self._build_gui()
+        self._populate_groups_list()
         
         # Render Initial Preview
         self.update_preview()
@@ -82,7 +84,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
 
     def _init_variables(self):
         # 1. Chart Type
-        self.var_chart_type = ctk.StringVar(value="contour")  # contour, distribution, density, quality
+        self.var_chart_type = ctk.StringVar(value="contour")  # contour, distribution, density, quality, overview_heatmap
         
         # 2. Export Scope
         scope_default = "active"
@@ -124,6 +126,20 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
         
         # Pagination state
         self.current_preview_page = 0
+        self.sort_by_count = False
+
+    def _init_group_filters(self):
+        # Extract all unique group names across all speakers
+        all_entries = self._extract_active_data(self.all_speakers if self.all_speakers else [self.active_speaker])
+        self.group_counts = {}
+        for entry in all_entries:
+            g = entry['group']
+            self.group_counts[g] = self.group_counts.get(g, 0) + 1
+            
+        self.available_groups = sorted(list(self.group_counts.keys()))
+        self.group_checkbox_vars = {}
+        for g in self.available_groups:
+            self.group_checkbox_vars[g] = ctk.BooleanVar(value=True)
 
     def _build_gui(self):
         # Main Grid Layout: Left Column = Settings, Right Column = Preview
@@ -203,6 +219,44 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
     def _build_settings_cards(self):
         card_padding = {"padx": 10, "pady": 8}
         
+        # --- OPTIONAL: Multi-group warning/suggestion card ---
+        if len(self.available_groups) > 8:
+            card_warn = ctk.CTkFrame(self.left_scroll, fg_color=("#FFFBEB", "#2A200B"), border_width=1, border_color=("#F59E0B", "#B45309"), corner_radius=12)
+            card_warn.pack(fill=tk.X, **card_padding)
+            
+            ctk.CTkLabel(card_warn, text="⚠️ 多组别优化建议", font=self.font_title, text_color=("#B45309", "#FBBF24")).pack(anchor="w", padx=15, pady=(10, 5))
+            
+            lbl_warn_text = (
+                f"当前数据包含 {len(self.available_groups)} 个组别。如果在一张图里\n"
+                f"叠加所有曲线会导致图表极其杂乱、无法阅读。\n"
+                f"建议选择以下三种专业优化模式之一："
+            )
+            ctk.CTkLabel(card_warn, text=lbl_warn_text, font=self.font_small, justify="left", text_color=("#78350F", "#FDE68A")).pack(anchor="w", padx=15, pady=(0, 10))
+            
+            btn_frame = ctk.CTkFrame(card_warn, fg_color="transparent")
+            btn_frame.pack(fill=tk.X, padx=15, pady=(0, 15))
+            
+            btn_opt1 = ctk.CTkButton(
+                btn_frame, text="精选对比", width=95, height=28, corner_radius=14,
+                fg_color=("#F59E0B", "#D97706"), text_color="white", hover_color=("#D97706", "#B45309"),
+                font=self.font_small, command=self._apply_featured_contrast_mode
+            )
+            btn_opt1.pack(side=tk.LEFT, padx=3)
+            
+            btn_opt2 = ctk.CTkButton(
+                btn_frame, text="批量图册", width=95, height=28, corner_radius=14,
+                fg_color=("#10B981", "#059669"), text_color="white", hover_color=("#059669", "#047857"),
+                font=self.font_small, command=self._apply_batch_album_mode
+            )
+            btn_opt2.pack(side=tk.LEFT, padx=3)
+            
+            btn_opt3 = ctk.CTkButton(
+                btn_frame, text="整体概览", width=95, height=28, corner_radius=14,
+                fg_color=("#6366F1", "#4F46E5"), text_color="white", hover_color=("#4F46E5", "#4338CA"),
+                font=self.font_small, command=self._apply_overall_overview_mode
+            )
+            btn_opt3.pack(side=tk.LEFT, padx=3)
+
         # --- CARD 1: Basic Type & Scope ---
         card1 = ctk.CTkFrame(self.left_scroll, fg_color=("#FFFFFF", "#1E293B"), border_width=1, border_color=("#E5E7EB", "#475569"), corner_radius=12)
         card1.pack(fill=tk.X, **card_padding)
@@ -211,10 +265,20 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
         
         # Chart Type OptionMenu
         ctk.CTkLabel(card1, text="图表类型:", font=self.font_small).pack(anchor="w", padx=15)
-        self.combo_type = ctk.CTkOptionMenu(card1, values=["声调轮廓图", "声调分布图", "时序密度图", "数据质量检查"], command=self._on_type_changed, **self.dropdown_kwargs)
+        self.combo_type = ctk.CTkOptionMenu(card1, values=["声调轮廓图", "声调分布图", "时序密度图", "数据质量检查", "声调组别概览图"], command=self._on_type_changed, **self.dropdown_kwargs)
         self.combo_type.set("声调轮廓图")
         self.combo_type.pack(fill=tk.X, padx=15, pady=(0, 10))
         self._apply_custom_arrow(self.combo_type)
+        
+        # Export Intention OptionMenu
+        ctk.CTkLabel(card1, text="导出意图 (自动匹配推荐设置):", font=self.font_small).pack(anchor="w", padx=15)
+        self.combo_intention = ctk.CTkOptionMenu(
+            card1, values=["论文主图 (清晰对比)", "附录图册 (完整数据)", "数据诊断 (质量排查)"],
+            command=self._on_intention_changed, **self.dropdown_kwargs
+        )
+        self.combo_intention.set("论文主图 (清晰对比)")
+        self.combo_intention.pack(fill=tk.X, padx=15, pady=(0, 10))
+        self._apply_custom_arrow(self.combo_intention)
         
         # Export Scope Options
         ctk.CTkLabel(card1, text="导出范围:", font=self.font_small).pack(anchor="w", padx=15)
@@ -273,6 +337,47 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
         # Build initial dynamic UI for Tone Contour
         self._build_contour_settings()
 
+        # --- CARD 4: Group Filter ---
+        self.card_filter = ctk.CTkFrame(self.left_scroll, fg_color=("#FFFFFF", "#1E293B"), border_width=1, border_color=("#E5E7EB", "#475569"), corner_radius=12)
+        self.card_filter.pack(fill=tk.X, **card_padding)
+        
+        ctk.CTkLabel(self.card_filter, text="🎯 组别筛选器", font=self.font_title).pack(anchor="w", padx=15, pady=(10, 5))
+        
+        # Search Entry
+        self.search_group_var = ctk.StringVar()
+        self.search_group_var.trace_add("write", lambda *args: self._filter_groups_list())
+        self.entry_search_group = ctk.CTkEntry(self.card_filter, placeholder_text="搜索组别...", textvariable=self.search_group_var, height=28, font=self.font_small)
+        self.entry_search_group.pack(fill=tk.X, padx=15, pady=(0, 5))
+        
+        # Scrollable Frame for Group list
+        self.filter_scroll = ctk.CTkScrollableFrame(self.card_filter, height=120, fg_color="transparent")
+        self.filter_scroll.pack(fill=tk.X, padx=10, pady=5)
+        
+        # Utility buttons
+        util_btn_frame1 = ctk.CTkFrame(self.card_filter, fg_color="transparent")
+        util_btn_frame1.pack(fill=tk.X, padx=15, pady=(5, 2))
+        
+        ctk.CTkButton(util_btn_frame1, text="全选", width=70, height=24, corner_radius=12, font=self.font_small, command=self._select_all_groups).pack(side=tk.LEFT, padx=2)
+        ctk.CTkButton(util_btn_frame1, text="反选", width=70, height=24, corner_radius=12, font=self.font_small, command=self._reverse_groups).pack(side=tk.LEFT, padx=2)
+        ctk.CTkButton(util_btn_frame1, text="只选树中", width=70, height=24, corner_radius=12, font=self.font_small, command=self._select_tree_selected_groups).pack(side=tk.LEFT, padx=2)
+        ctk.CTkButton(util_btn_frame1, text="仅高频", width=70, height=24, corner_radius=12, font=self.font_small, command=self._select_high_frequency_groups).pack(side=tk.LEFT, padx=2)
+        
+        util_btn_frame2 = ctk.CTkFrame(self.card_filter, fg_color="transparent")
+        util_btn_frame2.pack(fill=tk.X, padx=15, pady=(2, 10))
+        
+        self.btn_toggle_sort = ctk.CTkButton(
+            util_btn_frame2, text="按样本量排序", width=95, height=24, corner_radius=12, font=self.font_small,
+            fg_color=("#E5E7EB", "#374151"), text_color=("#374151", "#E5E7EB"), hover_color=("#D1D5DB", "#4B5563"),
+            command=self._toggle_groups_sorting
+        )
+        self.btn_toggle_sort.pack(side=tk.LEFT, padx=2)
+        
+        ctk.CTkLabel(util_btn_frame2, text="样本量 >", font=self.font_small).pack(side=tk.LEFT, padx=(10, 2))
+        self.entry_min_count = ctk.CTkEntry(util_btn_frame2, width=40, height=24, font=self.font_small, justify="center")
+        self.entry_min_count.insert(0, "0")
+        self.entry_min_count.pack(side=tk.LEFT, padx=2)
+        self.entry_min_count.bind("<KeyRelease>", lambda e: self._populate_groups_list())
+
     def _on_type_changed(self, val):
         # Update dynamic options card UI based on chart type selection
         for widget in self.dynamic_content_frame.winfo_children():
@@ -294,6 +399,10 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
             self.var_chart_type.set("quality")
             self.dynamic_title.configure(text="⚙️ 数据质量检查专有选项")
             self._build_quality_settings()
+        elif val == "声调组别概览图":
+            self.var_chart_type.set("overview_heatmap")
+            self.dynamic_title.configure(text="⚙️ 声调组别概览图专有选项")
+            self._build_overview_heatmap_settings()
             
         self.update_preview()
 
@@ -311,6 +420,174 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
             self.var_export_scope.set("active")
             self.combo_scale.configure(state="normal")
         self.update_preview()
+
+    def _on_intention_changed(self, val):
+        if "论文主图" in val:
+            selected_count = sum(1 for v in self.group_checkbox_vars.values() if v.get())
+            if selected_count > 8:
+                if messagebox.askyesno("论文主图模式", f"当前选中了 {selected_count} 个组，论文主图建议展示 8 组以内以保证可读性。\n是否自动精选样本量最大的 8 组？"):
+                    self._apply_featured_contrast_mode()
+            
+            if self.var_chart_type.get() == "quality" or self.var_chart_type.get() == "overview_heatmap":
+                self.combo_type.set("声调轮廓图")
+                self._on_type_changed("声调轮廓图")
+            
+            if self.var_chart_type.get() == "contour":
+                self.combo_contour_content.set("平均曲线 + 置信区间阴影")
+                
+        elif "附录图册" in val:
+            for var in self.group_checkbox_vars.values():
+                var.set(True)
+            self._populate_groups_list()
+            self.combo_format.set("PDF 文档 (.pdf)")
+            
+            if self.var_chart_type.get() == "quality":
+                self.combo_type.set("声调轮廓图")
+                self._on_type_changed("声调轮廓图")
+                
+            self._on_group_filter_changed()
+            messagebox.showinfo("附录图册模式", "已选中所有组别，并将导出格式设为 PDF。导出时将自动分页绘制完整图册。")
+            
+        elif "数据诊断" in val:
+            self.combo_type.set("数据质量检查")
+            self._on_type_changed("数据质量检查")
+            self.var_qc_view.set("raw_overlay")
+            self.combo_qc_view.set("个体 Raw F0 曲线叠加 (异常高亮)")
+            
+            for var in self.group_checkbox_vars.values():
+                var.set(True)
+            self._populate_groups_list()
+            self._on_group_filter_changed()
+            messagebox.showinfo("数据诊断模式", "已切换至“数据质量检查”视图，将重点排查 F0 缺失、异常与变异。")
+
+    def _apply_featured_contrast_mode(self):
+        if not self.group_counts:
+            return
+        sorted_groups = sorted(self.group_counts.keys(), key=lambda g: self.group_counts[g], reverse=True)
+        top_8 = set(sorted_groups[:8])
+        for g, var in self.group_checkbox_vars.items():
+            var.set(g in top_8)
+        self._populate_groups_list()
+        self._on_group_filter_changed()
+
+    def _apply_batch_album_mode(self):
+        for var in self.group_checkbox_vars.values():
+            var.set(True)
+        self.combo_format.set("PDF 文档 (.pdf)")
+        self._populate_groups_list()
+        self._on_group_filter_changed()
+
+    def _apply_overall_overview_mode(self):
+        self.combo_type.set("声调组别概览图")
+        self._on_type_changed("声调组别概览图")
+
+    def _select_tree_selected_groups(self):
+        if not self.project_tree or not hasattr(self.project_tree, 'tree'):
+            return
+            
+        selected_iids = self.project_tree.tree.selection()
+        if not selected_iids:
+            messagebox.showinfo("提示", "当前主界面的目录树中没有选中任何项。\n请先在主界面目录树中选择声调组或词条。")
+            return
+            
+        selected_groups = set()
+        for iid in selected_iids:
+            if iid.startswith("group_node_"):
+                g_name = iid[len("group_node_"):]
+                if g_name != "__warning__":
+                    selected_groups.add(g_name)
+            else:
+                item = self.project_tree.items.get(iid)
+                if item and 'group' in item:
+                    selected_groups.add(item['group'])
+                elif item and 'tone' in item:
+                    selected_groups.add(item['tone'])
+                    
+        if not selected_groups:
+            messagebox.showinfo("提示", "未能在当前目录树选中项中识别到有效的声调组别。")
+            return
+            
+        for g, var in self.group_checkbox_vars.items():
+            var.set(g in selected_groups)
+            
+        self._populate_groups_list()
+        self._on_group_filter_changed()
+
+    def _toggle_groups_sorting(self):
+        self.sort_by_count = not getattr(self, 'sort_by_count', False)
+        if self.sort_by_count:
+            self.btn_toggle_sort.configure(fg_color=("#3B82F6", "#2563EB"), text_color="white")
+        else:
+            self.btn_toggle_sort.configure(fg_color=("#E5E7EB", "#374151"), text_color=("#374151", "#E5E7EB"))
+        self._populate_groups_list()
+
+    def _populate_groups_list(self):
+        for w in self.filter_scroll.winfo_children():
+            w.destroy()
+            
+        search_query = self.search_group_var.get().strip().lower()
+        
+        min_count = 0
+        try:
+            val_str = self.entry_min_count.get().strip()
+            if val_str:
+                min_count = int(val_str)
+        except ValueError:
+            pass
+            
+        if getattr(self, 'sort_by_count', False):
+            groups_to_draw = sorted(self.available_groups, key=lambda g: self.group_counts.get(g, 0), reverse=True)
+        else:
+            groups_to_draw = self.available_groups
+            
+        for g in groups_to_draw:
+            count = self.group_counts.get(g, 0)
+            if count < min_count:
+                continue
+            if search_query and search_query not in g.lower():
+                continue
+                
+            var = self.group_checkbox_vars[g]
+            cb = ctk.CTkCheckBox(
+                self.filter_scroll, text=f"{g} ({count}项)", variable=var,
+                font=self.font_small, checkbox_width=18, checkbox_height=18,
+                fg_color=("#3B82F6", "#2563EB"), hover_color=("#4B5563", "#9CA3AF"), border_color=("#9CA3AF", "#4B5563"),
+                command=self._on_group_filter_changed
+            )
+            cb.pack(anchor="w", padx=10, pady=3)
+
+    def _on_group_filter_changed(self):
+        self.current_preview_page = 0
+        self.update_preview()
+
+    def _select_all_groups(self):
+        for var in self.group_checkbox_vars.values():
+            var.set(True)
+        self._on_group_filter_changed()
+
+    def _reverse_groups(self):
+        for var in self.group_checkbox_vars.values():
+            var.set(not var.get())
+        self._on_group_filter_changed()
+
+    def _select_high_frequency_groups(self):
+        if not self.group_counts:
+            return
+        counts = list(self.group_counts.values())
+        median_count = np.median(counts) if counts else 1
+        for g, var in self.group_checkbox_vars.items():
+            var.set(self.group_counts[g] >= median_count)
+        self._on_group_filter_changed()
+
+    def _filter_groups_list(self):
+        self._populate_groups_list()
+
+    def _build_overview_heatmap_settings(self):
+        ctk.CTkLabel(self.dynamic_content_frame, text="热图展示维度:", font=self.font_small).pack(anchor="w", pady=(5, 2))
+        self.combo_overview_metric = ctk.CTkOptionMenu(self.dynamic_content_frame, values=["均值热图 (Mean Map)", "标准差热图 (SD Map)"], command=lambda _: self.update_preview(), **self.dropdown_kwargs)
+        self.combo_overview_metric.set("均值热图 (Mean Map)")
+        self.combo_overview_metric.pack(fill=tk.X, pady=(2, 10))
+        self._apply_custom_arrow(self.combo_overview_metric)
 
     # --- DYNAMIC CONFIGURATION UI BUILDERS ---
     def _build_contour_settings(self):
@@ -548,6 +825,10 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
                 
             self.project_tree.items = orig_items
             
+        if hasattr(self, 'group_checkbox_vars') and self.group_checkbox_vars:
+            selected_groups = {g for g, var in self.group_checkbox_vars.items() if var.get()}
+            data_entries = [e for e in data_entries if e['group'] in selected_groups]
+            
         return data_entries
 
     def _get_current_data_entries(self):
@@ -588,18 +869,42 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
             ax.text(0.5, 0.5, "没有找到有效的声调基频数据！\n请检查是否配置了发音人或导入了音频点。", ha='center', va='center', fontsize=12, color='red')
             ax.axis('off')
             return fig
+
+        # Find unique groups to display
+        unique_groups = []
+        for e in data_entries:
+            val = e[group_key]
+            if val not in unique_groups:
+                unique_groups.append(val)
+
+        truncated = False
+        if is_preview and len(unique_groups) > 8 and chart_type != "overview_heatmap":
+            truncated = True
+            hidden_count = len(unique_groups) - 8
+            allowed_groups = set(unique_groups[:8])
+            data_entries = [e for e in data_entries if e[group_key] in allowed_groups]
             
         if chart_type == "contour":
-            return self._plot_tone_contour(data_entries, group_key, scale)
+            fig = self._plot_tone_contour(data_entries, group_key, scale)
         elif chart_type == "distribution":
-            return self._plot_tone_distribution(data_entries, group_key, scale)
+            fig = self._plot_tone_distribution(data_entries, group_key, scale)
         elif chart_type == "density":
-            return self._plot_temporal_density(data_entries, group_key)
+            fig = self._plot_temporal_density(data_entries, group_key)
         elif chart_type == "quality":
-            return self._plot_quality_check(data_entries)
+            fig = self._plot_quality_check(data_entries)
+        elif chart_type == "overview_heatmap":
+            fig = self._plot_tone_overview_heatmap(data_entries, group_key, scale)
+        else:
+            fig, ax = plt.subplots()
+            return fig
+
+        if truncated:
+            # Adjust subplots top margin to avoid overlaps with the banner
+            fig.subplots_adjust(top=0.88)
+            fig.text(0.5, 0.96, f"⚠️ 预览提示：当前共 {len(unique_groups)} 组，预览仅显示前 8 组（其余 {hidden_count} 组已隐藏）。导出时将自动分页/完整输出。",
+                     ha='center', va='center', fontsize=10, color='#991B1B', weight='bold',
+                     bbox=dict(facecolor='#FEF2F2', edgecolor='#FCA5A5', boxstyle='round,pad=0.4'))
             
-        # Fallback empty figure
-        fig, ax = plt.subplots()
         return fig
 
     def _plot_tone_contour(self, data_entries, group_key, scale):
@@ -715,8 +1020,11 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
                     # Draw Mean ± SD shadow
                     ax.fill_between(grid_x, mean_y - std_y, mean_y + std_y, color=color, alpha=0.15)
                     
+                short_g_name = g_name
+                if len(g_name) > 12:
+                    short_g_name = g_name[:10] + ".."
                 # Always draw the thick bold average curve
-                ax.plot(grid_x, mean_y, '-o', color=color, linewidth=2.5, markersize=5, label=g_name)
+                ax.plot(grid_x, mean_y, '-o', color=color, linewidth=2.5, markersize=5, label=short_g_name)
                 
             title_text = "声调声学格局连贯图"
             if facet in ("按声调类型分面", "按音节位置分面"):
@@ -724,20 +1032,34 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
             else:
                 if len(set(e['speaker_name'] for e in data_entries)) == 1:
                     title_text = f"{data_entries[0]['speaker_name']} - 声学格局连贯图"
+            if len(title_text) > 20:
+                title_text = title_text[:17] + "..."
             ax.set_title(title_text, fontsize=12, fontweight="bold")
             
             # Setup Y bounds
             if "T 值" in scale:
                 ax.set_ylim(-0.2, 5.2)
-                ax.set_ylabel("T 值 (0-5 标度)")
                 ax.set_yticks([0, 1, 2, 3, 4, 5])
+            
+            row_idx = f_idx // n_cols
+            col_idx = f_idx % n_cols
+            
+            if col_idx == 0:
+                if "T 值" in scale:
+                    ax.set_ylabel("T 值 (0-5 标度)")
+                else:
+                    ax.set_ylabel("频率 (Hz)")
             else:
-                ax.set_ylabel("频率 (Hz)")
+                ax.set_ylabel("")
                 
-            if x_axis == "归一化采样点":
-                ax.set_xlabel("音节测量点 (时序展开)")
+            is_bottom_row = (row_idx == n_rows - 1) or (f_idx + n_cols >= n_facets)
+            if is_bottom_row:
+                if x_axis == "归一化采样点":
+                    ax.set_xlabel("音节测量点 (时序展开)")
+                else:
+                    ax.set_xlabel("时长 Duration (s)")
             else:
-                ax.set_xlabel("时长 Duration (s)")
+                ax.set_xlabel("")
                 
             # Add syllable divider lines if multiple syllables and normalized X
             if max_syls > 1 and x_axis == "归一化采样点" and facet != "按音节位置分面":
@@ -751,6 +1073,114 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
         for idx in range(n_facets, len(axes_flat)):
             axes_flat[idx].set_visible(False)
             
+        fig.tight_layout()
+        return fig
+
+    def _plot_tone_overview_heatmap(self, data_entries, group_key, scale):
+        metric = self.combo_overview_metric.get()
+        
+        # Determine total points
+        max_syls = max(len(e['syl_data']) for e in data_entries)
+        num_points = self.project_tree.app_state_params.get('pts', 11)
+        total_points = max_syls * num_points
+        
+        # Group entries
+        grouped_data = {}
+        for entry in data_entries:
+            val = entry[group_key]
+            if val not in grouped_data:
+                grouped_data[val] = []
+            grouped_data[val].append(entry)
+            
+        # Compute row values for each group
+        groups_sorted = sorted(list(grouped_data.keys()))
+        if not groups_sorted:
+            fig, ax = plt.subplots(figsize=(6, 4))
+            ax.text(0.5, 0.5, "没有找到有效的声调数据用于生成概览图", ha='center', va='center')
+            return fig
+            
+        matrix = []
+        row_labels = []
+        
+        for g_name in groups_sorted:
+            entries = grouped_data[g_name]
+            vectors = []
+            for entry in entries:
+                syl_list = entry['normalized_syl_data'] if "T 值" in scale else entry['syl_data']
+                y_flat = []
+                for s_dur, pts in syl_list:
+                    y_flat.extend(pts)
+                if len(y_flat) < total_points:
+                    y_flat.extend([np.nan] * (total_points - len(y_flat)))
+                elif len(y_flat) > total_points:
+                    y_flat = y_flat[:total_points]
+                vectors.append(y_flat)
+                
+            if vectors:
+                vectors = np.array(vectors)
+                with np.errstate(all='ignore'):
+                    if "均值" in metric:
+                        row_vec = np.nanmean(vectors, axis=0)
+                    else:
+                        row_vec = np.nanstd(vectors, axis=0)
+                # Fallback check if row_vec is all NaNs
+                if np.isnan(row_vec).all():
+                    row_vec = np.zeros(total_points)
+                matrix.append(row_vec)
+                
+                # Check sample size
+                count = len(entries)
+                row_labels.append(f"{g_name} (N={count})")
+                
+        matrix = np.array(matrix)
+        
+        # Height of the plot dynamically scales with the number of groups
+        fig_height = max(4, len(row_labels) * 0.35 + 1.5)
+        fig, ax = plt.subplots(figsize=(8, fig_height))
+        
+        if "均值" in metric:
+            cmap = 'RdYlBu_r' if "T 值" in scale else 'viridis'
+            vmin = 0.0 if "T 值" in scale else None
+            vmax = 5.0 if "T 值" in scale else None
+        else:
+            cmap = 'Reds'
+            vmin = 0.0
+            vmax = None
+            
+        im = ax.imshow(matrix, cmap=cmap, aspect='auto', vmin=vmin, vmax=vmax)
+        
+        # Add colorbar
+        cbar = fig.colorbar(im, ax=ax, pad=0.02)
+        if "均值" in metric:
+            cbar.set_label("平均 T 值" if "T 值" in scale else "平均基频 (Hz)")
+        else:
+            cbar.set_label("标准差 (SD)" if "T 值" in scale else "标准差 (Hz)")
+            
+        # Labels and ticks
+        ax.set_yticks(np.arange(len(row_labels)))
+        ax.set_yticklabels(row_labels, fontsize=9)
+        
+        ax.set_xticks(np.arange(total_points))
+        x_labels = []
+        for s_idx in range(max_syls):
+            for p_idx in range(num_points):
+                if p_idx == 0 or p_idx == num_points - 1 or p_idx == num_points // 2:
+                    x_labels.append(f"音节{s_idx+1}_点{p_idx+1}")
+                else:
+                    x_labels.append("")
+        ax.set_xticklabels(x_labels, rotation=45, ha='right', fontsize=8)
+        
+        # Draw grid lines separating syllables if multiple syllables
+        if max_syls > 1:
+            for k in range(1, max_syls):
+                ax.axvline(k * num_points - 0.5, color='white', linestyle='--', linewidth=1.5, alpha=0.8)
+                
+        # Title and tight layout
+        title_text = f"声调组别概览图 - {metric}"
+        if len(set(e['speaker_name'] for e in data_entries)) == 1:
+            title_text = f"{data_entries[0]['speaker_name']} - {title_text}"
+        ax.set_title(title_text, fontsize=12, fontweight="bold", pad=15)
+        
         fig.tight_layout()
         return fig
 
@@ -1092,18 +1522,37 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
             for k in range(1, max_syls):
                 ax.axvline(k * 100, color='gray', linestyle='--', alpha=0.8)
                 
-            ticks, labels = [], []
-            for k in range(max_syls):
-                ticks.append(k * 100 + 50)
-                labels.append(f"第 {k+1} 字\n(0-100%)")
-            ax.set_xticks(ticks)
-            ax.set_xticklabels(labels, fontsize=9)
+            row_idx = f_idx // n_cols
+            col_idx = f_idx % n_cols
             
+            if col_idx == 0:
+                ax.set_ylabel("T 值 (0-5 标度)")
+            else:
+                ax.set_ylabel("")
+                
+            is_bottom_row = (row_idx == n_rows - 1) or (f_idx + n_cols >= n_facets)
+            if is_bottom_row:
+                ticks, labels = [], []
+                for k in range(max_syls):
+                    ticks.append(k * 100 + 50)
+                    labels.append(f"第 {k+1} 字\n(0-100%)")
+                ax.set_xticks(ticks)
+                ax.set_xticklabels(labels, fontsize=9)
+            else:
+                # Still set ticks but clear labels to keep shared axis alignment neat
+                ticks = []
+                for k in range(max_syls):
+                    ticks.append(k * 100 + 50)
+                ax.set_xticks(ticks)
+                ax.set_xticklabels([])
+                
             ax.set_ylim(-0.5, 5.5)
             ax.set_yticks([0, 1, 2, 3, 4, 5])
-            ax.set_ylabel("T 值 (0-5 标度)")
             
-            ax.set_title(f_key if facet != "Default" else "时序密度热力图", fontsize=12, fontweight="bold")
+            title_text = f_key if f_key != "Default" else "时序密度热力图"
+            if len(title_text) > 20:
+                title_text = title_text[:17] + "..."
+            ax.set_title(title_text, fontsize=12, fontweight="bold")
             
         for idx in range(n_facets, len(axes_flat)):
             axes_flat[idx].set_visible(False)
@@ -1336,10 +1785,8 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
                     # Extract single speaker's entries
                     data = self._extract_active_data([speaker])
                     if data:
-                        fig = self.generate_plot(data, is_preview=False)
                         out_path = os.path.join(out_dir, f"{speaker.name}_声调可视化图表{ext}")
-                        fig.savefig(out_path, dpi=300, bbox_inches='tight')
-                        plt.close(fig)
+                        self._export_dataset(data, out_path, ext)
                         
                 prog.destroy()
                 messagebox.showinfo("成功", f"批量图表成功导出至:\n{out_dir}")
@@ -1364,11 +1811,89 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
                 if not data:
                     return messagebox.showwarning("提示", "没有有效基频曲线，无法导出！")
                     
-                fig = self.generate_plot(data, is_preview=False)
-                fig.savefig(out_file, dpi=300, bbox_inches='tight')
-                plt.close(fig)
+                self._export_dataset(data, out_file, ext)
                 
                 messagebox.showinfo("成功", f"图表已成功保存至:\n{out_file}")
                 self.destroy()
             except Exception as e:
                 messagebox.showerror("错误", f"图表导出失败: {e}")
+
+    def _export_paginated_pdf(self, out_file, data_entries, group_key, scale):
+        from matplotlib.backends.backend_pdf import PdfPages
+        
+        unique_groups = []
+        for e in data_entries:
+            val = e[group_key]
+            if val not in unique_groups:
+                unique_groups.append(val)
+                
+        chunk_size = 8
+        pdf_pages = PdfPages(out_file)
+        
+        try:
+            for page_idx in range(math.ceil(len(unique_groups) / chunk_size)):
+                allowed_groups = set(unique_groups[page_idx * chunk_size : (page_idx + 1) * chunk_size])
+                chunk_entries = [e for e in data_entries if e[group_key] in allowed_groups]
+                
+                fig = self.generate_plot(chunk_entries, is_preview=False)
+                
+                # Add page number to figure
+                fig.text(0.95, 0.02, f"第 {page_idx + 1} 页 / 共 {math.ceil(len(unique_groups) / chunk_size)} 页",
+                         ha='right', va='bottom', fontsize=9, color='gray')
+                         
+                pdf_pages.savefig(fig, bbox_inches='tight')
+                plt.close(fig)
+        finally:
+            pdf_pages.close()
+
+    def _export_paginated_images(self, base_path, data_entries, group_key, scale, ext):
+        unique_groups = []
+        for e in data_entries:
+            val = e[group_key]
+            if val not in unique_groups:
+                unique_groups.append(val)
+                
+        chunk_size = 8
+        total_pages = math.ceil(len(unique_groups) / chunk_size)
+        
+        dir_name, file_name = os.path.split(base_path)
+        name_part, _ = os.path.splitext(file_name)
+        
+        for page_idx in range(total_pages):
+            allowed_groups = set(unique_groups[page_idx * chunk_size : (page_idx + 1) * chunk_size])
+            chunk_entries = [e for e in data_entries if e[group_key] in allowed_groups]
+            
+            fig = self.generate_plot(chunk_entries, is_preview=False)
+            
+            fig.text(0.95, 0.02, f"第 {page_idx + 1} 页 / 共 {total_pages} 页",
+                     ha='right', va='bottom', fontsize=9, color='gray')
+            
+            out_path = os.path.join(dir_name, f"{name_part}_第{page_idx + 1}页{ext}")
+            fig.savefig(out_path, dpi=300, bbox_inches='tight')
+            plt.close(fig)
+
+    def _export_dataset(self, data, out_path, ext):
+        chart_type = self.var_chart_type.get()
+        groupby = self.combo_groupby.get()
+        
+        group_key = 'group'
+        if groupby == "按词语":
+            group_key = 'label'
+        elif groupby == "按发音人":
+            group_key = 'speaker_name'
+            
+        unique_groups = []
+        for e in data:
+            val = e[group_key]
+            if val not in unique_groups:
+                unique_groups.append(val)
+                
+        if len(unique_groups) > 8 and chart_type != "overview_heatmap":
+            if ext == ".pdf":
+                self._export_paginated_pdf(out_path, data, group_key, self.combo_scale.get())
+            else:
+                self._export_paginated_images(out_path, data, group_key, self.combo_scale.get(), ext)
+        else:
+            fig = self.generate_plot(data, is_preview=False)
+            fig.savefig(out_path, dpi=300, bbox_inches='tight')
+            plt.close(fig)
