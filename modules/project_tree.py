@@ -1242,6 +1242,8 @@ class ProjectTreePanel:
         dlg.title("导出范围选择")
         dlg.geometry("400x440")
         dlg.resizable(False, False)
+        dlg.transient(self.parent)
+        dlg.grab_set()
         dlg.update_idletasks()
         main_win = self.parent.winfo_toplevel()
         x = main_win.winfo_rootx() + (main_win.winfo_width() - 400) // 2
@@ -1251,7 +1253,7 @@ class ProjectTreePanel:
         font_small = ctk.CTkFont(family="Microsoft YaHei", size=11)
         ctk.CTkLabel(dlg, text="请选择需要导出的发音人：", font=self.font_title, text_color=("#111827", "#F9FAFB")).pack(pady=(15, 5))
         
-        scroll_frame = ctk.CTkScrollableFrame(dlg, height=180, border_width=1, border_color=("#E5E7EB", "#475569"))
+        scroll_frame = ctk.CTkScrollableFrame(dlg, height=180, border_width=1, border_color=("#E5E7EB", "#475569"), fg_color=("#FFFFFF", "#1E293B"))
         scroll_frame.pack(fill=tk.BOTH, padx=30, pady=5)
         
         all_speakers = sm.get_all_speakers()
@@ -1261,7 +1263,8 @@ class ProjectTreePanel:
         for spk in all_speakers:
             is_active = (spk.id == active_speaker.id)
             val = ctk.BooleanVar(value=is_active)
-            cb = ctk.CTkCheckBox(scroll_frame, text=f"{spk.name} ({len(spk.items)}项)", variable=val, font=self.font_main)
+            cb = ctk.CTkCheckBox(scroll_frame, text=f"{spk.name} ({len(spk.items)}项)", variable=val, font=self.font_main, 
+                                 fg_color=("#3B82F6", "#2563EB"), border_color=("#9CA3AF", "#4B5563"))
             cb.pack(anchor="w", padx=15, pady=6)
             checkboxes[spk] = val
             
@@ -1275,15 +1278,18 @@ class ProjectTreePanel:
             for val in checkboxes.values():
                 val.set(False)
                 
-        ctk.CTkButton(util_frame, text="全选", width=70, height=26, corner_radius=13, font=font_small, 
-                      fg_color=("#F3F4F6", "#374151"), text_color=("#374151", "#D1D5DB"), hover_color=("#E5E7EB", "#4B5563"), command=select_all).pack(side=tk.LEFT, padx=5)
-        ctk.CTkButton(util_frame, text="全不选", width=70, height=26, corner_radius=13, font=font_small, 
-                      fg_color=("#F3F4F6", "#374151"), text_color=("#374151", "#D1D5DB"), hover_color=("#E5E7EB", "#4B5563"), command=select_none).pack(side=tk.LEFT, padx=5)
+        ctk.CTkButton(util_frame, text="全选", width=75, height=26, corner_radius=6, font=font_small, 
+                      fg_color=("#F3F4F6", "#374151"), text_color=("#2563EB", "#60A5FA"), hover_color=("#E5E7EB", "#4B5563"), 
+                      border_width=1, border_color=("#D1D5DB", "#475569"), command=select_all).pack(side=tk.LEFT, padx=5)
+        ctk.CTkButton(util_frame, text="全不选", width=75, height=26, corner_radius=6, font=font_small, 
+                      fg_color=("#F3F4F6", "#374151"), text_color=("#4B5563", "#D1D5DB"), hover_color=("#E5E7EB", "#4B5563"), 
+                      border_width=1, border_color=("#D1D5DB", "#475569"), command=select_none).pack(side=tk.LEFT, padx=5)
         
         ctk.CTkFrame(dlg, height=1, fg_color=("#E5E7EB", "#475569")).pack(fill=tk.X, padx=30, pady=8)
         
         integrate_var = ctk.BooleanVar(value=False)
-        cb_integrate = ctk.CTkCheckBox(dlg, text="整合选中发音人的结果 (采用 T值归一化)", variable=integrate_var, font=self.font_main)
+        cb_integrate = ctk.CTkCheckBox(dlg, text="整合选中发音人的结果 (采用 T值归一化)", variable=integrate_var, font=self.font_main,
+                                       fg_color=("#3B82F6", "#2563EB"), border_color=("#9CA3AF", "#4B5563"))
         cb_integrate.pack(anchor="w", padx=40, pady=5)
         
         def on_confirm():
@@ -1299,7 +1305,8 @@ class ProjectTreePanel:
         btn_frame.pack(pady=(15, 10))
         
         ctk.CTkButton(btn_frame, text="取消", width=90, height=36, corner_radius=10, 
-                      fg_color=("#F3F4F6", "#374151"), text_color=("#4B5563", "#D1D5DB"), hover_color=("#E5E7EB", "#4B5563"), font=self.font_main, command=dlg.destroy).pack(side=tk.LEFT, padx=10)
+                      fg_color=("#F3F4F6", "#374151"), text_color=("#4B5563", "#D1D5DB"), hover_color=("#E5E7EB", "#4B5563"), 
+                      border_width=1, border_color=("#D1D5DB", "#475569"), font=self.font_main, command=dlg.destroy).pack(side=tk.LEFT, padx=10)
         ctk.CTkButton(btn_frame, text="下一步", width=90, height=36, corner_radius=10, 
                       fg_color=("#3B82F6", "#2563EB"), text_color="#FFFFFF", hover_color=("#2563EB", "#1D4ED8"), font=self.font_main, command=on_confirm).pack(side=tk.LEFT, padx=10)
 
@@ -1359,6 +1366,8 @@ class ProjectTreePanel:
         dlg.title("选择导出格式")
         dlg.geometry("320x330")
         dlg.resizable(False, False)
+        dlg.transient(self.parent)
+        dlg.grab_set()
         dlg.update_idletasks()
         main_win = self.parent.winfo_toplevel()
         x = main_win.winfo_rootx() + (main_win.winfo_width() - 320) // 2
@@ -2237,10 +2246,11 @@ class ProjectTreePanel:
 
     def _show_kde_params_dialog(self, mode='single', tree_structure=None, all_speakers=None):
         param_dlg = ctk.CTkToplevel(self.parent)
-        param_dlg.title("词语时序密度热力图参数设置")
+        param_dlg.title("时序密度图参数设置")
         param_dlg.geometry("450x380")
-        param_dlg.attributes('-topmost', True)
         param_dlg.resizable(False, False)
+        param_dlg.transient(self.parent)
+        param_dlg.grab_set()
 
         param_dlg.update_idletasks()
         main_win = self.parent.winfo_toplevel()

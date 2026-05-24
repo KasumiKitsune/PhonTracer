@@ -20,8 +20,10 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
         self.all_speakers = all_speakers or []
         
         self.title("声学图表导出 - 声视化工具箱")
-        self.geometry("1100x750")
+        self.geometry("980x640")
         self.resizable(True, True)
+        self.transient(parent)
+        self.grab_set()
         
         # Color Palette
         self.colors = ['#2563EB', '#DC2626', '#16A34A', '#9333EA', '#EA580C', '#0891B2', '#CA8A04', '#6366F1']
