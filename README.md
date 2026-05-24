@@ -312,8 +312,8 @@ sequenceDiagram
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/KasumiKitsune/Tone_extractor.git
-cd Tone_extractor
+git clone https://github.com/KasumiKitsune/PhonTracer.git
+cd PhonTracer
 
 # 2. 安装依赖 (建议在虚拟环境下执行)
 pip install -r requirements.txt

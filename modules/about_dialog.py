@@ -166,7 +166,7 @@ class AboutDialog(ctk.CTkToplevel):
         btn_update.pack(side="left", expand=True, padx=5)
 
     def open_github(self):
-        webbrowser.open("https://github.com/KasumiKitsune/Tone_extractor")
+        webbrowser.open("https://github.com/KasumiKitsune/PhonTracer")
 
     def check_update(self):
         # 关闭当前关于窗口并触发更新检测

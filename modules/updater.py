@@ -9,8 +9,8 @@ from modules.version import __version__
 logger = logging.getLogger(__name__)
 
 # 默认检测地址：GitHub API。如果是国内环境，此地址可能较慢，但作为开源项目是标准做法。
-DEFAULT_UPDATE_URL = "https://api.github.com/repos/KasumiKitsune/Tone_extractor/releases/latest"
-SETTINGS_FILE = os.path.expanduser("~/.tone_extractor_settings.json")
+DEFAULT_UPDATE_URL = "https://api.github.com/repos/KasumiKitsune/PhonTracer/releases/latest"
+SETTINGS_FILE = os.path.expanduser("~/.phontracer_settings.json")
 
 def get_ignored_version():
     """获取用户选择忽略的版本"""
