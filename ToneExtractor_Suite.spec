@@ -65,13 +65,18 @@ is_win = (sys.platform == 'win32')
 
 # --- 3. 分析命令行工具 (仅在 Windows 上执行，macOS 无需打包 CLI) ---
 if is_win:
+    cli_hidden_imports = [
+        item for item in hidden_imports
+        if item != 'PIL._tkinter_finder'
+    ] + ['matplotlib.backends.backend_agg']
+
     c = Analysis(
         ['cli.py'],
         pathex=['.'],
         binaries=[],
         datas=package_datas,  # CLI 不需要 GUI 资源，但 REAPER 需要包元数据
-        hiddenimports=hidden_imports,
-        excludes=excluded_modules + ['customtkinter', 'PIL', 'tkinter'], # CLI 完全排除 GUI 库，超强瘦身！
+        hiddenimports=cli_hidden_imports,
+        excludes=excluded_modules + ['customtkinter', 'tkinter'], # CLI 排除 GUI 库，但保留 Pillow 供 Matplotlib 无窗口导出
         win_no_prefer_redirects=False,
         win_private_assemblies=False,
         cipher=None,

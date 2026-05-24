@@ -1,14 +1,42 @@
 import os
 import math
 import numpy as np
-import tkinter as tk
-import customtkinter as ctk
-from tkinter import messagebox, filedialog
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import parselmouth
 from scipy.stats import gaussian_kde
 from .data_utils import split_into_syllables, get_export_text_for_item
+
+_GUI_IMPORT_ERROR = None
+
+try:
+    import tkinter as tk
+    import customtkinter as ctk
+    from tkinter import messagebox, filedialog
+    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+except ImportError as exc:
+    _GUI_IMPORT_ERROR = exc
+
+    import matplotlib
+    matplotlib.use("Agg", force=True)
+
+    class _MissingTk:
+        LEFT = "left"
+        RIGHT = "right"
+        X = "x"
+        BOTH = "both"
+
+    class _MissingCtkToplevel:
+        pass
+
+    class _MissingCtk:
+        CTkToplevel = _MissingCtkToplevel
+
+    tk = _MissingTk()
+    ctk = _MissingCtk()
+    messagebox = None
+    filedialog = None
+    FigureCanvasTkAgg = None
+
+import matplotlib.pyplot as plt
 
 
 class AcousticChartExporter:
@@ -1215,6 +1243,9 @@ class AcousticChartExporter:
 
 class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
     def __init__(self, parent, app=None, project_tree=None, mode='single', all_speakers=None):
+        if _GUI_IMPORT_ERROR is not None:
+            raise RuntimeError("Acoustic chart dialog requires Tkinter/CustomTkinter GUI support.") from _GUI_IMPORT_ERROR
+
         ctk.CTkToplevel.__init__(self, parent)
         AcousticChartExporter.__init__(self, project_tree, app, all_speakers)
 
