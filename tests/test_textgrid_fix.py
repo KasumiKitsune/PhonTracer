@@ -235,6 +235,68 @@ class TestTextGridFix(unittest.TestCase):
             self.assertEqual(cli.items['item_0']['group'], 'MyCustomGroup')
             self.assertIn('MyCustomGroup', cli.groups)
 
+    @patch('textgrid.TextGrid.fromFile')
+    def test_cli_apply_textgrid_grouping_when_groups_tier_comes_first(self, mock_from_file):
+        from cli import PhonTracerCLI
+        import numpy as np
+
+        mock_word_interval = MagicMock()
+        mock_word_interval.minTime = 0.1
+        mock_word_interval.maxTime = 0.9
+        mock_word_interval.mark = "test_word"
+
+        mock_group_interval = MagicMock()
+        mock_group_interval.minTime = 0.0
+        mock_group_interval.maxTime = 1.0
+        mock_group_interval.mark = "MyCustomGroup"
+
+        mock_words_tier = MagicMock()
+        mock_words_tier.name = "words"
+        mock_words_tier.__iter__.return_value = [mock_word_interval]
+
+        mock_groups_tier = MagicMock()
+        mock_groups_tier.name = "groups"
+        mock_groups_tier.__iter__.return_value = [mock_group_interval]
+
+        mock_tg_instance = MagicMock()
+        mock_tg_instance.tiers = [mock_groups_tier, mock_words_tier]
+        mock_from_file.return_value = mock_tg_instance
+
+        cli = PhonTracerCLI()
+        cli.mode = 'long'
+
+        mock_pitch = MagicMock()
+        mock_pitch.xs.return_value = np.array([0.05, 0.15, 0.25, 0.35, 0.45, 0.55, 0.65, 0.75, 0.85, 0.95])
+        mock_pitch.selected_array = {'frequency': np.array([100.0, 110.0, 120.0, 130.0, 140.0, 150.0, 160.0, 170.0, 180.0, 190.0])}
+        mock_pitch.get_value_at_time.return_value = 150.0
+
+        mock_snd = MagicMock()
+        mock_snd.get_total_duration.return_value = 2.0
+        mock_snd.to_pitch_ac.return_value = mock_pitch
+
+        mock_part = MagicMock()
+        mock_part.values = np.zeros((1, 1000))
+        mock_part.sampling_frequency = 16000
+        mock_snd.extract_part.return_value = mock_part
+
+        cli.long_snd = mock_snd
+
+        with patch('os.path.exists', return_value=True), \
+             patch('modules.audio_core.process_single_long_word') as mock_process:
+            mock_process.return_value = {
+                'success': True,
+                'label': 'test_word',
+                'group': 'MyCustomGroup',
+                'start': 0.15,
+                'end': 0.85,
+                'inner_splits': [],
+                'chars_bounds': [[0.15, 0.85]]
+            }
+
+            cli.do_apply_textgrid("fake_path.TextGrid")
+            self.assertEqual(cli.items['item_0']['label'], 'test_word')
+            self.assertEqual(cli.items['item_0']['group'], 'MyCustomGroup')
+
     @patch('textgrid.TextGrid')
     @patch('textgrid.IntervalTier')
     def test_export_textgrid_long_grouping(self, mock_tier, mock_tg):
@@ -267,6 +329,93 @@ class TestTextGridFix(unittest.TestCase):
 
             # Verify that group tier is added
             self.assertEqual(mock_tg_instance.append.call_count, 3) # words, groups, chars (because syllables of 'mama' > 1)
+
+    @patch('textgrid.TextGrid')
+    @patch('textgrid.IntervalTier')
+    def test_export_textgrid_long_uses_full_audio_duration_and_new_tier_order(self, mock_tier, mock_tg):
+        parent = get_shared_root()
+        icons = {}
+        items_dict = {
+            'item1': {
+                'label': '公司',
+                'group': '双阴平连读',
+                'start': 0.153556,
+                'end': 0.495556,
+                'inner_splits': [0.32],
+                'chars_bounds': [[0.153556, 0.31], [0.46, 0.495556]],
+            }
+        }
+        app_params = {}
+
+        long_snd = MagicMock()
+        long_snd.get_total_duration.return_value = 0.748452
+        app = MagicMock()
+        app.pending_long_snd = long_snd
+
+        tiers = []
+
+        def make_tier(*args, **kwargs):
+            tier = MagicMock()
+            tier.name = kwargs.get('name')
+            tier.minTime = kwargs.get('minTime')
+            tier.maxTime = kwargs.get('maxTime')
+            tiers.append(tier)
+            return tier
+
+        mock_tier.side_effect = make_tier
+        mock_tg_instance = MagicMock()
+        mock_tg.return_value = mock_tg_instance
+
+        with patch.object(ProjectTreePanel, 'setup_ui'):
+            panel = ProjectTreePanel(parent, icons, items_dict, app_params, MagicMock(), MagicMock(), app=app)
+            panel.items = items_dict
+            panel._export_textgrid_long('C:/output.TextGrid', tree_structure=[('双阴平连读', ['item1'])])
+
+        self.assertEqual(mock_tg.call_args.kwargs['maxTime'], 0.748452)
+        self.assertEqual([call.args[0].name for call in mock_tg_instance.append.call_args_list], ['groups', 'words', 'chars'])
+
+        word_tier = next(t for t in tiers if t.name == 'words')
+        group_tier = next(t for t in tiers if t.name == 'groups')
+        char_tier = next(t for t in tiers if t.name == 'chars')
+        self.assertIn((0.495556, 0.748452, ""), [call.args for call in word_tier.add.call_args_list])
+        self.assertIn((0.495556, 0.748452, ""), [call.args for call in group_tier.add.call_args_list])
+        self.assertIn((0.495556, 0.748452, ""), [call.args for call in char_tier.add.call_args_list])
+
+    @patch('textgrid.TextGrid')
+    @patch('textgrid.IntervalTier')
+    def test_export_textgrid_batch_new_tier_order(self, mock_tier, mock_tg):
+        parent = get_shared_root()
+        icons = {}
+        snd = MagicMock()
+        snd.get_total_duration.return_value = 1.0
+        items_dict = {
+            'item1': {
+                'path': 'C:/audios/gongsi.wav',
+                'label': '公司',
+                'group': '双阴平连读',
+                'start': 0.1,
+                'end': 0.9,
+                'inner_splits': [0.5],
+                'chars_bounds': [[0.1, 0.5], [0.5, 0.9]],
+                'snd': snd
+            }
+        }
+
+        def make_tier(*args, **kwargs):
+            tier = MagicMock()
+            tier.name = kwargs.get('name')
+            return tier
+
+        mock_tier.side_effect = make_tier
+        mock_tg_instance = MagicMock()
+        mock_tg.return_value = mock_tg_instance
+
+        with patch.object(ProjectTreePanel, 'setup_ui'), patch('os.makedirs'):
+            panel = ProjectTreePanel(parent, icons, items_dict, {}, MagicMock(), MagicMock())
+            panel.items = items_dict
+            panel._export_textgrid_batch('C:/output_dir', tree_structure=[('双阴平连读', ['item1'])])
+
+        self.assertEqual([call.args[0].name for call in mock_tg_instance.append.call_args_list], ['groups', 'words', 'chars'])
 
 if __name__ == '__main__':
     unittest.main()

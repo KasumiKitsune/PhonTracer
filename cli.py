@@ -540,11 +540,11 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
             chars_tier = None
             groups_tier = None
             for t in tg.tiers:
-                if t.name == "words":
+                if t.name == "words" and words_tier is None:
                     words_tier = t
-                elif t.name == "chars":
+                elif t.name == "chars" and chars_tier is None:
                     chars_tier = t
-                elif t.name in ["groups", "group"]:
+                elif t.name in ["groups", "group"] and groups_tier is None:
                     groups_tier = t
 
             if not words_tier:
@@ -2588,8 +2588,8 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
         if max_time > last_group_end:
             group_tier.add(last_group_end, max_time, "")
 
-        tg.append(word_tier)
         tg.append(group_tier)
+        tg.append(word_tier)
         if has_chars:
             tg.append(char_tier)
 

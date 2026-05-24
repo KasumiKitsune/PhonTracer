@@ -2777,6 +2777,12 @@ class ProjectTreePanel:
         if tree_structure is None: tree_structure = self._get_all_items_by_group()
 
         max_time = 0
+        if self.app and getattr(self.app, 'pending_long_snd', None):
+            try:
+                max_time = self.app.pending_long_snd.get_total_duration()
+            except Exception:
+                pass
+
         for grp_name, children in tree_structure:
             for child in children:
                 item = self.items[child]
@@ -2810,26 +2816,36 @@ class ProjectTreePanel:
 
         for item in flat_items:
             t_s, t_e = item['start'], item['end']
+            t_s = min(t_s, max_time)
+            t_e = min(t_e, max_time)
             label = item.get('label', '')
             inner_splits = item.get('inner_splits', [])
             grp_name = item_to_group.get(id(item), "导入内容")
 
-            if t_s > last_word_end:
-                word_tier.add(last_word_end, t_s, "")
-            word_tier.add(t_s, t_e, label)
-            last_word_end = t_e
+            # Word tier
+            w_s = max(t_s, last_word_end)
+            if t_e > w_s:
+                if w_s > last_word_end:
+                    word_tier.add(last_word_end, w_s, "")
+                word_tier.add(w_s, t_e, label)
+                last_word_end = t_e
 
-            if t_s > last_group_end:
-                group_tier.add(last_group_end, t_s, "")
-            group_tier.add(t_s, t_e, grp_name)
-            last_group_end = t_e
+            # Group tier
+            g_s = max(t_s, last_group_end)
+            if t_e > g_s:
+                if g_s > last_group_end:
+                    group_tier.add(last_group_end, g_s, "")
+                group_tier.add(g_s, t_e, grp_name)
+                last_group_end = t_e
 
+            # Char tier
             syls = split_into_syllables(label)
             if len(syls) > 1:
                 has_chars = True
 
-                if t_s > last_char_end:
-                    char_tier.add(last_char_end, t_s, "")
+                c_s_start = max(t_s, last_char_end)
+                if c_s_start > last_char_end:
+                    char_tier.add(last_char_end, c_s_start, "")
 
                 chars_bounds = item.get('chars_bounds', [])
                 if not chars_bounds:
@@ -2839,23 +2855,28 @@ class ProjectTreePanel:
                         splits = np.linspace(t_s, t_e, len(syls) + 1).tolist()
                     chars_bounds = [(splits[j], splits[j+1]) for j in range(len(splits)-1)]
 
-                local_last = t_s
+                local_last = c_s_start
                 for i in range(len(syls)):
                     if i < len(chars_bounds):
                         c_s, c_e = chars_bounds[i]
-                        if c_s > local_last:
-                            char_tier.add(local_last, c_s, "")
-                        char_tier.add(c_s, c_e, syls[i])
-                        local_last = c_e
+                        c_s = min(c_s, max_time)
+                        c_e = min(c_e, max_time)
+                        c_s = max(c_s, local_last)
+                        if c_e > c_s:
+                            char_tier.add(c_s, c_e, syls[i])
+                            local_last = c_e
 
                 if local_last < t_e:
                     char_tier.add(local_last, t_e, "")
-                last_char_end = t_e
+                    local_last = t_e
+                last_char_end = local_last
             else:
-                if t_s > last_char_end:
-                    char_tier.add(last_char_end, t_s, "")
-                char_tier.add(t_s, t_e, label)
-                last_char_end = t_e
+                c_s = max(t_s, last_char_end)
+                if t_e > c_s:
+                    if c_s > last_char_end:
+                        char_tier.add(last_char_end, c_s, "")
+                    char_tier.add(c_s, t_e, label)
+                    last_char_end = t_e
 
         if max_time > last_word_end:
             word_tier.add(last_word_end, max_time, "")
@@ -2864,8 +2885,8 @@ class ProjectTreePanel:
         if max_time > last_group_end:
             group_tier.add(last_group_end, max_time, "")
 
-        tg.append(word_tier)
         tg.append(group_tier)
+        tg.append(word_tier)
         if has_chars:
             tg.append(char_tier)
 
@@ -2904,7 +2925,7 @@ class ProjectTreePanel:
                 if item.get('snd'):
                     dur = item['snd'].get_total_duration()
                     if dur > max_time: max_time = dur
-                elif item.get('end') is not None and item['end'] > max_time:
+                if item.get('end') is not None and item['end'] > max_time:
                     max_time = item['end']
 
             if max_time == 0: max_time = 1.0
@@ -2924,25 +2945,36 @@ class ProjectTreePanel:
             for item in items:
                 if item.get('start') is None or item.get('end') is None: continue
                 t_s, t_e = item['start'], item['end']
+                t_s = min(t_s, max_time)
+                t_e = min(t_e, max_time)
                 label = item.get('label', '')
                 inner_splits = item.get('inner_splits', [])
                 grp_name = item_to_group.get(id(item), "导入内容")
 
-                if t_s > last_word_end:
-                    word_tier.add(last_word_end, t_s, "")
-                word_tier.add(t_s, t_e, label)
-                last_word_end = t_e
+                # Word tier
+                w_s = max(t_s, last_word_end)
+                if t_e > w_s:
+                    if w_s > last_word_end:
+                        word_tier.add(last_word_end, w_s, "")
+                    word_tier.add(w_s, t_e, label)
+                    last_word_end = t_e
 
-                if t_s > last_group_end:
-                    group_tier.add(last_group_end, t_s, "")
-                group_tier.add(t_s, t_e, grp_name)
-                last_group_end = t_e
+                # Group tier
+                g_s = max(t_s, last_group_end)
+                if t_e > g_s:
+                    if g_s > last_group_end:
+                        group_tier.add(last_group_end, g_s, "")
+                    group_tier.add(g_s, t_e, grp_name)
+                    last_group_end = t_e
 
+                # Char tier
                 syls = split_into_syllables(label)
                 if len(syls) > 1:
                     has_chars = True
-                    if t_s > last_char_end:
-                        char_tier.add(last_char_end, t_s, "")
+
+                    c_s_start = max(t_s, last_char_end)
+                    if c_s_start > last_char_end:
+                        char_tier.add(last_char_end, c_s_start, "")
 
                     chars_bounds = item.get('chars_bounds', [])
                     if not chars_bounds:
@@ -2952,22 +2984,28 @@ class ProjectTreePanel:
                             splits = np.linspace(t_s, t_e, len(syls) + 1).tolist()
                         chars_bounds = [(splits[j], splits[j+1]) for j in range(len(splits)-1)]
 
-                    local_last = t_s
+                    local_last = c_s_start
                     for i in range(len(syls)):
                         if i < len(chars_bounds):
                             c_s, c_e = chars_bounds[i]
-                            if c_s > local_last:
-                                char_tier.add(local_last, c_s, "")
-                            char_tier.add(c_s, c_e, syls[i])
-                            local_last = c_e
+                            c_s = min(c_s, max_time)
+                            c_e = min(c_e, max_time)
+                            c_s = max(c_s, local_last)
+                            if c_e > c_s:
+                                char_tier.add(c_s, c_e, syls[i])
+                                local_last = c_e
+
                     if local_last < t_e:
                         char_tier.add(local_last, t_e, "")
-                    last_char_end = t_e
+                        local_last = t_e
+                    last_char_end = local_last
                 else:
-                    if t_s > last_char_end:
-                        char_tier.add(last_char_end, t_s, "")
-                    char_tier.add(t_s, t_e, label)
-                    last_char_end = t_e
+                    c_s = max(t_s, last_char_end)
+                    if t_e > c_s:
+                        if c_s > last_char_end:
+                            char_tier.add(last_char_end, c_s, "")
+                        char_tier.add(c_s, t_e, label)
+                        last_char_end = t_e
 
             if max_time > last_word_end:
                 word_tier.add(last_word_end, max_time, "")
@@ -2976,13 +3014,8 @@ class ProjectTreePanel:
             if max_time > last_group_end:
                 group_tier.add(last_group_end, max_time, "")
 
+            tg.append(group_tier)
             tg.append(word_tier)
-            tg.append(group_tier)
-            if has_chars:
-                tg.append(char_tier)
-
-            tg.write(tg_path)
-            tg.append(group_tier)
             if has_chars:
                 tg.append(char_tier)
 
