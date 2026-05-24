@@ -1309,18 +1309,23 @@ class ProjectTreePanel:
     def _show_export_menu(self, tree_structure=None, mode='single', all_speakers=None):
         dlg = ctk.CTkToplevel(self.parent)
         dlg.title("选择导出格式")
-        dlg.geometry("320x380")
+        dlg.geometry("320x330")
         dlg.attributes('-topmost', True)
         dlg.resizable(False, False)
         dlg.update_idletasks()
         main_win = self.parent.winfo_toplevel()
         x = main_win.winfo_rootx() + (main_win.winfo_width() - 320) // 2
-        y = main_win.winfo_rooty() + (main_win.winfo_height() - 380) // 2
+        y = main_win.winfo_rooty() + (main_win.winfo_height() - 330) // 2
         dlg.geometry(f"+{x}+{y}")
         ctk.CTkLabel(dlg, text="请选择导出格式", font=self.font_title, text_color="#111827").pack(pady=(20, 15))
         btn_kwargs = {"corner_radius": 12, "height": 44, "font": self.font_main, "anchor": "w", "compound": "left"}
 
         def do_export(format_mode):
+            if format_mode == 'line_chart':
+                dlg.destroy()
+                from .acoustic_exporter import AcousticChartExportDialog
+                AcousticChartExportDialog(self.parent, app=self.app, project_tree=self, mode=mode, all_speakers=all_speakers)
+                return
             if format_mode == 'kde':
                 dlg.destroy()
                 self._show_kde_params_dialog(mode=mode, tree_structure=tree_structure, all_speakers=all_speakers)
@@ -1402,8 +1407,8 @@ class ProjectTreePanel:
         ctk.CTkButton(dlg, text="  📄  文本文件 (.txt)", command=lambda: do_export('txt'), fg_color="#F3F4F6", text_color="#374151", hover_color="#E5E7EB", **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
         ctk.CTkButton(dlg, text="  🏷  TextGrid 标注文件 (.TextGrid)", command=lambda: do_export('textgrid'), fg_color="#F3E8FF", text_color="#6B21A8", hover_color="#E9D5FF", **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
         ctk.CTkButton(dlg, text="  📊  Excel 表格 (.xlsx)", command=lambda: do_export('xlsx'), fg_color="#ECFDF5", text_color="#047857", hover_color="#D1FAE5", **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
-        ctk.CTkButton(dlg, text="  📈  声调格局连贯折线图", command=lambda: do_export('line_chart'), fg_color="#EFF6FF", text_color="#1E40AF", hover_color="#DBEAFE", **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
-        ctk.CTkButton(dlg, text="  🔥  词语时序密度热力图", command=lambda: do_export('kde'), fg_color="#FFF7ED", text_color="#9A3412", hover_color="#FFEDD5", **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
+        ctk.CTkButton(dlg, text="  📈  声学图表可视化导出", command=lambda: do_export('line_chart'), fg_color="#EFF6FF", text_color="#1E40AF", hover_color="#DBEAFE", **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
+        # 时序密度热力图已整合至声学图表导出中
 
     def _ensure_item_loaded(self, item):
         """确保 item.snd 和 item.pitch / item.pitch_data 已正确加载或计算"""
