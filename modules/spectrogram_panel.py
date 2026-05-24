@@ -8,6 +8,7 @@ import numpy as np
 import sounddevice as sd
 import parselmouth
 from .audio_core import SILENCE_AMPLITUDE_THRESHOLD
+from .anomaly_detection import detect_pitch_anomaly_points
 from .ui_widgets import CTkReleaseButton
 
 class SpectrogramPanel:
@@ -534,10 +535,45 @@ class SpectrogramPanel:
             p_vals = np.array([])
         self.ax2.plot(p_xs, p_vals, '-o', markersize=4, linewidth=1.5, color='#3B82F6', zorder=5)
         
+        # Highlight anomalies (pitch jumps)
+        p_xs_raw, p_freqs_raw = None, None
+        if item.get('pitch_data'):
+            p_xs_raw = np.asarray(item['pitch_data'].get('xs'))
+            p_freqs_raw = np.asarray(item['pitch_data'].get('freqs'))
+        elif item.get('pitch'):
+            global_pitch = item['pitch']
+            try:
+                p_xs_raw = np.asarray(global_pitch.xs())
+                p_freqs_raw = np.asarray(global_pitch.selected_array['frequency'])
+            except Exception:
+                pass
+
+        anomaly_points = []
+        if p_xs_raw is not None and p_freqs_raw is not None and len(p_xs_raw) > 0:
+            bounds = chars_bounds if chars_bounds else [[t_s, t_e]]
+            anomaly_points = detect_pitch_anomaly_points(
+                p_xs_raw, p_freqs_raw, bounds=bounds, start=t_s, end=t_e
+            )
+
+            if anomaly_points:
+                jumps_x = [t for t, _ in anomaly_points]
+                jumps_y = [f for _, f in anomaly_points]
+                self.ax2.plot(jumps_x, jumps_y, 'o', color='#EF4444', markersize=6, zorder=6, label="异常点")
+
+
         self.ax.set_ylim([0, 5000])
         self.ax.set_xlim([view_s, view_e])
         self.ax.set_ylabel("Frequency (Hz)")
-        self.ax2.set_ylim([50, 500])
+
+        app_params = getattr(self.app, 'last_params', {}) if self.app else {}
+        pitch_floor = float(item.get('pitch_floor', app_params.get('pitch_floor', 75.0)))
+        pitch_ceiling = float(item.get('pitch_ceiling', app_params.get('pitch_ceiling', 600.0)))
+        visible_vals = p_vals[np.isfinite(p_vals)] if len(p_vals) else np.array([])
+        visible_high = float(np.max(visible_vals)) if len(visible_vals) else pitch_ceiling
+        anomaly_high = max((f for _, f in anomaly_points), default=pitch_ceiling)
+        y_min = max(0.0, min(50.0, pitch_floor - 25.0))
+        y_max = max(500.0, pitch_ceiling, visible_high, anomaly_high) + 25.0
+        self.ax2.set_ylim([y_min, y_max])
         self.ax2.set_ylabel("F0 (Hz)", color='#3B82F6')
         self.ax2.tick_params(axis='y', labelcolor='#3B82F6')
         self.ax.set_title(f"编辑区: {label}", pad=10)
@@ -873,8 +909,7 @@ class SpectrogramPanel:
             item['is_manual_edited'] = True
             panel = None
             if self.app:
-                if hasattr(self.app, 'project_manager'):
-                    self.app.project_manager.trigger_auto_save()
+                self.app.mark_modified()
                 if hasattr(self.app, 'tree_panel') and self.app.tree_panel:
                     panel = self.app.tree_panel
                 elif hasattr(self.app, 'project_panel') and self.app.project_panel:
@@ -1117,6 +1152,7 @@ class SpectrogramPanel:
             item['is_manual_edited'] = True
             panel = None
             if self.app:
+                self.app.mark_modified()
                 if hasattr(self.app, 'tree_panel') and self.app.tree_panel:
                     panel = self.app.tree_panel
                 elif hasattr(self.app, 'project_panel') and self.app.project_panel:

@@ -67,12 +67,40 @@ class PhoneticsApp:
         self.speaker_manager = SpeakerManager()
         self.project_manager = ProjectManager(self)
         self.export_numbering_rule_var = ctk.StringVar(value="continuous")
+        self.has_changes = False
+        self.current_project_path = None
 
         # Shared ProcessPoolExecutor for performance optimization
         max_workers = min(os.cpu_count() or 4, 8)
         self.executor = concurrent.futures.ProcessPoolExecutor(max_workers=max_workers)
 
         def on_closing():
+            if getattr(self, 'has_changes', False):
+                ans = messagebox.askyesnocancel("保存项目", "项目已被修改，是否在关闭前保存？")
+                if ans is True: # Yes
+                    if getattr(self, 'current_project_path', None):
+                        success = self.project_manager.export_project(self.current_project_path)
+                        if not success:
+                            return
+                    else:
+                        import datetime
+                        spk_name = self.active_speaker.name if getattr(self, 'active_speaker', None) else "发音人1"
+                        date_str = datetime.datetime.now().strftime("%m%d-%H%M")
+                        default_filename = f"{spk_name}_{date_str}"
+                        path = filedialog.asksaveasfilename(
+                            initialfile=default_filename,
+                            defaultextension=".teproj",
+                            filetypes=[("PhonTracer Project", "*.teproj")]
+                        )
+                        if not path:
+                            return
+                        success = self.project_manager.export_project(path)
+                        if not success:
+                            return
+                        self.current_project_path = path
+                elif ans is None: # Cancel
+                    return
+
             if self._drop_queue_job is not None:
                 try:
                     self.root.after_cancel(self._drop_queue_job)
@@ -109,6 +137,10 @@ class PhoneticsApp:
         # 启动时后台静默检查更新
         self.root.after(3000, lambda: self.check_update(is_manual=False))
 
+    def mark_modified(self):
+        self.has_changes = True
+        if hasattr(self, 'project_manager'):
+            self.project_manager.trigger_auto_save()
 
     @property
     def active_speaker(self): return self.speaker_manager.get_active_speaker()
@@ -307,6 +339,7 @@ class PhoneticsApp:
         teproj_files = [p for p in decoded_paths if p.lower().endswith(('.teproj', '.zip'))]
         if teproj_files:
             path = teproj_files[0]
+            self._last_imported_path = path
             self.start_loading("正在导入工程...")
             def run():
                 success = self.project_manager.load_project(path)
@@ -320,6 +353,7 @@ class PhoneticsApp:
         # Check for wordlist files (.txt, .csv, .textgrid)
         wordlist_files = [p for p in decoded_paths if p.lower().endswith(('.txt', '.csv', '.textgrid'))]
         if wordlist_files:
+            self.mark_modified()
             current_tab = self.tabview.get()
             if current_tab == "单条长音频":
                 mode = 'long'
@@ -346,6 +380,7 @@ class PhoneticsApp:
             messagebox.showwarning("提示", "拖入的文件中没有支持的音频文件 (.wav, .mp3)、工程文件 (.teproj) 或字表文件 (.txt, .csv)")
             return
 
+        self.mark_modified()
         self.handle_input_files(audio_paths)
 
     def handle_input_files(self, paths):
@@ -877,6 +912,7 @@ class PhoneticsApp:
         if 'has_empty_data' in item:
             item.pop('has_empty_data')
 
+        self.mark_modified()
         self.tree_panel.update_preview()
         for iid, it in list(self.items.items()):
             if it is item:
@@ -944,6 +980,7 @@ class PhoneticsApp:
                     self.spectrogram_panel.var_t_end.set(f"{mic_e:.3f}")
                     self.spectrogram_panel.plot_item_spectrogram()
                     self.spectrogram_panel.update_ui_times()
+                    self.mark_modified()
                     self.stop_loading("识别完成")
                 self.root.after(0, update_ui)
             except Exception as e:
@@ -1050,6 +1087,7 @@ class PhoneticsApp:
         self._update_speaker_dropdown()
         self.speaker_option_var.set(new_speaker.name)
         self.on_speaker_changed(new_speaker.name)
+        self.mark_modified()
 
     def on_rename_speaker(self):
         dialog = ctk.CTkInputDialog(text="请输入新的名称:", title="重命名发音人")
@@ -1058,6 +1096,7 @@ class PhoneticsApp:
             self.speaker_manager.rename_speaker(self.speaker_manager.active_speaker_id, new_name.strip())
             self._update_speaker_dropdown()
             self.speaker_option_var.set(new_name.strip())
+            self.mark_modified()
 
     def on_delete_speaker(self):
         if len(self.speaker_manager.speakers) <= 1:
@@ -1068,6 +1107,7 @@ class PhoneticsApp:
             self._update_speaker_dropdown()
             self.speaker_option_var.set(self.active_speaker.name)
             self.on_speaker_changed(self.active_speaker.name)
+            self.mark_modified()
 
     def _update_speaker_dropdown(self):
         self.speaker_dropdown.configure(values=[s.name for s in self.speaker_manager.get_all_speakers()])
@@ -1415,6 +1455,7 @@ class PhoneticsApp:
                     self.tree_panel.update_item_icon(iid)
 
                 self.tree_panel.update_preview()
+                self.mark_modified()
                 self.stop_loading("全局参数已应用")
 
             self.root.after(0, finalize)
@@ -1540,6 +1581,7 @@ class PhoneticsApp:
                             self.tree_panel.update_item_icon(iid)
                             break
                     self.tree_panel.update_preview()
+                    self.mark_modified()
                     self.set_status("当前项已更新", "#10B981", "status_success")
 
                 self.root.after(0, finalize)
@@ -1569,6 +1611,7 @@ class PhoneticsApp:
                     self.long_audio_path = path
                     audio_name = os.path.splitext(os.path.basename(path))[0]
                     self.lbl_long_file.configure(text=os.path.basename(path), text_color="#2563EB")
+                    self.mark_modified()
                     self.stop_loading("长音频就绪")
                     if self.active_speaker.name.startswith("发音人"):
                         self.speaker_manager.rename_speaker(self.speaker_manager.active_speaker_id, audio_name)
@@ -1897,6 +1940,7 @@ class PhoneticsApp:
         self.pending_batch_paths = list(paths)
         self.lbl_batch_files.configure(text=f"已选 {len(paths)} 个文件", text_color="#2563EB")
         self.lbl_status.configure(text="独立音频就绪，正在后台分析...", text_color="#10B981")
+        self.mark_modified()
         self.start_background_batch_processing(paths)
         if getattr(self, 'switch_unified_wordlist', None) and self.switch_unified_wordlist.get() and getattr(self, 'global_wordlist_text', None):
             self.root.after(100, lambda: self.process_batch_with_wordlist(self.global_wordlist_text, match_mode=getattr(self, 'global_wordlist_match_mode', 'fuzzy')))
@@ -2739,6 +2783,7 @@ class PhoneticsApp:
     def on_import_project(self):
         path = filedialog.askopenfilename(filetypes=[("PhonTracer Project", "*.teproj *.zip")])
         if not path: return
+        self._last_imported_path = path
         self.start_loading("正在导入工程...")
 
         def run():
@@ -2769,18 +2814,33 @@ class PhoneticsApp:
 
         self.spectrogram_panel.clear_canvas()
         self._refresh_ui_for_speaker()
+        self.has_changes = False
+        self.current_project_path = getattr(self, '_last_imported_path', None)
         messagebox.showinfo("成功", "工程导入成功！")
 
     def on_export_project(self):
-        path = filedialog.asksaveasfilename(defaultextension=".teproj", filetypes=[("PhonTracer Project", "*.teproj")])
+        import datetime
+        spk_name = self.active_speaker.name if getattr(self, 'active_speaker', None) else "发音人1"
+        date_str = datetime.datetime.now().strftime("%m%d-%H%M")
+        default_filename = f"{spk_name}_{date_str}"
+        path = filedialog.asksaveasfilename(
+            initialfile=default_filename,
+            defaultextension=".teproj",
+            filetypes=[("PhonTracer Project", "*.teproj")]
+        )
         if not path: return
+        self._last_exported_path = path
         self.start_loading("正在导出工程...")
 
         def run():
             success = self.project_manager.export_project(path)
             self.root.after(0, self.stop_loading)
             if success:
-                self.root.after(0, lambda: messagebox.showinfo("成功", "工程已成功导出！"))
+                def on_success():
+                    self.has_changes = False
+                    self.current_project_path = getattr(self, '_last_exported_path', None)
+                    messagebox.showinfo("成功", "工程已成功导出！")
+                self.root.after(0, on_success)
         import threading
         threading.Thread(target=run, daemon=True).start()
 

@@ -254,6 +254,65 @@ class TestUISyncBugs(unittest.TestCase):
             panel.on_draw(draw_event)
             panel.canvas.copy_from_bbox.assert_called_once_with(panel.fig.bbox)
 
+    def test_spectrogram_panel_plots_anomaly_points(self):
+        """Test that spectrogram panel detects and plots anomaly pitch jumps in red on ax2"""
+        with patch.object(SpectrogramPanel, 'setup_ui'):
+            panel = SpectrogramPanel(self.root, {}, None, None, None)
+            panel.ax = MagicMock()
+            panel.ax2 = MagicMock()
+            panel.fig = MagicMock()
+            panel.canvas = MagicMock()
+            panel.switch_trim_silence = MagicMock()
+            panel.switch_trim_silence.get.return_value = False
+            panel.var_t_start = MagicMock()
+            panel.var_t_end = MagicMock()
+
+            # Mock sound device extract_part to return a mock spectrogram
+            mock_part = MagicMock()
+            mock_sg = MagicMock()
+            mock_sg.x_grid.return_value = np.array([0.0, 0.5, 1.0])
+            mock_sg.y_grid.return_value = np.array([0.0, 100.0, 200.0])
+            mock_sg.values = np.zeros((3, 3))
+            mock_part.to_spectrogram.return_value = mock_sg
+
+            mock_snd = MagicMock()
+            mock_snd.extract_part.return_value = mock_part
+            mock_snd.get_total_duration.return_value = 1.0
+
+            # A short doubled-F0 run should be marked at every bad point.
+            xs = np.array([0.00, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.10])
+            freqs = np.array([150.0, 150.0, 148.0, 151.0, 150.0, 300.0, 305.0, 295.0, 150.0, 149.0, 151.0])
+
+            item_jump = {
+                'start': 0.0,
+                'end': 1.0,
+                'macro_start': 0.0,
+                'macro_end': 1.0,
+                'label': 'a',
+                'snd': mock_snd,
+                'pitch_data': {
+                    'xs': xs,
+                    'freqs': freqs
+                },
+                'chars_bounds': [[0.0, 1.0]]
+            }
+            panel.current_item = item_jump
+
+            panel.plot_item_spectrogram()
+
+            # Verify ax2.plot was called for the red anomaly scatter dots
+            called_with_red = False
+            for call in panel.ax2.plot.call_args_list:
+                args, kwargs = call
+                if kwargs.get('color') == '#EF4444' or kwargs.get('label') == '异常点':
+                    called_with_red = True
+                    self.assertEqual([round(x, 2) for x in args[0]], [0.05, 0.06, 0.07])
+                    self.assertEqual([round(y) for y in args[1]], [300, 305, 295])
+            self.assertTrue(called_with_red)
+            ylim = panel.ax2.set_ylim.call_args.args[0]
+            self.assertGreaterEqual(ylim[1], 600.0)
+
+
     def test_spectrogram_panel_on_motion_ignores_none_coordinates(self):
         """Test that on_motion ignores events with None xdata during dragging to prevent cursor reset"""
         with patch.object(SpectrogramPanel, 'setup_ui'):

@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 from unittest.mock import MagicMock
+from modules.anomaly_detection import detect_pitch_anomaly_points
 from modules.project_tree import ProjectTreePanel
 
 
@@ -75,6 +76,41 @@ def test_pitch_jump_detection_does_not_cross_word_internal_boundaries():
 
     warnings = panel.analyze_item_anomalies(panel, item)
     assert not any("疑似倍频/半频/噪声点" in w for w in warnings)
+
+
+def test_moderate_pitch_onset_inside_syllable_is_not_hard_anomaly():
+    panel = make_panel()
+
+    xs = np.array([0.10, 0.11, 0.12, 0.13, 0.14, 0.30, 0.31, 0.32, 0.33, 0.34])
+    freqs = np.array([90.0, 145.0, 140.0, 135.0, 130.0, 95.0, 100.0, 105.0, 110.0, 115.0])
+    item = {
+        'start': 0.0,
+        'end': 0.5,
+        'label': '洋山',
+        'chars_bounds': [[0.0, 0.20], [0.28, 0.5]],
+        'pitch_data': {
+            'xs': xs,
+            'freqs': freqs
+        }
+    }
+    panel._get_pitch_arrays_for_item = MagicMock(return_value=(xs, freqs))
+    panel._extract_item_features = MagicMock(return_value={
+        'duration': 0.5, 'mean_f0': 116.5, 'f0_range': 55.0, 'active_ratio': 1.0
+    })
+
+    warnings = panel.analyze_item_anomalies(panel, item)
+    assert not any("疑似倍频/半频/噪声点" in w for w in warnings)
+
+
+def test_anomaly_detection_marks_all_points_in_short_bad_run():
+    xs = np.array([0.00, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.10])
+    freqs = np.array([150.0, 150.0, 148.0, 151.0, 150.0, 300.0, 305.0, 295.0, 150.0, 149.0, 151.0])
+
+    points = detect_pitch_anomaly_points(xs, freqs, bounds=[[0.0, 0.10]], start=0.0, end=0.10)
+
+    assert [round(t, 2) for t, _ in points] == [0.05, 0.06, 0.07]
+    assert [round(f) for _, f in points] == [300, 305, 295]
+
 
 def test_statistical_outlier_is_soft_tip():
     panel = make_panel()

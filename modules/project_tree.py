@@ -8,6 +8,7 @@ import math
 import matplotlib.pyplot as plt
 import logging
 from .data_utils import get_export_text_for_item, build_five_point_chart, write_analysis_sheet_with_formulas, split_into_syllables
+from .anomaly_detection import detect_pitch_anomaly_points
 from .ui_widgets import CTkReleaseButton, AutoScrollbar
 from PIL import Image, ImageDraw, ImageTk
 
@@ -337,6 +338,9 @@ class ProjectTreePanel:
         gid = self.tree.insert("", tk.END, text=temp_name, open=True, tags=('group',))
         self.group_nodes[temp_name] = gid
 
+        if self.app:
+            self.app.mark_modified()
+
         self.tree.see(gid)
         self.tree.selection_set(gid)
         self._debounce_zebra_stripes()
@@ -383,6 +387,8 @@ class ProjectTreePanel:
                     self.tree.item(w_iid, text=new_name)
                 self.items[real_iid]['label'] = new_name
 
+            if self.app:
+                self.app.mark_modified()
             self.update_preview()
             self._debounce_zebra_stripes()
             edit_entry.destroy()
@@ -479,6 +485,8 @@ class ProjectTreePanel:
                 self.tree.delete(self.warning_group_id)
                 self.warning_group_id = None
 
+        if self.app:
+            self.app.mark_modified()
         self.update_preview()
         self._debounce_zebra_stripes()
 
@@ -551,6 +559,8 @@ class ProjectTreePanel:
                 for drag_item in reversed(self.tree_drag_items):
                     self.tree.move(drag_item, parent_grp, target_idx)
                     self.items[drag_item]['group'] = group_name
+                if self.app:
+                    self.app.mark_modified()
                 self.update_preview()
                 self._debounce_zebra_stripes()
         self.tree_drag_items = None
@@ -971,33 +981,16 @@ class ProjectTreePanel:
                 p_xs_slice = p_xs[mask]
                 p_freqs_slice = p_freqs[mask]
 
-                jumps = []
                 _, bounds = self._get_syllables_and_bounds(item)
                 if not bounds:
                     bounds = [[t_s, t_e]]
 
-                for b_s, b_e in bounds:
-                    inner_mask = (p_xs_slice >= b_s) & (p_xs_slice <= b_e)
-                    b_xs = p_xs_slice[inner_mask]
-                    b_freqs = p_freqs_slice[inner_mask]
-                    active_idx = np.where((b_freqs > 0) & (~np.isnan(b_freqs)))[0]
-
-                    for idx in range(1, len(active_idx)):
-                        curr_i = active_idx[idx]
-                        prev_i = active_idx[idx-1]
-                        t_diff = b_xs[curr_i] - b_xs[prev_i]
-                        if t_diff < 0.05:
-                            prev_f = b_freqs[prev_i]
-                            curr_f = b_freqs[curr_i]
-                            if prev_f <= 0:
-                                continue
-                            ratio = curr_f / prev_f
-                            abs_delta = abs(curr_f - prev_f)
-                            if abs_delta >= 45.0 and (ratio > 1.55 or ratio < 0.65):
-                                jumps.append(b_xs[curr_i])
-                if len(jumps) > 0:
-                    jump_times = ", ".join([f"{t:.2f}s" for t in jumps[:3]])
-                    suffix = "..." if len(jumps) > 3 else ""
+                anomaly_points = detect_pitch_anomaly_points(
+                    p_xs_slice, p_freqs_slice, bounds=bounds, start=t_s, end=t_e
+                )
+                if len(anomaly_points) > 0:
+                    jump_times = ", ".join([f"{t:.2f}s" for t, _ in anomaly_points[:5]])
+                    suffix = "..." if len(anomaly_points) > 5 else ""
                     warnings.append(f"[警告] 疑似倍频/半频/噪声点 (发生在: {jump_times}{suffix})")
 
             split_warnings = item.get('split_warnings', [])
@@ -1224,6 +1217,8 @@ class ProjectTreePanel:
                     pass
 
         self._debounce_zebra_stripes()
+        if self.current_iid:
+            self.update_preview()
 
     def update_item_icon(self, iid):
         if str(iid).startswith('warning_'): return
