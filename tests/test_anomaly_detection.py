@@ -163,3 +163,16 @@ def test_moderate_duration_or_f0_difference_is_not_flagged():
 
     warnings = panel.analyze_item_anomalies(panel, item, group_stats=group_stats)
     assert not any("明显偏离" in w or "有效点比例偏低" in w for w in warnings)
+
+
+def test_ignore_warnings_bypass():
+    panel = make_panel()
+    item = {
+        'start': 0.0,
+        'end': 1.0,
+        'label': 'a',
+        'ignore_warnings': True,
+        'preview_segment_mismatch': True
+    }
+    warnings = panel.analyze_item_anomalies(panel, item)
+    assert warnings == []

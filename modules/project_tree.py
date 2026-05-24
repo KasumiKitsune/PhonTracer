@@ -861,8 +861,14 @@ class ProjectTreePanel:
         if iid and self.tree.exists(iid):
             tags = self.tree.item(iid, 'tags')
             if 'item' in tags:
-                menu.add_command(label="重命名 (F2)", command=lambda: self.start_inline_edit(iid))
-                menu.add_command(label="删除选中项 (Delete)", command=lambda: self.on_tree_backspace(None))
+                real_iid = iid[8:] if str(iid).startswith('warning_') else iid
+                item = self.items.get(real_iid)
+                if item:
+                    is_ignored = item.get('ignore_warnings', False)
+                    label_text = "取消忽略警告" if is_ignored else "忽略警告"
+                    menu.add_command(label="重命名 (F2)", command=lambda: self.start_inline_edit(real_iid))
+                    menu.add_command(label="删除选中项 (Delete)", command=lambda: self.on_tree_backspace(None))
+                    menu.add_command(label=label_text, command=lambda: self.toggle_ignore_warnings(real_iid))
             elif 'group' in tags and iid != self.warning_group_id:
                 menu.add_command(label="重命名组", command=lambda: self.start_inline_edit(iid))
                 menu.add_command(label="清空此组中所有项", command=lambda: self.clear_group_items(iid))
@@ -872,6 +878,18 @@ class ProjectTreePanel:
             menu.add_command(label="新建组别", command=self.add_new_group)
 
         menu.post(event.x_root, event.y_root)
+
+    def toggle_ignore_warnings(self, real_iid):
+        if real_iid not in self.items: return
+        item = self.items[real_iid]
+        old_val = item.get('ignore_warnings', False)
+        item['ignore_warnings'] = not old_val
+
+        if self.app:
+            self.app.mark_modified()
+            self.app.project_manager.trigger_auto_save()
+
+        self.rebuild_tree()
 
     def clear_group_items(self, gid):
         if not self.tree.exists(gid): return
@@ -961,6 +979,8 @@ class ProjectTreePanel:
         }
 
     def analyze_item_anomalies(self, item, group_stats=None, speaker_stats=None):
+        if item and item.get('ignore_warnings'):
+            return []
         warnings = []
         if not item or item.get('start') is None:
             warnings.append("[致命] 时间边界无效或缺失")
@@ -1040,6 +1060,12 @@ class ProjectTreePanel:
     def rebuild_tree(self):
         # 1. 保存当前选择和展开状态
         sel = self.tree.selection()
+        mapped_sel = []
+        for s in sel:
+            if str(s).startswith('warning_'):
+                mapped_sel.append(s[8:])
+            else:
+                mapped_sel.append(s)
         expanded_groups = set()
         for g_name, gid in self.group_nodes.items():
             try:
@@ -1209,6 +1235,13 @@ class ProjectTreePanel:
         # 7. 恢复选择和可见性
         if sel:
             valid_sel = [s for s in sel if self.tree.exists(s)]
+            if not valid_sel:
+                for s in mapped_sel:
+                    w_s = f"warning_{s}"
+                    if self.tree.exists(w_s):
+                        valid_sel.append(w_s)
+                    elif self.tree.exists(s):
+                        valid_sel.append(s)
             if valid_sel:
                 try:
                     self.tree.selection_set(valid_sel)
@@ -1249,65 +1282,65 @@ class ProjectTreePanel:
         x = main_win.winfo_rootx() + (main_win.winfo_width() - 400) // 2
         y = main_win.winfo_rooty() + (main_win.winfo_height() - 440) // 2
         dlg.geometry(f"+{x}+{y}")
-        
+
         font_small = ctk.CTkFont(family="Microsoft YaHei", size=11)
         ctk.CTkLabel(dlg, text="请选择需要导出的发音人：", font=self.font_title, text_color=("#111827", "#F9FAFB")).pack(pady=(15, 5))
-        
+
         scroll_frame = ctk.CTkScrollableFrame(dlg, height=180, border_width=1, border_color=("#E5E7EB", "#475569"), fg_color=("#FFFFFF", "#1E293B"))
         scroll_frame.pack(fill=tk.BOTH, padx=30, pady=5)
-        
+
         all_speakers = sm.get_all_speakers()
         active_speaker = sm.get_active_speaker()
-        
+
         checkboxes = {}
         for spk in all_speakers:
             is_active = (spk.id == active_speaker.id)
             val = ctk.BooleanVar(value=is_active)
-            cb = ctk.CTkCheckBox(scroll_frame, text=f"{spk.name} ({len(spk.items)}项)", variable=val, font=self.font_main, 
+            cb = ctk.CTkCheckBox(scroll_frame, text=f"{spk.name} ({len(spk.items)}项)", variable=val, font=self.font_main,
                                  fg_color=("#3B82F6", "#2563EB"), hover_color=("#9CA3AF", "#4B5563"), border_color=("#4B5563", "#9CA3AF"))
             cb.pack(anchor="w", padx=15, pady=6)
             checkboxes[spk] = val
-            
+
         util_frame = ctk.CTkFrame(dlg, fg_color="transparent")
         util_frame.pack(fill=tk.X, padx=30, pady=5)
-        
+
         def select_all():
             for val in checkboxes.values():
                 val.set(True)
         def select_none():
             for val in checkboxes.values():
                 val.set(False)
-                
-        ctk.CTkButton(util_frame, text="全选", width=75, height=26, corner_radius=13, font=font_small, 
-                      fg_color=("#F3F4F6", "#374151"), text_color=("#2563EB", "#60A5FA"), hover_color=("#E5E7EB", "#4B5563"), 
+
+        ctk.CTkButton(util_frame, text="全选", width=75, height=26, corner_radius=13, font=font_small,
+                      fg_color=("#F3F4F6", "#374151"), text_color=("#2563EB", "#60A5FA"), hover_color=("#E5E7EB", "#4B5563"),
                       border_width=1, border_color=("#D1D5DB", "#475569"), command=select_all).pack(side=tk.LEFT, padx=5)
-        ctk.CTkButton(util_frame, text="全不选", width=75, height=26, corner_radius=13, font=font_small, 
-                      fg_color=("#F3F4F6", "#374151"), text_color=("#4B5563", "#D1D5DB"), hover_color=("#E5E7EB", "#4B5563"), 
+        ctk.CTkButton(util_frame, text="全不选", width=75, height=26, corner_radius=13, font=font_small,
+                      fg_color=("#F3F4F6", "#374151"), text_color=("#4B5563", "#D1D5DB"), hover_color=("#E5E7EB", "#4B5563"),
                       border_width=1, border_color=("#D1D5DB", "#475569"), command=select_none).pack(side=tk.LEFT, padx=5)
-        
+
         ctk.CTkFrame(dlg, height=1, fg_color=("#E5E7EB", "#475569")).pack(fill=tk.X, padx=30, pady=8)
-        
+
         integrate_var = ctk.BooleanVar(value=False)
         cb_integrate = ctk.CTkCheckBox(dlg, text="整合选中发音人的结果 (采用 T值归一化)", variable=integrate_var, font=self.font_main,
                                        fg_color=("#3B82F6", "#2563EB"), hover_color=("#9CA3AF", "#4B5563"), border_color=("#4B5563", "#9CA3AF"))
         cb_integrate.pack(anchor="w", padx=40, pady=5)
-        
+
         def on_confirm():
             selected_speakers = [spk for spk, var in checkboxes.items() if var.get()]
             if not selected_speakers:
                 return messagebox.showwarning("提示", "请至少勾选一个发音人。", parent=dlg)
-            
+
             do_integrate = integrate_var.get()
             dlg.destroy()
             self._do_custom_export_preparation(selected_speakers, do_integrate)
-            
+
         btn_frame = ctk.CTkFrame(dlg, fg_color="transparent")
         btn_frame.pack(pady=(15, 10))
-        
-        ctk.CTkButton(btn_frame, text="取消", width=90, height=36, corner_radius=18, 
-                      fg_color=("#F3F4F6", "#374151"), text_color=("#4B5563", "#D1D5DB"), hover_color=("#E5E7EB", "#4B5563"), 
+
+        ctk.CTkButton(btn_frame, text="取消", width=90, height=36, corner_radius=18,
+                      fg_color=("#F3F4F6", "#374151"), text_color=("#4B5563", "#D1D5DB"), hover_color=("#E5E7EB", "#4B5563"),
                       border_width=1, border_color=("#D1D5DB", "#475569"), font=self.font_main, command=dlg.destroy).pack(side=tk.LEFT, padx=10)
-        ctk.CTkButton(btn_frame, text="下一步", width=90, height=36, corner_radius=18, 
+        ctk.CTkButton(btn_frame, text="下一步", width=90, height=36, corner_radius=18,
                       fg_color=("#3B82F6", "#2563EB"), text_color="#FFFFFF", hover_color=("#2563EB", "#1D4ED8"), font=self.font_main, command=on_confirm).pack(side=tk.LEFT, padx=10)
 
     def _do_custom_export_preparation(self, selected_speakers, do_integrate):
@@ -1319,7 +1352,7 @@ class ProjectTreePanel:
                     warnings = item.get('warnings')
                     if warnings is None:
                         warnings = self.analyze_item_anomalies(item)
-                    
+
                     has_anomalies = any(w.startswith("[致命]") or w.startswith("[警告]") for w in warnings)
                     if has_anomalies:
                         descriptions = []
@@ -1328,7 +1361,7 @@ class ProjectTreePanel:
                                 parts = w.split("] ", 1)
                                 desc = parts[1] if len(parts) > 1 else w
                                 descriptions.append(desc)
-                        
+
                         anomaly_desc = ", ".join(descriptions)
                         anomalous_labels.append(f"[{s.name}] {item['label']} ({anomaly_desc})")
 
@@ -1339,7 +1372,7 @@ class ProjectTreePanel:
             msg += "\n\n是否继续强制导出？"
             if not messagebox.askyesno("异常数据警告", msg):
                 return
-            
+
         if len(selected_speakers) == 1 and not do_integrate:
             s = selected_speakers[0]
             orig_items = self.items
@@ -1484,13 +1517,13 @@ class ProjectTreePanel:
                 out = filedialog.askdirectory(title="选择热力图导出文件夹") if mode == 'separate' else filedialog.asksaveasfilename(title="导出热力图", defaultextension=".png", initialfile="tone_heatmap", filetypes=[("PNG 图片", "*.png")])
                 if out and execute_export(out): messagebox.showinfo("成功", f"热力图已导出至:\n{out}")
 
-        ctk.CTkButton(dlg, text="  📄  文本文件 (.txt)", command=lambda: do_export('txt'), 
+        ctk.CTkButton(dlg, text="  📄  文本文件 (.txt)", command=lambda: do_export('txt'),
                       fg_color=("#F3F4F6", "#374151"), text_color=("#374151", "#E5E7EB"), hover_color=("#E5E7EB", "#4B5563"), border_color=("#D1D5DB", "#475569"), **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
-        ctk.CTkButton(dlg, text="  🏷  TextGrid 标注文件 (.TextGrid)", command=lambda: do_export('textgrid'), 
+        ctk.CTkButton(dlg, text="  🏷  TextGrid 标注文件 (.TextGrid)", command=lambda: do_export('textgrid'),
                       fg_color=("#F3E8FF", "#3B0764"), text_color=("#6B21A8", "#E9D5FF"), hover_color=("#E9D5FF", "#5B21B6"), border_color=("#C084FC", "#A855F7"), **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
-        ctk.CTkButton(dlg, text="  📊  Excel 表格 (.xlsx)", command=lambda: do_export('xlsx'), 
+        ctk.CTkButton(dlg, text="  📊  Excel 表格 (.xlsx)", command=lambda: do_export('xlsx'),
                       fg_color=("#ECFDF5", "#022C22"), text_color=("#047857", "#D1FAE5"), hover_color=("#D1FAE5", "#065F46"), border_color=("#34D399", "#10B981"), **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
-        ctk.CTkButton(dlg, text="  📈  声学图表可视化导出", command=lambda: do_export('line_chart'), 
+        ctk.CTkButton(dlg, text="  📈  声学图表可视化导出", command=lambda: do_export('line_chart'),
                       fg_color=("#EFF6FF", "#172554"), text_color=("#1E40AF", "#DBEAFE"), hover_color=("#DBEAFE", "#1E40AF"), border_color=("#60A5FA", "#3B82F6"), **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
         # 时序密度热力图已整合至声学图表导出中
 
