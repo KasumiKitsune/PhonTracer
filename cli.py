@@ -1366,6 +1366,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
         Example: export xlsx output.xlsx continuous integrated
         Example: export wav scratch/output_dir 0.1 separate
         Example: export contour output.svg integrated scale=hz groupby=label facet=group
+        Example: export density output.png integrated normalization=speaker facet=group
         """
         args = shlex.split(arg)
         if len(args) < 2:

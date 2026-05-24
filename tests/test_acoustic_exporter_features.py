@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 import numpy as np
 import customtkinter as ctk
-from modules.acoustic_exporter import AcousticChartExportDialog
+from modules.acoustic_exporter import AcousticChartExportDialog, AcousticChartExporter
 from tests.shared_root import get_shared_root
 
 class TestAcousticExporterFeatures(unittest.TestCase):
@@ -120,6 +120,91 @@ class TestAcousticExporterFeatures(unittest.TestCase):
             self.assertIsNotNone(fig)
 
             dlg.destroy()
+
+    def test_integrated_density_defaults_to_speaker_normalized_contours(self):
+        project_tree = MagicMock()
+        project_tree._get_syllables_and_bounds.return_value = ([], [(0.0, 1.0)])
+        project_tree._extract_kde_contour.side_effect = AssertionError("raw global contour should not be used")
+
+        exporter = AcousticChartExporter(project_tree=project_tree)
+        exporter.params = {
+            'chart_type': 'density',
+            'export_scope': 'integrated',
+            'density_facet': 'none',
+        }
+
+        data_entries = [
+            {
+                'speaker_name': 'S1',
+                'group': 'T1',
+                'label': 'a',
+                'syl_data': [(1.0, [100.0, 110.0, 120.0])],
+                'raw_xs': np.linspace(0.0, 1.0, 20),
+                'raw_freqs': np.linspace(100.0, 140.0, 20),
+                'normalized_raw_freqs': np.linspace(1.0, 4.0, 20),
+                'raw_item': {},
+            },
+            {
+                'speaker_name': 'S2',
+                'group': 'T1',
+                'label': 'a',
+                'syl_data': [(1.0, [210.0, 220.0, 230.0])],
+                'raw_xs': np.linspace(0.0, 1.0, 20),
+                'raw_freqs': np.linspace(210.0, 260.0, 20),
+                'normalized_raw_freqs': np.linspace(1.0, 4.0, 20),
+                'raw_item': {},
+            },
+        ]
+
+        class FakeKDE:
+            def __init__(self, positions, bw_method=None):
+                self.positions = positions
+
+            def __call__(self, values):
+                return np.ones(values.shape[1])
+
+        with patch('modules.acoustic_exporter.gaussian_kde', FakeKDE):
+            fig = exporter._plot_temporal_density(data_entries, "group")
+
+        self.assertIsNotNone(fig)
+        project_tree._extract_kde_contour.assert_not_called()
+
+    def test_density_global_normalization_preserves_legacy_path(self):
+        project_tree = MagicMock()
+        project_tree._get_syllables_and_bounds.return_value = ([], [(0.0, 1.0)])
+        project_tree._extract_kde_contour.return_value = np.linspace(100.0, 140.0, 100)
+
+        exporter = AcousticChartExporter(project_tree=project_tree)
+        exporter.params = {
+            'chart_type': 'density',
+            'export_scope': 'integrated',
+            'density_facet': 'none',
+            'normalization': 'global',
+        }
+
+        data_entries = [{
+            'speaker_name': 'S1',
+            'group': 'T1',
+            'label': 'a',
+            'syl_data': [(1.0, [100.0, 110.0, 120.0])],
+            'raw_xs': np.linspace(0.0, 1.0, 20),
+            'raw_freqs': np.linspace(100.0, 140.0, 20),
+            'normalized_raw_freqs': np.linspace(1.0, 4.0, 20),
+            'raw_item': {},
+        }]
+
+        class FakeKDE:
+            def __init__(self, positions, bw_method=None):
+                self.positions = positions
+
+            def __call__(self, values):
+                return np.ones(values.shape[1])
+
+        with patch('modules.acoustic_exporter.gaussian_kde', FakeKDE):
+            fig = exporter._plot_temporal_density(data_entries, "group")
+
+        self.assertIsNotNone(fig)
+        project_tree._extract_kde_contour.assert_called_once()
 
     def test_group_pagination(self):
         project_tree = MagicMock()

@@ -54,6 +54,7 @@ class AcousticChartExporter:
             'density_bw': lambda: getattr(self, 'var_density_bw').get() if hasattr(self, 'var_density_bw') else None,
             'density_f0_mode': lambda: getattr(self, 'var_density_f0_mode').get() if hasattr(self, 'var_density_f0_mode') else None,
             'density_facet': lambda: getattr(self, 'combo_density_facet').get() if hasattr(self, 'combo_density_facet') else None,
+            'density_normalization': lambda: getattr(self, 'var_density_normalization').get() if hasattr(self, 'var_density_normalization') else None,
             'density_p_low': lambda: getattr(self, 'entry_low_p').get() if hasattr(self, 'entry_low_p') else None,
             'density_p_high': lambda: getattr(self, 'entry_high_p').get() if hasattr(self, 'entry_high_p') else None,
             'density_m_min': lambda: getattr(self, 'entry_min_hz').get() if hasattr(self, 'entry_min_hz') else None,
@@ -765,6 +766,19 @@ class AcousticChartExporter:
         bw_method = float(self.get_param('density_bw', 0.15))
         f0_mode_val = self.get_param('density_f0_mode', 'percentile')
         facet_val = self.get_param('density_facet', 'group')
+        scope = str(self.get_param('export_scope', 'active')).lower()
+        normalization_val = self.get_param('density_normalization', None)
+        if normalization_val is None:
+            normalization_val = self.get_param('normalization', None)
+
+        if normalization_val is None:
+            normalization = "speaker" if scope == "integrated" else "global"
+        else:
+            normalization_text = str(normalization_val).lower()
+            if "speaker" in normalization_text or "发音人" in str(normalization_val) or "per" in normalization_text:
+                normalization = "speaker"
+            else:
+                normalization = "global"
 
         if f0_mode_val:
             if "percentile" in str(f0_mode_val).lower() or "分位数" in str(f0_mode_val):
@@ -794,44 +808,81 @@ class AcousticChartExporter:
         max_syls = max(len(e['syl_data']) for e in data_entries)
         N_DENSE = 100
 
-        all_raw_f0 = []
-        for entry in data_entries:
-            all_raw_f0.extend([f for f in entry['raw_freqs'] if f > 0])
-
-        if not all_raw_f0:
+        def empty_density_fig(message):
             fig, ax = plt.subplots()
-            ax.text(0.5, 0.5, "没有有效基频点可进行 KDE 计算", ha='center', va='center')
+            ax.text(0.5, 0.5, message, ha='center', va='center')
             return fig
 
-        p_low_val = self.get_param('density_p_low', 5.0)
-        p_high_val = self.get_param('density_p_high', 95.0)
-        min_hz_val = self.get_param('density_m_min', 75.0)
-        max_hz_val = self.get_param('density_m_max', 600.0)
+        def extract_normalized_contour(entry, c_s, c_e):
+            p_xs = np.asarray(entry.get('raw_xs', []), dtype=float)
+            p_freqs = np.asarray(entry.get('normalized_raw_freqs', []), dtype=float)
+            if len(p_xs) != len(p_freqs) or len(p_xs) == 0:
+                return None
 
-        try:
-            p_low = float(p_low_val)
-            p_high = float(p_high_val)
-        except ValueError:
-            p_low, p_high = 5.0, 95.0
+            valid = (p_xs >= c_s) & (p_xs <= c_e) & np.isfinite(p_freqs)
+            if np.sum(valid) < 2:
+                return None
 
-        try:
-            min_f0 = float(min_hz_val)
-            max_f0 = float(max_hz_val)
-        except ValueError:
-            min_f0, max_f0 = 75.0, 600.0
+            x_valid = p_xs[valid]
+            y_valid = p_freqs[valid]
+            order = np.argsort(x_valid)
+            x_valid = x_valid[order]
+            y_valid = y_valid[order]
 
-        if f0_mode == 'percentile':
-            min_f0 = np.percentile(all_raw_f0, p_low)
-            max_f0 = np.percentile(all_raw_f0, p_high)
-        elif f0_mode == 'minmax':
-            min_f0 = min(all_raw_f0)
-            max_f0 = max(all_raw_f0)
+            unique_x, unique_idx = np.unique(x_valid, return_index=True)
+            if len(unique_x) < 2:
+                return None
+            y_valid = y_valid[unique_idx]
 
-        def hz_to_t(hz):
-            if max_f0 == min_f0: return 3.0
-            hz_val = np.clip(hz, min_f0, max_f0)
-            if min_f0 <= 0 or max_f0 <= min_f0: return 3.0
-            return 5 * (np.log(hz_val) - np.log(min_f0)) / (np.log(max_f0) - np.log(min_f0))
+            dense_x = np.linspace(c_s, c_e, N_DENSE)
+            dense_y = np.interp(dense_x, unique_x, y_valid)
+
+            for idx, x_val in enumerate(dense_x):
+                nearest = np.min(np.abs(unique_x - x_val))
+                if nearest > 0.025:
+                    dense_y[idx] = np.nan
+
+            return dense_y
+
+        if normalization == "global":
+            all_raw_f0 = []
+            for entry in data_entries:
+                all_raw_f0.extend([f for f in entry['raw_freqs'] if f > 0])
+
+            if not all_raw_f0:
+                return empty_density_fig("没有有效基频点可进行 KDE 计算")
+
+            p_low_val = self.get_param('density_p_low', 5.0)
+            p_high_val = self.get_param('density_p_high', 95.0)
+            min_hz_val = self.get_param('density_m_min', 75.0)
+            max_hz_val = self.get_param('density_m_max', 600.0)
+
+            try:
+                p_low = float(p_low_val)
+                p_high = float(p_high_val)
+            except ValueError:
+                p_low, p_high = 5.0, 95.0
+
+            try:
+                min_f0 = float(min_hz_val)
+                max_f0 = float(max_hz_val)
+            except ValueError:
+                min_f0, max_f0 = 75.0, 600.0
+
+            if f0_mode == 'percentile':
+                min_f0 = np.percentile(all_raw_f0, p_low)
+                max_f0 = np.percentile(all_raw_f0, p_high)
+            elif f0_mode == 'minmax':
+                min_f0 = min(all_raw_f0)
+                max_f0 = max(all_raw_f0)
+
+            def hz_to_t(hz):
+                if max_f0 == min_f0: return 3.0
+                hz_val = np.clip(hz, min_f0, max_f0)
+                if min_f0 <= 0 or max_f0 <= min_f0: return 3.0
+                return 5 * (np.log(hz_val) - np.log(min_f0)) / (np.log(max_f0) - np.log(min_f0))
+        elif not any(np.any(np.isfinite(entry.get('normalized_raw_freqs', []))) for entry in data_entries):
+            return empty_density_fig("没有有效归一化基频点可进行 KDE 计算")
 
         facet_keys = ["Default"]
         if facet == "声调类型分面 (默认)":
@@ -859,10 +910,13 @@ class AcousticChartExporter:
             for entry in facet_entries:
                 syl_bounds = self.project_tree._get_syllables_and_bounds(entry['raw_item'])[1]
                 for s_idx, (c_s, c_e) in enumerate(syl_bounds):
-                    y_dense = self.project_tree._extract_kde_contour(entry['raw_xs'], entry['raw_freqs'], c_s, c_e, N_DENSE)
-                    if y_dense is not None:
+                    if normalization == "speaker":
+                        y_t_dense = extract_normalized_contour(entry, c_s, c_e)
+                    else:
+                        y_dense = self.project_tree._extract_kde_contour(entry['raw_xs'], entry['raw_freqs'], c_s, c_e, N_DENSE)
+                        y_t_dense = np.array([hz_to_t(h) for h in y_dense]) if y_dense is not None else None
+                    if y_t_dense is not None:
                         x_dense = np.linspace(s_idx * 100, (s_idx + 1) * 100, N_DENSE)
-                        y_t_dense = np.array([hz_to_t(h) for h in y_dense])
                         valid = np.isfinite(y_t_dense)
                         X_all.extend(x_dense[valid].tolist())
                         Y_all.extend(y_t_dense[valid].tolist())
