@@ -60,6 +60,27 @@ def detect_pitch_anomaly_points(p_xs, p_freqs, bounds=None, start=None, end=None
             & ((high_ratio >= 1.70) | (low_ratio >= 1.70))
         )
 
+        # Filter candidates that are connected to the non-candidate main body (no sudden jump)
+        connected_to_main = np.zeros(len(active_freqs), dtype=bool)
+        queue = [i for i in range(len(active_freqs)) if not candidate_mask[i]]
+        for idx in queue:
+            connected_to_main[idx] = True
+            
+        head = 0
+        while head < len(queue):
+            curr = queue[head]
+            head += 1
+            for neighbor in [curr - 1, curr + 1]:
+                if 0 <= neighbor < len(active_freqs):
+                    if not connected_to_main[neighbor]:
+                        dt = np.abs(active_xs[curr] - active_xs[neighbor])
+                        df = np.abs(active_freqs[curr] - active_freqs[neighbor])
+                        if dt <= 0.025 and df < 25.0:
+                            connected_to_main[neighbor] = True
+                            queue.append(neighbor)
+                            
+        candidate_mask = candidate_mask & (~connected_to_main)
+
         if not np.any(candidate_mask):
             continue
 

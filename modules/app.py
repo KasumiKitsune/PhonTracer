@@ -1294,11 +1294,30 @@ class PhoneticsApp:
     def recalculate_all_audio(self, only_trim_silence=False, recompute_pitch=True):
         if not self.items: return
 
+        # Capture parameter values before sync
+        old_params = dict(self.last_params) if hasattr(self, 'last_params') and self.last_params else {}
+
         # 1. 确保所有 UI 输入框的最新的参数值都已经同步到了 self.last_params 中（在主线程中执行）
         try:
             self.on_param_change()
         except Exception:
             pass
+
+        # Check if ONLY pitch floor/ceiling/voicing threshold changed
+        only_pitch_changed = False
+        if old_params and hasattr(self, 'last_params') and self.last_params:
+            new_params = self.last_params
+            pitch_changed = (
+                old_params.get('pitch_floor') != new_params.get('pitch_floor') or
+                old_params.get('pitch_ceiling') != new_params.get('pitch_ceiling') or
+                old_params.get('voicing_threshold') != new_params.get('voicing_threshold')
+            )
+            boundary_params_changed = (
+                old_params.get('db') != new_params.get('db') or
+                old_params.get('skip_front') != new_params.get('skip_front')
+            )
+            if pitch_changed and not boundary_params_changed:
+                only_pitch_changed = True
 
         items_snapshot = list(self.items.items())
         total = len(items_snapshot)
@@ -1424,7 +1443,7 @@ class PhoneticsApp:
                                     target_item = valid_items[idx]
                                     if tasks[idx].get('type') == 'batch':
                                         # 合并独立音频处理结果
-                                        if not target_item.get('is_manual_edited'):
+                                        if not target_item.get('is_manual_edited') and not only_pitch_changed:
                                             target_item['start'] = res['start']
                                             target_item['end'] = res['end']
                                             target_item['raw_start'] = res['raw_start']
@@ -1443,7 +1462,7 @@ class PhoneticsApp:
                                             self.audio_cache[target_item['path']] = res
                                     else:
                                         # 合并长音频处理结果
-                                        if not target_item.get('is_manual_edited'):
+                                        if not target_item.get('is_manual_edited') and not only_pitch_changed:
                                             target_item['start'] = res['mis']
                                             target_item['end'] = res['mie']
                                             target_item['raw_start'] = res['raw_s']
