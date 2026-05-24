@@ -322,7 +322,7 @@ class ProjectTreePanel:
     def ensure_group(self, group_name):
         if group_name not in self.project_groups:
             self.project_groups.append(group_name)
-            gid = self.tree.insert("", tk.END, text=group_name, open=True, tags=('group',))
+            gid = self.tree.insert("", tk.END, iid=f"group_node_{group_name}", text=group_name, open=True, tags=('group',))
             self.group_nodes[group_name] = gid
         return self.group_nodes[group_name]
 
@@ -335,7 +335,7 @@ class ProjectTreePanel:
             counter += 1
 
         self.project_groups.append(temp_name)
-        gid = self.tree.insert("", tk.END, text=temp_name, open=True, tags=('group',))
+        gid = self.tree.insert("", tk.END, iid=f"group_node_{temp_name}", text=temp_name, open=True, tags=('group',))
         self.group_nodes[temp_name] = gid
 
         if self.app:
@@ -1176,7 +1176,7 @@ class ProjectTreePanel:
             w_count = len(warning_items)
             w_text = f"需要检查 ({w_count})"
             is_open = '__warning__' in expanded_groups or not expanded_groups
-            self.warning_group_id = self.tree.insert("", 0, text=w_text, open=is_open, tags=('group', 'warning_group'))
+            self.warning_group_id = self.tree.insert("", 0, iid="group_node___warning__", text=w_text, open=is_open, tags=('group', 'warning_group'))
             for iid, item in warning_items:
                 w_iid = f"warning_{iid}"
                 img = self.tk_icons.get('warning', '') if self.tk_icons else ''
@@ -1191,7 +1191,7 @@ class ProjectTreePanel:
 
             g_text = f"{grp} ({len(items_in_grp)})"
             is_open = grp in expanded_groups or not expanded_groups
-            gid = self.tree.insert("", 'end', text=g_text, open=is_open, tags=('group',))
+            gid = self.tree.insert("", 'end', iid=f"group_node_{grp}", text=g_text, open=is_open, tags=('group',))
             self.group_nodes[grp] = gid
 
             for iid, item in items_in_grp:
