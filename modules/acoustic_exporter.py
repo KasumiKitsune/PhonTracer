@@ -10,9 +10,1159 @@ import parselmouth
 from scipy.stats import gaussian_kde
 from .data_utils import split_into_syllables, get_export_text_for_item
 
-class AcousticChartExportDialog(ctk.CTkToplevel):
+
+class AcousticChartExporter:
+    def __init__(self, project_tree, app=None, all_speakers=None):
+        self.project_tree = project_tree
+        self.app = app
+        self.all_speakers = all_speakers or []
+        self.params = {}  # CLI parameter overrides
+        self.colors = ['#2563EB', '#DC2626', '#16A34A', '#9333EA', '#EA580C', '#0891B2', '#CA8A04', '#6366F1']
+
+        # Load active speaker's data items as default fallback
+        self.sm = getattr(self.app, 'speaker_manager', None)
+        self.active_speaker = self.sm.get_active_speaker() if self.sm else None
+        if not self.active_speaker and self.all_speakers:
+            self.active_speaker = self.all_speakers[0]
+
+        self.current_preview_page = 0
+        self.current_group_page = 0
+
+    def get_param(self, name, default=None):
+        # If explicitly set in params (CLI mode)
+        if hasattr(self, 'params') and self.params is not None and name in self.params:
+            return self.params[name]
+
+        # Dynamic GUI property routing if subclassed by CTkToplevel
+        gui_mappings = {
+            'chart_type': lambda: getattr(self, 'var_chart_type').get() if hasattr(self, 'var_chart_type') else None,
+            'export_scope': lambda: getattr(self, 'var_export_scope').get() if hasattr(self, 'var_export_scope') else None,
+            'groupby': lambda: getattr(self, 'combo_groupby').get() if hasattr(self, 'combo_groupby') else None,
+            'scale': lambda: getattr(self, 'combo_scale').get() if hasattr(self, 'combo_scale') else None,
+            'format': lambda: getattr(self, 'combo_format').get() if hasattr(self, 'combo_format') else None,
+
+            # contour specific
+            'contour_x': lambda: getattr(self, 'combo_contour_x').get() if hasattr(self, 'combo_contour_x') else None,
+            'contour_content': lambda: getattr(self, 'combo_contour_content').get() if hasattr(self, 'combo_contour_content') else None,
+            'contour_facet': lambda: getattr(self, 'combo_contour_facet').get() if hasattr(self, 'combo_contour_facet') else None,
+
+            # distribution specific
+            'dist_type': lambda: getattr(self, 'combo_dist_type').get() if hasattr(self, 'combo_dist_type') else None,
+            'dist_style': lambda: getattr(self, 'combo_dist_style').get() if hasattr(self, 'combo_dist_style') else None,
+
+            # density specific
+            'density_bw': lambda: getattr(self, 'var_density_bw').get() if hasattr(self, 'var_density_bw') else None,
+            'density_f0_mode': lambda: getattr(self, 'var_density_f0_mode').get() if hasattr(self, 'var_density_f0_mode') else None,
+            'density_facet': lambda: getattr(self, 'combo_density_facet').get() if hasattr(self, 'combo_density_facet') else None,
+            'density_p_low': lambda: getattr(self, 'entry_low_p').get() if hasattr(self, 'entry_low_p') else None,
+            'density_p_high': lambda: getattr(self, 'entry_high_p').get() if hasattr(self, 'entry_high_p') else None,
+            'density_m_min': lambda: getattr(self, 'entry_min_hz').get() if hasattr(self, 'entry_min_hz') else None,
+            'density_m_max': lambda: getattr(self, 'entry_max_hz').get() if hasattr(self, 'entry_max_hz') else None,
+
+            # quality specific
+            'qc_view': lambda: getattr(self, 'var_qc_view').get() if hasattr(self, 'var_qc_view') else None,
+
+            # overview specific
+            'overview_metric': lambda: getattr(self, 'combo_overview_metric').get() if hasattr(self, 'combo_overview_metric') else None,
+        }
+
+        if name in gui_mappings:
+            try:
+                val = gui_mappings[name]()
+                if val is not None:
+                    return val
+            except Exception:
+                pass
+        return default
+
+    # --- CORE DATA EXTRACTION ENGINE ---
+    def _extract_active_data(self, speakers_list):
+        num_points = self.project_tree.app_state_params.get('pts', 11)
+        data_entries = []
+
+        for speaker in speakers_list:
+            orig_items = self.project_tree.items
+            self.project_tree.items = speaker.items
+
+            s_struct = self.project_tree._get_items_by_group_for_dict(speaker.items)
+
+            speaker_f0_pool = []
+            speaker_items_temp = []
+
+            for grp_name, children in s_struct:
+                for child in children:
+                    item = speaker.items[child]
+                    self.project_tree._ensure_item_loaded(item)
+                    if item.get('start') is None or not item.get('snd') or (not item.get('pitch') and not item.get('pitch_data')):
+                        continue
+
+                    total_dur, syl_data = self.project_tree._extract_syl_data(item, num_points)
+                    if total_dur <= 0:
+                        continue
+
+                    p_xs, p_freqs = self.project_tree._get_pitch_arrays_for_item(item)
+                    if p_xs is None or p_freqs is None:
+                        continue
+
+                    valid_f0_mask = p_freqs > 0
+                    active_ratio = np.mean(valid_f0_mask) if len(p_freqs) > 0 else 0.0
+
+                    warnings = item.get('warnings', [])
+
+                    speaker_items_temp.append({
+                        'speaker_name': speaker.name,
+                        'group': grp_name,
+                        'label': item.get('label', ''),
+                        'total_dur': total_dur,
+                        'syl_data': syl_data,
+                        'raw_xs': p_xs,
+                        'raw_freqs': p_freqs,
+                        'active_ratio': active_ratio,
+                        'warnings': warnings,
+                        'raw_item': item
+                    })
+
+                    speaker_f0_pool.extend([f for f in p_freqs if f > 0])
+
+            if speaker_f0_pool:
+                s_min = np.percentile(speaker_f0_pool, 5.0)
+                s_max = np.percentile(speaker_f0_pool, 95.0)
+            else:
+                s_min, s_max = 75.0, 600.0
+
+            for entry in speaker_items_temp:
+                normalized_syl_data = []
+                for s_dur, freqs in entry['syl_data']:
+                    norm_freqs = []
+                    for f in freqs:
+                        if f > 0:
+                            if s_max > s_min:
+                                norm_t = 5 * (math.log10(f) - math.log10(s_min)) / (math.log10(s_max) - math.log10(s_min))
+                                norm_t = np.clip(norm_t, 0.0, 5.0)
+                            else:
+                                norm_t = 3.0
+                            norm_freqs.append(norm_t)
+                        else:
+                            norm_freqs.append(np.nan)
+                    normalized_syl_data.append((s_dur, norm_freqs))
+
+                norm_raw_freqs = []
+                for f in entry['raw_freqs']:
+                    if f > 0:
+                        if s_max > s_min:
+                            norm_t = 5 * (math.log10(f) - math.log10(s_min)) / (math.log10(s_max) - math.log10(s_min))
+                            norm_t = np.clip(norm_t, 0.0, 5.0)
+                        else:
+                            norm_t = 3.0
+                        norm_raw_freqs.append(norm_t)
+                    else:
+                        norm_raw_freqs.append(np.nan)
+
+                entry['normalized_syl_data'] = normalized_syl_data
+                entry['normalized_raw_freqs'] = np.array(norm_raw_freqs)
+                data_entries.append(entry)
+
+            self.project_tree.items = orig_items
+
+        selected_groups = self.get_param('selected_groups', None)
+        if selected_groups is not None:
+            if isinstance(selected_groups, str):
+                selected_groups = [g.strip() for g in selected_groups.split(',') if g.strip()]
+            selected_groups = set(selected_groups)
+            data_entries = [e for e in data_entries if e['group'] in selected_groups]
+        elif hasattr(self, 'group_checkbox_vars') and self.group_checkbox_vars:
+            selected_groups = {g for g, var in self.group_checkbox_vars.items() if var.get()}
+            data_entries = [e for e in data_entries if e['group'] in selected_groups]
+
+        return data_entries
+
+    def _get_current_data_entries(self):
+        scope = self.get_param('export_scope', 'active')
+        if scope == "active" or not self.all_speakers:
+            return self._extract_active_data([self.active_speaker])
+        elif scope == "separate":
+            idx = getattr(self, 'current_preview_page', 0)
+            if idx < 0 or idx >= len(self.all_speakers):
+                idx = 0
+                self.current_preview_page = 0
+            current_speaker = self.all_speakers[idx]
+            return self._extract_active_data([current_speaker])
+        else:
+            return self._extract_active_data(self.all_speakers)
+
+    # --- ADVANCED SCIENTIFIC PLOTTING ENGINE ---
+    def generate_plot(self, data_entries, is_preview=True):
+        plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS', 'sans-serif']
+        plt.rcParams['axes.unicode_minus'] = False
+
+        chart_type = self.get_param('chart_type', 'contour')
+        groupby_val = self.get_param('groupby', 'group')
+        scale_val = self.get_param('scale', 't_value')
+
+        if groupby_val in ("按词语", "label"):
+            group_key = 'label'
+        elif groupby_val in ("按发音人", "speaker"):
+            group_key = 'speaker_name'
+        else:
+            group_key = 'group'
+
+        if not data_entries:
+            fig, ax = plt.subplots(figsize=(6, 4))
+            ax.text(0.5, 0.5, "没有找到有效的声调基频数据！\n请检查是否配置了发音人或导入了音频点。", ha='center', va='center', fontsize=12, color='red')
+            ax.axis('off')
+            return fig
+
+        unique_groups = []
+        for e in data_entries:
+            val = e[group_key]
+            if val not in unique_groups:
+                unique_groups.append(val)
+
+        total_groups = len(unique_groups)
+        page_size = 8
+        total_pages = math.ceil(total_groups / page_size) if total_groups > 0 else 1
+
+        if self.current_group_page < 0:
+            self.current_group_page = 0
+        elif self.current_group_page >= total_pages:
+            self.current_group_page = max(0, total_pages - 1)
+
+        P = self.current_group_page
+
+        truncated = False
+        if is_preview and total_groups > page_size and chart_type != "overview_heatmap":
+            truncated = True
+            start_idx = P * page_size
+            end_idx = min(total_groups, start_idx + page_size)
+            allowed_groups = set(unique_groups[start_idx:end_idx])
+            data_entries = [e for e in data_entries if e[group_key] in allowed_groups]
+
+        if scale_val and ("T" in str(scale_val) or "t_value" in str(scale_val).lower()):
+            scale = "T 值"
+        else:
+            scale = "Hz"
+
+        if chart_type == "contour":
+            fig = self._plot_tone_contour(data_entries, group_key, scale)
+        elif chart_type == "distribution":
+            fig = self._plot_tone_distribution(data_entries, group_key, scale)
+        elif chart_type == "density":
+            fig = self._plot_temporal_density(data_entries, group_key)
+        elif chart_type == "quality":
+            fig = self._plot_quality_check(data_entries)
+        elif chart_type == "overview_heatmap":
+            fig = self._plot_tone_overview_heatmap(data_entries, group_key, scale)
+        else:
+            fig, ax = plt.subplots()
+            return fig
+
+        if truncated:
+            fig.subplots_adjust(top=0.88)
+            fig.text(0.5, 0.96, f"[预览提示] 当前共 {total_groups} 组，分 {total_pages} 页显示。当前预览第 {P+1} 页（显示第 {start_idx+1}~{end_idx} 组）。导出时将自动分页/完整输出。",
+                     ha='center', va='center', fontsize=10, color='#991B1B', weight='bold',
+                     bbox=dict(facecolor='#FEF2F2', edgecolor='#FCA5A5', boxstyle='round,pad=0.4'))
+
+        return fig
+
+    def _plot_tone_contour(self, data_entries, group_key, scale):
+        x_axis_val = self.get_param('contour_x', 'normalized')
+        if x_axis_val in ("normalized", "归一化采样点"):
+            x_axis = "归一化采样点"
+        else:
+            x_axis = "真实物理时长"
+
+        content_val = self.get_param('contour_content', 'average')
+        if content_val in ("average", "仅组别平均曲线"):
+            content = "仅组别平均曲线"
+        elif content_val in ("average_individual", "平均曲线 + 个体浅色细线"):
+            content = "平均曲线 + 个体浅色细线"
+        elif content_val in ("average_sd_ci", "平均曲线 + 置信区间阴影"):
+            content = "平均曲线 + 置信区间阴影"
+        else:
+            content = "仅组别平均曲线"
+
+        facet_val = self.get_param('contour_facet', 'none')
+        if facet_val in ("group", "按声调类型分面"):
+            facet = "按声调类型分面"
+        elif facet_val in ("syllable_position", "按音节位置分面"):
+            facet = "按音节位置分面"
+        else:
+            facet = "单图展示 (不分面)"
+
+        grouped_data = {}
+        for entry in data_entries:
+            val = entry[group_key]
+            if val not in grouped_data:
+                grouped_data[val] = []
+            grouped_data[val].append(entry)
+
+        max_syls = max(len(e['syl_data']) for e in data_entries)
+        num_points = self.project_tree.app_state_params.get('pts', 11)
+
+        facet_keys = ["Default"]
+        if facet == "按声调类型分面":
+            facet_keys = sorted(list(set(e['group'] for e in data_entries)))
+        elif facet == "按音节位置分面":
+            facet_keys = [f"第 {k+1} 音节" for k in range(max_syls)]
+
+        n_facets = len(facet_keys)
+        n_cols = min(2, n_facets)
+        n_rows = math.ceil(n_facets / n_cols)
+
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(5 * n_cols + 2, 4.5 * n_rows + 0.5), squeeze=False, sharex=True, sharey=True)
+        axes_flat = axes.flatten()
+
+        for f_idx, f_key in enumerate(facet_keys):
+            ax = axes_flat[f_idx]
+            ax.grid(True, linestyle="--", alpha=0.3)
+
+            facet_entries = data_entries
+            if facet == "按声调类型分面":
+                facet_entries = [e for e in data_entries if e['group'] == f_key]
+
+            facet_grouped = {}
+            for entry in facet_entries:
+                val = entry[group_key]
+                if val not in facet_grouped:
+                    facet_grouped[val] = []
+                facet_grouped[val].append(entry)
+
+            for g_color_idx, (g_name, entries) in enumerate(facet_grouped.items()):
+                color = self.colors[g_color_idx % len(self.colors)]
+
+                curves_x = []
+                curves_y = []
+
+                for entry in entries:
+                    y_series = []
+                    x_series = []
+
+                    syl_list = entry['normalized_syl_data'] if "T 值" in scale else entry['syl_data']
+
+                    acc_dur = 0.0
+                    for s_idx, (s_dur, pts) in enumerate(syl_list):
+                        if facet == "按音节位置分面" and f_idx != s_idx:
+                            continue
+
+                        if x_axis == "归一化采样点":
+                            x_pts = np.linspace(s_idx * num_points + 1, (s_idx + 1) * num_points, len(pts))
+                        else:
+                            x_pts = np.linspace(acc_dur, acc_dur + s_dur, len(pts))
+                            acc_dur += s_dur
+
+                        x_series.extend(x_pts)
+                        y_series.extend(pts)
+
+                    if len(y_series) > 0:
+                        curves_x.append(np.array(x_series))
+                        curves_y.append(np.array(y_series))
+
+                if not curves_y:
+                    continue
+
+                total_len = len(curves_x[0]) if curves_x else 10
+                grid_x = np.linspace(np.min([np.min(cx) for cx in curves_x]), np.max([np.max(cx) for cx in curves_x]), total_len)
+
+                interpolated_ys = []
+                for cx, cy in zip(curves_x, curves_y):
+                    valid = ~np.isnan(cy)
+                    if np.sum(valid) >= 2:
+                        iy = np.interp(grid_x, cx[valid], cy[valid])
+                        interpolated_ys.append(iy)
+
+                if not interpolated_ys:
+                    continue
+
+                mean_y = np.nanmean(interpolated_ys, axis=0)
+                std_y = np.nanstd(interpolated_ys, axis=0)
+
+                if "个体浅色" in content:
+                    for cy in interpolated_ys:
+                        ax.plot(grid_x, cy, color=color, linewidth=0.6, alpha=0.18)
+                elif "置信区间" in content:
+                    ax.fill_between(grid_x, mean_y - std_y, mean_y + std_y, color=color, alpha=0.15)
+
+                short_g_name = g_name
+                if len(g_name) > 12:
+                    short_g_name = g_name[:10] + ".."
+                ax.plot(grid_x, mean_y, '-o', color=color, linewidth=2.5, markersize=5, label=short_g_name)
+
+            title_text = "声调声学格局连贯图"
+            if facet in ("按声调类型分面", "按音节位置分面"):
+                title_text = f_key
+            else:
+                if len(set(e['speaker_name'] for e in data_entries)) == 1:
+                    title_text = f"{data_entries[0]['speaker_name']} - 声学格局连贯图"
+            if len(title_text) > 20:
+                title_text = title_text[:17] + "..."
+            ax.set_title(title_text, fontsize=12, fontweight="bold")
+
+            if "T 值" in scale:
+                ax.set_ylim(-0.2, 5.2)
+                ax.set_yticks([0, 1, 2, 3, 4, 5])
+
+            row_idx = f_idx // n_cols
+            col_idx = f_idx % n_cols
+
+            if col_idx == 0:
+                if "T 值" in scale:
+                    ax.set_ylabel("T 值 (0-5 标度)")
+                else:
+                    ax.set_ylabel("频率 (Hz)")
+            else:
+                ax.set_ylabel("")
+
+            is_bottom_row = (row_idx == n_rows - 1) or (f_idx + n_cols >= n_facets)
+            if is_bottom_row:
+                if x_axis == "归一化采样点":
+                    ax.set_xlabel("音节测量点 (时序展开)")
+                else:
+                    ax.set_xlabel("时长 Duration (s)")
+            else:
+                ax.set_xlabel("")
+
+            if max_syls > 1 and x_axis == "归一化采样点" and facet != "按音节位置分面":
+                for k in range(1, max_syls):
+                    ax.axvline(k * num_points + 0.5, color='gray', linestyle='--', alpha=0.5)
+
+            if g_color_idx >= 0:
+                ax.legend(loc="upper right", fontsize=8)
+
+        for idx in range(n_facets, len(axes_flat)):
+            axes_flat[idx].set_visible(False)
+
+        fig.tight_layout()
+        return fig
+
+    def _plot_tone_overview_heatmap(self, data_entries, group_key, scale):
+        metric_val = self.get_param('overview_metric', 'mean')
+        if metric_val in ("sd", "标准差热图 (SD Map)"):
+            metric = "标准差热图 (SD Map)"
+        else:
+            metric = "均值热图 (Mean Map)"
+
+        max_syls = max(len(e['syl_data']) for e in data_entries)
+        num_points = self.project_tree.app_state_params.get('pts', 11)
+        total_points = max_syls * num_points
+
+        grouped_data = {}
+        for entry in data_entries:
+            val = entry[group_key]
+            if val not in grouped_data:
+                grouped_data[val] = []
+            grouped_data[val].append(entry)
+
+        groups_sorted = sorted(list(grouped_data.keys()))
+        if not groups_sorted:
+            fig, ax = plt.subplots(figsize=(6, 4))
+            ax.text(0.5, 0.5, "没有找到有效的声调数据用于生成概览图", ha='center', va='center')
+            return fig
+
+        matrix = []
+        row_labels = []
+
+        for g_name in groups_sorted:
+            entries = grouped_data[g_name]
+            vectors = []
+            for entry in entries:
+                syl_list = entry['normalized_syl_data'] if "T 值" in scale else entry['syl_data']
+                y_flat = []
+                for s_dur, pts in syl_list:
+                    y_flat.extend(pts)
+                if len(y_flat) < total_points:
+                    y_flat.extend([np.nan] * (total_points - len(y_flat)))
+                elif len(y_flat) > total_points:
+                    y_flat = y_flat[:total_points]
+                vectors.append(y_flat)
+
+            if vectors:
+                vectors = np.array(vectors)
+                with np.errstate(all='ignore'):
+                    if "均值" in metric:
+                        row_vec = np.nanmean(vectors, axis=0)
+                    else:
+                        row_vec = np.nanstd(vectors, axis=0)
+                if np.isnan(row_vec).all():
+                    row_vec = np.zeros(total_points)
+                matrix.append(row_vec)
+
+                count = len(entries)
+                row_labels.append(f"{g_name} (N={count})")
+
+        matrix = np.array(matrix)
+
+        fig_height = max(4, len(row_labels) * 0.35 + 1.5)
+        fig, ax = plt.subplots(figsize=(8, fig_height))
+
+        if "均值" in metric:
+            cmap = 'RdYlBu_r' if "T 值" in scale else 'viridis'
+            vmin = 0.0 if "T 值" in scale else None
+            vmax = 5.0 if "T 值" in scale else None
+        else:
+            cmap = 'Reds'
+            vmin = 0.0
+            vmax = None
+
+        im = ax.imshow(matrix, cmap=cmap, aspect='auto', vmin=vmin, vmax=vmax)
+
+        cbar = fig.colorbar(im, ax=ax, pad=0.02)
+        if "均值" in metric:
+            cbar.set_label("平均 T 值" if "T 值" in scale else "平均基频 (Hz)")
+        else:
+            cbar.set_label("标准差 (SD)" if "T 值" in scale else "标准差 (Hz)")
+
+        ax.set_yticks(np.arange(len(row_labels)))
+        ax.set_yticklabels(row_labels, fontsize=9)
+
+        ax.set_xticks(np.arange(total_points))
+        x_labels = []
+        for s_idx in range(max_syls):
+            for p_idx in range(num_points):
+                if p_idx == 0 or p_idx == num_points - 1 or p_idx == num_points // 2:
+                    x_labels.append(f"音节{s_idx+1}_点{p_idx+1}")
+                else:
+                    x_labels.append("")
+        ax.set_xticklabels(x_labels, rotation=45, ha='right', fontsize=8)
+
+        if max_syls > 1:
+            for k in range(1, max_syls):
+                ax.axvline(k * num_points - 0.5, color='white', linestyle='--', linewidth=1.5, alpha=0.8)
+
+        title_text = f"声调组别概览图 - {metric}"
+        if len(set(e['speaker_name'] for e in data_entries)) == 1:
+            title_text = f"{data_entries[0]['speaker_name']} - {title_text}"
+        ax.set_title(title_text, fontsize=12, fontweight="bold", pad=15)
+
+        fig.tight_layout()
+        return fig
+
+    def _plot_tone_distribution(self, data_entries, group_key, scale):
+        dist_type_val = self.get_param('dist_type', 'boxplot_violin')
+        if dist_type_val in ("start_mid_end", "起-中-终三点比较"):
+            dist_type = "起-中-终三点比较"
+        elif dist_type_val in ("range", "调域范围跨度图"):
+            dist_type = "调域范围跨度图"
+        elif dist_type_val in ("variability", "变异程度(CV)比较"):
+            dist_type = "变异程度(CV)比较"
+        else:
+            dist_type = "测量点精细分布"
+
+        style_val = self.get_param('dist_style', 'boxplot')
+        if style_val and ("violin" in str(style_val).lower() or "小提琴" in str(style_val)):
+            style = "小提琴图 (Violin Plot)"
+        else:
+            style = "科学箱线图 (Box Plot)"
+
+        grouped_data = {}
+        for entry in data_entries:
+            val = entry[group_key]
+            if val not in grouped_data:
+                grouped_data[val] = []
+            grouped_data[val].append(entry)
+
+        num_points = self.project_tree.app_state_params.get('pts', 11)
+        max_syls = max(len(e['syl_data']) for e in data_entries)
+        n_groups = len(grouped_data)
+
+        if "测量点精细分布" in dist_type:
+            n_cols = min(2, n_groups)
+            n_rows = math.ceil(n_groups / n_cols)
+            fig, axes = plt.subplots(n_rows, n_cols, figsize=(5 * n_cols + 2, 4.2 * n_rows + 0.5), squeeze=False, sharex=True, sharey=True)
+            axes_flat = axes.flatten()
+
+            for idx, (g_name, entries) in enumerate(grouped_data.items()):
+                ax = axes_flat[idx]
+                ax.grid(True, linestyle="--", alpha=0.3)
+
+                pts_data = []
+                for entry in entries:
+                    y_series = []
+                    syl_list = entry['normalized_syl_data'] if "T 值" in scale else entry['syl_data']
+                    for s_dur, pts in syl_list:
+                        y_series.extend(pts)
+                    if len(y_series) == max_syls * num_points:
+                        pts_data.append(y_series)
+
+                if not pts_data:
+                    ax.text(0.5, 0.5, "数据不完整，音节数不一致", ha='center', va='center', color='red')
+                    continue
+
+                pts_data = np.array(pts_data)
+                positions = np.arange(1, pts_data.shape[1] + 1)
+
+                if "小提琴图" in style:
+                    cleaned_columns = []
+                    for col_idx in range(pts_data.shape[1]):
+                        col = pts_data[:, col_idx]
+                        cleaned_columns.append(col[~np.isnan(col)])
+                    ax.violinplot(cleaned_columns, positions, showmeans=True, showmedians=False)
+                else:
+                    cleaned_columns = []
+                    for col_idx in range(pts_data.shape[1]):
+                        col = pts_data[:, col_idx]
+                        cleaned_columns.append(col[~np.isnan(col)])
+                    ax.boxplot(cleaned_columns, positions=positions, patch_artist=True,
+                               boxprops=dict(facecolor="#DBEAFE", color="#1E40AF"),
+                               whiskerprops=dict(color="#1E40AF"),
+                               capprops=dict(color="#1E40AF"),
+                               medianprops=dict(color="#DC2626", linewidth=1.5))
+
+                ax.set_title(f"{g_name} 基频测量点分布", fontsize=11, fontweight="bold")
+                if "T 值" in scale:
+                    ax.set_ylim(-0.2, 5.2)
+                    ax.set_yticks([0, 1, 2, 3, 4, 5])
+                ax.set_xticks(positions)
+                ax.set_xticklabels([str((p-1)%num_points + 1) for p in positions], fontsize=8)
+
+            for idx in range(n_groups, len(axes_flat)):
+                axes_flat[idx].set_visible(False)
+
+            fig.tight_layout()
+            return fig
+
+        elif "起-中-终" in dist_type:
+            fig, ax = plt.subplots(figsize=(8, 5))
+            ax.grid(True, linestyle="--", alpha=0.3)
+
+            data_to_plot = []
+            labels = []
+            colors_to_use = []
+
+            for g_color_idx, (g_name, entries) in enumerate(grouped_data.items()):
+                start_pts, mid_pts, end_pts = [], [], []
+                color = self.colors[g_color_idx % len(self.colors)]
+
+                for entry in entries:
+                    y_series = []
+                    syl_list = entry['normalized_syl_data'] if "T 值" in scale else entry['syl_data']
+                    for s_dur, pts in syl_list:
+                        y_series.extend(pts)
+
+                    if len(y_series) >= 3:
+                        y_series = np.array(y_series)
+                        valid_ys = y_series[~np.isnan(y_series)]
+                        if len(valid_ys) >= 3:
+                            start_pts.append(valid_ys[0])
+                            mid_pts.append(valid_ys[len(valid_ys) // 2])
+                            end_pts.append(valid_ys[-1])
+
+                if start_pts:
+                    data_to_plot.extend([start_pts, mid_pts, end_pts])
+                    labels.extend([f"{g_name}\n起点", f"{g_name}\n中点", f"{g_name}\n终点"])
+                    colors_to_use.extend([color, color, color])
+
+            if data_to_plot:
+                if "小提琴图" in style:
+                    parts = ax.violinplot(data_to_plot, showmeans=True)
+                    for pc_idx, pc in enumerate(parts['bodies']):
+                        pc.set_facecolor(colors_to_use[pc_idx])
+                        pc.set_alpha(0.6)
+                else:
+                    bp = ax.boxplot(data_to_plot, patch_artist=True)
+                    for patch, color in zip(bp['boxes'], colors_to_use):
+                        patch.set_facecolor(color)
+                        patch.set_alpha(0.6)
+
+                ax.set_xticklabels(labels, fontsize=9)
+                ax.set_title("各声调起-中-终三点基频离散比较", fontsize=13, fontweight="bold")
+                if "T 值" in scale:
+                    ax.set_ylim(-0.2, 5.2)
+                    ax.set_yticks([0, 1, 2, 3, 4, 5])
+
+            return fig
+
+        elif "调域范围" in dist_type:
+            fig, ax = plt.subplots(figsize=(8, 5))
+            ax.grid(True, linestyle="--", alpha=0.3)
+
+            y_positions = np.arange(n_groups)
+            group_names = []
+
+            for idx, (g_name, entries) in enumerate(grouped_data.items()):
+                group_names.append(g_name)
+                color = self.colors[idx % len(self.colors)]
+
+                min_vals = []
+                max_vals = []
+                for entry in entries:
+                    y_series = []
+                    syl_list = entry['normalized_syl_data'] if "T 值" in scale else entry['syl_data']
+                    for s_dur, pts in syl_list:
+                        y_series.extend(pts)
+                    y_series = np.array(y_series)
+                    valid_ys = y_series[~np.isnan(y_series)]
+                    if len(valid_ys) > 0:
+                        min_vals.append(np.min(valid_ys))
+                        max_vals.append(np.max(valid_ys))
+
+                if min_vals:
+                    avg_min = np.mean(min_vals)
+                    avg_max = np.mean(max_vals)
+                    ax.barh(idx, avg_max - avg_min, left=avg_min, height=0.5, color=color, alpha=0.7, edgecolor=color, align='center')
+                    ax.plot([avg_min, avg_max], [idx, idx], '|', color='black', markersize=10, markeredgewidth=2)
+                    ax.text((avg_min + avg_max)/2, idx, f"{avg_min:.2f} ~ {avg_max:.2f}\n(调域: {avg_max-avg_min:.2f})",
+                            ha='center', va='center', color='black', fontsize=9, fontweight='bold')
+
+            ax.set_yticks(y_positions)
+            ax.set_yticklabels(group_names, fontsize=11, fontweight="bold")
+            ax.set_title("各声调调域范围图 (最高点 / 最低点 / 调域跨度)", fontsize=13, fontweight="bold")
+
+            if "T 值" in scale:
+                ax.set_xlim(-0.2, 5.2)
+                ax.set_xticks([0, 1, 2, 3, 4, 5])
+                ax.set_xlabel("T 值域区间")
+            else:
+                ax.set_xlabel("绝对频率范围 (Hz)")
+
+            return fig
+
+        elif "变异程度" in dist_type:
+            fig, ax = plt.subplots(figsize=(8, 5))
+            ax.grid(True, linestyle="--", alpha=0.3)
+
+            group_names = []
+            cv_values = []
+            colors_to_use = []
+
+            for idx, (g_name, entries) in enumerate(grouped_data.items()):
+                group_names.append(g_name)
+                color = self.colors[idx % len(self.colors)]
+                colors_to_use.append(color)
+
+                all_pts_flat = []
+                for entry in entries:
+                    y_series = []
+                    syl_list = entry['normalized_syl_data'] if "T 值" in scale else entry['syl_data']
+                    for s_dur, pts in syl_list:
+                        y_series.extend(pts)
+                    y_series = np.array(y_series)
+                    valid_ys = y_series[~np.isnan(y_series)]
+                    all_pts_flat.extend(valid_ys.tolist())
+
+                if all_pts_flat:
+                    mean_val = np.mean(all_pts_flat)
+                    std_val = np.nanstd(all_pts_flat)
+                    cv = (std_val / mean_val) if mean_val > 0 else 0.0
+                    cv_values.append(cv)
+                else:
+                    cv_values.append(0.0)
+
+            ax.bar(group_names, cv_values, color=colors_to_use, alpha=0.75, width=0.45)
+
+            for idx, val in enumerate(cv_values):
+                ax.text(idx, val + 0.005, f"{val:.1%}", ha='center', va='bottom', fontweight='bold')
+
+            ax.set_title("各声调内部发音变异系数 (Coefficient of Variation) 比较", fontsize=12, fontweight="bold")
+            ax.set_ylabel("变异系数 CV (SD / Mean)")
+            ax.set_xlabel("声调类别")
+
+            return fig
+
+        fig, ax = plt.subplots()
+        return fig
+
+    def _plot_temporal_density(self, data_entries, group_key):
+        bw_method = float(self.get_param('density_bw', 0.15))
+        f0_mode_val = self.get_param('density_f0_mode', 'percentile')
+        facet_val = self.get_param('density_facet', 'group')
+
+        if f0_mode_val:
+            if "percentile" in str(f0_mode_val).lower() or "分位数" in str(f0_mode_val):
+                f0_mode = "percentile"
+            elif "manual" in str(f0_mode_val).lower() or "手动" in str(f0_mode_val):
+                f0_mode = "manual"
+            else:
+                f0_mode = "minmax"
+        else:
+            f0_mode = "percentile"
+
+        if facet_val in ("none", "不分面 (混合叠加)"):
+            facet = "不分面 (混合叠加)"
+        elif facet_val in ("label", "按词语分面"):
+            facet = "按词语分面"
+        else:
+            facet = "声调类型分面 (默认)"
+
+        grouped_data = {}
+        for entry in data_entries:
+            val = entry[group_key]
+            if val not in grouped_data:
+                grouped_data[val] = []
+            grouped_data[val].append(entry)
+
+        n_groups = len(grouped_data)
+        max_syls = max(len(e['syl_data']) for e in data_entries)
+        N_DENSE = 100
+
+        all_raw_f0 = []
+        for entry in data_entries:
+            all_raw_f0.extend([f for f in entry['raw_freqs'] if f > 0])
+
+        if not all_raw_f0:
+            fig, ax = plt.subplots()
+            ax.text(0.5, 0.5, "没有有效基频点可进行 KDE 计算", ha='center', va='center')
+            return fig
+
+        p_low_val = self.get_param('density_p_low', 5.0)
+        p_high_val = self.get_param('density_p_high', 95.0)
+        min_hz_val = self.get_param('density_m_min', 75.0)
+        max_hz_val = self.get_param('density_m_max', 600.0)
+
+        try:
+            p_low = float(p_low_val)
+            p_high = float(p_high_val)
+        except ValueError:
+            p_low, p_high = 5.0, 95.0
+
+        try:
+            min_f0 = float(min_hz_val)
+            max_f0 = float(max_hz_val)
+        except ValueError:
+            min_f0, max_f0 = 75.0, 600.0
+
+        if f0_mode == 'percentile':
+            min_f0 = np.percentile(all_raw_f0, p_low)
+            max_f0 = np.percentile(all_raw_f0, p_high)
+        elif f0_mode == 'minmax':
+            min_f0 = min(all_raw_f0)
+            max_f0 = max(all_raw_f0)
+
+        def hz_to_t(hz):
+            if max_f0 == min_f0: return 3.0
+            hz_val = np.clip(hz, min_f0, max_f0)
+            if min_f0 <= 0 or max_f0 <= min_f0: return 3.0
+            return 5 * (np.log(hz_val) - np.log(min_f0)) / (np.log(max_f0) - np.log(min_f0))
+
+        facet_keys = ["Default"]
+        if facet == "声调类型分面 (默认)":
+            facet_keys = sorted(list(set(e['group'] for e in data_entries)))
+        elif facet == "按词语分面":
+            facet_keys = sorted(list(set(e['label'] for e in data_entries)))
+
+        n_facets = len(facet_keys)
+        n_cols = min(2, n_facets)
+        n_rows = math.ceil(n_facets / n_cols)
+
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(5 * max_syls * n_cols + 1, 4.5 * n_rows + 0.5), squeeze=False, sharex=True, sharey=True)
+        axes_flat = axes.flatten()
+
+        for f_idx, f_key in enumerate(facet_keys):
+            ax = axes_flat[f_idx]
+
+            facet_entries = data_entries
+            if facet == "声调类型分面 (默认)":
+                facet_entries = [e for e in data_entries if e['group'] == f_key]
+            elif facet == "按词语分面":
+                facet_entries = [e for e in data_entries if e['label'] == f_key]
+
+            X_all, Y_all = [], []
+            for entry in facet_entries:
+                syl_bounds = self.project_tree._get_syllables_and_bounds(entry['raw_item'])[1]
+                for s_idx, (c_s, c_e) in enumerate(syl_bounds):
+                    y_dense = self.project_tree._extract_kde_contour(entry['raw_xs'], entry['raw_freqs'], c_s, c_e, N_DENSE)
+                    if y_dense is not None:
+                        x_dense = np.linspace(s_idx * 100, (s_idx + 1) * 100, N_DENSE)
+                        y_t_dense = np.array([hz_to_t(h) for h in y_dense])
+                        valid = np.isfinite(y_t_dense)
+                        X_all.extend(x_dense[valid].tolist())
+                        Y_all.extend(y_t_dense[valid].tolist())
+
+            if not X_all:
+                ax.text(0.5, 0.5, "没有足够的有效数据点", ha='center', va='center')
+                continue
+
+            xmin, xmax = 0, max_syls * 100
+            ymin, ymax = -0.5, 5.5
+
+            positions = np.vstack([X_all, Y_all])
+            try:
+                kernel = gaussian_kde(positions, bw_method=bw_method)
+                xi, yi = np.mgrid[xmin:xmax:200j, ymin:ymax:100j]
+                zi = kernel(np.vstack([xi.flatten(), yi.flatten()]))
+                zi = zi.reshape(xi.shape)
+
+                vmax = zi.max()
+                if vmax > 0:
+                    levels = np.linspace(vmax * 0.05, vmax, 30)
+                    ax.contourf(xi, yi, zi, levels=levels, cmap="YlOrRd", extend='neither')
+            except Exception as e:
+                ax.text(0.5, 0.5, f"KDE 计算失败: {str(e)[:20]}", ha='center', va='center', color='red')
+
+            for k in range(1, max_syls):
+                ax.axvline(k * 100, color='gray', linestyle='--', alpha=0.8)
+
+            row_idx = f_idx // n_cols
+            col_idx = f_idx % n_cols
+
+            if col_idx == 0:
+                ax.set_ylabel("T 值 (0-5 标度)")
+            else:
+                ax.set_ylabel("")
+
+            is_bottom_row = (row_idx == n_rows - 1) or (f_idx + n_cols >= n_facets)
+            if is_bottom_row:
+                ticks, labels = [], []
+                for k in range(max_syls):
+                    ticks.append(k * 100 + 50)
+                    labels.append(f"第 {k+1} 字\n(0-100%)")
+                ax.set_xticks(ticks)
+                ax.set_xticklabels(labels, fontsize=9)
+            else:
+                ticks = []
+                for k in range(max_syls):
+                    ticks.append(k * 100 + 50)
+                ax.set_xticks(ticks)
+                ax.set_xticklabels([])
+
+            ax.set_ylim(-0.5, 5.5)
+            ax.set_yticks([0, 1, 2, 3, 4, 5])
+
+            title_text = f_key if f_key != "Default" else "时序密度热力图"
+            if len(title_text) > 20:
+                title_text = title_text[:17] + "..."
+            ax.set_title(title_text, fontsize=12, fontweight="bold")
+
+        for idx in range(n_facets, len(axes_flat)):
+            axes_flat[idx].set_visible(False)
+
+        fig.tight_layout()
+        return fig
+
+    def _plot_quality_check(self, data_entries):
+        view_val = self.get_param('qc_view', 'raw_overlay')
+        if view_val:
+            if "active_ratio" in str(view_val).lower() or "有效点" in str(view_val):
+                view = "active_ratio"
+            elif "speaker_means" in str(view_val).lower() or "发音人" in str(view_val):
+                view = "speaker_means"
+            else:
+                view = "raw_overlay"
+        else:
+            view = "raw_overlay"
+
+        scale_val = self.get_param('scale')
+        is_t_value = scale_val and ("T" in str(scale_val) or "t_value" in str(scale_val).lower())
+
+        if view == "raw_overlay":
+            fig, ax = plt.subplots(figsize=(9, 5))
+            ax.grid(True, linestyle="--", alpha=0.3)
+
+            max_syls = max(len(e['syl_data']) for e in data_entries)
+            num_points = self.project_tree.app_state_params.get('pts', 11)
+
+            normal_drawn = False
+            outlier_drawn = False
+
+            for entry in data_entries:
+                y_series = entry['normalized_syl_data'] if is_t_value else entry['syl_data']
+                y_flat = []
+                x_flat = []
+
+                for s_idx, (s_dur, pts) in enumerate(y_series):
+                    x_pts = np.linspace(s_idx * num_points + 1, (s_idx + 1) * num_points, len(pts))
+                    x_flat.extend(x_pts)
+                    y_flat.extend(pts)
+
+                y_flat = np.array(y_flat)
+                x_flat = np.array(x_flat)
+
+                has_warning = any(w.startswith("[警告]") or w.startswith("[致命]") for w in entry.get('warnings', []))
+
+                if has_warning:
+                    ax.plot(x_flat, y_flat, color="#EF4444", linewidth=1.2, alpha=0.75, linestyle="--",
+                            label="存在质量异常的发音" if not outlier_drawn else "")
+                    outlier_drawn = True
+                else:
+                    ax.plot(x_flat, y_flat, color="#3B82F6", linewidth=0.75, alpha=0.3,
+                            label="质量良好的常规发音" if not normal_drawn else "")
+                    normal_drawn = True
+
+            if max_syls > 1:
+                for k in range(1, max_syls):
+                    ax.axvline(k * num_points + 0.5, color='gray', linestyle='--', alpha=0.5)
+
+            ax.set_title("数据质量分析：逐项基频曲线质量分布叠加", fontsize=13, fontweight="bold")
+            ax.set_xlabel("测量点")
+
+            if is_t_value:
+                ax.set_ylim(-0.2, 5.2)
+                ax.set_yticks([0, 1, 2, 3, 4, 5])
+                ax.set_ylabel("T 值 (0-5 标度)")
+            else:
+                ax.set_ylabel("频率 (Hz)")
+
+            ax.legend(loc="upper right")
+            return fig
+
+        elif view == "active_ratio":
+            fig, ax = plt.subplots(figsize=(8, 5))
+            ax.grid(True, linestyle="--", alpha=0.3)
+
+            spk_data = {}
+            for entry in data_entries:
+                spk = entry['speaker_name']
+                if spk not in spk_data:
+                    spk_data[spk] = []
+                spk_data[spk].append(entry['active_ratio'])
+
+            labels = []
+            data_to_plot = []
+            for spk, ratios in spk_data.items():
+                labels.append(spk)
+                data_to_plot.append(ratios)
+
+            if data_to_plot:
+                bp = ax.boxplot(data_to_plot, patch_artist=True)
+                for patch in bp['boxes']:
+                    patch.set_facecolor("#ECFDF5")
+                    patch.set_color("#059669")
+                for whisker in bp['whiskers']:
+                    whisker.set_color("#059669")
+                for cap in bp['caps']:
+                    cap.set_color("#059669")
+                for median in bp['medians']:
+                    median.set_color("#DC2626")
+                    median.set_linewidth(1.5)
+
+                ax.set_xticklabels(labels, fontsize=10, fontweight="bold")
+                ax.set_ylabel("有效基频采样点比例 (Active Ratio)", fontsize=11)
+                ax.set_title("各发音人录音有效率与基频检出比例分布比较", fontsize=13, fontweight="bold")
+
+                ax.axhline(0.60, color="#EF4444", linestyle=":", label="常规建议的极低阈值 (60%)")
+                ax.legend(loc="lower left")
+                ax.set_ylim(-0.05, 1.05)
+
+            return fig
+
+        elif view == "speaker_means":
+            fig, ax = plt.subplots(figsize=(9, 5))
+            ax.grid(True, linestyle="--", alpha=0.3)
+
+            for idx, entry in enumerate(data_entries):
+                spk = entry['speaker_name']
+                color = self.colors[hash(spk) % len(self.colors)]
+
+                valid_ys = entry['raw_freqs'][entry['raw_freqs'] > 0]
+                if len(valid_ys) > 0:
+                    mean_f0 = np.mean(valid_ys)
+                    ax.scatter(spk, mean_f0, color=color, alpha=0.4, edgecolors='none', s=40)
+
+            spk_freqs_pool = {}
+            for entry in data_entries:
+                spk = entry['speaker_name']
+                valid_ys = entry['raw_freqs'][entry['raw_freqs'] > 0]
+                if len(valid_ys) > 0:
+                    if spk not in spk_freqs_pool:
+                        spk_freqs_pool[spk] = []
+                    spk_freqs_pool[spk].append(np.mean(valid_ys))
+
+            for idx, (spk, means) in enumerate(spk_freqs_pool.items()):
+                med = np.median(means)
+                q1 = np.percentile(means, 25)
+                q3 = np.percentile(means, 75)
+                color = self.colors[hash(spk) % len(self.colors)]
+                ax.errorbar(spk, med, yerr=[[med - q1], [q3 - med]], fmt='D', color='black', ecolor=color, elinewidth=3, capsize=8, label=f"{spk} 中位数 ({med:.1f}Hz)" if idx < 5 else "")
+
+            ax.set_title("各受试发音人基频均值及调域离散域 (用于快速排查八度音高跳变)", fontsize=12, fontweight="bold")
+            ax.set_ylabel("发音基频均值 Mean F0 (Hz)")
+            ax.legend(loc="upper right", fontsize=9)
+
+            return fig
+
+        fig, ax = plt.subplots()
+        return fig
+
+    def _export_paginated_pdf(self, out_file, data_entries, group_key, scale):
+        from matplotlib.backends.backend_pdf import PdfPages
+
+        unique_groups = []
+        for e in data_entries:
+            val = e[group_key]
+            if val not in unique_groups:
+                unique_groups.append(val)
+
+        chunk_size = 8
+        pdf_pages = PdfPages(out_file)
+
+        try:
+            for page_idx in range(math.ceil(len(unique_groups) / chunk_size)):
+                allowed_groups = set(unique_groups[page_idx * chunk_size : (page_idx + 1) * chunk_size])
+                chunk_entries = [e for e in data_entries if e[group_key] in allowed_groups]
+
+                fig = self.generate_plot(chunk_entries, is_preview=False)
+
+                fig.text(0.95, 0.02, f"第 {page_idx + 1} 页 / 共 {math.ceil(len(unique_groups) / chunk_size)} 页",
+                         ha='right', va='bottom', fontsize=9, color='gray')
+
+                pdf_pages.savefig(fig, bbox_inches='tight')
+                plt.close(fig)
+        finally:
+            pdf_pages.close()
+
+    def _export_paginated_images(self, base_path, data_entries, group_key, scale, ext):
+        unique_groups = []
+        for e in data_entries:
+            val = e[group_key]
+            if val not in unique_groups:
+                unique_groups.append(val)
+
+        chunk_size = 8
+        total_pages = math.ceil(len(unique_groups) / chunk_size)
+
+        dir_name, file_name = os.path.split(base_path)
+        name_part, _ = os.path.splitext(file_name)
+
+        for page_idx in range(total_pages):
+            allowed_groups = set(unique_groups[page_idx * chunk_size : (page_idx + 1) * chunk_size])
+            chunk_entries = [e for e in data_entries if e[group_key] in allowed_groups]
+
+            fig = self.generate_plot(chunk_entries, is_preview=False)
+
+            fig.text(0.95, 0.02, f"第 {page_idx + 1} 页 / 共 {total_pages} 页",
+                     ha='right', va='bottom', fontsize=9, color='gray')
+
+            out_path = os.path.join(dir_name, f"{name_part}_第{page_idx + 1}页{ext}")
+            fig.savefig(out_path, dpi=300, bbox_inches='tight')
+            plt.close(fig)
+
+    def _export_dataset(self, data, out_path, ext):
+        chart_type = self.get_param('chart_type', 'contour')
+        groupby = self.get_param('groupby', 'group')
+
+        group_key = 'group'
+        if groupby in ("按词语", "label"):
+            group_key = 'label'
+        elif groupby in ("按发音人", "speaker"):
+            group_key = 'speaker_name'
+
+        unique_groups = []
+        for e in data:
+            val = e[group_key]
+            if val not in unique_groups:
+                unique_groups.append(val)
+
+        scale_val = self.get_param('scale')
+        if scale_val and ("T" in str(scale_val) or "t_value" in str(scale_val).lower()):
+            scale = "T 值"
+        else:
+            scale = "Hz"
+
+        if len(unique_groups) > 8 and chart_type != "overview_heatmap":
+            if ext == ".pdf":
+                self._export_paginated_pdf(out_path, data, group_key, scale)
+            else:
+                self._export_paginated_images(out_path, data, group_key, scale, ext)
+        else:
+            fig = self.generate_plot(data, is_preview=False)
+            fig.savefig(out_path, dpi=300, bbox_inches='tight')
+            plt.close(fig)
+
+
+class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
     def __init__(self, parent, app=None, project_tree=None, mode='single', all_speakers=None):
-        super().__init__(parent)
+        ctk.CTkToplevel.__init__(self, parent)
+        AcousticChartExporter.__init__(self, project_tree, app, all_speakers)
+
         self.parent = parent
         self.app = app
         self.project_tree = project_tree
@@ -804,991 +1954,6 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
             self.var_qc_view.set("speaker_means")
         self.update_preview()
 
-    # --- CORE DATA EXTRACTION ENGINE ---
-    def _extract_active_data(self, speakers_list):
-        """Extracts complete structures, raw F0 arrays, active ratios, labels, groups, etc. for all speakers in scope."""
-        num_points = self.project_tree.app_state_params.get('pts', 11)
-        data_entries = []
-
-        for speaker in speakers_list:
-            # We need to temporarily set the tree items to this speaker if not the active one
-            orig_items = self.project_tree.items
-            self.project_tree.items = speaker.items
-
-            s_struct = self.project_tree._get_items_by_group_for_dict(speaker.items)
-
-            # Extract Speaker's absolute F0 stats to do speaker-wise T-value calculation
-            speaker_f0_pool = []
-            speaker_items_temp = []
-
-            for grp_name, children in s_struct:
-                for child in children:
-                    item = speaker.items[child]
-                    self.project_tree._ensure_item_loaded(item)
-                    if item.get('start') is None or not item.get('snd') or (not item.get('pitch') and not item.get('pitch_data')):
-                        continue
-
-                    total_dur, syl_data = self.project_tree._extract_syl_data(item, num_points)
-                    if total_dur <= 0:
-                        continue
-
-                    # Extract raw pitch arrays
-                    p_xs, p_freqs = self.project_tree._get_pitch_arrays_for_item(item)
-                    if p_xs is None or p_freqs is None:
-                        continue
-
-                    # Calculate active ratios
-                    valid_f0_mask = p_freqs > 0
-                    active_ratio = np.mean(valid_f0_mask) if len(p_freqs) > 0 else 0.0
-
-                    # Warnings checks
-                    warnings = item.get('warnings', [])
-
-                    speaker_items_temp.append({
-                        'speaker_name': speaker.name,
-                        'group': grp_name,
-                        'label': item.get('label', ''),
-                        'total_dur': total_dur,
-                        'syl_data': syl_data,
-                        'raw_xs': p_xs,
-                        'raw_freqs': p_freqs,
-                        'active_ratio': active_ratio,
-                        'warnings': warnings,
-                        'raw_item': item
-                    })
-
-                    speaker_f0_pool.extend([f for f in p_freqs if f > 0])
-
-            # Calculate speaker-wise min/max using robust percentile to avoid extreme outliers distorting
-            if speaker_f0_pool:
-                s_min = np.percentile(speaker_f0_pool, 5.0)
-                s_max = np.percentile(speaker_f0_pool, 95.0)
-            else:
-                s_min, s_max = 75.0, 600.0
-
-            # Perform T-value mapping speaker-wise
-            for entry in speaker_items_temp:
-                # Add normalized T-value to entry's syl_data
-                normalized_syl_data = []
-                for s_dur, freqs in entry['syl_data']:
-                    norm_freqs = []
-                    for f in freqs:
-                        if f > 0:
-                            if s_max > s_min:
-                                norm_t = 5 * (math.log10(f) - math.log10(s_min)) / (math.log10(s_max) - math.log10(s_min))
-                                norm_t = np.clip(norm_t, 0.0, 5.0)
-                            else:
-                                norm_t = 3.0
-                            norm_freqs.append(norm_t)
-                        else:
-                            norm_freqs.append(np.nan)
-                    normalized_syl_data.append((s_dur, norm_freqs))
-
-                # Normalize raw F0 to T values too
-                norm_raw_freqs = []
-                for f in entry['raw_freqs']:
-                    if f > 0:
-                        if s_max > s_min:
-                            norm_t = 5 * (math.log10(f) - math.log10(s_min)) / (math.log10(s_max) - math.log10(s_min))
-                            norm_t = np.clip(norm_t, 0.0, 5.0)
-                        else:
-                            norm_t = 3.0
-                        norm_raw_freqs.append(norm_t)
-                    else:
-                        norm_raw_freqs.append(np.nan)
-
-                entry['normalized_syl_data'] = normalized_syl_data
-                entry['normalized_raw_freqs'] = np.array(norm_raw_freqs)
-                data_entries.append(entry)
-
-            self.project_tree.items = orig_items
-
-        if hasattr(self, 'group_checkbox_vars') and self.group_checkbox_vars:
-            selected_groups = {g for g, var in self.group_checkbox_vars.items() if var.get()}
-            data_entries = [e for e in data_entries if e['group'] in selected_groups]
-
-        return data_entries
-
-    def _get_current_data_entries(self):
-        scope = self.var_export_scope.get()
-        if scope == "active" or not self.all_speakers:
-            # Active speaker only
-            return self._extract_active_data([self.active_speaker])
-        elif scope == "separate":
-            # For separate export preview, show the speaker at self.current_preview_page
-            idx = getattr(self, 'current_preview_page', 0)
-            if idx < 0 or idx >= len(self.all_speakers):
-                idx = 0
-                self.current_preview_page = 0
-            current_speaker = self.all_speakers[idx]
-            return self._extract_active_data([current_speaker])
-        else:
-            # All speakers (integrated)
-            return self._extract_active_data(self.all_speakers)
-
-    # --- ADVANCED SCIENTIFIC PLOTTING ENGINE ---
-    def generate_plot(self, data_entries, is_preview=True):
-        plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS', 'sans-serif']
-        plt.rcParams['axes.unicode_minus'] = False
-
-        chart_type = self.var_chart_type.get()
-        groupby = self.combo_groupby.get()
-        scale = self.combo_scale.get()
-
-        # Decide grouping label extraction
-        group_key = 'group'
-        if groupby == "按词语":
-            group_key = 'label'
-        elif groupby == "按发音人":
-            group_key = 'speaker_name'
-
-        if not data_entries:
-            fig, ax = plt.subplots(figsize=(6, 4))
-            ax.text(0.5, 0.5, "没有找到有效的声调基频数据！\n请检查是否配置了发音人或导入了音频点。", ha='center', va='center', fontsize=12, color='red')
-            ax.axis('off')
-            return fig
-
-        # Find unique groups to display
-        unique_groups = []
-        for e in data_entries:
-            val = e[group_key]
-            if val not in unique_groups:
-                unique_groups.append(val)
-
-        total_groups = len(unique_groups)
-        page_size = 8
-        total_pages = math.ceil(total_groups / page_size) if total_groups > 0 else 1
-
-        if self.current_group_page < 0:
-            self.current_group_page = 0
-        elif self.current_group_page >= total_pages:
-            self.current_group_page = max(0, total_pages - 1)
-
-        P = self.current_group_page
-
-        truncated = False
-        if is_preview and total_groups > page_size and chart_type != "overview_heatmap":
-            truncated = True
-            start_idx = P * page_size
-            end_idx = min(total_groups, start_idx + page_size)
-            allowed_groups = set(unique_groups[start_idx:end_idx])
-            data_entries = [e for e in data_entries if e[group_key] in allowed_groups]
-
-        if chart_type == "contour":
-            fig = self._plot_tone_contour(data_entries, group_key, scale)
-        elif chart_type == "distribution":
-            fig = self._plot_tone_distribution(data_entries, group_key, scale)
-        elif chart_type == "density":
-            fig = self._plot_temporal_density(data_entries, group_key)
-        elif chart_type == "quality":
-            fig = self._plot_quality_check(data_entries)
-        elif chart_type == "overview_heatmap":
-            fig = self._plot_tone_overview_heatmap(data_entries, group_key, scale)
-        else:
-            fig, ax = plt.subplots()
-            return fig
-
-        if truncated:
-            # Adjust subplots top margin to avoid overlaps with the banner
-            fig.subplots_adjust(top=0.88)
-            fig.text(0.5, 0.96, f"[预览提示] 当前共 {total_groups} 组，分 {total_pages} 页显示。当前预览第 {P+1} 页（显示第 {start_idx+1}~{end_idx} 组）。导出时将自动分页/完整输出。",
-                     ha='center', va='center', fontsize=10, color='#991B1B', weight='bold',
-                     bbox=dict(facecolor='#FEF2F2', edgecolor='#FCA5A5', boxstyle='round,pad=0.4'))
-
-        return fig
-
-    def _plot_tone_contour(self, data_entries, group_key, scale):
-        x_axis = self.combo_contour_x.get()
-        content = self.combo_contour_content.get()
-        facet = self.combo_contour_facet.get()
-
-        # Group items
-        grouped_data = {}
-        for entry in data_entries:
-            val = entry[group_key]
-            if val not in grouped_data:
-                grouped_data[val] = []
-            grouped_data[val].append(entry)
-
-        max_syls = max(len(e['syl_data']) for e in data_entries)
-        num_points = self.project_tree.app_state_params.get('pts', 11)
-
-        # Faceting setup
-        facet_keys = ["Default"]
-        if facet == "按声调类型分面":
-            facet_keys = sorted(list(set(e['group'] for e in data_entries)))
-        elif facet == "按音节位置分面":
-            facet_keys = [f"第 {k+1} 音节" for k in range(max_syls)]
-
-        n_facets = len(facet_keys)
-        n_cols = min(2, n_facets)
-        n_rows = math.ceil(n_facets / n_cols)
-
-        fig, axes = plt.subplots(n_rows, n_cols, figsize=(5 * n_cols + 2, 4.5 * n_rows + 0.5), squeeze=False, sharex=True, sharey=True)
-        axes_flat = axes.flatten()
-
-        for f_idx, f_key in enumerate(facet_keys):
-            ax = axes_flat[f_idx]
-            ax.grid(True, linestyle="--", alpha=0.3)
-
-            # Sub-slice data for this facet
-            facet_entries = data_entries
-            if facet == "按声调类型分面":
-                facet_entries = [e for e in data_entries if e['group'] == f_key]
-
-            # Group slice
-            facet_grouped = {}
-            for entry in facet_entries:
-                val = entry[group_key]
-                if val not in facet_grouped:
-                    facet_grouped[val] = []
-                facet_grouped[val].append(entry)
-
-            # Plot each group
-            for g_color_idx, (g_name, entries) in enumerate(facet_grouped.items()):
-                color = self.colors[g_color_idx % len(self.colors)]
-
-                # Collect curves
-                curves_x = []
-                curves_y = []
-
-                for entry in entries:
-                    y_series = []
-                    x_series = []
-
-                    syl_list = entry['normalized_syl_data'] if "T 值" in scale else entry['syl_data']
-
-                    acc_dur = 0.0
-                    for s_idx, (s_dur, pts) in enumerate(syl_list):
-                        # Filter this syllable position if faceting by syllable position
-                        if facet == "按音节位置分面" and f_idx != s_idx:
-                            continue
-
-                        # Build X points
-                        if x_axis == "归一化采样点":
-                            # sequential points: e.g. 1 to 11 for syl 1, 12 to 22 for syl 2
-                            x_pts = np.linspace(s_idx * num_points + 1, (s_idx + 1) * num_points, len(pts))
-                        else:
-                            # physically stretched real duration
-                            x_pts = np.linspace(acc_dur, acc_dur + s_dur, len(pts))
-                            acc_dur += s_dur
-
-                        x_series.extend(x_pts)
-                        y_series.extend(pts)
-
-                    if len(y_series) > 0:
-                        curves_x.append(np.array(x_series))
-                        curves_y.append(np.array(y_series))
-
-                if not curves_y:
-                    continue
-
-                # Compute average curve
-                # To handle potential differences in lengths gracefully, we interpolate to a standard grid
-                total_len = len(curves_x[0]) if curves_x else 10
-                grid_x = np.linspace(np.min([np.min(cx) for cx in curves_x]), np.max([np.max(cx) for cx in curves_x]), total_len)
-
-                interpolated_ys = []
-                for cx, cy in zip(curves_x, curves_y):
-                    valid = ~np.isnan(cy)
-                    if np.sum(valid) >= 2:
-                        iy = np.interp(grid_x, cx[valid], cy[valid])
-                        interpolated_ys.append(iy)
-
-                if not interpolated_ys:
-                    continue
-
-                mean_y = np.nanmean(interpolated_ys, axis=0)
-                std_y = np.nanstd(interpolated_ys, axis=0)
-
-                # --- Drawing Content Options ---
-                if "个体浅色" in content:
-                    # Draw individual lines
-                    for cy in interpolated_ys:
-                        ax.plot(grid_x, cy, color=color, linewidth=0.6, alpha=0.18)
-                elif "置信区间" in content:
-                    # Draw Mean ± SD shadow
-                    ax.fill_between(grid_x, mean_y - std_y, mean_y + std_y, color=color, alpha=0.15)
-
-                short_g_name = g_name
-                if len(g_name) > 12:
-                    short_g_name = g_name[:10] + ".."
-                # Always draw the thick bold average curve
-                ax.plot(grid_x, mean_y, '-o', color=color, linewidth=2.5, markersize=5, label=short_g_name)
-
-            title_text = "声调声学格局连贯图"
-            if facet in ("按声调类型分面", "按音节位置分面"):
-                title_text = f_key
-            else:
-                if len(set(e['speaker_name'] for e in data_entries)) == 1:
-                    title_text = f"{data_entries[0]['speaker_name']} - 声学格局连贯图"
-            if len(title_text) > 20:
-                title_text = title_text[:17] + "..."
-            ax.set_title(title_text, fontsize=12, fontweight="bold")
-
-            # Setup Y bounds
-            if "T 值" in scale:
-                ax.set_ylim(-0.2, 5.2)
-                ax.set_yticks([0, 1, 2, 3, 4, 5])
-
-            row_idx = f_idx // n_cols
-            col_idx = f_idx % n_cols
-
-            if col_idx == 0:
-                if "T 值" in scale:
-                    ax.set_ylabel("T 值 (0-5 标度)")
-                else:
-                    ax.set_ylabel("频率 (Hz)")
-            else:
-                ax.set_ylabel("")
-
-            is_bottom_row = (row_idx == n_rows - 1) or (f_idx + n_cols >= n_facets)
-            if is_bottom_row:
-                if x_axis == "归一化采样点":
-                    ax.set_xlabel("音节测量点 (时序展开)")
-                else:
-                    ax.set_xlabel("时长 Duration (s)")
-            else:
-                ax.set_xlabel("")
-
-            # Add syllable divider lines if multiple syllables and normalized X
-            if max_syls > 1 and x_axis == "归一化采样点" and facet != "按音节位置分面":
-                for k in range(1, max_syls):
-                    ax.axvline(k * num_points + 0.5, color='gray', linestyle='--', alpha=0.5)
-
-            if g_color_idx >= 0:
-                ax.legend(loc="upper right", fontsize=8)
-
-        # Hide unused subplots
-        for idx in range(n_facets, len(axes_flat)):
-            axes_flat[idx].set_visible(False)
-
-        fig.tight_layout()
-        return fig
-
-    def _plot_tone_overview_heatmap(self, data_entries, group_key, scale):
-        metric = self.combo_overview_metric.get()
-
-        # Determine total points
-        max_syls = max(len(e['syl_data']) for e in data_entries)
-        num_points = self.project_tree.app_state_params.get('pts', 11)
-        total_points = max_syls * num_points
-
-        # Group entries
-        grouped_data = {}
-        for entry in data_entries:
-            val = entry[group_key]
-            if val not in grouped_data:
-                grouped_data[val] = []
-            grouped_data[val].append(entry)
-
-        # Compute row values for each group
-        groups_sorted = sorted(list(grouped_data.keys()))
-        if not groups_sorted:
-            fig, ax = plt.subplots(figsize=(6, 4))
-            ax.text(0.5, 0.5, "没有找到有效的声调数据用于生成概览图", ha='center', va='center')
-            return fig
-
-        matrix = []
-        row_labels = []
-
-        for g_name in groups_sorted:
-            entries = grouped_data[g_name]
-            vectors = []
-            for entry in entries:
-                syl_list = entry['normalized_syl_data'] if "T 值" in scale else entry['syl_data']
-                y_flat = []
-                for s_dur, pts in syl_list:
-                    y_flat.extend(pts)
-                if len(y_flat) < total_points:
-                    y_flat.extend([np.nan] * (total_points - len(y_flat)))
-                elif len(y_flat) > total_points:
-                    y_flat = y_flat[:total_points]
-                vectors.append(y_flat)
-
-            if vectors:
-                vectors = np.array(vectors)
-                with np.errstate(all='ignore'):
-                    if "均值" in metric:
-                        row_vec = np.nanmean(vectors, axis=0)
-                    else:
-                        row_vec = np.nanstd(vectors, axis=0)
-                # Fallback check if row_vec is all NaNs
-                if np.isnan(row_vec).all():
-                    row_vec = np.zeros(total_points)
-                matrix.append(row_vec)
-
-                # Check sample size
-                count = len(entries)
-                row_labels.append(f"{g_name} (N={count})")
-
-        matrix = np.array(matrix)
-
-        # Height of the plot dynamically scales with the number of groups
-        fig_height = max(4, len(row_labels) * 0.35 + 1.5)
-        fig, ax = plt.subplots(figsize=(8, fig_height))
-
-        if "均值" in metric:
-            cmap = 'RdYlBu_r' if "T 值" in scale else 'viridis'
-            vmin = 0.0 if "T 值" in scale else None
-            vmax = 5.0 if "T 值" in scale else None
-        else:
-            cmap = 'Reds'
-            vmin = 0.0
-            vmax = None
-
-        im = ax.imshow(matrix, cmap=cmap, aspect='auto', vmin=vmin, vmax=vmax)
-
-        # Add colorbar
-        cbar = fig.colorbar(im, ax=ax, pad=0.02)
-        if "均值" in metric:
-            cbar.set_label("平均 T 值" if "T 值" in scale else "平均基频 (Hz)")
-        else:
-            cbar.set_label("标准差 (SD)" if "T 值" in scale else "标准差 (Hz)")
-
-        # Labels and ticks
-        ax.set_yticks(np.arange(len(row_labels)))
-        ax.set_yticklabels(row_labels, fontsize=9)
-
-        ax.set_xticks(np.arange(total_points))
-        x_labels = []
-        for s_idx in range(max_syls):
-            for p_idx in range(num_points):
-                if p_idx == 0 or p_idx == num_points - 1 or p_idx == num_points // 2:
-                    x_labels.append(f"音节{s_idx+1}_点{p_idx+1}")
-                else:
-                    x_labels.append("")
-        ax.set_xticklabels(x_labels, rotation=45, ha='right', fontsize=8)
-
-        # Draw grid lines separating syllables if multiple syllables
-        if max_syls > 1:
-            for k in range(1, max_syls):
-                ax.axvline(k * num_points - 0.5, color='white', linestyle='--', linewidth=1.5, alpha=0.8)
-
-        # Title and tight layout
-        title_text = f"声调组别概览图 - {metric}"
-        if len(set(e['speaker_name'] for e in data_entries)) == 1:
-            title_text = f"{data_entries[0]['speaker_name']} - {title_text}"
-        ax.set_title(title_text, fontsize=12, fontweight="bold", pad=15)
-
-        fig.tight_layout()
-        return fig
-
-    def _plot_tone_distribution(self, data_entries, group_key, scale):
-        dist_type = self.combo_dist_type.get()
-        style = self.combo_dist_style.get()
-
-        # Group items
-        grouped_data = {}
-        for entry in data_entries:
-            val = entry[group_key]
-            if val not in grouped_data:
-                grouped_data[val] = []
-            grouped_data[val].append(entry)
-
-        n_groups = len(grouped_data)
-        num_points = self.project_tree.app_state_params.get('pts', 11)
-        max_syls = max(len(e['syl_data']) for e in data_entries)
-
-        if "测量点精细分布" in dist_type:
-            # 1. Boxplot/Violin per measurement point (Facetted by group)
-            n_cols = min(2, n_groups)
-            n_rows = math.ceil(n_groups / n_cols)
-            fig, axes = plt.subplots(n_rows, n_cols, figsize=(5 * n_cols + 2, 4.2 * n_rows + 0.5), squeeze=False, sharex=True, sharey=True)
-            axes_flat = axes.flatten()
-
-            for idx, (g_name, entries) in enumerate(grouped_data.items()):
-                ax = axes_flat[idx]
-                ax.grid(True, linestyle="--", alpha=0.3)
-
-                # Assemble points matrix (N_entries x Total_points)
-                pts_data = []
-                for entry in entries:
-                    y_series = []
-                    syl_list = entry['normalized_syl_data'] if "T 值" in scale else entry['syl_data']
-                    for s_dur, pts in syl_list:
-                        y_series.extend(pts)
-                    if len(y_series) == max_syls * num_points:
-                        pts_data.append(y_series)
-
-                if not pts_data:
-                    ax.text(0.5, 0.5, "数据不完整，音节数不一致", ha='center', va='center', color='red')
-                    continue
-
-                pts_data = np.array(pts_data)
-                positions = np.arange(1, pts_data.shape[1] + 1)
-
-                if "小提琴图" in style:
-                    # Clean NaNs for violinplot
-                    cleaned_columns = []
-                    for col_idx in range(pts_data.shape[1]):
-                        col = pts_data[:, col_idx]
-                        cleaned_columns.append(col[~np.isnan(col)])
-                    ax.violinplot(cleaned_columns, positions, showmeans=True, showmedians=False)
-                else:
-                    # Boxplot handles NaNs nicely in newer matplotlib, but robust cleaning is safer
-                    cleaned_columns = []
-                    for col_idx in range(pts_data.shape[1]):
-                        col = pts_data[:, col_idx]
-                        cleaned_columns.append(col[~np.isnan(col)])
-                    ax.boxplot(cleaned_columns, positions=positions, patch_artist=True,
-                               boxprops=dict(facecolor="#DBEAFE", color="#1E40AF"),
-                               whiskerprops=dict(color="#1E40AF"),
-                               capprops=dict(color="#1E40AF"),
-                               medianprops=dict(color="#DC2626", linewidth=1.5))
-
-                ax.set_title(f"{g_name} 基频测量点分布", fontsize=11, fontweight="bold")
-                if "T 值" in scale:
-                    ax.set_ylim(-0.2, 5.2)
-                    ax.set_yticks([0, 1, 2, 3, 4, 5])
-                ax.set_xticks(positions)
-                ax.set_xticklabels([str((p-1)%num_points + 1) for p in positions], fontsize=8)
-
-            for idx in range(n_groups, len(axes_flat)):
-                axes_flat[idx].set_visible(False)
-
-            fig.tight_layout()
-            return fig
-
-        elif "起-中-终" in dist_type:
-            # 2. Boxplot/Violin for Start, Mid, End comparison
-            fig, ax = plt.subplots(figsize=(8, 5))
-            ax.grid(True, linestyle="--", alpha=0.3)
-
-            data_to_plot = []
-            labels = []
-            colors_to_use = []
-
-            for g_color_idx, (g_name, entries) in enumerate(grouped_data.items()):
-                start_pts, mid_pts, end_pts = [], [], []
-                color = self.colors[g_color_idx % len(self.colors)]
-
-                for entry in entries:
-                    y_series = []
-                    syl_list = entry['normalized_syl_data'] if "T 值" in scale else entry['syl_data']
-                    for s_dur, pts in syl_list:
-                        y_series.extend(pts)
-
-                    if len(y_series) >= 3:
-                        y_series = np.array(y_series)
-                        valid_ys = y_series[~np.isnan(y_series)]
-                        if len(valid_ys) >= 3:
-                            start_pts.append(valid_ys[0])
-                            mid_pts.append(valid_ys[len(valid_ys) // 2])
-                            end_pts.append(valid_ys[-1])
-
-                if start_pts:
-                    data_to_plot.extend([start_pts, mid_pts, end_pts])
-                    labels.extend([f"{g_name}\n起点", f"{g_name}\n中点", f"{g_name}\n终点"])
-                    colors_to_use.extend([color, color, color])
-
-            if data_to_plot:
-                if "小提琴图" in style:
-                    parts = ax.violinplot(data_to_plot, showmeans=True)
-                    for pc_idx, pc in enumerate(parts['bodies']):
-                        pc.set_facecolor(colors_to_use[pc_idx])
-                        pc.set_alpha(0.6)
-                else:
-                    bp = ax.boxplot(data_to_plot, patch_artist=True)
-                    for patch, color in zip(bp['boxes'], colors_to_use):
-                        patch.set_facecolor(color)
-                        patch.set_alpha(0.6)
-
-                ax.set_xticklabels(labels, fontsize=9)
-                ax.set_title("各声调起-中-终三点基频离散比较", fontsize=13, fontweight="bold")
-                if "T 值" in scale:
-                    ax.set_ylim(-0.2, 5.2)
-                    ax.set_yticks([0, 1, 2, 3, 4, 5])
-
-            return fig
-
-        elif "调域范围" in dist_type:
-            # 3. Tone Range Plot (Highest vs Lowest domain mapping)
-            fig, ax = plt.subplots(figsize=(8, 5))
-            ax.grid(True, linestyle="--", alpha=0.3)
-
-            y_positions = np.arange(n_groups)
-            group_names = []
-
-            for idx, (g_name, entries) in enumerate(grouped_data.items()):
-                group_names.append(g_name)
-                color = self.colors[idx % len(self.colors)]
-
-                min_vals = []
-                max_vals = []
-                for entry in entries:
-                    y_series = []
-                    syl_list = entry['normalized_syl_data'] if "T 值" in scale else entry['syl_data']
-                    for s_dur, pts in syl_list:
-                        y_series.extend(pts)
-                    y_series = np.array(y_series)
-                    valid_ys = y_series[~np.isnan(y_series)]
-                    if len(valid_ys) > 0:
-                        min_vals.append(np.min(valid_ys))
-                        max_vals.append(np.max(valid_ys))
-
-                if min_vals:
-                    avg_min = np.mean(min_vals)
-                    avg_max = np.mean(max_vals)
-                    # Draw a floating range bar representing the pitch domain
-                    ax.barh(idx, avg_max - avg_min, left=avg_min, height=0.5, color=color, alpha=0.7, edgecolor=color, align='center')
-                    # Draw ticks for min and max
-                    ax.plot([avg_min, avg_max], [idx, idx], '|', color='black', markersize=10, markeredgewidth=2)
-                    ax.text((avg_min + avg_max)/2, idx, f"{avg_min:.2f} ~ {avg_max:.2f}\n(调域: {avg_max-avg_min:.2f})",
-                            ha='center', va='center', color='black', fontsize=9, fontweight='bold')
-
-            ax.set_yticks(y_positions)
-            ax.set_yticklabels(group_names, fontsize=11, fontweight="bold")
-            ax.set_title("各声调调域范围图 (最高点 / 最低点 / 调域跨度)", fontsize=13, fontweight="bold")
-
-            if "T 值" in scale:
-                ax.set_xlim(-0.2, 5.2)
-                ax.set_xticks([0, 1, 2, 3, 4, 5])
-                ax.set_xlabel("T 值域区间")
-            else:
-                ax.set_xlabel("绝对频率范围 (Hz)")
-
-            return fig
-
-        elif "变异程度" in dist_type:
-            # 4. Variation coefficient (CV) bar chart
-            fig, ax = plt.subplots(figsize=(8, 5))
-            ax.grid(True, linestyle="--", alpha=0.3)
-
-            group_names = []
-            cv_values = []
-            colors_to_use = []
-
-            for idx, (g_name, entries) in enumerate(grouped_data.items()):
-                group_names.append(g_name)
-                color = self.colors[idx % len(self.colors)]
-                colors_to_use.append(color)
-
-                all_pts_flat = []
-                for entry in entries:
-                    y_series = []
-                    syl_list = entry['normalized_syl_data'] if "T 值" in scale else entry['syl_data']
-                    for s_dur, pts in syl_list:
-                        y_series.extend(pts)
-                    y_series = np.array(y_series)
-                    valid_ys = y_series[~np.isnan(y_series)]
-                    all_pts_flat.extend(valid_ys.tolist())
-
-                if all_pts_flat:
-                    mean_val = np.mean(all_pts_flat)
-                    std_val = np.nanstd(all_pts_flat)
-                    cv = (std_val / mean_val) if mean_val > 0 else 0.0
-                    cv_values.append(cv)
-                else:
-                    cv_values.append(0.0)
-
-            ax.bar(group_names, cv_values, color=colors_to_use, alpha=0.75, width=0.45)
-
-            for idx, val in enumerate(cv_values):
-                ax.text(idx, val + 0.005, f"{val:.1%}", ha='center', va='bottom', fontweight='bold')
-
-            ax.set_title("各声调内部发音变异系数 (Coefficient of Variation) 比较", fontsize=12, fontweight="bold")
-            ax.set_ylabel("变异系数 CV (SD / Mean)")
-            ax.set_xlabel("声调类别")
-
-            return fig
-
-        # Fallback empty figure
-        fig, ax = plt.subplots()
-        return fig
-
-    def _plot_temporal_density(self, data_entries, group_key):
-        bw_method = self.var_density_bw.get()
-        f0_mode = self.var_density_f0_mode.get()
-        facet = self.combo_density_facet.get()
-
-        # Group items
-        grouped_data = {}
-        for entry in data_entries:
-            val = entry[group_key]
-            if val not in grouped_data:
-                grouped_data[val] = []
-            grouped_data[val].append(entry)
-
-        n_groups = len(grouped_data)
-        max_syls = max(len(e['syl_data']) for e in data_entries)
-        N_DENSE = 100
-
-        # Collect F0 pool to compute robust global limits
-        all_raw_f0 = []
-        for entry in data_entries:
-            all_raw_f0.extend([f for f in entry['raw_freqs'] if f > 0])
-
-        if not all_raw_f0:
-            fig, ax = plt.subplots()
-            ax.text(0.5, 0.5, "没有有效基频点可进行 KDE 计算", ha='center', va='center')
-            return fig
-
-        # Determine Min/Max bounds based on selected F0 limits mode
-        if f0_mode == 'percentile':
-            try:
-                p_low = float(self.entry_low_p.get())
-                p_high = float(self.entry_high_p.get())
-            except ValueError:
-                p_low, p_high = 5.0, 95.0
-            min_f0 = np.percentile(all_raw_f0, p_low)
-            max_f0 = np.percentile(all_raw_f0, p_high)
-        elif f0_mode == 'manual':
-            try:
-                min_f0 = float(self.entry_min_hz.get())
-                max_f0 = float(self.entry_max_hz.get())
-            except ValueError:
-                min_f0, max_f0 = 75.0, 600.0
-        else:
-            min_f0 = min(all_raw_f0)
-            max_f0 = max(all_raw_f0)
-
-        # Helper to map Hz to T-scale robustly
-        def hz_to_t(hz):
-            if max_f0 == min_f0: return 3.0
-            hz_val = np.clip(hz, min_f0, max_f0)
-            if min_f0 <= 0 or max_f0 <= min_f0: return 3.0
-            return 5 * (np.log(hz_val) - np.log(min_f0)) / (np.log(max_f0) - np.log(min_f0))
-
-        # Faceting setup
-        facet_keys = ["Default"]
-        if facet == "声调类型分面 (默认)":
-            facet_keys = sorted(list(set(e['group'] for e in data_entries)))
-        elif facet == "按词语分面":
-            facet_keys = sorted(list(set(e['label'] for e in data_entries)))
-
-        n_facets = len(facet_keys)
-        n_cols = min(2, n_facets)
-        n_rows = math.ceil(n_facets / n_cols)
-
-        fig, axes = plt.subplots(n_rows, n_cols, figsize=(5 * max_syls * n_cols + 1, 4.5 * n_rows + 0.5), squeeze=False, sharex=True, sharey=True)
-        axes_flat = axes.flatten()
-
-        for f_idx, f_key in enumerate(facet_keys):
-            ax = axes_flat[f_idx]
-
-            # Sift data for this facet panel
-            facet_entries = data_entries
-            if facet == "声调类型分面 (默认)":
-                facet_entries = [e for e in data_entries if e['group'] == f_key]
-            elif facet == "按词语分面":
-                facet_entries = [e for e in data_entries if e['label'] == f_key]
-
-            # Assemble density points
-            X_all, Y_all = [], []
-            for entry in facet_entries:
-                syl_bounds = self.project_tree._get_syllables_and_bounds(entry['raw_item'])[1]
-                for s_idx, (c_s, c_e) in enumerate(syl_bounds):
-                    y_dense = self.project_tree._extract_kde_contour(entry['raw_xs'], entry['raw_freqs'], c_s, c_e, N_DENSE)
-                    if y_dense is not None:
-                        x_dense = np.linspace(s_idx * 100, (s_idx + 1) * 100, N_DENSE)
-                        y_t_dense = np.array([hz_to_t(h) for h in y_dense])
-                        valid = np.isfinite(y_t_dense)
-                        X_all.extend(x_dense[valid].tolist())
-                        Y_all.extend(y_t_dense[valid].tolist())
-
-            if not X_all:
-                ax.text(0.5, 0.5, "没有足够的有效数据点", ha='center', va='center')
-                continue
-
-            xmin, xmax = 0, max_syls * 100
-            ymin, ymax = -0.5, 5.5
-
-            positions = np.vstack([X_all, Y_all])
-            try:
-                kernel = gaussian_kde(positions, bw_method=bw_method)
-                xi, yi = np.mgrid[xmin:xmax:200j, ymin:ymax:100j]
-                zi = kernel(np.vstack([xi.flatten(), yi.flatten()]))
-                zi = zi.reshape(xi.shape)
-
-                vmax = zi.max()
-                if vmax > 0:
-                    levels = np.linspace(vmax * 0.05, vmax, 30)
-                    ax.contourf(xi, yi, zi, levels=levels, cmap="YlOrRd", extend='neither')
-            except Exception as e:
-                ax.text(0.5, 0.5, f"KDE 计算失败: {str(e)[:20]}", ha='center', va='center', color='red')
-
-            # Layout grids & dividers
-            for k in range(1, max_syls):
-                ax.axvline(k * 100, color='gray', linestyle='--', alpha=0.8)
-
-            row_idx = f_idx // n_cols
-            col_idx = f_idx % n_cols
-
-            if col_idx == 0:
-                ax.set_ylabel("T 值 (0-5 标度)")
-            else:
-                ax.set_ylabel("")
-
-            is_bottom_row = (row_idx == n_rows - 1) or (f_idx + n_cols >= n_facets)
-            if is_bottom_row:
-                ticks, labels = [], []
-                for k in range(max_syls):
-                    ticks.append(k * 100 + 50)
-                    labels.append(f"第 {k+1} 字\n(0-100%)")
-                ax.set_xticks(ticks)
-                ax.set_xticklabels(labels, fontsize=9)
-            else:
-                # Still set ticks but clear labels to keep shared axis alignment neat
-                ticks = []
-                for k in range(max_syls):
-                    ticks.append(k * 100 + 50)
-                ax.set_xticks(ticks)
-                ax.set_xticklabels([])
-
-            ax.set_ylim(-0.5, 5.5)
-            ax.set_yticks([0, 1, 2, 3, 4, 5])
-
-            title_text = f_key if f_key != "Default" else "时序密度热力图"
-            if len(title_text) > 20:
-                title_text = title_text[:17] + "..."
-            ax.set_title(title_text, fontsize=12, fontweight="bold")
-
-        for idx in range(n_facets, len(axes_flat)):
-            axes_flat[idx].set_visible(False)
-
-        fig.tight_layout()
-        return fig
-
-    def _plot_quality_check(self, data_entries):
-        view = self.var_qc_view.get()
-
-        if view == "raw_overlay":
-            # 1. Overlay raw individual curves and highlight anomalies in Red
-            fig, ax = plt.subplots(figsize=(9, 5))
-            ax.grid(True, linestyle="--", alpha=0.3)
-
-            max_syls = max(len(e['syl_data']) for e in data_entries)
-            num_points = self.project_tree.app_state_params.get('pts', 11)
-
-            normal_drawn = False
-            outlier_drawn = False
-
-            for entry in data_entries:
-                y_series = entry['normalized_syl_data'] if self.combo_scale.get().startswith("T") else entry['syl_data']
-                y_flat = []
-                x_flat = []
-
-                for s_idx, (s_dur, pts) in enumerate(y_series):
-                    x_pts = np.linspace(s_idx * num_points + 1, (s_idx + 1) * num_points, len(pts))
-                    x_flat.extend(x_pts)
-                    y_flat.extend(pts)
-
-                y_flat = np.array(y_flat)
-                x_flat = np.array(x_flat)
-
-                # Check if this item has warnings
-                has_warning = any(w.startswith("[警告]") or w.startswith("[致命]") for w in entry.get('warnings', []))
-
-                if has_warning:
-                    ax.plot(x_flat, y_flat, color="#EF4444", linewidth=1.2, alpha=0.75, linestyle="--",
-                            label="存在质量异常的发音" if not outlier_drawn else "")
-                    outlier_drawn = True
-                else:
-                    ax.plot(x_flat, y_flat, color="#3B82F6", linewidth=0.75, alpha=0.3,
-                            label="质量良好的常规发音" if not normal_drawn else "")
-                    normal_drawn = True
-
-            if max_syls > 1:
-                for k in range(1, max_syls):
-                    ax.axvline(k * num_points + 0.5, color='gray', linestyle='--', alpha=0.5)
-
-            ax.set_title("数据质量分析：逐项基频曲线质量分布叠加", fontsize=13, fontweight="bold")
-            ax.set_xlabel("测量点")
-
-            if self.combo_scale.get().startswith("T"):
-                ax.set_ylim(-0.2, 5.2)
-                ax.set_yticks([0, 1, 2, 3, 4, 5])
-                ax.set_ylabel("T 值 (0-5 标度)")
-            else:
-                ax.set_ylabel("频率 (Hz)")
-
-            ax.legend(loc="upper right")
-            return fig
-
-        elif view == "active_ratio":
-            # 2. Active Ratio (F0 tracking success rate) boxplot
-            fig, ax = plt.subplots(figsize=(8, 5))
-            ax.grid(True, linestyle="--", alpha=0.3)
-
-            # Group by speaker
-            spk_data = {}
-            for entry in data_entries:
-                spk = entry['speaker_name']
-                if spk not in spk_data:
-                    spk_data[spk] = []
-                spk_data[spk].append(entry['active_ratio'])
-
-            labels = []
-            data_to_plot = []
-            for spk, ratios in spk_data.items():
-                labels.append(spk)
-                data_to_plot.append(ratios)
-
-            if data_to_plot:
-                bp = ax.boxplot(data_to_plot, patch_artist=True)
-                for patch in bp['boxes']:
-                    patch.set_facecolor("#ECFDF5")
-                    patch.set_color("#059669")
-                for whisker in bp['whiskers']:
-                    whisker.set_color("#059669")
-                for cap in bp['caps']:
-                    cap.set_color("#059669")
-                for median in bp['medians']:
-                    median.set_color("#DC2626")
-                    median.set_linewidth(1.5)
-
-                ax.set_xticklabels(labels, fontsize=10, fontweight="bold")
-                ax.set_ylabel("有效基频采样点比例 (Active Ratio)", fontsize=11)
-                ax.set_title("各发音人录音有效率与基频检出比例分布比较", fontsize=13, fontweight="bold")
-
-                # Horizontal line for 60% standard recommended floor
-                ax.axhline(0.60, color="#EF4444", linestyle=":", label="常规建议的极低阈值 (60%)")
-                ax.legend(loc="lower left")
-                ax.set_ylim(-0.05, 1.05)
-
-            return fig
-
-        elif view == "speaker_means":
-            # 3. Speaker means scatter plot showing robust domains
-            fig, ax = plt.subplots(figsize=(9, 5))
-            ax.grid(True, linestyle="--", alpha=0.3)
-
-            for idx, entry in enumerate(data_entries):
-                spk = entry['speaker_name']
-                color = self.colors[hash(spk) % len(self.colors)]
-
-                valid_ys = entry['raw_freqs'][entry['raw_freqs'] > 0]
-                if len(valid_ys) > 0:
-                    mean_f0 = np.mean(valid_ys)
-                    ax.scatter(spk, mean_f0, color=color, alpha=0.4, edgecolors='none', s=40)
-
-            # Compute medians and errors per speaker
-            spk_freqs_pool = {}
-            for entry in data_entries:
-                spk = entry['speaker_name']
-                valid_ys = entry['raw_freqs'][entry['raw_freqs'] > 0]
-                if len(valid_ys) > 0:
-                    if spk not in spk_freqs_pool:
-                        spk_freqs_pool[spk] = []
-                    spk_freqs_pool[spk].append(np.mean(valid_ys))
-
-            for idx, (spk, means) in enumerate(spk_freqs_pool.items()):
-                med = np.median(means)
-                q1 = np.percentile(means, 25)
-                q3 = np.percentile(means, 75)
-                color = self.colors[hash(spk) % len(self.colors)]
-                # Plot robust median & IQR
-                ax.errorbar(spk, med, yerr=[[med - q1], [q3 - med]], fmt='D', color='black', ecolor=color, elinewidth=3, capsize=8, label=f"{spk} 中位数 ({med:.1f}Hz)" if idx < 5 else "")
-
-            ax.set_title("各受试发音人基频均值及调域离散域 (用于快速排查八度音高跳变)", fontsize=12, fontweight="bold")
-            ax.set_ylabel("发音基频均值 Mean F0 (Hz)")
-            ax.legend(loc="upper right", fontsize=9)
-
-            return fig
-
-        fig, ax = plt.subplots()
-        return fig
 
     # --- CONTROLLER: RE-RENDER LIVE PREVIEW ---
     def update_preview(self):
@@ -1942,83 +2107,3 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
                 self.destroy()
             except Exception as e:
                 messagebox.showerror("错误", f"图表导出失败: {e}")
-
-    def _export_paginated_pdf(self, out_file, data_entries, group_key, scale):
-        from matplotlib.backends.backend_pdf import PdfPages
-
-        unique_groups = []
-        for e in data_entries:
-            val = e[group_key]
-            if val not in unique_groups:
-                unique_groups.append(val)
-
-        chunk_size = 8
-        pdf_pages = PdfPages(out_file)
-
-        try:
-            for page_idx in range(math.ceil(len(unique_groups) / chunk_size)):
-                allowed_groups = set(unique_groups[page_idx * chunk_size : (page_idx + 1) * chunk_size])
-                chunk_entries = [e for e in data_entries if e[group_key] in allowed_groups]
-
-                fig = self.generate_plot(chunk_entries, is_preview=False)
-
-                # Add page number to figure
-                fig.text(0.95, 0.02, f"第 {page_idx + 1} 页 / 共 {math.ceil(len(unique_groups) / chunk_size)} 页",
-                         ha='right', va='bottom', fontsize=9, color='gray')
-
-                pdf_pages.savefig(fig, bbox_inches='tight')
-                plt.close(fig)
-        finally:
-            pdf_pages.close()
-
-    def _export_paginated_images(self, base_path, data_entries, group_key, scale, ext):
-        unique_groups = []
-        for e in data_entries:
-            val = e[group_key]
-            if val not in unique_groups:
-                unique_groups.append(val)
-
-        chunk_size = 8
-        total_pages = math.ceil(len(unique_groups) / chunk_size)
-
-        dir_name, file_name = os.path.split(base_path)
-        name_part, _ = os.path.splitext(file_name)
-
-        for page_idx in range(total_pages):
-            allowed_groups = set(unique_groups[page_idx * chunk_size : (page_idx + 1) * chunk_size])
-            chunk_entries = [e for e in data_entries if e[group_key] in allowed_groups]
-
-            fig = self.generate_plot(chunk_entries, is_preview=False)
-
-            fig.text(0.95, 0.02, f"第 {page_idx + 1} 页 / 共 {total_pages} 页",
-                     ha='right', va='bottom', fontsize=9, color='gray')
-
-            out_path = os.path.join(dir_name, f"{name_part}_第{page_idx + 1}页{ext}")
-            fig.savefig(out_path, dpi=300, bbox_inches='tight')
-            plt.close(fig)
-
-    def _export_dataset(self, data, out_path, ext):
-        chart_type = self.var_chart_type.get()
-        groupby = self.combo_groupby.get()
-
-        group_key = 'group'
-        if groupby == "按词语":
-            group_key = 'label'
-        elif groupby == "按发音人":
-            group_key = 'speaker_name'
-
-        unique_groups = []
-        for e in data:
-            val = e[group_key]
-            if val not in unique_groups:
-                unique_groups.append(val)
-
-        if len(unique_groups) > 8 and chart_type != "overview_heatmap":
-            if ext == ".pdf":
-                self._export_paginated_pdf(out_path, data, group_key, self.combo_scale.get())
-            else:
-                self._export_paginated_images(out_path, data, group_key, self.combo_scale.get(), ext)
-        else:
-            fig = self.generate_plot(data, is_preview=False)
-            fig.savefig(out_path, dpi=300, bbox_inches='tight')
-            plt.close(fig)

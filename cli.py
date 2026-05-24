@@ -24,6 +24,7 @@ from modules.speaker_manager import SpeakerManager
 from modules.data_utils import parse_wordlist, fuzzy_match_word_to_path, get_export_text_for_item, build_five_point_chart, split_into_syllables
 from modules.project_manager import ProjectManager
 from modules.version import APP_NAME, __version__
+from modules.acoustic_exporter import AcousticChartExporter
 
 class LoggerOut:
     def __init__(self, original_stdout, log_file):
@@ -38,6 +39,136 @@ class LoggerOut:
     def flush(self):
         self.original_stdout.flush()
         self.log_file.flush()
+
+class AcousticChartCLIAdapter:
+    def __init__(self, cli_instance):
+        self.cli = cli_instance
+        self.app_state_params = cli_instance.params  # Mapped from self.params in CLI
+        self.items = cli_instance.items
+
+    def _get_items_by_group_for_dict(self, items_dict):
+        groups = {}
+        for k, v in items_dict.items():
+            g = v.get('group', '导入内容')
+            if g not in groups: groups[g] = []
+            groups[g].append(k)
+        return [(g, groups[g]) for g in groups]
+
+    def _ensure_item_loaded(self, item):
+        if not item or not item.get('path'): return
+        has_snd = item.get('snd') is not None
+        has_pitch = (item.get('pitch') is not None) or (item.get('pitch_data') is not None)
+
+        if not has_snd or not has_pitch:
+            try:
+                import parselmouth
+                from modules.audio_core import extract_f0
+                if not has_snd:
+                    item['snd'] = parselmouth.Sound(item['path'])
+                if not has_pitch:
+                    pf = item.get('pitch_floor', self.app_state_params.get('pitch_floor', 75))
+                    pc = item.get('pitch_ceiling', self.app_state_params.get('pitch_ceiling', 600))
+                    vt = item.get('voicing_threshold', self.app_state_params.get('voicing_threshold', 0.25))
+                    engine = item.get('f0_engine', self.app_state_params.get('f0_engine', 'praat'))
+
+                    if engine == 'praat':
+                        item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=pf, pitch_ceiling=pc, voicing_threshold=vt, very_accurate=True, octave_jump_cost=0.9)
+                    else:
+                        item['pitch_data'] = extract_f0(item['snd'], self.app_state_params)
+            except Exception:
+                pass
+
+    def _extract_syl_data(self, item, num_points):
+        return self.cli._extract_syl_data(item, num_points)
+
+    def _get_pitch_arrays_for_item(self, item):
+        if item.get('pitch_data'):
+            p_xs = item['pitch_data'].get('xs')
+            p_freqs = item['pitch_data'].get('freqs')
+            if p_xs is None or p_freqs is None:
+                return None, None
+            return np.asarray(p_xs), np.asarray(p_freqs)
+        if item.get('pitch'):
+            pitch = item['pitch']
+            try:
+                p_xs = np.asarray(pitch.xs())
+                p_freqs = np.asarray(pitch.selected_array['frequency'])
+            except (TypeError, KeyError, AttributeError):
+                return None, None
+            if p_xs.ndim != 1 or p_freqs.ndim != 1 or len(p_xs) != len(p_freqs):
+                return None, None
+            return p_xs, p_freqs
+        return None, None
+
+    def _get_syllables_and_bounds(self, item):
+        t_s, t_e = item.get('start'), item.get('end')
+        if t_s is None or t_e is None or t_e <= t_s:
+            return [], []
+
+        label = item.get('label', '')
+        from modules.data_utils import split_into_syllables
+        syls = split_into_syllables(label)
+        if not syls and label:
+            syls = [label]
+
+        chars_bounds = item.get('chars_bounds', [])
+        if chars_bounds and len(chars_bounds) == len(syls):
+            return syls, [[float(s), float(e)] for s, e in chars_bounds]
+
+        inner_splits = item.get('inner_splits', [])
+        splits = [t_s] + [s for s in inner_splits if t_s < s < t_e] + [t_e]
+        if len(syls) > 1 and len(splits) != len(syls) + 1:
+            splits = np.linspace(t_s, t_e, len(syls) + 1).tolist()
+        elif len(syls) <= 1:
+            splits = [t_s, t_e]
+            if not syls:
+                syls = [label]
+
+        return syls, [[splits[i], splits[i + 1]] for i in range(len(splits) - 1)]
+
+    def _extract_kde_contour(self, p_xs, p_freqs, c_s, c_e, n_dense):
+        if c_e <= c_s:
+            return None
+
+        valid_idx = np.where((p_xs >= c_s) & (p_xs <= c_e) & np.isfinite(p_freqs) & (p_freqs > 0))[0]
+        if len(valid_idx) < 3:
+            return None
+
+        seg_xs = np.asarray(p_xs[valid_idx], dtype=float)
+        seg_ys = np.asarray(p_freqs[valid_idx], dtype=float)
+        order = np.argsort(seg_xs)
+        seg_xs = seg_xs[order]
+        seg_ys = seg_ys[order]
+
+        v_s, v_e = seg_xs[0], seg_xs[-1]
+        if v_e <= v_s:
+            return None
+
+        gap_threshold = 0.025
+        smoothed = seg_ys.copy()
+        try:
+            from scipy.signal import savgol_filter
+            breaks = np.where(np.diff(seg_xs) > gap_threshold)[0] + 1
+            run_ranges = np.split(np.arange(len(seg_xs)), breaks)
+            for run in run_ranges:
+                run_len = len(run)
+                if run_len < 5:
+                    continue
+                win = min(9, run_len if run_len % 2 == 1 else run_len - 1)
+                if win >= 5:
+                    smoothed[run] = savgol_filter(seg_ys[run], win, 2)
+        except Exception:
+            pass
+
+        dense_times = np.linspace(v_s, v_e, n_dense)
+        y_dense = np.interp(dense_times, seg_xs, smoothed)
+
+        nearest_right = np.searchsorted(seg_xs, dense_times, side='left')
+        nearest_left = np.clip(nearest_right - 1, 0, len(seg_xs) - 1)
+        nearest_right = np.clip(nearest_right, 0, len(seg_xs) - 1)
+        nearest_dist = np.minimum(np.abs(dense_times - seg_xs[nearest_left]), np.abs(dense_times - seg_xs[nearest_right]))
+        y_dense[nearest_dist > gap_threshold] = np.nan
+        return y_dense
 
 class PhonTracerCLI(cmd.Cmd):
     intro = f"""{APP_NAME} CLI v{__version__} - AI Agent Mode
@@ -240,8 +371,8 @@ PhonTracer 是一款高精度的声学声调格局分析工具。
    - 使用最新修改的全局参数，重新批量计算整个项目的所有项：
      `recalculate`
 4. 数据导出：
-   - `export <格式> <输出路径> [规则]`
-     * 支持的导出格式：txt, xlsx, line_chart, kde, wav, merged_wav
+   - `export <格式> <输出路径> [规则] [目标范围] [高级参数=值 ...]`
+     * 支持的导出格式：txt, xlsx, line_chart, kde, wav, merged_wav, textgrid, contour (声调轮廓图), distribution (声调分布图), density (时序密度图), quality (数据质量检查), overview_heatmap (声调组别概览图)
 
 --- 声学参数与调优指南 ---
 * pts: 等分插值采样点数（默认：11）
@@ -296,8 +427,8 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
    - To recalculate all items globally with updated global parameters:
      `recalculate`
 4. Export:
-   - `export <format> <output_file> [rule]`
-     * format: txt, xlsx, line_chart, kde, wav, merged_wav
+   - `export <format> <output_file> [rule] [target] [key=val ...]`
+     * format: txt, xlsx, line_chart, kde, wav, merged_wav, textgrid, contour, distribution, density, quality, overview_heatmap
 
 --- CURRENT CONFIG & SCHEMAS ---
 - Global parameters (modifiable via `set_params`):
@@ -1227,12 +1358,14 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
     def do_export(self, arg):
         """
         Export data to various formats.
-        Usage: export <format> <output_file> [rule] [target]
-        Formats: txt, xlsx, line_chart, kde, wav, merged_wav, textgrid
+        Usage: export <format> <output_file> [rule] [target] [key=val ...]
+        Advanced charts: export <chart_type> <output_file_or_dir> [target] [key=val ...]
+        Formats: txt, xlsx, line_chart, kde, wav, merged_wav, textgrid, contour, distribution, density, quality, overview_heatmap
         Rule: continuous (default) or per_group (For 'wav' and 'merged_wav', rule can also be buffer_sec or gap_sec like 0.5)
         Target (Multi-speaker): active (default), separate (multiple files per speaker), integrated (merged T-value calculation)
         Example: export xlsx output.xlsx continuous integrated
         Example: export wav scratch/output_dir 0.1 separate
+        Example: export contour output.svg integrated scale=hz groupby=label facet=group
         """
         args = shlex.split(arg)
         if len(args) < 2:
@@ -1241,6 +1374,107 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
 
         fmt = args[0]
         out_file = args[1]
+
+        # Scientific/Advanced Visualization Toolbox integration
+        scientific_charts = {'contour', 'distribution', 'density', 'quality', 'overview_heatmap'}
+        if fmt in scientific_charts:
+            # Parse parameters:
+            # Positional arguments: target
+            # Key-value arguments: key=value
+            params = {
+                'chart_type': fmt,
+                'export_scope': 'active',  # default target
+            }
+
+            # Gather positional args and key-value pairs
+            pos_args = []
+            for item in args[2:]:
+                if '=' in item:
+                    k, v = item.split('=', 1)
+                    k = k.strip().lower()
+                    v = v.strip()
+                    # Strip surrounding quotes if present
+                    if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
+                        v = v[1:-1]
+                    # Map some standard aliases for ease of use
+                    if k == 'target':
+                        k = 'export_scope'
+                    elif k == 'facet':
+                        if fmt == 'density':
+                            k = 'density_facet'
+                        elif fmt == 'contour':
+                            k = 'contour_facet'
+                    params[k] = v
+                else:
+                    pos_args.append(item)
+
+            # Accept both the advanced syntax and the generic export syntax:
+            # `export contour out.png integrated` and `export contour out.png continuous integrated`.
+            for pos_arg in pos_args:
+                scope_candidate = pos_arg.lower()
+                if scope_candidate in ('active', 'separate', 'integrated'):
+                    params['export_scope'] = scope_candidate
+                    break
+
+            scope = params.get('export_scope', 'active')
+
+            # Let's handle parameter values translation or casting (like density_bw to float, etc.)
+            float_params = {'density_bw', 'density_p_low', 'density_p_high', 'density_m_min', 'density_m_max'}
+            for fp in float_params:
+                if fp in params:
+                    try:
+                        params[fp] = float(params[fp])
+                    except ValueError:
+                        pass
+
+            # Resolve file extension
+            if scope == 'separate':
+                ext = "." + params.get('format', 'png').lower()
+            else:
+                _, ext = os.path.splitext(out_file)
+                if not ext:
+                    # Fallback based on format param or default to .png
+                    ext_param = params.get('format', 'png').lower()
+                    ext = f".{ext_param}"
+                    out_file = out_file + ext
+                else:
+                    params['format'] = ext[1:]
+
+            # Instantiate adapter
+            adapter = AcousticChartCLIAdapter(self)
+
+            # Instantiate AcousticChartExporter
+            all_speakers = self.speaker_manager.get_all_speakers()
+            exporter = AcousticChartExporter(project_tree=adapter, app=self, all_speakers=all_speakers)
+            exporter.params = params
+
+            # Check if there are speakers and if they have data
+            speakers_to_process = [self.current_speaker] if scope == 'active' else all_speakers
+            if not any(len(s.items) > 0 for s in speakers_to_process):
+                print('{"success": False, "error": "No items to export"}')
+                return
+
+            try:
+                if scope == 'separate':
+                    os.makedirs(out_file, exist_ok=True)
+                    for speaker in all_speakers:
+                        data = exporter._extract_active_data([speaker])
+                        if data:
+                            out_path = os.path.join(out_file, f"{speaker.name}_{fmt}{ext}")
+                            exporter._export_dataset(data, out_path, ext)
+                    print(json.dumps({"success": True, "message": f"Exported {fmt} for multiple speakers separately to {out_file}"}))
+                else:
+                    # active or integrated
+                    data = exporter._get_current_data_entries()
+                    if not data:
+                        print('{"success": False, "error": "No valid pitch data found for export"}')
+                        return
+                    exporter._export_dataset(data, out_file, ext)
+                    print(json.dumps({"success": True, "message": f"Exported {fmt} ({scope}) to {out_file}"}))
+            except Exception as e:
+                print(json.dumps({"success": False, "error": str(e)}))
+            return
+
         rule = args[2] if len(args) > 2 else 'continuous'
         target = args[3] if len(args) > 3 else 'active'
 
@@ -1255,7 +1489,6 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
 
         try:
             if target == 'separate':
-                import os
                 # Export individually to out_file (treated as directory)
                 os.makedirs(out_file, exist_ok=True)
                 for s in speakers_to_process:
