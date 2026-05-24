@@ -901,7 +901,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
         if truncated:
             # Adjust subplots top margin to avoid overlaps with the banner
             fig.subplots_adjust(top=0.88)
-            fig.text(0.5, 0.96, f"⚠️ 预览提示：当前共 {len(unique_groups)} 组，预览仅显示前 8 组（其余 {hidden_count} 组已隐藏）。导出时将自动分页/完整输出。",
+            fig.text(0.5, 0.96, f"[预览提示] 当前共 {len(unique_groups)} 组，预览仅显示前 8 组（其余 {hidden_count} 组已隐藏）。导出时将自动分页/完整输出。",
                      ha='center', va='center', fontsize=10, color='#991B1B', weight='bold',
                      bbox=dict(facecolor='#FEF2F2', edgecolor='#FCA5A5', boxstyle='round,pad=0.4'))
             
