@@ -1240,50 +1240,97 @@ class ProjectTreePanel:
     def _show_multi_speaker_export_dialog(self, sm):
         dlg = ctk.CTkToplevel(self.parent)
         dlg.title("导出范围选择")
-        dlg.geometry("350x260")
-        dlg.attributes('-topmost', True)
+        dlg.geometry("400x440")
         dlg.resizable(False, False)
         dlg.update_idletasks()
         main_win = self.parent.winfo_toplevel()
-        x = main_win.winfo_rootx() + (main_win.winfo_width() - 350) // 2
-        y = main_win.winfo_rooty() + (main_win.winfo_height() - 260) // 2
+        x = main_win.winfo_rootx() + (main_win.winfo_width() - 400) // 2
+        y = main_win.winfo_rooty() + (main_win.winfo_height() - 440) // 2
         dlg.geometry(f"+{x}+{y}")
-        ctk.CTkLabel(dlg, text="请选择导出范围：", font=self.font_title).pack(pady=(20, 10))
-        mode_var = ctk.IntVar(value=1)
-        ctk.CTkRadioButton(dlg, text=f"仅导出当前发音人 ({sm.get_active_speaker().name})", variable=mode_var, value=1, font=self.font_main).pack(anchor="w", padx=40, pady=5)
-        ctk.CTkRadioButton(dlg, text=f"分别导出所有发音人 ({len(sm.get_all_speakers())}人)", variable=mode_var, value=2, font=self.font_main).pack(anchor="w", padx=40, pady=5)
-        ctk.CTkRadioButton(dlg, text=f"整合所有发音人的结果 (采用 T值归一化)", variable=mode_var, value=3, font=self.font_main).pack(anchor="w", padx=40, pady=5)
+        
+        ctk.CTkLabel(dlg, text="请选择需要导出的发音人：", font=self.font_title, text_color=("#111827", "#F9FAFB")).pack(pady=(15, 5))
+        
+        scroll_frame = ctk.CTkScrollableFrame(dlg, height=180, border_width=1, border_color=("#E5E7EB", "#475569"))
+        scroll_frame.pack(fill=tk.BOTH, padx=30, pady=5)
+        
+        all_speakers = sm.get_all_speakers()
+        active_speaker = sm.get_active_speaker()
+        
+        checkboxes = {}
+        for spk in all_speakers:
+            is_active = (spk.id == active_speaker.id)
+            val = ctk.BooleanVar(value=is_active)
+            cb = ctk.CTkCheckBox(scroll_frame, text=f"{spk.name} ({len(spk.items)}项)", variable=val, font=self.font_main)
+            cb.pack(anchor="w", padx=15, pady=6)
+            checkboxes[spk] = val
+            
+        util_frame = ctk.CTkFrame(dlg, fg_color="transparent")
+        util_frame.pack(fill=tk.X, padx=30, pady=5)
+        
+        def select_all():
+            for val in checkboxes.values():
+                val.set(True)
+        def select_none():
+            for val in checkboxes.values():
+                val.set(False)
+                
+        ctk.CTkButton(util_frame, text="全选", width=70, height=26, corner_radius=13, font=self.font_small, 
+                      fg_color=("#F3F4F6", "#374151"), text_color=("#374151", "#D1D5DB"), hover_color=("#E5E7EB", "#4B5563"), command=select_all).pack(side=tk.LEFT, padx=5)
+        ctk.CTkButton(util_frame, text="全不选", width=70, height=26, corner_radius=13, font=self.font_small, 
+                      fg_color=("#F3F4F6", "#374151"), text_color=("#374151", "#D1D5DB"), hover_color=("#E5E7EB", "#4B5563"), command=select_none).pack(side=tk.LEFT, padx=5)
+        
+        ctk.CTkFrame(dlg, height=1, fg_color=("#E5E7EB", "#475569")).pack(fill=tk.X, padx=30, pady=8)
+        
+        integrate_var = ctk.BooleanVar(value=False)
+        cb_integrate = ctk.CTkCheckBox(dlg, text="整合选中发音人的结果 (采用 T值归一化)", variable=integrate_var, font=self.font_main)
+        cb_integrate.pack(anchor="w", padx=40, pady=5)
+        
         def on_confirm():
-            mode = mode_var.get()
+            selected_speakers = [spk for spk, var in checkboxes.items() if var.get()]
+            if not selected_speakers:
+                return messagebox.showwarning("提示", "请至少勾选一个发音人。", parent=dlg)
+            
+            do_integrate = integrate_var.get()
             dlg.destroy()
-            self._do_export_preparation(mode)
+            self._do_custom_export_preparation(selected_speakers, do_integrate)
+            
         btn_frame = ctk.CTkFrame(dlg, fg_color="transparent")
-        btn_frame.pack(pady=20)
-        ctk.CTkButton(btn_frame, text="取消", width=80, command=dlg.destroy, fg_color="#E5E7EB", text_color="#374151", hover_color="#D1D5DB").pack(side=tk.LEFT, padx=10)
-        ctk.CTkButton(btn_frame, text="下一步", width=80, command=on_confirm).pack(side=tk.LEFT, padx=10)
+        btn_frame.pack(pady=(15, 10))
+        
+        ctk.CTkButton(btn_frame, text="取消", width=90, height=36, corner_radius=10, 
+                      fg_color=("#F3F4F6", "#374151"), text_color=("#4B5563", "#D1D5DB"), hover_color=("#E5E7EB", "#4B5563"), font=self.font_main, command=dlg.destroy).pack(side=tk.LEFT, padx=10)
+        ctk.CTkButton(btn_frame, text="下一步", width=90, height=36, corner_radius=10, 
+                      fg_color=("#3B82F6", "#2563EB"), text_color="#FFFFFF", hover_color=("#2563EB", "#1D4ED8"), font=self.font_main, command=on_confirm).pack(side=tk.LEFT, padx=10)
+
+    def _do_custom_export_preparation(self, selected_speakers, do_integrate):
+        empty_labels = []
+        for s in selected_speakers:
+            for grp_name, children in self._get_items_by_group_for_dict(s.items):
+                for child in children:
+                    item = s.items[child]
+                    if self._check_item_has_empty_data(item):
+                        empty_labels.append(f"[{s.name}] {item['label']}")
+        if empty_labels:
+            msg = "部分项目的基频数据包含 0 值：\n\n" + "\n".join(empty_labels[:10])
+            if len(empty_labels) > 10: msg += f"\n... 等共 {len(empty_labels)} 项"
+            msg += "\n\n是否继续导出？"
+            if not messagebox.askyesno("空数据警告", msg): return
+            
+        if len(selected_speakers) == 1 and not do_integrate:
+            s = selected_speakers[0]
+            orig_items = self.items
+            self.items = s.items
+            tree_structure = self._get_all_items_by_group()
+            self.items = orig_items
+            self._check_empty_and_show_menu(tree_structure, mode='single', all_speakers=selected_speakers)
+        else:
+            if do_integrate:
+                self._show_export_menu(mode='integrated', all_speakers=selected_speakers)
+            else:
+                self._show_export_menu(mode='separate', all_speakers=selected_speakers)
 
     def _do_export_preparation(self, multi_speaker_mode):
-        if not multi_speaker_mode or multi_speaker_mode == 1:
-            if not self.items: return messagebox.showwarning("提示", "没有可导出的数据。")
-            tree_structure = self._get_all_items_by_group()
-            self._check_empty_and_show_menu(tree_structure, mode='single')
-        else:
-            sm = self.app.speaker_manager
-            all_speakers = sm.get_all_speakers()
-            empty_labels = []
-            for s in all_speakers:
-                for grp_name, children in self._get_items_by_group_for_dict(s.items):
-                    for child in children:
-                        item = s.items[child]
-                        if self._check_item_has_empty_data(item):
-                            empty_labels.append(f"[{s.name}] {item['label']}")
-            if empty_labels:
-                msg = "部分项目的基频数据包含 0 值：\n\n" + "\n".join(empty_labels[:10])
-                if len(empty_labels) > 10: msg += f"\n... 等共 {len(empty_labels)} 项"
-                msg += "\n\n是否继续导出？"
-                if not messagebox.askyesno("空数据警告", msg): return
-            if multi_speaker_mode == 2: self._show_export_menu(mode='separate', all_speakers=all_speakers)
-            else: self._show_export_menu(mode='integrated', all_speakers=all_speakers)
+        self._do_custom_export_preparation([self.app.speaker_manager.get_active_speaker()], False)
 
     def _get_items_by_group_for_dict(self, items_dict):
         groups = {}
@@ -1310,15 +1357,14 @@ class ProjectTreePanel:
         dlg = ctk.CTkToplevel(self.parent)
         dlg.title("选择导出格式")
         dlg.geometry("320x330")
-        dlg.attributes('-topmost', True)
         dlg.resizable(False, False)
         dlg.update_idletasks()
         main_win = self.parent.winfo_toplevel()
         x = main_win.winfo_rootx() + (main_win.winfo_width() - 320) // 2
         y = main_win.winfo_rooty() + (main_win.winfo_height() - 330) // 2
         dlg.geometry(f"+{x}+{y}")
-        ctk.CTkLabel(dlg, text="请选择导出格式", font=self.font_title, text_color="#111827").pack(pady=(20, 15))
-        btn_kwargs = {"corner_radius": 22, "height": 44, "font": self.font_main, "anchor": "w", "compound": "left"}
+        ctk.CTkLabel(dlg, text="请选择导出格式", font=self.font_title, text_color=("#111827", "#F9FAFB")).pack(pady=(20, 15))
+        btn_kwargs = {"corner_radius": 10, "height": 44, "font": self.font_main, "anchor": "w", "compound": "left", "border_width": 1.5}
 
         def do_export(format_mode):
             if format_mode == 'line_chart':
@@ -1334,16 +1380,22 @@ class ProjectTreePanel:
             def execute_export(out_path, inc_chart=False):
                 try:
                     if mode == 'single':
-                        if format_mode == 'txt': self._export_txt(out_path, tree_structure=tree_structure)
-                        elif format_mode == 'xlsx': self._export_xlsx(out_path, include_chart=inc_chart, tree_structure=tree_structure)
-                        elif format_mode == 'textgrid':
-                            is_batch = False
-                            if self.app and hasattr(self.app, 'tabview'): is_batch = (self.app.tabview.get() == "多条独立音频")
-                            elif hasattr(self.parent, 'tabview'): is_batch = (self.parent.tabview.get() == "多条独立音频")
-                            if is_batch: self._export_textgrid_batch(out_path, tree_structure=tree_structure)
-                            else: self._export_textgrid_long(out_path, tree_structure=tree_structure)
-                        elif format_mode == 'line_chart': self._export_line_chart(out_path, tree_structure=tree_structure)
-                        elif format_mode == 'kde': self._export_kde_heatmap(out_path, tree_structure=tree_structure)
+                        orig_items = self.items
+                        if all_speakers and len(all_speakers) == 1:
+                            self.items = all_speakers[0].items
+                        try:
+                            if format_mode == 'txt': self._export_txt(out_path, tree_structure=tree_structure)
+                            elif format_mode == 'xlsx': self._export_xlsx(out_path, include_chart=inc_chart, tree_structure=tree_structure)
+                            elif format_mode == 'textgrid':
+                                is_batch = False
+                                if self.app and hasattr(self.app, 'tabview'): is_batch = (self.app.tabview.get() == "多条独立音频")
+                                elif hasattr(self.parent, 'tabview'): is_batch = (self.parent.tabview.get() == "多条独立音频")
+                                if is_batch: self._export_textgrid_batch(out_path, tree_structure=tree_structure)
+                                else: self._export_textgrid_long(out_path, tree_structure=tree_structure)
+                            elif format_mode == 'line_chart': self._export_line_chart(out_path, tree_structure=tree_structure)
+                            elif format_mode == 'kde': self._export_kde_heatmap(out_path, tree_structure=tree_structure)
+                        finally:
+                            self.items = orig_items
                     elif mode == 'separate':
                         import os
                         for s in all_speakers:
@@ -1404,10 +1456,14 @@ class ProjectTreePanel:
                 out = filedialog.askdirectory(title="选择热力图导出文件夹") if mode == 'separate' else filedialog.asksaveasfilename(title="导出热力图", defaultextension=".png", initialfile="tone_heatmap", filetypes=[("PNG 图片", "*.png")])
                 if out and execute_export(out): messagebox.showinfo("成功", f"热力图已导出至:\n{out}")
 
-        ctk.CTkButton(dlg, text="  📄  文本文件 (.txt)", command=lambda: do_export('txt'), fg_color="#F3F4F6", text_color="#374151", hover_color="#E5E7EB", **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
-        ctk.CTkButton(dlg, text="  🏷  TextGrid 标注文件 (.TextGrid)", command=lambda: do_export('textgrid'), fg_color="#F3E8FF", text_color="#6B21A8", hover_color="#E9D5FF", **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
-        ctk.CTkButton(dlg, text="  📊  Excel 表格 (.xlsx)", command=lambda: do_export('xlsx'), fg_color="#ECFDF5", text_color="#047857", hover_color="#D1FAE5", **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
-        ctk.CTkButton(dlg, text="  📈  声学图表可视化导出", command=lambda: do_export('line_chart'), fg_color="#EFF6FF", text_color="#1E40AF", hover_color="#DBEAFE", **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
+        ctk.CTkButton(dlg, text="  📄  文本文件 (.txt)", command=lambda: do_export('txt'), 
+                      fg_color=("#F3F4F6", "#374151"), text_color=("#374151", "#E5E7EB"), hover_color=("#E5E7EB", "#4B5563"), border_color=("#D1D5DB", "#475569"), **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
+        ctk.CTkButton(dlg, text="  🏷  TextGrid 标注文件 (.TextGrid)", command=lambda: do_export('textgrid'), 
+                      fg_color=("#F3E8FF", "#3B0764"), text_color=("#6B21A8", "#E9D5FF"), hover_color=("#E9D5FF", "#5B21B6"), border_color=("#C084FC", "#A855F7"), **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
+        ctk.CTkButton(dlg, text="  📊  Excel 表格 (.xlsx)", command=lambda: do_export('xlsx'), 
+                      fg_color=("#ECFDF5", "#022C22"), text_color=("#047857", "#D1FAE5"), hover_color=("#D1FAE5", "#065F46"), border_color=("#34D399", "#10B981"), **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
+        ctk.CTkButton(dlg, text="  📈  声学图表可视化导出", command=lambda: do_export('line_chart'), 
+                      fg_color=("#EFF6FF", "#172554"), text_color=("#1E40AF", "#DBEAFE"), hover_color=("#DBEAFE", "#1E40AF"), border_color=("#60A5FA", "#3B82F6"), **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
         # 时序密度热力图已整合至声学图表导出中
 
     def _ensure_item_loaded(self, item):
