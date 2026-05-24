@@ -134,8 +134,8 @@ class PhoneticsApp:
         if initial_files:
             self.root.after(1500, lambda: self.on_files_dropped(initial_files))
 
-        # 启动时后台静默检查更新
-        self.root.after(3000, lambda: self.check_update(is_manual=False))
+        # 启动时后台静默检查更新 (已取消自动获取最新版本机制，改为手动检测更新)
+        # self.root.after(3000, lambda: self.check_update(is_manual=False))
 
     def mark_modified(self):
         self.has_changes = True

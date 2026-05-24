@@ -290,5 +290,57 @@ class TestAcousticExporterFeatures(unittest.TestCase):
 
             dlg.destroy()
 
+    def test_live_refresh_and_debounce(self):
+        project_tree = MagicMock()
+        project_tree.app_state_params = {'pts': 11}
+        project_tree._get_items_by_group_for_dict.return_value = [("Group1", ["item1"])]
+
+        speaker = MagicMock()
+        speaker.name = "Speaker 1"
+        speaker.items = {}
+
+        app = MagicMock()
+        app.speaker_manager.get_active_speaker.return_value = speaker
+
+        dummy_data = []
+
+        with patch.object(AcousticChartExportDialog, '_extract_active_data', return_value=dummy_data), \
+             patch.object(AcousticChartExportDialog, 'update_preview') as mock_update:
+
+            dlg = AcousticChartExportDialog(
+                self.root, app=app, project_tree=project_tree,
+                mode='single', all_speakers=[speaker]
+            )
+
+            # Live refresh is True by default
+            self.assertTrue(dlg.var_live_refresh.get())
+
+            # Mock after method
+            dlg.after = MagicMock(return_value="timer_123")
+            dlg.after_cancel = MagicMock()
+
+            # Call trigger_preview_update
+            dlg.trigger_preview_update()
+            dlg.after.assert_called_once_with(300, dlg._debounced_update_preview)
+            self.assertEqual(dlg._debounce_timer_id, "timer_123")
+
+            # Call trigger_preview_update again: should cancel previous timer and schedule new one
+            dlg.trigger_preview_update()
+            dlg.after_cancel.assert_called_once_with("timer_123")
+
+            # Turn off live refresh
+            dlg.var_live_refresh.set(False)
+            dlg.after.reset_mock()
+            dlg.trigger_preview_update()
+            dlg.after.assert_not_called()
+
+            # Test live refresh toggle commands
+            dlg.var_live_refresh.set(True)
+            mock_update.reset_mock()
+            dlg._on_live_refresh_toggle()
+            mock_update.assert_called_once()
+
+            dlg.destroy()
+
 if __name__ == '__main__':
     unittest.main()

@@ -4,6 +4,9 @@ import threading
 import re
 import subprocess
 import platform
+import json
+import zipfile
+import shutil
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import customtkinter as ctk
@@ -718,9 +721,11 @@ class AudioToolkitApp(ctk.CTk):
         
         self.tab_merge = self.tabview.add("多音频合并 (拼长音)")
         self.tab_split = self.tabview.add("长音频拆分 (按字表)")
+        self.tab_project = self.tabview.add("工程预览与压缩 (.teproj)")
         
         self.build_merge_tab()
         self.build_split_tab()
+        self.build_project_tab()
         
         self.progress = ctk.CTkProgressBar(self, height=6, progress_color="#3B82F6", fg_color="#E5E7EB")
         self.progress.set(0)
@@ -823,6 +828,14 @@ class AudioToolkitApp(ctk.CTk):
     
     def on_files_dropped(self, files):
         paths = [f.decode('gbk') if isinstance(f, bytes) else str(f) for f in files]
+        
+        # Check if there is any .teproj file dropped
+        teproj_files = [p for p in paths if p.lower().endswith('.teproj')]
+        if teproj_files:
+            self.tabview.set("工程预览与压缩 (.teproj)")
+            self.load_project_file(teproj_files[0])
+            return
+            
         audio_paths = [p for p in paths if p.lower().endswith(('.wav', '.mp3'))]
         if not audio_paths: return
         
@@ -1185,6 +1198,459 @@ class AudioToolkitApp(ctk.CTk):
                 self.after(0, lambda: self.set_loading(False))
                 
         threading.Thread(target=run, daemon=True).start()
+
+    def build_project_tab(self):
+        # Left Panel for Actions and Info
+        left_panel = ctk.CTkFrame(self.tab_project, fg_color="#F9FAFB", corner_radius=10, width=280)
+        left_panel.pack(side=tk.LEFT, fill=tk.Y, padx=(10, 5), pady=10)
+        left_panel.pack_propagate(False)
+        
+        ctk.CTkLabel(left_panel, text="工程操作", font=self.font_title, text_color="#111827").pack(pady=15, padx=15, anchor="w")
+        
+        self.btn_open_project = CTkReleaseButton(
+            left_panel, text=" 选择工程文件 (.teproj)", image=self.icons.get("import_white"), compound="left",
+            command=self.select_project_file, **self.btn_kwargs
+        )
+        self.btn_open_project.pack(fill=tk.X, padx=15, pady=(5, 10))
+        
+        self.btn_convert_zip = CTkReleaseButton(
+            left_panel, text=" 转换为 ZIP 压缩包", image=self.icons.get("tab_batch"), compound="left",
+            fg_color="#6366F1", hover_color="#4F46E5", command=self.convert_project_to_zip, **self.btn_kwargs
+        )
+        self.btn_convert_zip.pack(fill=tk.X, padx=15, pady=(5, 15))
+        self.btn_convert_zip.configure(state="disabled") # Disabled until a project is loaded
+        
+        # Info Card
+        ctk.CTkLabel(left_panel, text="文件信息", font=self.font_title, text_color="#111827").pack(pady=(15, 5), padx=15, anchor="w")
+        
+        self.lbl_proj_file = ctk.CTkLabel(left_panel, text="未加载任何工程文件", font=self.font_main, text_color="#6B7280", wraplength=250, justify="left")
+        self.lbl_proj_file.pack(padx=15, pady=5, anchor="w")
+        
+        # Right Panel for Preview
+        right_panel = ctk.CTkFrame(self.tab_project, fg_color="transparent")
+        right_panel.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(5, 10), pady=10)
+        
+        ctk.CTkLabel(right_panel, text="📝 工程内容预览", font=self.font_title, text_color="#111827").pack(anchor="w", pady=(0, 10))
+        
+        self.preview_container = ctk.CTkFrame(right_panel, fg_color="transparent")
+        self.preview_container.pack(fill=tk.BOTH, expand=True)
+        self.show_placeholder()
+
+    def select_project_file(self):
+        path = filedialog.askopenfilename(filetypes=[("PhonTracer Project", "*.teproj")])
+        if path:
+            self.load_project_file(path)
+
+    def clear_preview_container(self):
+        for widget in self.preview_container.winfo_children():
+            widget.destroy()
+
+    def show_placeholder(self):
+        self.clear_preview_container()
+        card = ctk.CTkFrame(self.preview_container, fg_color="#FFFFFF", corner_radius=12, border_width=1, border_color="#E5E7EB")
+        card.pack(fill=tk.BOTH, expand=True)
+        
+        inner = ctk.CTkFrame(card, fg_color="transparent")
+        inner.place(relx=0.5, rely=0.5, anchor="center")
+        
+        ctk.CTkLabel(inner, text="📁", font=("Microsoft YaHei", 64)).pack(pady=(0, 15))
+        ctk.CTkLabel(inner, text="暂无工程文件数据", font=ctk.CTkFont(family="Microsoft YaHei", size=18, weight="bold"), text_color="#1F2937").pack(pady=5)
+        ctk.CTkLabel(inner, text="请在左侧选择并打开一个 .teproj 工程文件来预览其内部的数据结构。", font=ctk.CTkFont(family="Microsoft YaHei", size=13), text_color="#6B7280", justify="center").pack(pady=5)
+
+    def show_loading_placeholder(self):
+        self.clear_preview_container()
+        card = ctk.CTkFrame(self.preview_container, fg_color="#FFFFFF", corner_radius=12, border_width=1, border_color="#E5E7EB")
+        card.pack(fill=tk.BOTH, expand=True)
+        
+        inner = ctk.CTkFrame(card, fg_color="transparent")
+        inner.place(relx=0.5, rely=0.5, anchor="center")
+        
+        ctk.CTkLabel(inner, text="⏳", font=("Microsoft YaHei", 48)).pack(pady=(0, 15))
+        ctk.CTkLabel(inner, text="正在读取工程数据，请稍候...", font=self.font_main, text_color="#374151").pack()
+
+    def show_error_placeholder(self, error_msg):
+        self.clear_preview_container()
+        card = ctk.CTkFrame(self.preview_container, fg_color="#FFFFFF", corner_radius=12, border_width=1, border_color="#EF4444")
+        card.pack(fill=tk.BOTH, expand=True)
+        
+        inner = ctk.CTkFrame(card, fg_color="transparent")
+        inner.place(relx=0.5, rely=0.5, anchor="center")
+        
+        ctk.CTkLabel(inner, text="❌", font=("Microsoft YaHei", 48)).pack(pady=(0, 15))
+        ctk.CTkLabel(inner, text="无法解析工程文件", font=ctk.CTkFont(family="Microsoft YaHei", size=18, weight="bold"), text_color="#EF4444").pack(pady=5)
+        
+        err_box = ctk.CTkTextbox(inner, width=450, height=120, corner_radius=8, border_width=1, border_color="#FCA5A5", fg_color="#FEF2F2", text_color="#991B1B")
+        err_box.pack(pady=10)
+        err_box.insert("1.0", error_msg)
+        err_box.configure(state="disabled")
+
+    def create_detail_row(self, parent, row, label_text, val_text):
+        lbl = ctk.CTkLabel(parent, text=label_text, font=ctk.CTkFont(family="Microsoft YaHei", size=12, weight="bold"), text_color="#4B5563")
+        lbl.grid(row=row, column=0, sticky="w", padx=10, pady=3)
+        val = ctk.CTkLabel(parent, text=val_text, font=ctk.CTkFont(family="Consolas", size=12), text_color="#1F2937")
+        val.grid(row=row, column=1, sticky="w", padx=5, pady=3)
+
+    def display_project_preview(self, project_data, namelist):
+        self.clear_preview_container()
+        
+        # Configure a custom smaller style for the project preview treeview
+        style = ttk.Style()
+        style.configure("Proj.Treeview", 
+                        font=("Microsoft YaHei", 10), 
+                        rowheight=26,
+                        background="#FFFFFF",
+                        fieldbackground="#FFFFFF",
+                        foreground="#1F2937",
+                        borderwidth=0,
+                        relief="flat")
+        style.configure("Proj.Treeview.Heading", 
+                        font=("Microsoft YaHei", 10, "bold"),
+                        background="#F3F4F6",
+                        foreground="#374151")
+        style.map("Proj.Treeview", background=[('selected', '#3B82F6')], foreground=[('selected', '#FFFFFF')])
+
+        # Main scrollable content frame inside self.preview_container
+        scroll_content = ctk.CTkScrollableFrame(self.preview_container, fg_color="transparent")
+        scroll_content.pack(fill=tk.BOTH, expand=True)
+        try:
+            scroll_content._parent_canvas.configure(yscrollincrement=8)
+        except Exception:
+            pass
+        
+        # 1. Summary Card
+        summary_frame = ctk.CTkFrame(scroll_content, fg_color="#FFFFFF", corner_radius=12, border_width=1, border_color="#E5E7EB")
+        summary_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        ctk.CTkLabel(summary_frame, text="📊 工程概览与资源统计", font=ctk.CTkFont(family="Microsoft YaHei", size=14, weight="bold"), text_color="#1E3A8A").pack(anchor="w", padx=15, pady=(10, 5))
+        
+        sub_grid = ctk.CTkFrame(summary_frame, fg_color="transparent")
+        sub_grid.pack(fill=tk.X, padx=5, pady=(0, 10))
+        sub_grid.columnconfigure(0, weight=1)
+        sub_grid.columnconfigure(1, weight=1)
+        
+        # Left summary col (Meta)
+        meta_frame = ctk.CTkFrame(sub_grid, fg_color="transparent")
+        meta_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+        ctk.CTkLabel(meta_frame, text="【基本信息】", font=ctk.CTkFont(family="Microsoft YaHei", size=12, weight="bold"), text_color="#374151").grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=5)
+        
+        version = project_data.get("version", "未知")
+        speakers = project_data.get("speakers", {})
+        active_speaker_id = project_data.get("active_speaker_id", "无")
+        trunc_active_id = (active_speaker_id[:12] + "...") if len(active_speaker_id) > 15 else active_speaker_id
+        
+        self.create_detail_row(meta_frame, 1, "工程格式版本:", version)
+        self.create_detail_row(meta_frame, 2, "发音人数量:", str(len(speakers)))
+        self.create_detail_row(meta_frame, 3, "默认选中发音人 ID:", trunc_active_id)
+        
+        # Right summary col (Files)
+        files_frame = ctk.CTkFrame(sub_grid, fg_color="transparent")
+        files_frame.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
+        ctk.CTkLabel(files_frame, text="【物理文件统计】", font=ctk.CTkFont(family="Microsoft YaHei", size=12, weight="bold"), text_color="#374151").grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=5)
+        
+        audio_files = [f for f in namelist if f.startswith("audio/")]
+        data_files = [f for f in namelist if f.startswith("data/")]
+        
+        self.create_detail_row(files_frame, 1, "压缩包内文件总数:", str(len(namelist)))
+        self.create_detail_row(files_frame, 2, "音频文件数 (audio/):", str(len(audio_files)))
+        self.create_detail_row(files_frame, 3, "缓存数据数 (data/):", str(len(data_files)))
+        
+        # 2. Speakers Detail Section
+        ctk.CTkLabel(scroll_content, text="👥 发音人及数据分析明细", font=ctk.CTkFont(family="Microsoft YaHei", size=14, weight="bold"), text_color="#1F2937").pack(anchor="w", pady=(15, 5), padx=5)
+        
+        if not speakers:
+            no_spk_card = ctk.CTkFrame(scroll_content, fg_color="#FFFFFF", corner_radius=12, border_width=1, border_color="#E5E7EB")
+            no_spk_card.pack(fill=tk.X, padx=5, pady=5)
+            ctk.CTkLabel(no_spk_card, text="暂无发音人数据", font=self.font_main, text_color="#6B7280").pack(pady=20)
+            return
+
+        spk_tabview = ctk.CTkTabview(scroll_content, corner_radius=12, border_width=1, border_color="#E5E7EB", fg_color="#FFFFFF")
+        spk_tabview.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        for s_id, spk in speakers.items():
+            name = spk.get("name", "未命名")
+            tab_title = name
+            if s_id == active_speaker_id:
+                tab_title += " (当前选中)"
+            
+            spk_tabview.add(tab_title)
+            tab_frame = spk_tabview.tab(tab_title)
+            
+            # Sub layout within each speaker tab
+            top_row = ctk.CTkFrame(tab_frame, fg_color="transparent")
+            top_row.pack(fill=tk.X, anchor="n", pady=5)
+            
+            info_frame = ctk.CTkFrame(top_row, fg_color="#F3F4F6", corner_radius=8)
+            info_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5), pady=5)
+            
+            ctk.CTkLabel(info_frame, text="发音人与音频", font=ctk.CTkFont(family="Microsoft YaHei", size=12, weight="bold"), text_color="#111827").grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=5)
+            tab_mode = spk.get("tab_mode", "未知模式")
+            self.create_detail_row(info_frame, 1, "唯一标识符 (ID):", s_id)
+            self.create_detail_row(info_frame, 2, "音频管理模式:", tab_mode)
+            
+            if tab_mode == "单条长音频":
+                long_audio_path = spk.get("long_audio_path", "")
+                mac_segs = spk.get("current_macro_segments", [])
+                man_segs = spk.get("manual_segments", [])
+                self.create_detail_row(info_frame, 3, "长音频文件:", os.path.basename(long_audio_path) if long_audio_path else "无")
+                self.create_detail_row(info_frame, 4, "自动分段 / 手动微调:", f"{len(mac_segs)} 段 / {len(man_segs) if man_segs is not None else '未进行微调'}")
+            else:
+                pending_batch_paths = spk.get("pending_batch_paths", [])
+                self.create_detail_row(info_frame, 3, "待导入音频数量:", str(len(pending_batch_paths)))
+            
+            # Engine params frame
+            param_frame = ctk.CTkFrame(top_row, fg_color="#F3F4F6", corner_radius=8)
+            param_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(5, 0), pady=5)
+            
+            ctk.CTkLabel(param_frame, text="分析引擎参数", font=ctk.CTkFont(family="Microsoft YaHei", size=12, weight="bold"), text_color="#111827").grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=5)
+            last_params = spk.get("last_params", {})
+            if last_params:
+                self.create_detail_row(param_frame, 1, "基频范围 (F0 Range):", f"{last_params.get('f0_min', 75)} Hz ~ {last_params.get('f0_max', 600)} Hz")
+                self.create_detail_row(param_frame, 2, "时序分析点数 (Pts):", str(last_params.get('pts', 11)))
+                self.create_detail_row(param_frame, 3, "分析算法:", last_params.get('method', 'ac'))
+            else:
+                ctk.CTkLabel(param_frame, text="无已存引擎参数", font=self.font_main, text_color="#6B7280").grid(row=1, column=0, columnspan=2, sticky="w", padx=10, pady=5)
+            
+            # Bottom row: Word items Treeview
+            items = spk.get("items", {})
+            
+            table_frame = ctk.CTkFrame(tab_frame, fg_color="transparent")
+            table_frame.pack(fill=tk.BOTH, expand=True, pady=(10, 5))
+            
+            ctk.CTkLabel(table_frame, text=f"📋 解析出的字词条目 (共 {len(items)} 条)", font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), text_color="#374151").pack(anchor="w", pady=(0, 5))
+            
+            if not items:
+                no_items_card = ctk.CTkFrame(table_frame, fg_color="#F3F4F6", corner_radius=8)
+                no_items_card.pack(fill=tk.X, pady=5)
+                ctk.CTkLabel(no_items_card, text="暂无提取的字词数据", font=self.font_main, text_color="#6B7280").pack(pady=15)
+            else:
+                tree_container = ctk.CTkFrame(table_frame, fg_color="transparent")
+                tree_container.pack(fill=tk.BOTH, expand=True)
+                
+                cols = ("idx", "word", "time", "cache")
+                tree = ttk.Treeview(tree_container, columns=cols, show="headings", height=8)
+                
+                tree.heading("idx", text="序号")
+                tree.heading("word", text="音节/字词")
+                tree.heading("time", text="时间区间 (s)")
+                tree.heading("cache", text="F0 缓存状态")
+                
+                tree.column("idx", width=60, anchor="center")
+                tree.column("word", width=120, anchor="center")
+                tree.column("time", width=220, anchor="center")
+                tree.column("cache", width=120, anchor="center")
+                
+                tree.configure(style="Proj.Treeview", takefocus=False)
+                
+                scrollbar = ctk.CTkScrollbar(tree_container, orientation="vertical", command=tree.yview)
+                tree.configure(yscrollcommand=scrollbar.set)
+                
+                tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+                scrollbar.pack(side=tk.RIGHT, fill=tk.Y, padx=1, pady=1)
+                
+                # 滚动隔离：当鼠标悬浮在列表容器（包括列表和滚动条）上时，禁用父 scroll_content 的滚动绑定，允许 Treeview 完全原生滚动；离开时重新启用。
+                def on_enter_tree(e):
+                    method = getattr(scroll_content, "_disable_all_bindings", None)
+                    if callable(method):
+                        try:
+                            method()
+                        except Exception:
+                            pass
+                
+                def on_leave_tree(e):
+                    x = tree_container.winfo_pointerx() - tree_container.winfo_rootx()
+                    y = tree_container.winfo_pointery() - tree_container.winfo_rooty()
+                    w = tree_container.winfo_width()
+                    h = tree_container.winfo_height()
+                    if not (0 <= x < w and 0 <= y < h):
+                        method = getattr(scroll_content, "_enable_all_bindings", None)
+                        if callable(method):
+                            try:
+                                method()
+                            except Exception:
+                                pass
+                
+                tree_container.bind("<Enter>", on_enter_tree, add="+")
+                tree_container.bind("<Leave>", on_leave_tree, add="+")
+                tree.bind("<Enter>", on_enter_tree, add="+")
+                scrollbar.bind("<Enter>", on_enter_tree, add="+")
+                
+                for idx, (item_id, item) in enumerate(items.items(), 1):
+                    label = item.get("label", "无")
+                    start = item.get("start", 0.0)
+                    end = item.get("end", 0.0)
+                    time_str = f"{start:.3f}s ~ {end:.3f}s"
+                    
+                    pitch_file = item.get("pitch_data_file", "")
+                    has_pitch = "无"
+                    if pitch_file and pitch_file in namelist:
+                        has_pitch = "已缓存"
+                    elif item.get("pitch_data") is not None:
+                        has_pitch = "已缓存"
+                        
+                    tree.insert("", tk.END, values=(idx, label, time_str, has_pitch))
+
+    def load_project_file(self, path):
+        if not os.path.exists(path):
+            messagebox.showerror("错误", "工程文件不存在。")
+            return
+            
+        self.loaded_teproj_path = path
+        self.lbl_proj_file.configure(
+            text=f"已加载工程:\n{os.path.basename(path)}\n\n大小: {os.path.getsize(path) / (1024 * 1024):.2f} MB",
+            text_color="#10B981"
+        )
+        
+        self.show_loading_placeholder()
+        
+        def run():
+            try:
+                if not zipfile.is_zipfile(path):
+                    raise ValueError("所选文件不是有效的 ZIP 格式压缩包")
+                    
+                with zipfile.ZipFile(path, 'r') as zf:
+                    namelist = zf.namelist()
+                    if "project.json" not in namelist:
+                        raise ValueError("未在压缩包中找到 project.json，这可能不是一个合法的 PhonTracer 工程文件")
+                    
+                    with zf.open("project.json") as f:
+                        project_data = json.loads(f.read().decode('utf-8'))
+                
+                def update_ui():
+                    self.display_project_preview(project_data, namelist)
+                    self.btn_convert_zip.configure(state="normal")
+                    
+                self.after(0, update_ui)
+                
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                err_msg = f"❌ 无法解析工程文件: {str(e)}"
+                def show_err():
+                    self.show_error_placeholder(err_msg)
+                    self.btn_convert_zip.configure(state="disabled")
+                    self.lbl_proj_file.configure(text="解析失败", text_color="#EF4444")
+                    messagebox.showerror("错误", f"解析 .teproj 文件失败:\n{str(e)}")
+                self.after(0, show_err)
+                
+        threading.Thread(target=run, daemon=True).start()
+
+    def format_project_preview(self, project_data, namelist):
+        def pad_chinese(text, width):
+            text_len = len(text)
+            chinese_len = sum(1 for char in text if ord(char) > 127)
+            padding = width - text_len - chinese_len
+            if padding <= 0:
+                return text
+            return text + " " * padding
+
+        lines = []
+        lines.append("=" * 60)
+        lines.append("               PHONTRACER 工程文件 (.teproj) 数据预览")
+        lines.append("=" * 60)
+        lines.append("")
+        
+        # 1. Basic Info
+        version = project_data.get("version", "未知")
+        active_speaker_id = project_data.get("active_speaker_id", "无")
+        speakers = project_data.get("speakers", {})
+        
+        lines.append("【基本信息】")
+        lines.append(f"  • 工程格式版本: {version}")
+        lines.append(f"  • 发音人数量: {len(speakers)}")
+        lines.append("")
+        
+        # 2. Speakers & Detailed structure
+        lines.append("【发音人及音频明细】")
+        for s_id, spk in speakers.items():
+            name = spk.get("name", "未命名")
+            tab_mode = spk.get("tab_mode", "未知模式")
+            last_params = spk.get("last_params", {})
+            items = spk.get("items", {})
+            pending_batch_paths = spk.get("pending_batch_paths", [])
+            long_audio_path = spk.get("long_audio_path", "")
+            
+            is_active = " (当前选中)" if s_id == active_speaker_id else ""
+            lines.append(f"  ■ 发音人: {name}{is_active}")
+            lines.append(f"    • 唯一标识符: {s_id}")
+            lines.append(f"    • 音频管理模式: {tab_mode}")
+            
+            if tab_mode == "单条长音频":
+                lines.append(f"    • 长音频文件: {long_audio_path or '无'}")
+                mac_segs = spk.get("current_macro_segments", [])
+                man_segs = spk.get("manual_segments", [])
+                lines.append(f"    • 自动分段数量: {len(mac_segs)}")
+                lines.append(f"    • 手动微调段数: {len(man_segs) if man_segs is not None else '未进行微调'}")
+            else:
+                lines.append(f"    • 待导入音频数: {len(pending_batch_paths)}")
+                
+            # Engine parameters
+            if last_params:
+                lines.append("    • 分析引擎参数配置:")
+                lines.append(f"      - 基频范围 (F0 Range): {last_params.get('f0_min', 75)} Hz ~ {last_params.get('f0_max', 600)} Hz")
+                lines.append(f"      - 时序分析点数 (Points): {last_params.get('pts', 11)}")
+                lines.append(f"      - 分析算法: {last_params.get('method', 'ac')}")
+            
+            lines.append(f"    • 解析出的字词条目 (共 {len(items)} 条):")
+            if not items:
+                lines.append("      (暂无提取 of 字词条目数据)")
+            else:
+                item_header = f"      {'序号':<4} | {pad_chinese('音节/字词', 12)} | {'时间区间 (s)':<22} | {pad_chinese('F0缓存状态', 10)}"
+                lines.append(item_header)
+                lines.append("      " + "-" * 56)
+                
+                for idx, (item_id, item) in enumerate(items.items(), 1):
+                    label = item.get("label", "无")
+                    start = item.get("start", 0.0)
+                    end = item.get("end", 0.0)
+                    
+                    pitch_file = item.get("pitch_data_file", "")
+                    has_pitch = "无"
+                    if pitch_file and pitch_file in namelist:
+                        has_pitch = "已缓存"
+                    elif item.get("pitch_data") is not None:
+                        has_pitch = "已缓存"
+                        
+                    idx_str = f"{idx:<4}"
+                    label_col = pad_chinese(label, 12)
+                    time_col = f"{start:7.3f}s ~ {end:7.3f}s"
+                    has_pitch_col = pad_chinese(has_pitch, 10)
+                    
+                    lines.append(f"      {idx_str} | {label_col} | {time_col} | {has_pitch_col}")
+            lines.append("")
+            
+        # 3. Archive file list overview
+        lines.append("【工程压缩包物理文件清单】")
+        lines.append(f"  • 压缩包内文件总数: {len(namelist)}")
+        
+        audio_files = [f for f in namelist if f.startswith("audio/")]
+        data_files = [f for f in namelist if f.startswith("data/")]
+        
+        lines.append(f"  • 音频资源文件数 (audio/): {len(audio_files)}")
+        lines.append(f"  • 基频数据缓存数 (data/): {len(data_files)}")
+        lines.append("")
+        lines.append("=" * 60)
+        
+        return "\n".join(lines)
+
+    def convert_project_to_zip(self):
+        if not hasattr(self, 'loaded_teproj_path') or not self.loaded_teproj_path:
+            return messagebox.showwarning("提示", "请先选择并加载 .teproj 文件")
+            
+        default_name = os.path.splitext(os.path.basename(self.loaded_teproj_path))[0] + ".zip"
+        zip_path = filedialog.asksaveasfilename(
+            defaultextension=".zip",
+            initialfile=default_name,
+            filetypes=[("ZIP Archive", "*.zip")],
+            title="另存为 ZIP 压缩包"
+        )
+        if not zip_path:
+            return
+            
+        try:
+            shutil.copy2(self.loaded_teproj_path, zip_path)
+            messagebox.showinfo("转换成功", f"工程已成功另存为 ZIP 压缩包：\n{zip_path}")
+        except Exception as e:
+            messagebox.showerror("错误", f"另存为 ZIP 失败：\n{str(e)}")
 
 if __name__ == "__main__":
     app = AudioToolkitApp()

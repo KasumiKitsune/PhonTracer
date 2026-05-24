@@ -2,9 +2,11 @@
 import os
 import sys
 import customtkinter
+from PyInstaller.utils.hooks import collect_submodules, copy_metadata
 
 # 1. 动态获取 customtkinter 的安装路径，确保主题和 json 文件被包含
 ctk_path = os.path.dirname(customtkinter.__file__)
+package_datas = copy_metadata('pyreaper') + copy_metadata('setuptools')
 
 # 2. 隐式导入列表（PyInstaller 自动检测不到的模块）
 hidden_imports = [
@@ -17,9 +19,10 @@ hidden_imports = [
     'scipy.special._cdflib', # scipy 经常漏掉的底层库
     'textgrid',
     'pyreaper',
+    'setuptools',
     'pkg_resources',
     'matplotlib.backends.backend_svg'
-]
+] + collect_submodules('pkg_resources')
 
 if sys.platform == 'win32':
     hidden_imports.append('windnd')
@@ -45,7 +48,7 @@ a = Analysis(
         ('icons', 'icons'), 
         ('assets', 'assets'),
         (ctk_path, 'customtkinter')
-    ],
+    ] + package_datas,
     hiddenimports=hidden_imports,
     hookspath=[],
     hooksconfig={},

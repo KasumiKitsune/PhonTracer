@@ -1,5 +1,7 @@
 import numpy as np
 import os
+import sys
+import types
 from typing import Tuple, List, Union, Dict, Any
 import parselmouth
 
@@ -11,6 +13,29 @@ VOP_HOP_LEN_SEC = 0.002
 VAD_TIME_STEP = 0.01
 VAD_MIN_DURATION = 0.1
 VAD_MERGE_THRESHOLD = 0.25
+
+
+def _import_pyreaper():
+    try:
+        import pyreaper
+        return pyreaper
+    except ModuleNotFoundError as exc:
+        if exc.name != "pkg_resources":
+            raise
+
+        # pyreaper imports pkg_resources only to read its own version. Some
+        # packaged builds omit setuptools/pkg_resources even though pyreaper's
+        # compiled extension is present, so provide the tiny API it needs.
+        fallback = types.ModuleType("pkg_resources")
+
+        class _Distribution:
+            version = "unknown"
+
+        fallback.get_distribution = lambda _name: _Distribution()
+        sys.modules["pkg_resources"] = fallback
+
+        import pyreaper
+        return pyreaper
 
 def detect_vowel_onset(snd: parselmouth.Sound, rough_start: float, rough_end: float) -> float:
     """
@@ -423,7 +448,7 @@ def extract_f0(snd: parselmouth.Sound, params: Dict[str, Any]) -> Dict[str, Any]
     voicing_threshold = float(params.get('voicing_threshold', 0.25))
 
     if engine == 'reaper':
-        import pyreaper
+        pyreaper = _import_pyreaper()
         # REAPER 推荐使用 16000Hz 采样率
         sr_reaper = 16000
         original_samples = snd.values.shape[1]

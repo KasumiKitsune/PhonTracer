@@ -1,10 +1,11 @@
 import sys
+import types
 import numpy as np
 import pytest
 import parselmouth
 from unittest.mock import MagicMock, patch
 
-from modules.audio_core import extract_f0, auto_split_to_chars_bounds
+from modules.audio_core import extract_f0, auto_split_to_chars_bounds, _import_pyreaper
 from modules.data_utils import get_export_text_for_item
 
 class MockPitch:
@@ -87,6 +88,29 @@ def test_extract_f0_reaper():
         assert call_kwargs['minf0'] == 75.0
         assert call_kwargs['maxf0'] == 500.0
         assert abs(call_kwargs['unvoiced_cost'] - 0.9) < 1e-5
+
+def test_import_pyreaper_falls_back_without_pkg_resources():
+    fake_pyreaper = types.SimpleNamespace(reaper=MagicMock())
+    import_calls = {"pyreaper": 0}
+
+    def fake_import(name, *args, **kwargs):
+        if name == "pyreaper":
+            import_calls["pyreaper"] += 1
+            if import_calls["pyreaper"] == 1:
+                raise ModuleNotFoundError("No module named 'pkg_resources'", name="pkg_resources")
+            return fake_pyreaper
+        return real_import(name, *args, **kwargs)
+
+    real_import = __import__
+    old_pkg_resources = sys.modules.pop("pkg_resources", None)
+    try:
+        with patch("builtins.__import__", side_effect=fake_import):
+            assert _import_pyreaper() is fake_pyreaper
+            assert sys.modules["pkg_resources"].get_distribution("pyreaper").version == "unknown"
+    finally:
+        sys.modules.pop("pkg_resources", None)
+        if old_pkg_resources is not None:
+            sys.modules["pkg_resources"] = old_pkg_resources
 
 def test_auto_split_to_chars_bounds_dual_engines():
     snd = MockSound(duration=1.0)

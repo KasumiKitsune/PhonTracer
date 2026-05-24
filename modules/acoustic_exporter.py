@@ -1334,6 +1334,10 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         self.current_group_page = 0
         self.sort_by_count = False
 
+        # Live refresh switch
+        self.var_live_refresh = ctk.BooleanVar(value=True)
+        self._debounce_timer_id = None
+
     def _init_group_filters(self):
         # Extract all unique group names across all speakers
         all_entries = self._extract_active_data(self.all_speakers if self.all_speakers else [self.active_speaker])
@@ -1427,7 +1431,13 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         self.bottom_frame = ctk.CTkFrame(self.right_frame, fg_color="transparent")
         self.bottom_frame.grid(row=3, column=0, sticky="ew")
 
-        ctk.CTkButton(self.bottom_frame, text="🔄 刷新预览", width=120, height=38, corner_radius=19, fg_color="#E5E7EB", text_color="#374151", hover_color="#D1D5DB", font=self.font_main, command=self.update_preview).pack(side=tk.LEFT, padx=5)
+        ctk.CTkButton(self.bottom_frame, text="🔄 刷新预览", width=120, height=38, corner_radius=19, fg_color="#E5E7EB", text_color="#374151", hover_color="#D1D5DB", font=self.font_main, command=lambda: self.update_preview(force=True)).pack(side=tk.LEFT, padx=5)
+
+        self.switch_live_refresh = ctk.CTkSwitch(
+            self.bottom_frame, text="实时刷新", variable=self.var_live_refresh,
+            font=self.font_main, command=self._on_live_refresh_toggle
+        )
+        self.switch_live_refresh.pack(side=tk.LEFT, padx=10)
 
         self.btn_export = ctk.CTkButton(self.bottom_frame, text="💾 导出所选图表", width=180, height=38, corner_radius=19, font=self.font_title, command=self.on_confirm)
         self.btn_export.pack(side=tk.RIGHT, padx=5)
@@ -1647,10 +1657,19 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         # Scrollable Frame for Group list
         self.filter_scroll = ctk.CTkScrollableFrame(self.card_filter, height=120, fg_color="transparent")
         self.filter_scroll.pack(fill=tk.X, padx=10, pady=5)
+        try:
+            self.filter_scroll._parent_canvas.configure(yscrollincrement=15)
+        except Exception:
+            pass
 
         # Bind enter/leave to self.filter_scroll to disable parent left_scroll scrolling
         def on_enter_filter_scroll(e):
-            self.left_scroll._disable_all_bindings()
+            method = getattr(self.left_scroll, "_disable_all_bindings", None)
+            if callable(method):
+                try:
+                    method()
+                except Exception:
+                    pass
         
         def on_leave_filter_scroll(e):
             x = self.filter_scroll.winfo_pointerx() - self.filter_scroll.winfo_rootx()
@@ -1658,7 +1677,12 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             w = self.filter_scroll.winfo_width()
             h = self.filter_scroll.winfo_height()
             if not (0 <= x < w and 0 <= y < h):
-                self.left_scroll._enable_all_bindings()
+                method = getattr(self.left_scroll, "_enable_all_bindings", None)
+                if callable(method):
+                    try:
+                        method()
+                    except Exception:
+                        pass
             
         self.filter_scroll.bind("<Enter>", on_enter_filter_scroll, add="+")
         self.filter_scroll.bind("<Leave>", on_leave_filter_scroll, add="+")
@@ -1678,6 +1702,85 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         self.entry_min_count.insert(0, "0")
         self.entry_min_count.pack(side=tk.LEFT, padx=2)
         self.entry_min_count.bind("<KeyRelease>", lambda e: self._populate_groups_list())
+        self._bind_left_scroll_wheel_recursive(self.left_scroll)
+
+    def _on_filter_scroll_wheel(self, event):
+        canvas = getattr(self.filter_scroll, "_parent_canvas", None)
+        if canvas is None:
+            return "break"
+
+        if getattr(event, "num", None) == 4:
+            steps = -3  # 3 units = 45 pixels
+        elif getattr(event, "num", None) == 5:
+            steps = 3   # 3 units = 45 pixels
+        else:
+            delta = getattr(event, "delta", 0)
+            if delta == 0:
+                return "break"
+            if abs(delta) >= 120:
+                steps = -int(delta / 120) * 3
+            else:
+                steps = -delta * 3
+
+        if canvas.yview() != (0.0, 1.0):
+            canvas.yview_scroll(steps, "units")
+        return "break"
+
+    def _bind_filter_scroll_wheel_recursive(self, widget):
+        if not getattr(widget, "_phontracer_filter_wheel_bound", False):
+            for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+                widget.bind(sequence, self._on_filter_scroll_wheel, add="+")
+            widget._phontracer_filter_wheel_bound = True
+
+        for child in widget.winfo_children():
+            self._bind_filter_scroll_wheel_recursive(child)
+
+    def _on_left_scroll_wheel(self, event):
+        if hasattr(self, 'filter_scroll') and self.filter_scroll:
+            try:
+                if str(event.widget).startswith(str(self.filter_scroll)):
+                    return "break"
+            except Exception:
+                pass
+
+        canvas = getattr(self.left_scroll, "_parent_canvas", None)
+        if canvas is None:
+            return "break"
+
+        if getattr(event, "num", None) == 4:
+            steps = -40  # scroll up
+        elif getattr(event, "num", None) == 5:
+            steps = 40   # scroll down
+        else:
+            delta = getattr(event, "delta", 0)
+            if delta == 0:
+                return "break"
+            if abs(delta) >= 120:
+                steps = -int(delta / 120) * 40
+            else:
+                steps = -delta * 40
+
+        try:
+            canvas.configure(yscrollincrement=1)
+        except Exception:
+            pass
+
+        if canvas.yview() != (0.0, 1.0):
+            canvas.yview_scroll(steps, "units")
+        return "break"
+
+    def _bind_left_scroll_wheel_recursive(self, widget):
+        # Do not bind widgets inside filter_scroll to left_scroll's wheel event
+        if widget == getattr(self, "filter_scroll", None):
+            return
+
+        if not getattr(widget, "_phontracer_left_wheel_bound", False):
+            for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+                widget.bind(sequence, self._on_left_scroll_wheel, add="+")
+            widget._phontracer_left_wheel_bound = True
+
+        for child in widget.winfo_children():
+            self._bind_left_scroll_wheel_recursive(child)
 
     def _on_type_changed(self, val):
         self.current_group_page = 0
@@ -1706,6 +1809,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             self.dynamic_title.configure(text="⚙️ 声调组别概览图专有选项")
             self._build_overview_heatmap_settings()
 
+        self._bind_left_scroll_wheel_recursive(self.dynamic_content_frame)
         self.update_preview()
 
     def _on_scope_changed(self, val):
@@ -1863,6 +1967,8 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             )
             cb.pack(anchor="w", padx=10, pady=3)
 
+        self._bind_filter_scroll_wheel_recursive(self.filter_scroll)
+
     def _on_group_filter_changed(self):
         self.current_preview_page = 0
         self.current_group_page = 0
@@ -1892,7 +1998,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
 
     def _build_overview_heatmap_settings(self):
         ctk.CTkLabel(self.dynamic_content_frame, text="热图展示维度:", font=self.font_small).pack(anchor="w", pady=(5, 2))
-        self.combo_overview_metric = ctk.CTkOptionMenu(self.dynamic_content_frame, values=["均值热图 (Mean Map)", "标准差热图 (SD Map)"], command=lambda _: self.update_preview(), **self.dropdown_kwargs)
+        self.combo_overview_metric = ctk.CTkOptionMenu(self.dynamic_content_frame, values=["均值热图 (Mean Map)", "标准差热图 (SD Map)"], command=lambda _: self.trigger_preview_update(), **self.dropdown_kwargs)
         self.combo_overview_metric.set("均值热图 (Mean Map)")
         self.combo_overview_metric.pack(fill=tk.X, pady=(2, 10))
         self._apply_custom_arrow(self.combo_overview_metric)
@@ -1901,21 +2007,21 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
     def _build_contour_settings(self):
         # X-Axis scale
         ctk.CTkLabel(self.dynamic_content_frame, text="横轴展现形式:", font=self.font_small).pack(anchor="w", pady=(5, 2))
-        self.combo_contour_x = ctk.CTkOptionMenu(self.dynamic_content_frame, values=["归一化采样点", "真实物理时长"], command=lambda _: self.update_preview(), **self.dropdown_kwargs)
+        self.combo_contour_x = ctk.CTkOptionMenu(self.dynamic_content_frame, values=["归一化采样点", "真实物理时长"], command=lambda _: self.trigger_preview_update(), **self.dropdown_kwargs)
         self.combo_contour_x.set("归一化采样点")
         self.combo_contour_x.pack(fill=tk.X, pady=2)
         self._apply_custom_arrow(self.combo_contour_x)
 
         # Curve Content
         ctk.CTkLabel(self.dynamic_content_frame, text="曲线展示要素:", font=self.font_small).pack(anchor="w", pady=(5, 2))
-        self.combo_contour_content = ctk.CTkOptionMenu(self.dynamic_content_frame, values=["仅组别平均曲线", "平均曲线 + 个体浅色细线", "平均曲线 + 置信区间阴影"], command=lambda _: self.update_preview(), **self.dropdown_kwargs)
+        self.combo_contour_content = ctk.CTkOptionMenu(self.dynamic_content_frame, values=["仅组别平均曲线", "平均曲线 + 个体浅色细线", "平均曲线 + 置信区间阴影"], command=lambda _: self.trigger_preview_update(), **self.dropdown_kwargs)
         self.combo_contour_content.set("仅组别平均曲线")
         self.combo_contour_content.pack(fill=tk.X, pady=2)
         self._apply_custom_arrow(self.combo_contour_content)
 
         # Facet By
         ctk.CTkLabel(self.dynamic_content_frame, text="分面子图排版 (Facet):", font=self.font_small).pack(anchor="w", pady=(5, 2))
-        self.combo_contour_facet = ctk.CTkOptionMenu(self.dynamic_content_frame, values=["单图展示 (不分面)", "按声调类型分面", "按音节位置分面"], command=lambda _: self.update_preview(), **self.dropdown_kwargs)
+        self.combo_contour_facet = ctk.CTkOptionMenu(self.dynamic_content_frame, values=["单图展示 (不分面)", "按声调类型分面", "按音节位置分面"], command=lambda _: self.trigger_preview_update(), **self.dropdown_kwargs)
         self.combo_contour_facet.set("单图展示 (不分面)")
         self.combo_contour_facet.pack(fill=tk.X, pady=(2, 10))
         self._apply_custom_arrow(self.combo_contour_facet)
@@ -1931,7 +2037,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         # Plot style (Boxplot / Violin)
         self.lbl_dist_style = ctk.CTkLabel(self.dynamic_content_frame, text="统计图样式:", font=self.font_small)
         self.lbl_dist_style.pack(anchor="w", pady=(5, 2))
-        self.combo_dist_style = ctk.CTkOptionMenu(self.dynamic_content_frame, values=["科学箱线图 (Box Plot)", "小提琴图 (Violin Plot)"], command=lambda _: self.update_preview(), **self.dropdown_kwargs)
+        self.combo_dist_style = ctk.CTkOptionMenu(self.dynamic_content_frame, values=["科学箱线图 (Box Plot)", "小提琴图 (Violin Plot)"], command=lambda _: self.trigger_preview_update(), **self.dropdown_kwargs)
         self.combo_dist_style.set("科学箱线图 (Box Plot)")
         self.combo_dist_style.pack(fill=tk.X, pady=(2, 10))
         self._apply_custom_arrow(self.combo_dist_style)
@@ -1941,7 +2047,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             self.combo_dist_style.configure(state="disabled")
         else:
             self.combo_dist_style.configure(state="normal")
-        self.update_preview()
+        self.trigger_preview_update()
 
     def _build_density_settings(self):
         # KDE Bandwidth
@@ -1990,7 +2096,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
 
         # Facet Density
         ctk.CTkLabel(self.dynamic_content_frame, text="排版分面依据:", font=self.font_small).pack(anchor="w", pady=(5, 2))
-        self.combo_density_facet = ctk.CTkOptionMenu(self.dynamic_content_frame, values=["声调类型分面 (默认)", "不分面 (混合叠加)", "按词语分面"], command=lambda _: self.update_preview(), **self.dropdown_kwargs)
+        self.combo_density_facet = ctk.CTkOptionMenu(self.dynamic_content_frame, values=["声调类型分面 (默认)", "不分面 (混合叠加)", "按词语分面"], command=lambda _: self.trigger_preview_update(), **self.dropdown_kwargs)
         self.combo_density_facet.set("声调类型分面 (默认)")
         self.combo_density_facet.pack(fill=tk.X, pady=(2, 10))
         self._apply_custom_arrow(self.combo_density_facet)
@@ -2000,7 +2106,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         self.lbl_bw_val.configure(text=f"{float(val):.2f}")
         # Use simple debounce by only updating on actual release if desired,
         # but here we update directly (Matplotlib is fast enough)
-        self.update_preview()
+        self.trigger_preview_update()
 
     def _on_density_f0_changed(self, val):
         self.pct_f0_frame.pack_forget()
@@ -2015,7 +2121,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         else:
             self.var_density_f0_mode.set("minmax")
 
-        self.update_preview()
+        self.trigger_preview_update()
 
     def _build_quality_settings(self):
         ctk.CTkLabel(self.dynamic_content_frame, text="数据质检视图类型:", font=self.font_small).pack(anchor="w", pady=(5, 2))
@@ -2032,11 +2138,39 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             self.var_qc_view.set("active_ratio")
         else:
             self.var_qc_view.set("speaker_means")
-        self.update_preview()
+        self.trigger_preview_update()
 
 
     # --- CONTROLLER: RE-RENDER LIVE PREVIEW ---
+    def _on_live_refresh_toggle(self):
+        if self.var_live_refresh.get():
+            self.update_preview()
+
+    def trigger_preview_update(self):
+        if not getattr(self, 'var_live_refresh', None) or not self.var_live_refresh.get():
+            return
+
+        if hasattr(self, '_debounce_timer_id') and self._debounce_timer_id is not None:
+            try:
+                self.after_cancel(self._debounce_timer_id)
+            except Exception:
+                pass
+            self._debounce_timer_id = None
+
+        self._debounce_timer_id = self.after(300, self._debounced_update_preview)
+
+    def _debounced_update_preview(self):
+        self._debounce_timer_id = None
+        self.update_preview()
+
     def update_preview(self):
+        if hasattr(self, '_debounce_timer_id') and self._debounce_timer_id is not None:
+            try:
+                self.after_cancel(self._debounce_timer_id)
+            except Exception:
+                pass
+            self._debounce_timer_id = None
+
         # Clear existing preview canvas
         for widget in self.preview_container.winfo_children():
             widget.destroy()
