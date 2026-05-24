@@ -223,7 +223,7 @@ Type 'help' or '?' to list commands. Use 'agent_guide' for AI operating rules.
     @mode.setter
     def mode(self, value):
         if value == 'long':
-            self.current_speaker.tab_mode = '导入单条长音频'
+            self.current_speaker.tab_mode = '单条长音频'
         else:
             self.current_speaker.tab_mode = '多条独立音频'
 

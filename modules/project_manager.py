@@ -429,6 +429,10 @@ class ProjectManager:
             
             spk.last_params = spk_data.get("last_params", spk.last_params)
             spk.tab_mode = spk_data.get("tab_mode", "多条独立音频")
+            if "单条" in spk.tab_mode:
+                spk.tab_mode = "单条长音频"
+            elif "独立" in spk.tab_mode or "多条" in spk.tab_mode:
+                spk.tab_mode = "多条独立音频"
 
             long_audio_rel = spk_data.get("long_audio_path")
             if long_audio_rel:
