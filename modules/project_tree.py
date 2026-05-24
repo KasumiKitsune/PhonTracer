@@ -1248,6 +1248,7 @@ class ProjectTreePanel:
         y = main_win.winfo_rooty() + (main_win.winfo_height() - 440) // 2
         dlg.geometry(f"+{x}+{y}")
         
+        font_small = ctk.CTkFont(family="Microsoft YaHei", size=11)
         ctk.CTkLabel(dlg, text="请选择需要导出的发音人：", font=self.font_title, text_color=("#111827", "#F9FAFB")).pack(pady=(15, 5))
         
         scroll_frame = ctk.CTkScrollableFrame(dlg, height=180, border_width=1, border_color=("#E5E7EB", "#475569"))
@@ -1274,9 +1275,9 @@ class ProjectTreePanel:
             for val in checkboxes.values():
                 val.set(False)
                 
-        ctk.CTkButton(util_frame, text="全选", width=70, height=26, corner_radius=13, font=self.font_small, 
+        ctk.CTkButton(util_frame, text="全选", width=70, height=26, corner_radius=13, font=font_small, 
                       fg_color=("#F3F4F6", "#374151"), text_color=("#374151", "#D1D5DB"), hover_color=("#E5E7EB", "#4B5563"), command=select_all).pack(side=tk.LEFT, padx=5)
-        ctk.CTkButton(util_frame, text="全不选", width=70, height=26, corner_radius=13, font=self.font_small, 
+        ctk.CTkButton(util_frame, text="全不选", width=70, height=26, corner_radius=13, font=font_small, 
                       fg_color=("#F3F4F6", "#374151"), text_color=("#374151", "#D1D5DB"), hover_color=("#E5E7EB", "#4B5563"), command=select_none).pack(side=tk.LEFT, padx=5)
         
         ctk.CTkFrame(dlg, height=1, fg_color=("#E5E7EB", "#475569")).pack(fill=tk.X, padx=30, pady=8)
