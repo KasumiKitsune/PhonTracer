@@ -470,6 +470,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                 "优先使用 CLI 命令完成导入、分析、修改、导出、工程保存。",
                 "除非用户明确要求，不要直接修改源码、删除文件、移动工程资产或绕过 CLI 改数据。",
                 "开始前用 status/list_items 了解状态；失败时把 JSON 里的 error 原样反馈给用户。",
+                "遇到数据格式不匹配、交错录音等复杂混乱的数据状况或不明错误时，务必先停下来，向用户提问并确认映射规则，切忌盲目猜测或强行处理。",
                 "工程保存用 project_export 或 autosave；数据结果导出用 export。",
                 "需要拼长音/拆长音时使用 tool_merge、tool_split、tool_sort_batch。",
             ],
