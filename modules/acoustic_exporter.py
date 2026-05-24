@@ -57,6 +57,29 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
         # Render Initial Preview
         self.update_preview()
         
+    def _apply_custom_arrow(self, dropdown):
+        try:
+            orig_draw_arrow = dropdown._draw_engine.draw_dropdown_arrow
+
+            def custom_draw_arrow(*args, **kwargs):
+                old_method = dropdown._draw_engine.preferred_drawing_method
+                try:
+                    dropdown._draw_engine.preferred_drawing_method = "polygon_shapes"
+                    res = orig_draw_arrow(*args, **kwargs)
+                    try:
+                        dropdown._canvas.itemconfigure("dropdown_arrow", width=2)
+                    except Exception:
+                        pass
+                    return res
+                finally:
+                    dropdown._draw_engine.preferred_drawing_method = old_method
+
+            dropdown._draw_engine.draw_dropdown_arrow = custom_draw_arrow
+            dropdown._canvas.delete("dropdown_arrow")
+            dropdown._draw(no_color_updates=False)
+        except Exception:
+            pass
+
     def _init_variables(self):
         # 1. Chart Type
         self.var_chart_type = ctk.StringVar(value="contour")  # contour, distribution, density, quality
@@ -151,6 +174,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
         self.combo_type = ctk.CTkOptionMenu(card1, values=["声调轮廓图", "声调分布图", "时序密度图", "数据质量检查"], command=self._on_type_changed, **self.dropdown_kwargs)
         self.combo_type.set("声调轮廓图")
         self.combo_type.pack(fill=tk.X, padx=15, pady=(0, 10))
+        self._apply_custom_arrow(self.combo_type)
         
         # Export Scope Options
         ctk.CTkLabel(card1, text="导出范围:", font=self.font_small).pack(anchor="w", padx=15)
@@ -163,6 +187,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
         else:
             self.combo_scope.set("仅当前发音人")
         self.combo_scope.pack(fill=tk.X, padx=15, pady=(0, 10))
+        self._apply_custom_arrow(self.combo_scope)
         
         # Speaker Management Restriction
         if not self.all_speakers or len(self.all_speakers) <= 1:
@@ -179,18 +204,21 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
         self.combo_groupby = ctk.CTkOptionMenu(card2, values=["按声调类型", "按词语", "按发音人"], command=lambda _: self.update_preview(), **self.dropdown_kwargs)
         self.combo_groupby.set("按声调类型")
         self.combo_groupby.pack(fill=tk.X, padx=15, pady=(0, 10))
+        self._apply_custom_arrow(self.combo_groupby)
         
         # Acoustic Scale
         ctk.CTkLabel(card2, text="声学尺度 (纵轴单位):", font=self.font_small).pack(anchor="w", padx=15)
         self.combo_scale = ctk.CTkOptionMenu(card2, values=["T 值 (五度标调)", "Hz (基频绝对频率)"], command=lambda _: self.update_preview(), **self.dropdown_kwargs)
         self.combo_scale.set("T 值 (五度标调)")
         self.combo_scale.pack(fill=tk.X, padx=15, pady=(0, 10))
+        self._apply_custom_arrow(self.combo_scale)
         
         # Image Format
         ctk.CTkLabel(card2, text="图像导出格式:", font=self.font_small).pack(anchor="w", padx=15)
         self.combo_format = ctk.CTkOptionMenu(card2, values=["PNG 图片 (.png)", "SVG 矢量图 (.svg)", "PDF 文档 (.pdf)"], **self.dropdown_kwargs)
         self.combo_format.set("PNG 图片 (.png)")
         self.combo_format.pack(fill=tk.X, padx=15, pady=(0, 15))
+        self._apply_custom_arrow(self.combo_format)
 
         # --- CARD 3: Dynamic Options Frame ---
         self.dynamic_card = ctk.CTkFrame(self.left_scroll, fg_color=("#FFFFFF", "#1E293B"), border_width=1, border_color=("#E5E7EB", "#475569"), corner_radius=12)
@@ -250,18 +278,21 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
         self.combo_contour_x = ctk.CTkOptionMenu(self.dynamic_content_frame, values=["归一化采样点", "真实物理时长"], command=lambda _: self.update_preview(), **self.dropdown_kwargs)
         self.combo_contour_x.set("归一化采样点")
         self.combo_contour_x.pack(fill=tk.X, pady=2)
+        self._apply_custom_arrow(self.combo_contour_x)
         
         # Curve Content
         ctk.CTkLabel(self.dynamic_content_frame, text="曲线展示要素:", font=self.font_small).pack(anchor="w", pady=(5, 2))
         self.combo_contour_content = ctk.CTkOptionMenu(self.dynamic_content_frame, values=["仅组别平均曲线", "平均曲线 + 个体浅色细线", "平均曲线 + 置信区间阴影"], command=lambda _: self.update_preview(), **self.dropdown_kwargs)
         self.combo_contour_content.set("仅组别平均曲线")
         self.combo_contour_content.pack(fill=tk.X, pady=2)
+        self._apply_custom_arrow(self.combo_contour_content)
         
         # Facet By
         ctk.CTkLabel(self.dynamic_content_frame, text="分面子图排版 (Facet):", font=self.font_small).pack(anchor="w", pady=(5, 2))
         self.combo_contour_facet = ctk.CTkOptionMenu(self.dynamic_content_frame, values=["单图展示 (不分面)", "按声调类型分面", "按音节位置分面"], command=lambda _: self.update_preview(), **self.dropdown_kwargs)
         self.combo_contour_facet.set("单图展示 (不分面)")
         self.combo_contour_facet.pack(fill=tk.X, pady=(2, 10))
+        self._apply_custom_arrow(self.combo_contour_facet)
 
     def _build_distribution_settings(self):
         # Distribution view type
@@ -269,6 +300,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
         self.combo_dist_type = ctk.CTkOptionMenu(self.dynamic_content_frame, values=["测量点精细分布", "起-中-终三点比较", "调域范围跨度图", "变异程度(CV)比较"], command=self._on_dist_type_changed, **self.dropdown_kwargs)
         self.combo_dist_type.set("测量点精细分布")
         self.combo_dist_type.pack(fill=tk.X, pady=2)
+        self._apply_custom_arrow(self.combo_dist_type)
         
         # Plot style (Boxplot / Violin)
         self.lbl_dist_style = ctk.CTkLabel(self.dynamic_content_frame, text="统计图样式:", font=self.font_small)
@@ -276,6 +308,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
         self.combo_dist_style = ctk.CTkOptionMenu(self.dynamic_content_frame, values=["科学箱线图 (Box Plot)", "小提琴图 (Violin Plot)"], command=lambda _: self.update_preview(), **self.dropdown_kwargs)
         self.combo_dist_style.set("科学箱线图 (Box Plot)")
         self.combo_dist_style.pack(fill=tk.X, pady=(2, 10))
+        self._apply_custom_arrow(self.combo_dist_style)
 
     def _on_dist_type_changed(self, val):
         if val in ["调域范围跨度图", "变异程度(CV)比较"]:
@@ -300,6 +333,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
         self.combo_density_f0 = ctk.CTkOptionMenu(self.dynamic_content_frame, values=["分位数自动截断 (5%-95%)", "极值自动范围 (Min-Max)", "手动指定频率范围 (Hz)"], command=self._on_density_f0_changed, **self.dropdown_kwargs)
         self.combo_density_f0.set("分位数自动截断 (5%-95%)")
         self.combo_density_f0.pack(fill=tk.X, pady=2)
+        self._apply_custom_arrow(self.combo_density_f0)
         
         # Sub-entries for manual / percentile
         self.manual_f0_frame = ctk.CTkFrame(self.dynamic_content_frame, fg_color="transparent")
@@ -333,6 +367,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
         self.combo_density_facet = ctk.CTkOptionMenu(self.dynamic_content_frame, values=["声调类型分面 (默认)", "不分面 (混合叠加)", "按词语分面"], command=lambda _: self.update_preview(), **self.dropdown_kwargs)
         self.combo_density_facet.set("声调类型分面 (默认)")
         self.combo_density_facet.pack(fill=tk.X, pady=(2, 10))
+        self._apply_custom_arrow(self.combo_density_facet)
 
     def _on_bw_slider_changed(self, val):
         self.var_density_bw.set(float(val))
@@ -361,6 +396,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel):
         self.combo_qc_view = ctk.CTkOptionMenu(self.dynamic_content_frame, values=["个体 Raw F0 曲线叠加 (异常高亮)", "有效点比例 (Active Ratio) 分布箱线图", "发音人基频均值与调域跨度散点图"], command=self._on_qc_view_changed, **self.dropdown_kwargs)
         self.combo_qc_view.set("个体 Raw F0 曲线叠加 (异常高亮)")
         self.combo_qc_view.pack(fill=tk.X, pady=(2, 10))
+        self._apply_custom_arrow(self.combo_qc_view)
         self.var_qc_view.set("raw_overlay")
 
     def _on_qc_view_changed(self, val):
