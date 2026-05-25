@@ -1239,7 +1239,7 @@ class PhoneticsApp:
         entry.bind("<FocusOut>", on_focus_out)
         entry.bind("<Return>", lambda e: self.root.focus_set())
 
-    def on_param_change(self, event=None):
+    def on_param_change(self, event=None, recalculate_current=True):
         try:
             new_db = float(self.var_drop_db.get())
             new_skip = float(self.var_min_dur.get())
@@ -1276,7 +1276,7 @@ class PhoneticsApp:
                 if new_ceiling != curr_item.get('pitch_ceiling', self.last_params['pitch_ceiling']): recompute_pitch = True
                 if new_voicing != curr_item.get('voicing_threshold', self.last_params.get('voicing_threshold', 0.25)): recompute_pitch = True
 
-            if changed_algo or recompute_pitch:
+            if recalculate_current and (changed_algo or recompute_pitch):
                 self.recalculate_current_item(recompute_pitch=recompute_pitch)
             if new_pts != self.last_params['pts']:
                 self.last_params['pts'] = new_pts
@@ -1312,7 +1312,7 @@ class PhoneticsApp:
 
         # 1. 确保所有 UI 输入框的最新的参数值都已经同步到了 self.last_params 中（在主线程中执行）
         try:
-            self.on_param_change()
+            self.on_param_change(recalculate_current=False)
         except Exception:
             pass
 
@@ -3212,5 +3212,5 @@ class PhoneticsApp:
             self.entry_pitch_ceiling._last_val = str(int(ceiling))
 
         # [P1 优化]：触发参数变化逻辑，并传入 only_pitch_changed=True 以保护所有非手动切分边界不被重写
-        self.on_param_change()
+        self.on_param_change(recalculate_current=False)
         self.recalculate_all_audio(recompute_pitch=True, only_pitch_changed=True)

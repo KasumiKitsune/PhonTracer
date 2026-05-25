@@ -68,3 +68,153 @@ def test_certified_uncertified_filtering():
         if not item.get('is_manual_edited', False)
     ]
     assert set(filtered_uncertified) == {"item2", "item3"}
+
+def test_recalculate_all_audio_preserves_bounds():
+    from unittest.mock import MagicMock
+    # Mocking standard PhoneticsApp attributes for the test
+    app = DummyApp()
+    app.items = {
+        "item1": {
+            "label": "test",
+            "group": "group1",
+            "snd": MagicMock(),
+            "pitch_data": {"xs": np.array([0.1]), "freqs": np.array([150.0])},
+            "macro_start": 0.0,
+            "macro_end": 1.0,
+            "start": 0.2, # Manually set start bounds
+            "end": 0.8,
+            "raw_start": 0.15,
+            "raw_end": 0.85,
+            "inner_splits": [0.5],
+            "chars_bounds": [[0.2, 0.5], [0.5, 0.8]],
+            "is_manual_edited": False
+        }
+    }
+    app.last_params = {
+        "db": 60.0,
+        "skip_front": 0.0,
+        "pitch_floor": 75,
+        "pitch_ceiling": 600,
+        "voicing_threshold": 0.25,
+        "pts": 11,
+        "f0_engine": "praat"
+    }
+    
+    # Mock entry widgets/variables
+    app.entry_points = MagicMock()
+    app.entry_points.get.return_value = "11"
+    app.var_drop_db = MagicMock()
+    app.var_drop_db.get.return_value = "60.0"
+    app.var_min_dur = MagicMock()
+    app.var_min_dur.get.return_value = "0.0"
+    app.entry_pitch_floor = MagicMock()
+    app.entry_pitch_floor.get.return_value = "80" # changed floor
+    app.entry_pitch_ceiling = MagicMock()
+    app.entry_pitch_ceiling.get.return_value = "500" # changed ceiling
+    app.entry_voicing_threshold = MagicMock()
+    app.entry_voicing_threshold.get.return_value = "0.25"
+    
+    # Mock other Tkinter widgets/elements
+    app.root = MagicMock()
+    app.switch_trim_silence = MagicMock()
+    app.switch_trim_silence.get.return_value = True
+    app.tree_panel = MagicMock()
+    app.spectrogram_panel = MagicMock()
+    app.spectrogram_panel.current_item = app.items["item1"]
+    
+    # Spy on recalculate_current_item
+    app.recalculate_current_item = MagicMock()
+    
+    # When recalculate_all_audio is called, it should call on_param_change(recalculate_current=False)
+    # Let's bind the real on_param_change to app
+    app.on_param_change = PhoneticsApp.on_param_change.__get__(app, DummyApp)
+    
+    # Call on_param_change(recalculate_current=False) directly to verify it doesn't trigger recalculate_current_item
+    app.on_param_change(recalculate_current=False)
+    app.recalculate_current_item.assert_not_called()
+    
+    # Verify the global parameters were updated
+    assert app.last_params["pitch_floor"] == 80
+    assert app.last_params["pitch_ceiling"] == 500
+
+def test_cli_detect_f0():
+    from unittest.mock import MagicMock, patch
+    from cli import PhonTracerCLI
+    import io
+    import sys
+    import json
+
+    # Setup CLI mock environment
+    cli = PhonTracerCLI()
+    
+    # Mock speaker
+    speaker = MagicMock()
+    speaker.name = "TestSpeaker"
+    speaker.tab_mode = "多条独立音频"
+    
+    dummy_sound = MagicMock()
+    dummy_sound.get_total_duration.return_value = 1.0
+    
+    # Create 100 stable F0 frames (each frame duration 0.010s)
+    xs = np.linspace(0.0, 0.99, 100)
+    freqs = np.full(100, 200.0) # Stable 200Hz
+    
+    speaker.items = {
+        "item_1": {
+            'label': 'ma',
+            'group': 'T1',
+            'start': 0.0,
+            'end': 1.0,
+            'snd': dummy_sound,
+            'pitch_data': {
+                'xs': xs,
+                'freqs': freqs
+            },
+            'warnings': [],
+            'success': True,
+            'path': 'dummy.wav'
+        }
+    }
+    speaker.last_params = {
+        'pts': 11,
+        'pitch_floor': 75,
+        'pitch_ceiling': 600,
+        'voicing_threshold': 0.25,
+        'f0_engine': 'praat'
+    }
+    speaker.cli_groups = ['T1']
+    
+    cli.speaker_manager = MagicMock()
+    cli.speaker_manager.get_active_speaker.return_value = speaker
+    cli.speaker_manager.get_all_speakers.return_value = [speaker]
+    
+    # Mock extract_f0 to return our dummy pitch data during detection
+    with patch('modules.audio_core.extract_f0', return_value={'xs': xs, 'freqs': freqs}):
+        captured_output = io.StringIO()
+        sys.stdout = captured_output
+        try:
+            cli.do_detect_f0("")
+        finally:
+            sys.stdout = sys.__stdout__
+            
+        res_json = json.loads(captured_output.getvalue().strip())
+        assert res_json["success"] is True
+        assert "suggestions" in res_json
+        assert "conservative" in res_json["suggestions"]
+        assert "recommended" in res_json["suggestions"]
+        assert "fine" in res_json["suggestions"]
+        
+        # Test applying a preset
+        captured_output2 = io.StringIO()
+        sys.stdout = captured_output2
+        try:
+            cli.do_detect_f0("recommended")
+        finally:
+            sys.stdout = sys.__stdout__
+            
+        res_json2 = json.loads(captured_output2.getvalue().strip())
+        assert res_json2["success"] is True
+        assert res_json2["applied"] is True
+        # Verify the parameters were updated in self.params
+        assert cli.params["pitch_floor"] == res_json2["suggestions"]["recommended"]["floor"]
+        assert cli.params["pitch_ceiling"] == res_json2["suggestions"]["recommended"]["ceiling"]

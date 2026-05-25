@@ -489,6 +489,7 @@ PhonTracer 是一款高精度的声学声调格局分析工具。
 - `modify_bounds <音节ID> <开始秒数> <结束秒数>`: 手动重写音节声学边界。
 - `modify_params <音节ID> 键=值 ...`: 手动指定单个音节专属的提取参数。
 - `recalculate`: 基于全局最新参数，批量重算整个项目。
+- `detect_f0 [apply_preset]`: 自动估算发音人的 F0 分布并给出保守/推荐/精细范围。可直接应用预设（conservative, recommended, fine）。
 - `project_export <路径.teproj>` / `project_import <路径.teproj>`: 导出或导入完整工程。
 - `autosave on|off|now`: 开启、关闭或立即执行工程自动保存。
 - `tool_merge <输出.wav> <间隔秒> <音频1> <音频2> ...`: 拼接多个短音频。
@@ -546,6 +547,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
 - `modify_bounds <item_id> <start> <end>`: Set manual time boundaries.
 - `modify_params <item_id> key=value ...`: Set item-specific custom parameters.
 - `recalculate`: Recalculate VAD boundaries & F0 curves globally.
+- `detect_f0 [apply_preset]`: Estimate speaker F0 distribution and get conservative/recommended/fine range suggestions. Can apply preset directly (conservative, recommended, fine).
 - `project_export <path.teproj>` / `project_import <path.teproj>`: Save or load a full project.
 - `autosave on|off|now`: Enable, disable, or immediately run project autosave.
 - `tool_merge <output.wav> <gap_sec> <audio1> <audio2> ...`: Merge short audios.
@@ -1454,6 +1456,226 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
 
         self._after_state_change("recalculate")
         print('{"success": True, "message": "重算完成。"}')
+
+    def extract_stable_f0_values(self, xs, freqs):
+        if len(xs) < 2:
+            return []
+
+        dt = xs[1] - xs[0]
+        if dt <= 0:
+            dt = 0.010
+
+        # 1. 查找连续的有声帧 (freq > 0)
+        voiced_runs = []
+        current_run = []
+        for i in range(len(freqs)):
+            if freqs[i] > 0:
+                current_run.append((xs[i], freqs[i]))
+            else:
+                if current_run:
+                    voiced_runs.append(current_run)
+                    current_run = []
+        if current_run:
+            voiced_runs.append(current_run)
+
+        stable_values = []
+        for run in voiced_runs:
+            if len(run) < 2:
+                continue
+
+            # 2. 对每个有声片段，如果相邻帧 of F0 突变过大（相对跳变 > 20%），在跳变处切断
+            sub_runs = []
+            current_sub = [run[0]]
+            for i in range(1, len(run)):
+                f_prev = run[i-1][1]
+                f_curr = run[i][1]
+                if abs(f_curr - f_prev) / f_prev > 0.20:
+                    if current_sub:
+                        sub_runs.append(current_sub)
+                    current_sub = [run[i]]
+                else:
+                    current_sub.append(run[i])
+            if current_sub:
+                sub_runs.append(current_sub)
+
+            # 3. 对子片段进行时间筛选和边界裁剪
+            for sub in sub_runs:
+                sub_duration = len(sub) * dt
+                if sub_duration < 0.10:
+                    continue
+
+                # 边界剔除：从首尾各剔除 30ms 的数据，以消除发音边界过渡带来的基频不稳/追踪错误
+                trim_frames = int(round(0.030 / dt))
+                if trim_frames < 1:
+                    trim_frames = 1
+
+                if len(sub) > 2 * trim_frames:
+                    trimmed_sub = sub[trim_frames:-trim_frames]
+                    for item in trimmed_sub:
+                        stable_values.append(item[1])
+        return stable_values
+
+    def do_detect_f0(self, arg):
+        """
+        Estimate speaker F0 distribution and suggest floor/ceiling ranges.
+        Usage: detect_f0 [apply_preset]
+        Presets: conservative, recommended, fine
+        Example: detect_f0
+        Example: detect_f0 recommended
+        """
+        if not self.items:
+            print(json.dumps({"success": False, "error": "No items loaded. Please load audio files first."}))
+            return
+
+        import os
+        import numpy as np
+        import parselmouth
+        from modules.audio_core import extract_f0
+
+        # We need to compute stable F0 using 50-700 Hz temporary range
+        params_temp = {
+            'f0_engine': self.params.get('f0_engine', 'praat'),
+            'pitch_floor': 50,
+            'pitch_ceiling': 700,
+            'voicing_threshold': self.params.get('voicing_threshold', 0.25)
+        }
+
+        all_stable_f0 = []
+
+        # Determine mode: long or batch
+        if self.mode == 'long':
+            snd = self.long_snd
+            if snd is None and self.long_snd_path and os.path.exists(self.long_snd_path):
+                try:
+                    snd = parselmouth.Sound(self.long_snd_path)
+                    self.long_snd = snd
+                except Exception:
+                    pass
+            if snd is None:
+                print(json.dumps({"success": False, "error": "Active long audio file not loaded or not found"}))
+                return
+
+            pitch_data = extract_f0(snd, params_temp)
+            times = pitch_data['xs']
+            freqs = pitch_data['freqs']
+
+            for item in self.items.values():
+                macro_start = item.get('macro_start')
+                macro_end = item.get('macro_end')
+                # Ignore placeholder/missing items
+                if macro_start is None or macro_end is None:
+                    continue
+                mask = (times >= macro_start) & (times <= macro_end)
+                item_times = times[mask]
+                item_freqs = freqs[mask]
+                stable_f0 = self.extract_stable_f0_values(item_times, item_freqs)
+                all_stable_f0.extend(stable_f0)
+
+        else: # batch mode
+            valid_items = [it for it in self.items.values() if it.get('snd') or (it.get('path') and os.path.exists(it['path']))]
+            if not valid_items:
+                print(json.dumps({"success": False, "error": "No valid independent audio files found in project"}))
+                return
+
+            for item in valid_items:
+                item_snd = item.get('snd')
+                if item_snd is None:
+                    try:
+                        item_snd = parselmouth.Sound(item['path'])
+                    except Exception:
+                        continue
+                try:
+                    pitch_data = extract_f0(item_snd, params_temp)
+                    stable_f0 = self.extract_stable_f0_values(pitch_data['xs'], pitch_data['freqs'])
+                    all_stable_f0.extend(stable_f0)
+                except Exception:
+                    continue
+
+        if len(all_stable_f0) < 50:
+            print(json.dumps({
+                "success": False,
+                "error": "Too little voiced speech data (< 0.5s) to reliably estimate F0. Please import more audio or ensure there is stable speech."
+            }))
+            return
+
+        p5 = float(np.percentile(all_stable_f0, 5))
+        p10 = float(np.percentile(all_stable_f0, 10))
+        p50 = float(np.percentile(all_stable_f0, 50))
+        p90 = float(np.percentile(all_stable_f0, 90))
+        p95 = float(np.percentile(all_stable_f0, 95))
+
+        # Weight interpolation based on median
+        med = p50
+        w = max(0.0, min(1.0, (med - 120.0) / 120.0))
+
+        # Coefficients mapping male to female
+        mult_cons_floor = 0.66 * (1.0 - w) + 0.58 * w
+        mult_cons_ceil = 1.94 * (1.0 - w) + 1.61 * w
+
+        mult_reco_floor = 0.78 * (1.0 - w) + 0.76 * w
+        mult_reco_ceil = 1.67 * (1.0 - w) + 1.45 * w
+
+        mult_fine_floor = 0.89 * (1.0 - w) + 0.88 * w
+        mult_fine_ceil = 1.44 * (1.0 - w) + 1.35 * w
+
+        def round_to_nearest(val, base):
+            return int(round(val / base) * base)
+
+        cons_floor = max(40, round_to_nearest(p5 * mult_cons_floor, 5))
+        cons_ceil = min(1000, round_to_nearest(p95 * mult_cons_ceil, 10))
+
+        reco_floor = max(40, round_to_nearest(p5 * mult_reco_floor, 5))
+        reco_ceil = min(1000, round_to_nearest(p95 * mult_reco_ceil, 10))
+
+        fine_floor = max(40, round_to_nearest(p5 * mult_fine_floor, 5))
+        fine_ceil = min(1000, round_to_nearest(p95 * mult_fine_ceil, 10))
+
+        voiced_duration = len(all_stable_f0) * 0.01
+
+        presets = {
+            "conservative": (cons_floor, cons_ceil),
+            "recommended": (reco_floor, reco_ceil),
+            "fine": (fine_floor, fine_ceil)
+        }
+
+        preset_arg = arg.strip().lower()
+        applied = False
+        applied_msg = ""
+        if preset_arg:
+            if preset_arg in presets:
+                floor, ceiling = presets[preset_arg]
+                self.params['pitch_floor'] = floor
+                self.params['pitch_ceiling'] = ceiling
+                applied = True
+                applied_msg = f"Applied '{preset_arg}' preset: pitch_floor={floor}, pitch_ceiling={ceiling}. Run 'recalculate' to apply globally."
+                self._after_state_change("set_params")
+            else:
+                print(json.dumps({
+                    "success": False,
+                    "error": f"Invalid preset '{preset_arg}'. Choose from: conservative, recommended, fine"
+                }))
+                return
+
+        response = {
+            "success": True,
+            "metrics": {
+                "voiced_duration_s": voiced_duration,
+                "stable_frames_count": len(all_stable_f0),
+                "p5": p5,
+                "p10": p10,
+                "p50": p50,
+                "p90": p90,
+                "p95": p95
+            },
+            "suggestions": {
+                "conservative": {"floor": cons_floor, "ceiling": cons_ceil},
+                "recommended": {"floor": reco_floor, "ceiling": reco_ceil},
+                "fine": {"floor": fine_floor, "ceiling": fine_ceil}
+            },
+            "applied": applied,
+            "message": applied_msg if applied else f"F0 distribution estimated. Detected main distribution: {int(p5)}~{int(p95)} Hz."
+        }
+        print(json.dumps(response))
 
     def do_export(self, arg):
         """
