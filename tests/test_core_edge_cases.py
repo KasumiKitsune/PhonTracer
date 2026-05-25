@@ -67,7 +67,7 @@ def test_export_short_f0():
     result = get_export_text_for_item(item, 1, 11)
 
     # Should fallback to zeros because we need at least 2 points to interpolate
-    assert "   0.000000" in result
+    assert "\t0.000000" in result
     assert "150.000000" not in result
 
 def test_export_zero_valid_f0_points():
@@ -79,7 +79,7 @@ def test_export_zero_valid_f0_points():
     result = get_export_text_for_item(item, 1, 11)
 
     # Should fallback to zeros
-    assert "   0.000000" in result
+    assert "\t0.000000" in result
 
 def test_word_mode_missing_f0():
     freqs = np.zeros(100)

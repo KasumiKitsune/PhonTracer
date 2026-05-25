@@ -111,7 +111,7 @@ def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: 
             for i, t in enumerate(times):
                 f0 = item['preview_f0'][i]
                 f0_str = "0.000000" if f0 == 0 else f"{f0:.6f}"
-                output += f"{t:.6f}   {f0_str}\n"
+                output += f"{t:.6f}\t{f0_str}\n"
             return output
         else:
             try:
@@ -203,10 +203,10 @@ def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: 
                     if np.min(np.abs(seg_xs - t)) > 0.025:
                         f0 = 0.0
                     f0_str = f"{f0:.6f}" if f0 > 0 else "0.000000"
-                    output += f"{t:.6f}   {f0_str}\n"
+                    output += f"{t:.6f}\t{f0_str}\n"
             else:
                 for t in times:
-                    output += f"{t:.6f}   0.000000\n"
+                    output += f"{t:.6f}\t0.000000\n"
     else:
         # 单字模式同样应用此逻辑
         if item.get('pitch_data'):
@@ -232,15 +232,15 @@ def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: 
                     if np.min(np.abs(seg_xs - t)) > 0.025:
                         f0 = 0.0
                     f0_str = f"{f0:.6f}" if f0 > 0 else "0.000000"
-                    output += f"{t:.6f}   {f0_str}\n"
+                    output += f"{t:.6f}\t{f0_str}\n"
             else:
                 for t in times:
-                    output += f"{t:.6f}   0.000000\n"
+                    output += f"{t:.6f}\t0.000000\n"
         else:
             output += f"{real_index}.{label}\n0.000\n"
             times = np.linspace(t_s, t_e, num_points)
             for t in times:
-                output += f"{t:.6f}   0.000000\n"
+                output += f"{t:.6f}\t0.000000\n"
             
     return output
 

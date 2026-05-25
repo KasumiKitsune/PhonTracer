@@ -2114,33 +2114,13 @@ class ProjectTreePanel:
             global_idx = 1
             for grp_name, children in tree_structure:
                 if not is_continuous: global_idx = 1
-                f.write(f"{grp_name}\n\n")
+                if grp_name and grp_name.strip() and grp_name not in ("未分组", "导入内容"):
+                    f.write(f"{grp_name}\n")
                 for child in children:
                     item = self.items[child]
                     if item['start'] is not None:
                         txt_data = get_export_text_for_item(item, global_idx, self.app_state_params['pts'], pitch_floor=self.app_state_params.get('pitch_floor', 75.0), pitch_ceiling=self.app_state_params.get('pitch_ceiling', 600.0), voicing_threshold=self.app_state_params.get('voicing_threshold', 0.25))
-                        
-                        syls = split_into_syllables(item.get('label', ''))
-                        expected_sections = len(syls)
-                        shown_sections = 0
-                        if expected_sections > 1:
-                            lines = txt_data.splitlines()
-                            subsection_prefix = f"{global_idx}_"
-                            single_prefix = f"{global_idx}."
-                            shown_sections = sum(1 for line in lines if line.startswith(subsection_prefix))
-                            if shown_sections == 0 and any(line.startswith(single_prefix) for line in lines):
-                                shown_sections = 1
-                        
-                        preview_mismatch = expected_sections > 1 and shown_sections == 1
-                        if preview_mismatch:
-                            txt_data = f"[致命] 检测到 {expected_sections} 个子段，但数据预览当前只显示 1 个。请检查该段边界或基频。\n\n{txt_data}"
-                        
-                        warnings = item.get('warnings', [])
-                        if warnings:
-                            warnings_text = "\n".join(warnings)
-                            txt_data = f"{warnings_text}\n\n{txt_data}"
-                        
-                        f.write(txt_data + "\n\n")
+                        f.write(txt_data)
                         global_idx += 1
 
     def _collect_group_avg_data(self, tree_structure=None):

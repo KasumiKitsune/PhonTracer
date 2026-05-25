@@ -76,8 +76,8 @@ def test_export_preview_f0_fallback():
     }
     # For num_points=11, it should use preview_f0 if snd/pitch are missing
     result = get_export_text_for_item(item, 1, 11)
-    assert "0.100000   150.000000" in result
-    assert "0.500000   150.000000" in result
+    assert "0.100000\t150.000000" in result
+    assert "0.500000\t150.000000" in result
 
 def test_export_inner_split_length_mismatch():
     pitch = MockPitch(np.ones(100) * 150.0)
