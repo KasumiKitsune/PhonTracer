@@ -1,7 +1,13 @@
-import os
 import math
+import os
+import threading
+import queue
 import numpy as np
 import parselmouth
+import matplotlib
+
+matplotlib.use("Agg", force=True)
+
 from scipy.stats import gaussian_kde
 from .data_utils import split_into_syllables, get_export_text_for_item
 
@@ -39,6 +45,13 @@ except ImportError as exc:
 import matplotlib.pyplot as plt
 
 
+_MATPLOTLIB_LOCK = threading.RLock()
+
+
+class ExportCancelled(Exception):
+    """Raised when a user cancels an in-progress chart export."""
+
+
 class AcousticChartExporter:
     def __init__(self, project_tree, app=None, all_speakers=None):
         self.project_tree = project_tree
@@ -55,8 +68,36 @@ class AcousticChartExporter:
 
         self.current_preview_page = 0
         self.current_group_page = 0
+        self._render_runtime = threading.local()
+
+    def _set_export_runtime(self, progress_callback=None, cancel_event=None, params=None):
+        self._render_runtime.progress_callback = progress_callback
+        self._render_runtime.cancel_event = cancel_event
+        self._render_runtime.params = params
+
+    def _clear_export_runtime(self):
+        self._render_runtime.progress_callback = None
+        self._render_runtime.cancel_event = None
+        self._render_runtime.params = None
+
+    def _check_export_cancelled(self):
+        cancel_event = getattr(self._render_runtime, "cancel_event", None)
+        if cancel_event is not None and cancel_event.is_set():
+            raise ExportCancelled("导出已取消")
+
+    def _report_export_progress(self, progress=None, message=None):
+        cb = getattr(self._render_runtime, "progress_callback", None)
+        if cb is None:
+            return
+        if progress is not None:
+            progress = max(0.0, min(1.0, float(progress)))
+        cb(progress, message)
 
     def get_param(self, name, default=None):
+        runtime_params = getattr(getattr(self, "_render_runtime", None), "params", None)
+        if runtime_params is not None and name in runtime_params:
+            return runtime_params[name]
+
         # If explicitly set in params (CLI mode)
         if hasattr(self, 'params') and self.params is not None and name in self.params:
             return self.params[name]
@@ -963,6 +1004,9 @@ class AcousticChartExporter:
         axes_flat = axes.flatten()
 
         for f_idx, f_key in enumerate(facet_keys):
+            self._check_export_cancelled()
+            if n_facets > 0:
+                self._report_export_progress(0.35 + 0.45 * (f_idx / n_facets), f"正在计算 KDE 分面 {f_idx + 1}/{n_facets}...")
             ax = axes_flat[f_idx]
 
             facet_entries = data_entries
@@ -972,7 +1016,9 @@ class AcousticChartExporter:
                 facet_entries = [e for e in data_entries if e['label'] == f_key]
 
             X_all, Y_all = [], []
-            for entry in facet_entries:
+            for e_idx, entry in enumerate(facet_entries):
+                if (e_idx % 8) == 0:
+                    self._check_export_cancelled()
                 syl_bounds = self.project_tree._get_syllables_and_bounds(entry['raw_item'])[1]
                 for s_idx, (c_s, c_e) in enumerate(syl_bounds):
                     if normalization == "speaker":
@@ -993,10 +1039,24 @@ class AcousticChartExporter:
             xmin, xmax = 0, max_syls * 100
             ymin, ymax = -0.5, 5.5
 
-            positions = np.vstack([X_all, Y_all])
+            x_arr = np.asarray(X_all, dtype=float)
+            y_arr = np.asarray(Y_all, dtype=float)
+            if len(x_arr) == 0:
+                ax.text(0.5, 0.5, "没有足够的有效数据点", ha='center', va='center')
+                continue
+            max_kde_points = int(self.get_param('density_max_points', 12000))
+            if len(x_arr) > max_kde_points and max_kde_points > 0:
+                sample_idx = np.linspace(0, len(x_arr) - 1, max_kde_points, dtype=int)
+                x_arr = x_arr[sample_idx]
+                y_arr = y_arr[sample_idx]
+
+            positions = np.vstack([x_arr, y_arr])
             try:
+                self._check_export_cancelled()
                 kernel = gaussian_kde(positions, bw_method=bw_method)
-                xi, yi = np.mgrid[xmin:xmax:200j, ymin:ymax:100j]
+                grid_x = max(120, min(240, int(80 * max_syls)))
+                grid_y = 90
+                xi, yi = np.mgrid[xmin:xmax:complex(0, grid_x), ymin:ymax:complex(0, grid_y)]
                 zi = kernel(np.vstack([xi.flatten(), yi.flatten()]))
                 zi = zi.reshape(xi.shape)
 
@@ -1227,6 +1287,9 @@ class AcousticChartExporter:
 
         try:
             for page_idx in range(math.ceil(len(unique_groups) / chunk_size)):
+                self._check_export_cancelled()
+                total_pages = max(1, math.ceil(len(unique_groups) / chunk_size))
+                self._report_export_progress(0.15 + 0.75 * (page_idx / total_pages), f"正在导出分页图 {page_idx + 1}/{total_pages}...")
                 allowed_groups = set(unique_groups[page_idx * chunk_size : (page_idx + 1) * chunk_size])
                 chunk_entries = [e for e in data_entries if e[group_key] in allowed_groups]
 
@@ -1254,6 +1317,8 @@ class AcousticChartExporter:
         name_part, _ = os.path.splitext(file_name)
 
         for page_idx in range(total_pages):
+            self._check_export_cancelled()
+            self._report_export_progress(0.15 + 0.75 * (page_idx / max(1, total_pages)), f"正在导出分页图 {page_idx + 1}/{total_pages}...")
             allowed_groups = set(unique_groups[page_idx * chunk_size : (page_idx + 1) * chunk_size])
             chunk_entries = [e for e in data_entries if e[group_key] in allowed_groups]
 
@@ -1267,6 +1332,8 @@ class AcousticChartExporter:
             plt.close(fig)
 
     def _export_dataset(self, data, out_path, ext):
+        self._check_export_cancelled()
+        self._report_export_progress(0.05, "正在准备导出数据...")
         chart_type = self.get_param('chart_type', 'contour')
         groupby = self.get_param('groupby', 'group')
 
@@ -1289,14 +1356,21 @@ class AcousticChartExporter:
             scale = "Hz"
 
         if len(unique_groups) > 8 and chart_type != "overview_heatmap":
-            if ext == ".pdf":
-                self._export_paginated_pdf(out_path, data, group_key, scale)
-            else:
-                self._export_paginated_images(out_path, data, group_key, scale, ext)
+            with _MATPLOTLIB_LOCK:
+                if ext == ".pdf":
+                    self._export_paginated_pdf(out_path, data, group_key, scale)
+                else:
+                    self._export_paginated_images(out_path, data, group_key, scale, ext)
         else:
-            fig = self.generate_plot(data, is_preview=False)
-            fig.savefig(out_path, dpi=300, bbox_inches='tight')
-            plt.close(fig)
+            self._report_export_progress(0.2, "正在生成图表...")
+            self._check_export_cancelled()
+            with _MATPLOTLIB_LOCK:
+                fig = self.generate_plot(data, is_preview=False)
+                self._check_export_cancelled()
+                self._report_export_progress(0.9, "正在写入文件...")
+                fig.savefig(out_path, dpi=300, bbox_inches='tight')
+                plt.close(fig)
+        self._report_export_progress(1.0, "当前任务完成")
 
 
 class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
@@ -1318,6 +1392,17 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         self.resizable(True, True)
         self.transient(parent)
         self.grab_set()
+        self.protocol("WM_DELETE_WINDOW", self._on_close_request)
+        self._export_worker = None
+        self._export_cancel_event = None
+        self._export_progress_queue = None
+        self._export_poll_job = None
+        self._export_progress_window = None
+        self._preview_worker = None
+        self._preview_cancel_event = None
+        self._preview_queue = None
+        self._preview_poll_job = None
+        self._preview_generation = 0
 
         # Color Palette
         self.colors = ['#2563EB', '#DC2626', '#16A34A', '#9333EA', '#EA580C', '#0891B2', '#CA8A04', '#6366F1']
@@ -1534,7 +1619,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         self.btn_export = ctk.CTkButton(self.bottom_frame, text="💾 导出", width=120, height=38, corner_radius=19, font=self.font_title, command=self.on_confirm)
         self.btn_export.pack(side=tk.RIGHT, padx=5)
 
-        ctk.CTkButton(self.bottom_frame, text="取消", width=100, height=38, corner_radius=19, fg_color="#F3F4F6", text_color="#4B5563", hover_color="#E5E7EB", font=self.font_main, command=self.destroy).pack(side=tk.RIGHT, padx=5)
+        ctk.CTkButton(self.bottom_frame, text="取消", width=100, height=38, corner_radius=19, fg_color="#F3F4F6", text_color="#4B5563", hover_color="#E5E7EB", font=self.font_main, command=self._on_close_request).pack(side=tk.RIGHT, padx=5)
 
     def _prev_page(self):
         if not self.all_speakers:
@@ -2275,6 +2360,82 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         self._debounce_timer_id = None
         self.update_preview()
 
+    def _snapshot_render_params(self):
+        keys = [
+            'chart_type', 'export_scope', 'groupby', 'scale', 'format',
+            'contour_x', 'contour_content', 'contour_facet',
+            'dist_type', 'dist_style',
+            'density_bw', 'density_f0_mode', 'density_facet',
+            'density_normalization', 'density_p_low', 'density_p_high',
+            'density_m_min', 'density_m_max', 'density_max_points',
+            'qc_view', 'overview_metric',
+            'legend_loc', 'legend_outside',
+        ]
+        snapshot = {}
+        for key in keys:
+            val = self.get_param(key)
+            if val is not None:
+                snapshot[key] = val
+        return snapshot
+
+    def _cancel_preview_render(self):
+        if self._preview_cancel_event is not None:
+            self._preview_cancel_event.set()
+
+    def _poll_preview_render(self, generation):
+        if self._preview_queue is None:
+            return
+
+        done_payload = None
+        while True:
+            try:
+                msg_type, payload = self._preview_queue.get_nowait()
+            except queue.Empty:
+                break
+            if msg_type == "progress":
+                message = payload.get("message")
+                if message and hasattr(self, "preview_lbl"):
+                    self.preview_lbl.configure(text=message, text_color="#6B7280")
+            elif msg_type == "done":
+                done_payload = payload
+
+        if done_payload is None:
+            self._preview_poll_job = self.after(80, lambda: self._poll_preview_render(generation))
+            return
+
+        if generation != self._preview_generation:
+            fig = done_payload.get("fig")
+            if fig is not None:
+                plt.close(fig)
+            return
+
+        self._preview_poll_job = None
+        self._preview_worker = None
+        self._preview_queue = None
+        self._preview_cancel_event = None
+
+        status = done_payload.get("status")
+        if status == "ok":
+            fig = done_payload["fig"]
+            for widget in self.preview_container.winfo_children():
+                widget.destroy()
+            canvas = FigureCanvasTkAgg(fig, master=self.preview_container)
+            canvas.draw()
+            canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+            if getattr(self, "active_figure", None) is not None and self.active_figure is not fig:
+                try:
+                    plt.close(self.active_figure)
+                except Exception:
+                    pass
+            self.active_figure = fig
+        elif status == "cancelled":
+            if hasattr(self, "preview_lbl"):
+                self.preview_lbl.configure(text="已取消本次预览渲染", text_color="#6B7280")
+        else:
+            self.group_pagination_frame.grid_forget()
+            if hasattr(self, "preview_lbl"):
+                self.preview_lbl.configure(text=f"图表渲染发生错误: {done_payload.get('message', '')[:35]}", text_color="#EF4444")
+
     def update_preview(self):
         if hasattr(self, '_debounce_timer_id') and self._debounce_timer_id is not None:
             try:
@@ -2283,12 +2444,25 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
                 pass
             self._debounce_timer_id = None
 
+        self._preview_generation += 1
+        generation = self._preview_generation
+        self._cancel_preview_render()
+        if self._preview_poll_job is not None:
+            try:
+                self.after_cancel(self._preview_poll_job)
+            except Exception:
+                pass
+            self._preview_poll_job = None
+
         # Clear existing preview canvas
         for widget in self.preview_container.winfo_children():
             widget.destroy()
 
-        self.preview_lbl = ctk.CTkLabel(self.preview_container, text="⏳ 正在实时渲染声图，请稍候...", font=self.font_title)
-        self.preview_lbl.grid(row=0, column=0)
+        preview_status = ctk.CTkFrame(self.preview_container, fg_color="transparent")
+        preview_status.grid(row=0, column=0)
+        self.preview_lbl = ctk.CTkLabel(preview_status, text="正在实时渲染声图，请稍候...", font=self.font_title, text_color="#6B7280")
+        self.preview_lbl.pack(pady=(0, 8))
+        ctk.CTkButton(preview_status, text="取消预览", width=90, height=30, command=self._cancel_preview_render).pack()
 
         scope = self.var_export_scope.get()
         if scope == "separate" and len(self.all_speakers) > 1:
@@ -2344,27 +2518,180 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             else:
                 self.group_pagination_frame.grid_forget()
 
-            # Create Plot Figure
-            fig = self.generate_plot(data, is_preview=True)
+            params_snapshot = self._snapshot_render_params()
+            cancel_event = threading.Event()
+            progress_queue = queue.Queue()
+            self._preview_cancel_event = cancel_event
+            self._preview_queue = progress_queue
 
-            # Embed matplotlib inside TK
-            for widget in self.preview_container.winfo_children():
-                widget.destroy()
+            def worker():
+                try:
+                    self._set_export_runtime(
+                        progress_callback=lambda _p, msg=None: progress_queue.put(("progress", {"message": msg})),
+                        cancel_event=cancel_event,
+                        params=params_snapshot,
+                    )
+                    with _MATPLOTLIB_LOCK:
+                        self._check_export_cancelled()
+                        fig = self.generate_plot(data, is_preview=True)
+                        self._check_export_cancelled()
+                    progress_queue.put(("done", {"status": "ok", "fig": fig}))
+                except ExportCancelled:
+                    progress_queue.put(("done", {"status": "cancelled"}))
+                except Exception as e:
+                    progress_queue.put(("done", {"status": "error", "message": str(e)}))
+                    import logging
+                    logging.getLogger(__name__).error(f"Render chart error: {e}", exc_info=True)
+                finally:
+                    self._clear_export_runtime()
 
-            canvas = FigureCanvasTkAgg(fig, master=self.preview_container)
-            canvas.draw()
-            canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-
-            # Save a reference to the active figure so GC doesn't delete it
-            self.active_figure = fig
+            self._preview_worker = threading.Thread(target=worker, daemon=True)
+            self._preview_worker.start()
+            self._poll_preview_render(generation)
         except Exception as e:
             self.group_pagination_frame.grid_forget()
-            self.preview_lbl.configure(text=f"❌ 图表渲染发生错误: {str(e)[:35]}", text_color="#EF4444")
+            self.preview_lbl.configure(text=f"图表渲染发生错误: {str(e)[:35]}", text_color="#EF4444")
             import logging
             logging.getLogger(__name__).error(f"Render chart error: {e}", exc_info=True)
 
     # --- CONFIRM & EXPORT CONTROLLER ---
+    def _on_close_request(self):
+        if self._export_worker is not None and self._export_worker.is_alive():
+            if messagebox.askyesno("导出进行中", "导出尚未完成，是否取消导出并关闭窗口？", parent=self):
+                self._cancel_export_job()
+            return
+        self._cancel_preview_render()
+        if self._preview_poll_job is not None:
+            try:
+                self.after_cancel(self._preview_poll_job)
+            except Exception:
+                pass
+            self._preview_poll_job = None
+        self.destroy()
+
+    def _destroy_export_progress_window(self):
+        if self._export_poll_job is not None:
+            try:
+                self.after_cancel(self._export_poll_job)
+            except Exception:
+                pass
+            self._export_poll_job = None
+        if self._export_progress_window is not None:
+            try:
+                self._export_progress_window.destroy()
+            except Exception:
+                pass
+            self._export_progress_window = None
+
+    def _cancel_export_job(self):
+        if self._export_cancel_event is not None:
+            self._export_cancel_event.set()
+
+    def _poll_export_updates(self):
+        if self._export_progress_queue is None:
+            return
+
+        done_payload = None
+        while True:
+            try:
+                msg_type, payload = self._export_progress_queue.get_nowait()
+            except queue.Empty:
+                break
+
+            if msg_type == "progress" and self._export_progress_window is not None:
+                bar = getattr(self._export_progress_window, "_pbar", None)
+                label = getattr(self._export_progress_window, "_status_lbl", None)
+                if bar is not None and payload.get("progress") is not None:
+                    bar.set(payload["progress"])
+                if label is not None and payload.get("message"):
+                    label.configure(text=payload["message"])
+            elif msg_type == "done":
+                done_payload = payload
+
+        if done_payload is not None:
+            self._destroy_export_progress_window()
+            self.btn_export.configure(state="normal")
+            self._export_worker = None
+            self._export_progress_queue = None
+            self._export_cancel_event = None
+            status = done_payload.get("status")
+            if status == "ok":
+                messagebox.showinfo("成功", done_payload.get("message", "导出完成。"), parent=self)
+            elif status == "cancelled":
+                messagebox.showinfo("已取消", "导出已取消。", parent=self)
+            else:
+                messagebox.showerror("错误", done_payload.get("message", "导出失败。"), parent=self)
+            return
+
+        self._export_poll_job = self.after(100, self._poll_export_updates)
+
+    def _start_async_export(self, jobs, success_message, params_snapshot=None):
+        if not jobs:
+            return
+
+        self.btn_export.configure(state="disabled")
+        self._export_cancel_event = threading.Event()
+        self._export_progress_queue = queue.Queue()
+
+        prog = ctk.CTkToplevel(self)
+        prog.title("导出进行中")
+        prog.geometry("380x150")
+        prog.resizable(False, False)
+        prog.transient(self)
+        prog.attributes('-topmost', True)
+        prog.protocol("WM_DELETE_WINDOW", self._cancel_export_job)
+
+        lbl = ctk.CTkLabel(prog, text="正在准备导出...", font=self.font_main)
+        lbl.pack(pady=(20, 8))
+        pbar = ctk.CTkProgressBar(prog, width=320)
+        pbar.pack(pady=(0, 10))
+        pbar.set(0)
+        ctk.CTkButton(prog, text="取消导出", width=100, command=self._cancel_export_job).pack()
+
+        prog._status_lbl = lbl
+        prog._pbar = pbar
+        self._export_progress_window = prog
+
+        total_jobs = len(jobs)
+
+        def worker():
+            try:
+                for idx, job in enumerate(jobs):
+                    if self._export_cancel_event.is_set():
+                        raise ExportCancelled("导出已取消")
+                    speaker_name = job.get("speaker_name", "当前发音人")
+                    out_path = job["out_path"]
+                    ext = job["ext"]
+                    data = job["data"]
+
+                    def job_progress(local_progress, local_message=None, _idx=idx, _speaker=speaker_name):
+                        lp = 0.0 if local_progress is None else max(0.0, min(1.0, float(local_progress)))
+                        global_progress = (_idx + lp) / total_jobs
+                        message = local_message or f"正在导出 {_speaker} ({_idx + 1}/{total_jobs})..."
+                        self._export_progress_queue.put(("progress", {"progress": global_progress, "message": message}))
+
+                    self._export_progress_queue.put(("progress", {"progress": idx / total_jobs, "message": f"正在导出 {speaker_name} ({idx + 1}/{total_jobs})..."}))
+                    self._set_export_runtime(progress_callback=job_progress, cancel_event=self._export_cancel_event, params=params_snapshot)
+                    self._export_dataset(data, out_path, ext)
+                    self._clear_export_runtime()
+                    self._export_progress_queue.put(("progress", {"progress": (idx + 1) / total_jobs, "message": f"{speaker_name} 导出完成 ({idx + 1}/{total_jobs})"}))
+
+                self._export_progress_queue.put(("done", {"status": "ok", "message": success_message}))
+            except ExportCancelled:
+                self._export_progress_queue.put(("done", {"status": "cancelled"}))
+            except Exception as e:
+                self._export_progress_queue.put(("done", {"status": "error", "message": f"图表导出失败: {e}"}))
+            finally:
+                self._clear_export_runtime()
+
+        self._export_worker = threading.Thread(target=worker, daemon=True)
+        self._export_worker.start()
+        self._poll_export_updates()
+
     def on_confirm(self):
+        if self._export_worker is not None and self._export_worker.is_alive():
+            return messagebox.showwarning("提示", "已有导出任务正在进行，请稍候或先取消。", parent=self)
+
         scope = self.var_export_scope.get()
         fmt = self.combo_format.get()
         ext = ".png"
@@ -2372,64 +2699,49 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             ext = ".svg"
         elif "pdf" in fmt.lower():
             ext = ".pdf"
+        params_snapshot = self._snapshot_render_params()
 
         if scope == "separate" and len(self.all_speakers) > 1:
-            # Batch separate exports to a directory
             out_dir = filedialog.askdirectory(title="选择声学图表导出文件夹")
             if not out_dir:
                 return
 
-            # Progress window
-            prog = ctk.CTkToplevel(self)
-            prog.title("导出进行中")
-            prog.geometry("300x120")
-            prog.resizable(False, False)
-            prog.update_idletasks()
-
-            lbl = ctk.CTkLabel(prog, text="正在批量绘制各发音人图表...", font=self.font_main)
-            lbl.pack(pady=(20, 5))
-            pbar = ctk.CTkProgressBar(prog, width=240)
-            pbar.pack()
-            pbar.set(0)
-
-            try:
-                for idx, speaker in enumerate(self.all_speakers):
-                    lbl.configure(text=f"正在绘制 {speaker.name} ({idx+1}/{len(self.all_speakers)})...")
-                    pbar.set(idx / len(self.all_speakers))
-                    prog.update()
-
-                    # Extract single speaker's entries
-                    data = self._extract_active_data([speaker])
-                    if data:
-                        out_path = os.path.join(out_dir, f"{speaker.name}_声调可视化图表{ext}")
-                        self._export_dataset(data, out_path, ext)
-
-                prog.destroy()
-                messagebox.showinfo("成功", f"批量图表成功导出至:\n{out_dir}")
-                # self.destroy()
-            except Exception as e:
-                prog.destroy()
-                messagebox.showerror("错误", f"批量图表导出失败: {e}")
-        else:
-            # Single/Integrated export to a file
-            default_name = "tone_integrated_acoustic_charts" if scope == "integrated" else "tone_acoustic_charts"
-            out_file = filedialog.asksaveasfilename(
-                title="导出声图",
-                defaultextension=ext,
-                initialfile=default_name,
-                filetypes=[("图像文件", f"*{ext}")]
-            )
-            if not out_file:
-                return
-
-            try:
-                data = self._get_current_data_entries()
+            jobs = []
+            for speaker in self.all_speakers:
+                data = self._extract_active_data([speaker])
                 if not data:
-                    return messagebox.showwarning("提示", "没有有效基频曲线，无法导出！")
+                    continue
+                out_path = os.path.join(out_dir, f"{speaker.name}_声调可视化图表{ext}")
+                jobs.append({
+                    "speaker_name": speaker.name,
+                    "data": data,
+                    "out_path": out_path,
+                    "ext": ext
+                })
+            if not jobs:
+                return messagebox.showwarning("提示", "没有可导出的有效基频数据。", parent=self)
 
-                self._export_dataset(data, out_file, ext)
+            self._start_async_export(jobs, f"批量图表成功导出至:\n{out_dir}", params_snapshot=params_snapshot)
+            return
 
-                messagebox.showinfo("成功", f"图表已成功保存至:\n{out_file}")
-                # self.destroy()
-            except Exception as e:
-                messagebox.showerror("错误", f"图表导出失败: {e}")
+        default_name = "tone_integrated_acoustic_charts" if scope == "integrated" else "tone_acoustic_charts"
+        out_file = filedialog.asksaveasfilename(
+            title="导出声图",
+            defaultextension=ext,
+            initialfile=default_name,
+            filetypes=[("图像文件", f"*{ext}")]
+        )
+        if not out_file:
+            return
+
+        data = self._get_current_data_entries()
+        if not data:
+            return messagebox.showwarning("提示", "没有有效基频曲线，无法导出！", parent=self)
+
+        jobs = [{
+            "speaker_name": "当前任务",
+            "data": data,
+            "out_path": out_file,
+            "ext": ext
+        }]
+        self._start_async_export(jobs, f"图表已成功保存至:\n{out_file}", params_snapshot=params_snapshot)

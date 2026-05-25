@@ -5,8 +5,13 @@ import csv
 import parselmouth
 import numpy as np
 import math
+import matplotlib
+
+matplotlib.use("Agg", force=True)
+
 import matplotlib.pyplot as plt
 import logging
+import threading
 from .data_utils import get_export_text_for_item, build_five_point_chart, write_analysis_sheet_with_formulas, split_into_syllables
 from .anomaly_detection import detect_pitch_anomaly_points
 from .ui_widgets import CTkReleaseButton, AutoScrollbar
@@ -2486,7 +2491,7 @@ class ProjectTreePanel:
         ctk.CTkButton(btn_frame, text="取消", width=90, fg_color="#E5E7EB", text_color="#374151", hover_color="#D1D5DB", command=param_dlg.destroy).pack(side=tk.LEFT, padx=10)
         ctk.CTkButton(btn_frame, text="确定并选择路径", width=120, command=on_confirm).pack(side=tk.LEFT, padx=10)
 
-    def _draw_kde_heatmap(self, group_norm_points, max_syls, out_file, prog_dlg, pbar, lbl_status, bw_method=0.15):
+    def _draw_kde_heatmap(self, group_norm_points, max_syls, out_file, prog_dlg, pbar, lbl_status, bw_method=0.15, cancel_event=None):
         import math
         from scipy.stats import gaussian_kde
         plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
@@ -2504,6 +2509,9 @@ class ProjectTreePanel:
         axes_flat = axes.flatten()
 
         for idx, grp_name in enumerate(groups_with_data):
+            if cancel_event is not None and cancel_event.is_set():
+                prog_dlg.destroy()
+                return False
             lbl_status.configure(text=f"正在绘制 {grp_name} ({idx+1}/{n_groups})...")
             pbar.set(0.8 + 0.2 * (idx / n_groups))
             prog_dlg.update()
@@ -2514,10 +2522,19 @@ class ProjectTreePanel:
             xmin, xmax = 0, max_syls * 100
             ymin, ymax = -1, 6
 
-            positions = np.vstack([X_all, Y_all])
+            x_arr = np.asarray(X_all, dtype=float)
+            y_arr = np.asarray(Y_all, dtype=float)
+            max_kde_points = 12000
+            if len(x_arr) > max_kde_points:
+                sample_idx = np.linspace(0, len(x_arr) - 1, max_kde_points, dtype=int)
+                x_arr = x_arr[sample_idx]
+                y_arr = y_arr[sample_idx]
+            positions = np.vstack([x_arr, y_arr])
             try:
                 kernel = gaussian_kde(positions, bw_method=bw_method)
-                xi, yi = np.mgrid[xmin:xmax:200j, ymin:ymax:100j]
+                grid_x = max(120, min(240, int(80 * max_syls)))
+                grid_y = 90
+                xi, yi = np.mgrid[xmin:xmax:complex(0, grid_x), ymin:ymax:complex(0, grid_y)]
                 zi = kernel(np.vstack([xi.flatten(), yi.flatten()]))
                 zi = zi.reshape(xi.shape)
 
@@ -2579,6 +2596,8 @@ class ProjectTreePanel:
         pbar = ctk.CTkProgressBar(prog_dlg, width=250)
         pbar.pack()
         pbar.set(0)
+        cancel_event = threading.Event()
+        ctk.CTkButton(prog_dlg, text="取消", width=80, command=cancel_event.set).pack(pady=(8, 0))
         prog_dlg.update()
 
         pbar.set(0.2)
@@ -2586,8 +2605,14 @@ class ProjectTreePanel:
 
         speaker_contours = {}
         for grp_name, children in tree_structure:
+            if cancel_event.is_set():
+                prog_dlg.destroy()
+                return False
             speaker_contours[grp_name] = {}
             for child in children:
+                if cancel_event.is_set():
+                    prog_dlg.destroy()
+                    return False
                 item = self.items[child]
                 syls, bounds = self._get_syllables_and_bounds(item)
                 if syls:
@@ -2659,6 +2684,9 @@ class ProjectTreePanel:
 
         group_norm_points = {}
         for name, syls_dict in aggregated_syl_contours.items():
+            if cancel_event.is_set():
+                prog_dlg.destroy()
+                return False
             X_all, Y_all = [], []
             for k, y_arrays in syls_dict.items():
                 x_dense = np.linspace(k * 100, (k + 1) * 100, N_DENSE)
@@ -2673,8 +2701,7 @@ class ProjectTreePanel:
         prog_dlg.update()
 
         bw_method = params.get('bw_method', 0.15) if params else 0.15
-        self._draw_kde_heatmap(group_norm_points, max_syls, out_file, prog_dlg, pbar, lbl_status, bw_method=bw_method)
-        return True
+        return self._draw_kde_heatmap(group_norm_points, max_syls, out_file, prog_dlg, pbar, lbl_status, bw_method=bw_method, cancel_event=cancel_event)
 
     def _export_kde_heatmap_integrated(self, out_file, all_speakers, params=None):
         N_DENSE = 100
@@ -2695,10 +2722,15 @@ class ProjectTreePanel:
         pbar = ctk.CTkProgressBar(prog_dlg, width=250)
         pbar.pack()
         pbar.set(0)
+        cancel_event = threading.Event()
+        ctk.CTkButton(prog_dlg, text="取消", width=80, command=cancel_event.set).pack(pady=(8, 0))
         prog_dlg.update()
 
         total_speakers = len(all_speakers)
         for s_idx, speaker in enumerate(all_speakers):
+            if cancel_event.is_set():
+                prog_dlg.destroy()
+                return False
             lbl_status.configure(text=f"正在处理 {speaker.name} ({s_idx+1}/{total_speakers})...")
             pbar.set(0.6 * (s_idx / total_speakers))
             prog_dlg.update()
@@ -2709,8 +2741,16 @@ class ProjectTreePanel:
 
             speaker_contours = {}
             for grp_name, children in s_struct:
+                if cancel_event.is_set():
+                    self.items = orig_items
+                    prog_dlg.destroy()
+                    return False
                 speaker_contours[grp_name] = {}
                 for child in children:
+                    if cancel_event.is_set():
+                        self.items = orig_items
+                        prog_dlg.destroy()
+                        return False
                     item = self.items[child]
                     syls, bounds = self._get_syllables_and_bounds(item)
                     if syls:
@@ -2790,6 +2830,9 @@ class ProjectTreePanel:
 
         group_norm_points = {}
         for name, syls_dict in aggregated_syl_contours.items():
+            if cancel_event.is_set():
+                prog_dlg.destroy()
+                return False
             X_all, Y_all = [], []
             for k, y_arrays in syls_dict.items():
                 x_dense = np.linspace(k * 100, (k + 1) * 100, N_DENSE)
@@ -2804,8 +2847,7 @@ class ProjectTreePanel:
         prog_dlg.update()
 
         bw_method = params.get('bw_method', 0.15) if params else 0.15
-        self._draw_kde_heatmap(group_norm_points, max_syls, out_file, prog_dlg, pbar, lbl_status, bw_method=bw_method)
-        return True
+        return self._draw_kde_heatmap(group_norm_points, max_syls, out_file, prog_dlg, pbar, lbl_status, bw_method=bw_method, cancel_event=cancel_event)
 
 
     def _export_textgrid_long(self, out_file, tree_structure=None):

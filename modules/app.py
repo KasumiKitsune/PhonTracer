@@ -62,6 +62,7 @@ class PhoneticsApp:
         self._drop_queue_idle_delay = 500
         self._drop_queue_active_delay = 50
         self._drop_queue_job = None
+        self._window_guard_job = None
         self._schedule_drop_queue_check(self._drop_queue_idle_delay)
         self.debounce_timer = None
         self.speaker_manager = SpeakerManager()
@@ -107,6 +108,12 @@ class PhoneticsApp:
                 except Exception:
                     pass
                 self._drop_queue_job = None
+            if self._window_guard_job is not None:
+                try:
+                    self.root.after_cancel(self._window_guard_job)
+                except Exception:
+                    pass
+                self._window_guard_job = None
 
             # 主动关闭并销毁 ProcessPoolExecutor 的子进程，避免程序关闭后滞留在后台
             import multiprocessing
@@ -131,6 +138,8 @@ class PhoneticsApp:
 
         self.setup_icons()
         self.setup_ui()
+        self.root.bind("<Map>", lambda _e: self._recover_window_from_stuck_grab())
+        self._schedule_window_guard()
 
         # 绑定拖拽事件
         try:
@@ -212,6 +221,42 @@ class PhoneticsApp:
             pass
         delay = self._drop_queue_active_delay if processed else self._drop_queue_idle_delay
         self._schedule_drop_queue_check(delay)
+
+    def _schedule_window_guard(self):
+        if self._window_guard_job is None:
+            self._window_guard_job = self.root.after(1200, self._window_guard_tick)
+
+    def _window_guard_tick(self):
+        self._window_guard_job = None
+        self._recover_window_from_stuck_grab()
+        self._schedule_window_guard()
+
+    def _recover_window_from_stuck_grab(self):
+        try:
+            grabbed = self.root.grab_current()
+        except Exception:
+            grabbed = None
+        if grabbed is None:
+            return
+
+        try:
+            grabbed_ok = grabbed.winfo_exists() and grabbed.winfo_viewable()
+        except Exception:
+            grabbed_ok = False
+
+        if grabbed_ok:
+            return
+
+        try:
+            self.root.grab_release()
+        except Exception:
+            pass
+        try:
+            self.root.deiconify()
+            self.root.lift()
+            self.root.focus_force()
+        except Exception:
+            pass
 
     def _process_dlg_dropped_files(self, files):
         if not getattr(self, 'active_import_dlg', None) or not self.active_import_dlg.winfo_exists():
