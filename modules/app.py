@@ -804,7 +804,7 @@ class PhoneticsApp:
         self.entry_pitch_ceiling.pack(side=tk.RIGHT)
         self.setup_entry_behavior(self.entry_pitch_ceiling, 'pitch_ceiling')
         ctk.CTkLabel(row_pitch, text="~", text_color="#6B7280").pack(side=tk.RIGHT, padx=2)
-        self.entry_pitch_floor = ctk.CTkEntry(row_pitch, width=45, justify="center", corner_radius=20, height=26)
+        self.entry_pitch_floor = ctk.CTkEntry(row_pitch, width=50, justify="center", corner_radius=20, height=26)
         self.entry_pitch_floor.insert(0, str(self.last_params['pitch_floor']))
         self.entry_pitch_floor.pack(side=tk.RIGHT)
         self.setup_entry_behavior(self.entry_pitch_floor, 'pitch_floor')
