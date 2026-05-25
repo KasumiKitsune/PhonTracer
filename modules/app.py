@@ -786,12 +786,25 @@ class PhoneticsApp:
         row_pitch = ctk.CTkFrame(self.params_content_frame, fg_color="transparent")
         row_pitch.pack(fill=tk.X, padx=15, pady=5)
         ctk.CTkLabel(row_pitch, text=" F0 范围 (Hz):", image=self.icons.get("points"), compound="left", text_color="#374151", font=self.font_main).pack(side=tk.LEFT)
-        self.entry_pitch_ceiling = ctk.CTkEntry(row_pitch, width=55, justify="center", corner_radius=20, height=26)
+        self.btn_detect_f0 = CTkReleaseButton(
+            row_pitch,
+            text="检测",
+            command=self.on_detect_f0_clicked,
+            width=50,
+            height=22,
+            font=self.font_main,
+            corner_radius=11,
+            fg_color="#F3F4F6",
+            text_color="#2563EB",
+            hover_color="#E5E7EB"
+        )
+        self.btn_detect_f0.pack(side=tk.LEFT, padx=(6, 8))
+        self.entry_pitch_ceiling = ctk.CTkEntry(row_pitch, width=50, justify="center", corner_radius=20, height=26)
         self.entry_pitch_ceiling.insert(0, str(self.last_params['pitch_ceiling']))
         self.entry_pitch_ceiling.pack(side=tk.RIGHT)
         self.setup_entry_behavior(self.entry_pitch_ceiling, 'pitch_ceiling')
         ctk.CTkLabel(row_pitch, text="~", text_color="#6B7280").pack(side=tk.RIGHT, padx=2)
-        self.entry_pitch_floor = ctk.CTkEntry(row_pitch, width=55, justify="center", corner_radius=20, height=26)
+        self.entry_pitch_floor = ctk.CTkEntry(row_pitch, width=45, justify="center", corner_radius=20, height=26)
         self.entry_pitch_floor.insert(0, str(self.last_params['pitch_floor']))
         self.entry_pitch_floor.pack(side=tk.RIGHT)
         self.setup_entry_behavior(self.entry_pitch_floor, 'pitch_floor')
@@ -2956,3 +2969,228 @@ class PhoneticsApp:
         """打开关于页面弹窗"""
         from modules.about_dialog import AboutDialog
         AboutDialog(self.root, self.check_update)
+
+    def on_detect_f0_clicked(self):
+        if not self.items:
+            messagebox.showwarning("提示", "请先导入音频文件以进行检测。")
+            return
+
+        self.start_loading("正在估算发音人 F0 分布...")
+
+        def run_detection():
+            try:
+                import parselmouth
+                from modules.audio_core import extract_f0
+
+                tab_mode = self.tabview.get()
+                all_stable_f0 = []
+
+                params_temp = {
+                    'f0_engine': self.last_params.get('f0_engine', 'praat'),
+                    'pitch_floor': 50,
+                    'pitch_ceiling': 700,
+                    'voicing_threshold': self.last_params.get('voicing_threshold', 0.25)
+                }
+
+                if tab_mode == "单条长音频":
+                    snd = self.pending_long_snd
+                    if snd is None and self.long_audio_path and os.path.exists(self.long_audio_path):
+                        snd = parselmouth.Sound(self.long_audio_path)
+                    if snd is None:
+                        self.root.after(0, self.stop_loading)
+                        self.root.after(0, lambda: messagebox.showwarning("提示", "未找到已加载的长音频。"))
+                        return
+
+                    # 提取整段长音频的 F0
+                    pitch_data = extract_f0(snd, params_temp)
+                    times = pitch_data['xs']
+                    freqs = pitch_data['freqs']
+
+                    for item in self.items.values():
+                        macro_start = item.get('macro_start', 0.0)
+                        macro_end = item.get('macro_end', times[-1] if len(times) > 0 else 10000.0)
+                        mask = (times >= macro_start) & (times <= macro_end)
+                        item_times = times[mask]
+                        item_freqs = freqs[mask]
+                        stable_f0 = self.extract_stable_f0_values(item_times, item_freqs)
+                        all_stable_f0.extend(stable_f0)
+
+                elif tab_mode == "多条独立音频":
+                    valid_items = [it for it in self.items.values() if it.get('snd') or (it.get('path') and os.path.exists(it['path']))]
+                    if not valid_items:
+                        self.root.after(0, self.stop_loading)
+                        self.root.after(0, lambda: messagebox.showwarning("提示", "没有有效的独立音频文件。"))
+                        return
+
+                    total_items = len(valid_items)
+                    for i, item in enumerate(valid_items):
+                        self.root.after(0, lambda v=((i + 1) / total_items): self.set_progress(v))
+                        self.root.after(0, lambda name=item['label']: self.set_status(f"正在分析 F0 ({i+1}/{total_items}): {name}...", "#3B82F6", "status_loading"))
+
+                        item_snd = item.get('snd')
+                        if item_snd is None:
+                            try:
+                                item_snd = parselmouth.Sound(item['path'])
+                            except Exception:
+                                continue
+
+                        try:
+                            pitch_data = extract_f0(item_snd, params_temp)
+                            stable_f0 = self.extract_stable_f0_values(pitch_data['xs'], pitch_data['freqs'])
+                            all_stable_f0.extend(stable_f0)
+                        except Exception:
+                            continue
+
+                # 判断有效有声帧是否足够（例如，每帧 10ms，至少需 50 帧，即 0.5 秒）
+                if len(all_stable_f0) < 50:
+                    self.root.after(0, self.stop_loading)
+                    self.root.after(0, lambda: messagebox.showwarning("无法可靠建议", "有效有声数据太少，无法进行可靠建议。请先导入更多音频，或确保当前音频包含足够稳定发音段。"))
+                    return
+
+                # 计算百分位数
+                p5 = float(np.percentile(all_stable_f0, 5))
+                p10 = float(np.percentile(all_stable_f0, 10))
+                p50 = float(np.percentile(all_stable_f0, 50))
+                p90 = float(np.percentile(all_stable_f0, 90))
+                p95 = float(np.percentile(all_stable_f0, 95))
+
+                # 基于 P50 (中位数) 决定插值权重
+                med = p50
+                w = (med - 120.0) / 120.0
+                w = max(0.0, min(1.0, w))
+
+                # 插值系数
+                mult_cons_floor = 0.66 * (1.0 - w) + 0.58 * w
+                mult_cons_ceil = 1.94 * (1.0 - w) + 1.61 * w
+
+                mult_reco_floor = 0.78 * (1.0 - w) + 0.76 * w
+                mult_reco_ceil = 1.67 * (1.0 - w) + 1.45 * w
+
+                mult_fine_floor = 0.89 * (1.0 - w) + 0.88 * w
+                mult_fine_ceil = 1.44 * (1.0 - w) + 1.35 * w
+
+                # 计算建议范围
+                cons_floor = p5 * mult_cons_floor
+                cons_ceil = p95 * mult_cons_ceil
+
+                reco_floor = p5 * mult_reco_floor
+                reco_ceil = p95 * mult_reco_ceil
+
+                fine_floor = p5 * mult_fine_floor
+                fine_ceil = p95 * mult_fine_ceil
+
+                # 四舍五入到 5 Hz 和 10 Hz
+                def round_to_nearest(val, base):
+                    return int(round(val / base) * base)
+
+                cons_floor = max(40, round_to_nearest(cons_floor, 5))
+                cons_ceil = min(1000, round_to_nearest(cons_ceil, 10))
+
+                reco_floor = max(40, round_to_nearest(reco_floor, 5))
+                reco_ceil = min(1000, round_to_nearest(reco_ceil, 10))
+
+                fine_floor = max(40, round_to_nearest(fine_floor, 5))
+                fine_ceil = min(1000, round_to_nearest(fine_ceil, 10))
+
+                # 估算稳定的有声时长 (dt 估计为 10ms = 0.01s)
+                voiced_duration = len(all_stable_f0) * 0.01
+
+                def show_result_dialog():
+                    self.stop_loading()
+                    from modules.f0_detection_dialog import F0DetectionDialog
+                    F0DetectionDialog(
+                        parent=self.root,
+                        app=self,
+                        p5=p5,
+                        p10=p10,
+                        p50=p50,
+                        p90=p90,
+                        p95=p95,
+                        stable_count=len(all_stable_f0),
+                        stable_duration=voiced_duration,
+                        cons_range=(cons_floor, cons_ceil),
+                        reco_range=(reco_floor, reco_ceil),
+                        fine_range=(fine_floor, fine_ceil)
+                    )
+
+                self.root.after(0, show_result_dialog)
+
+            except Exception as e:
+                self.root.after(0, self.stop_loading)
+                self.root.after(0, lambda: messagebox.showerror("错误", f"检测过程中发生错误: {e}"))
+
+        import threading
+        threading.Thread(target=run_detection, daemon=True).start()
+
+    def extract_stable_f0_values(self, xs, freqs):
+        if len(xs) < 2:
+            return []
+
+        dt = xs[1] - xs[0]
+        if dt <= 0:
+            dt = 0.010
+
+        # 1. 查找连续的有声帧 (freq > 0)
+        voiced_runs = []
+        current_run = []
+        for i in range(len(freqs)):
+            if freqs[i] > 0:
+                current_run.append((xs[i], freqs[i]))
+            else:
+                if current_run:
+                    voiced_runs.append(current_run)
+                    current_run = []
+        if current_run:
+            voiced_runs.append(current_run)
+
+        stable_values = []
+        for run in voiced_runs:
+            if len(run) < 2:
+                continue
+
+            # 2. 对每个有声片段，如果相邻帧 of F0 突变过大（相对跳变 > 20%），在跳变处切断
+            sub_runs = []
+            current_sub = [run[0]]
+            for i in range(1, len(run)):
+                f_prev = run[i-1][1]
+                f_curr = run[i][1]
+                if abs(f_curr - f_prev) / f_prev > 0.20:
+                    if current_sub:
+                        sub_runs.append(current_sub)
+                    current_sub = [run[i]]
+                else:
+                    current_sub.append(run[i])
+            if current_sub:
+                sub_runs.append(current_sub)
+
+            # 3. 对子片段进行时间筛选和边界裁剪
+            for sub in sub_runs:
+                sub_duration = len(sub) * dt
+                if sub_duration < 0.10:
+                    continue
+
+                # 边界剔除：从首尾各剔除 30ms 的数据，以消除发音边界过渡带来的基频不稳/追踪错误
+                trim_frames = int(round(0.030 / dt))
+                if trim_frames < 1:
+                    trim_frames = 1
+
+                if len(sub) > 2 * trim_frames:
+                    trimmed_sub = sub[trim_frames:-trim_frames]
+                    for item in trimmed_sub:
+                        stable_values.append(item[1])
+        return stable_values
+
+    def apply_f0_bounds(self, floor, ceiling):
+        self.entry_pitch_floor.delete(0, tk.END)
+        self.entry_pitch_floor.insert(0, str(int(floor)))
+        if hasattr(self.entry_pitch_floor, '_last_val'):
+            self.entry_pitch_floor._last_val = str(int(floor))
+
+        self.entry_pitch_ceiling.delete(0, tk.END)
+        self.entry_pitch_ceiling.insert(0, str(int(ceiling)))
+        if hasattr(self.entry_pitch_ceiling, '_last_val'):
+            self.entry_pitch_ceiling._last_val = str(int(ceiling))
+
+        # 触发参数变化逻辑并重新计算
+        self.on_param_change()
+        self.recalculate_all_audio(recompute_pitch=True)

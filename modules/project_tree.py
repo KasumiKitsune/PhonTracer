@@ -94,6 +94,12 @@ class CanvasButton(tk.Canvas):
             self.is_active = is_active
         self.draw()
 
+    def update_active_colors(self, active_bg, active_hover):
+        self.active_bg = active_bg
+        self.active_hover = active_hover
+        self.precache_backgrounds()
+        self.draw()
+
     def on_enter(self, event):
         self.hovered = True
         self.draw()
@@ -793,7 +799,17 @@ class ProjectTreePanel:
         self._schedule_rebuild()
 
     def _on_filter_btn_click(self, mode):
-        self.filter_var.set(mode)
+        current_mode = self.filter_var.get()
+        if mode == "已修改":
+            if current_mode == "已修改":
+                new_mode = "未修改"
+            elif current_mode == "未修改":
+                new_mode = "已修改"
+            else:
+                new_mode = "已修改"
+            self.filter_var.set(new_mode)
+        else:
+            self.filter_var.set(mode)
         self._update_filter_buttons()
         self.filter_tree()
 
@@ -808,9 +824,16 @@ class ProjectTreePanel:
             image=self.tk_icons.get("filter_warning_white" if current_mode == "需检查" else "filter_warning_black"),
             is_active=(current_mode == "需检查")
         )
+        
+        # 动态更新已修改/未修改过滤按钮的背景颜色：已修改为蓝色，未修改为灰色
+        if current_mode == "已修改":
+            self.btn_filter_check.update_active_colors("#3B82F6", "#2563EB")
+        elif current_mode == "未修改":
+            self.btn_filter_check.update_active_colors("#9CA3AF", "#6B7280")
+
         self.btn_filter_check.configure_button(
-            image=self.tk_icons.get("filter_check_white" if current_mode == "已修改" else "filter_check_black"),
-            is_active=(current_mode == "已修改")
+            image=self.tk_icons.get("filter_check_white" if current_mode in ("已修改", "未修改") else "filter_check_black"),
+            is_active=(current_mode in ("已修改", "未修改"))
         )
 
     def expand_all(self):
@@ -1190,6 +1213,8 @@ class ProjectTreePanel:
             if status_filter == "需检查" and not needs_check:
                 continue
             if status_filter == "已修改" and not item.get('is_manual_edited', False):
+                continue
+            if status_filter == "未修改" and item.get('is_manual_edited', False):
                 continue
 
             grp = item.get('group', '导入内容')
