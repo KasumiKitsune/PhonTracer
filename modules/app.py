@@ -107,6 +107,15 @@ class PhoneticsApp:
                 except Exception:
                     pass
                 self._drop_queue_job = None
+
+            # 主动关闭并销毁 ProcessPoolExecutor 的子进程，避免程序关闭后滞留在后台
+            import multiprocessing
+            try:
+                for child in multiprocessing.active_children():
+                    child.terminate()
+            except Exception:
+                pass
+
             self.executor.shutdown(wait=False)
             self.root.destroy()
         self.root.protocol("WM_DELETE_WINDOW", on_closing)
