@@ -1457,6 +1457,109 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
         self._after_state_change("recalculate")
         print('{"success": True, "message": "重算完成。"}')
 
+    def _recompute_pitch_only_all_items(self):
+        """
+        Recompute pitch-related data only, preserving existing boundaries.
+        Returns a tuple: (updated_count, skipped_count)
+        """
+        updated = 0
+        skipped = 0
+
+        if self.mode == 'long' and self.long_snd:
+            pitch_data = extract_f0(self.long_snd, self.params)
+            pitch_xs = pitch_data['xs']
+            pitch_freqs = pitch_data['freqs']
+
+            for item in self.items.values():
+                if item.get('missing') or not item.get('success', True):
+                    skipped += 1
+                    continue
+                if not item.get('snd'):
+                    skipped += 1
+                    continue
+
+                item['pitch_data'] = pitch_data
+                item['pitch_floor'] = self.params['pitch_floor']
+                item['pitch_ceiling'] = self.params['pitch_ceiling']
+                item['voicing_threshold'] = self.params.get('voicing_threshold', 0.25)
+                item['f0_engine'] = self.params.get('f0_engine', 'praat')
+
+                start = item.get('start')
+                end = item.get('end')
+                if start is None or end is None or end <= start:
+                    item['preview_f0'] = []
+                    item['has_empty_data'] = False
+                    updated += 1
+                    continue
+
+                preview_times = np.linspace(start, end, 11)
+                preview_f0 = np.interp(preview_times, pitch_xs, pitch_freqs).tolist()
+                for j, t in enumerate(preview_times):
+                    valid_indices = np.where(pitch_freqs > 0)[0]
+                    if len(valid_indices) == 0:
+                        preview_f0[j] = 0.0
+                        continue
+                    valid_xs = pitch_xs[valid_indices]
+                    if np.min(np.abs(valid_xs - t)) > 0.025:
+                        preview_f0[j] = 0.0
+                item['preview_f0'] = preview_f0
+                item['has_empty_data'] = any(f == 0.0 for f in preview_f0)
+                updated += 1
+        else:
+            for item in self.items.values():
+                if item.get('missing') or not item.get('success', True):
+                    skipped += 1
+                    continue
+
+                snd = item.get('snd')
+                if snd is None and item.get('path'):
+                    try:
+                        snd = parselmouth.Sound(item['path'])
+                        item['snd'] = snd
+                    except Exception:
+                        skipped += 1
+                        continue
+                if snd is None:
+                    skipped += 1
+                    continue
+
+                try:
+                    item['pitch_data'] = extract_f0(snd, self.params)
+                except Exception:
+                    skipped += 1
+                    continue
+
+                item['pitch_floor'] = self.params['pitch_floor']
+                item['pitch_ceiling'] = self.params['pitch_ceiling']
+                item['voicing_threshold'] = self.params.get('voicing_threshold', 0.25)
+                item['f0_engine'] = self.params.get('f0_engine', 'praat')
+
+                start = item.get('start')
+                end = item.get('end')
+                if start is None or end is None or end <= start:
+                    item['preview_f0'] = []
+                    item['has_empty_data'] = False
+                    updated += 1
+                    continue
+
+                p_xs = item['pitch_data']['xs']
+                p_freqs = item['pitch_data']['freqs']
+                preview_times = np.linspace(start, end, 11)
+                preview_f0 = np.interp(preview_times, p_xs, p_freqs).tolist()
+                for j, t in enumerate(preview_times):
+                    valid_indices = np.where(p_freqs > 0)[0]
+                    if len(valid_indices) == 0:
+                        preview_f0[j] = 0.0
+                        continue
+                    valid_xs = p_xs[valid_indices]
+                    if np.min(np.abs(valid_xs - t)) > 0.025:
+                        preview_f0[j] = 0.0
+                item['preview_f0'] = preview_f0
+                item['has_empty_data'] = any(f == 0.0 for f in preview_f0)
+                updated += 1
+
+        return updated, skipped
+
     def extract_stable_f0_values(self, xs, freqs):
         if len(xs) < 2:
             return []
@@ -1647,7 +1750,11 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                 self.params['pitch_floor'] = floor
                 self.params['pitch_ceiling'] = ceiling
                 applied = True
-                applied_msg = f"Applied '{preset_arg}' preset: pitch_floor={floor}, pitch_ceiling={ceiling}. Run 'recalculate' to apply globally."
+                updated_count, skipped_count = self._recompute_pitch_only_all_items()
+                applied_msg = (
+                    f"Applied '{preset_arg}' preset: pitch_floor={floor}, pitch_ceiling={ceiling}. "
+                    f"Pitch-only refresh completed (updated={updated_count}, skipped={skipped_count}); boundaries preserved."
+                )
                 self._after_state_change("set_params")
             else:
                 print(json.dumps({

@@ -189,7 +189,8 @@ def test_cli_detect_f0():
     cli.speaker_manager.get_all_speakers.return_value = [speaker]
     
     # Mock extract_f0 to return our dummy pitch data during detection
-    with patch('modules.audio_core.extract_f0', return_value={'xs': xs, 'freqs': freqs}):
+    with patch('modules.audio_core.extract_f0', return_value={'xs': xs, 'freqs': freqs}), \
+         patch('cli.extract_f0', return_value={'xs': xs, 'freqs': freqs}):
         captured_output = io.StringIO()
         sys.stdout = captured_output
         try:
@@ -205,6 +206,8 @@ def test_cli_detect_f0():
         assert "fine" in res_json["suggestions"]
         
         # Test applying a preset
+        old_start = speaker.items["item_1"]["start"]
+        old_end = speaker.items["item_1"]["end"]
         captured_output2 = io.StringIO()
         sys.stdout = captured_output2
         try:
@@ -218,3 +221,9 @@ def test_cli_detect_f0():
         # Verify the parameters were updated in self.params
         assert cli.params["pitch_floor"] == res_json2["suggestions"]["recommended"]["floor"]
         assert cli.params["pitch_ceiling"] == res_json2["suggestions"]["recommended"]["ceiling"]
+        # Boundary values should remain unchanged after preset application
+        assert speaker.items["item_1"]["start"] == old_start
+        assert speaker.items["item_1"]["end"] == old_end
+        # Pitch params should also be synchronized to item-level metadata
+        assert speaker.items["item_1"]["pitch_floor"] == cli.params["pitch_floor"]
+        assert speaker.items["item_1"]["pitch_ceiling"] == cli.params["pitch_ceiling"]
