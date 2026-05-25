@@ -2,6 +2,7 @@ import cmd
 import shlex
 import sys
 import os
+import multiprocessing
 
 # Force sys.stdin, sys.stdout, sys.stderr to use UTF-8 encoding to avoid encoding issues (especially on Windows)
 if sys.stdin and hasattr(sys.stdin, 'reconfigure'):
@@ -367,8 +368,8 @@ Type 'help' or '?' to list commands. Use 'agent_guide' for AI operating rules.
         if is_external:
             print(json.dumps({
                 "success": False,
-                "error": "External automation is not allowed in PhonTracer CLI workflow.",
-                "message": "Please use built-in PhonTracer CLI commands one step at a time. Do not create or run scripts, batch files, PowerShell, Python, or command lists.",
+                "error": f"Unknown CLI command: {line_stripped}",
+                "message": "Detected an external shell/script style command. PhonTracerCLI does not execute external commands directly; please use built-in CLI commands.",
                 "next_steps": ["help", "agent_guide", "status"]
             }))
         else:
@@ -3307,17 +3308,28 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
+    # Handle multiprocessing bootstrap correctly in frozen Windows builds.
+    multiprocessing.freeze_support()
     cli = PhonTracerCLI()
     try:
         if argv:
             first_arg = argv[0].strip().lower()
+            if first_arg.startswith("--multiprocessing-"):
+                return 0
             if first_arg in ("-h", "--help", "help", "?"):
                 cli.do_help("")
                 return 0
+            # Relaxed startup behavior:
+            # If non-option args are provided, treat them as one CLI command and run once.
+            # Example: PhonTracerCLI.exe status
+            if not first_arg.startswith("-"):
+                command_line = " ".join(argv)
+                cli.onecmd(command_line)
+                return 0
             print(json.dumps({
                 "success": False,
-                "error": f"Unknown startup argument: {argv[0]}",
-                "hint": "Start PhonTracerCLI.exe without arguments, then type help at the (phontracer) prompt."
+                "error": f"Unknown startup option: {argv[0]}",
+                "hint": "Use --help for manual, or pass a CLI command directly (e.g. `PhonTracerCLI.exe status`)."
             }))
             return 2
 
