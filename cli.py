@@ -297,6 +297,87 @@ Type 'help' or '?' to list commands. Use 'agent_guide' for AI operating rules.
             self.log_file.flush()
         return line
 
+    def default(self, line):
+        line_stripped = line.strip()
+        if not line_stripped:
+            return
+
+        is_external = False
+
+        # 1. Normalize line: strip PowerShell leading operator '&'
+        test_line = line_stripped
+        if test_line.startswith('&'):
+            test_line = test_line[1:].strip()
+
+        # 2. Extract tokens
+        import os
+        import shlex
+        try:
+            parts = shlex.split(test_line)
+        except Exception:
+            parts = test_line.split()
+
+        normalized_tokens = []
+        for p in parts:
+            p_clean = p.strip().lower().strip('\'"')
+            if p_clean.startswith('.\\') or p_clean.startswith('./'):
+                p_clean = p_clean[2:]
+            normalized_tokens.append(p_clean)
+
+        banned_commands = {
+            "python", "py", "powershell", "pwsh", "cmd", "bash", "sh",
+            "node", "rscript", "praat", "parselmouth", "start", "call"
+        }
+        banned_suffixes = ('.bat', '.cmd', '.ps1', '.py', '.r', '.js', '.vbs')
+
+        if normalized_tokens:
+            first_token = normalized_tokens[0]
+            # Extract basename in case of paths (e.g. C:\Python312\python.exe)
+            cmd_name = os.path.basename(first_token.replace('\\', '/'))
+            if cmd_name.endswith('.exe'):
+                cmd_name = cmd_name[:-4]
+
+            if cmd_name in banned_commands:
+                is_external = True
+
+            for token in normalized_tokens:
+                if token.endswith(banned_suffixes):
+                    is_external = True
+                    break
+
+        # Double check with simple whitespace splitting to prevent shlex parsing bypasses
+        raw_parts = line_stripped.split()
+        if raw_parts:
+            raw_first = raw_parts[0].strip().lower().strip('\'"')
+            if raw_first.startswith('.\\') or raw_first.startswith('./'):
+                raw_first = raw_first[2:]
+            raw_cmd_name = os.path.basename(raw_first.replace('\\', '/'))
+            if raw_cmd_name.endswith('.exe'):
+                raw_cmd_name = raw_cmd_name[:-4]
+
+            if raw_cmd_name in banned_commands:
+                is_external = True
+
+            for rp in raw_parts:
+                rp_clean = rp.strip().lower().strip('\'"')
+                if rp_clean.endswith(banned_suffixes):
+                    is_external = True
+                    break
+
+        if is_external:
+            print(json.dumps({
+                "success": False,
+                "error": "External automation is not allowed in PhonTracer CLI workflow.",
+                "message": "Please use built-in PhonTracer CLI commands one step at a time. Do not create or run scripts, batch files, PowerShell, Python, or command lists.",
+                "next_steps": ["help", "agent_guide", "status"]
+            }))
+        else:
+            print(json.dumps({
+                "success": False,
+                "error": f"Unknown CLI command: {line_stripped}",
+                "message": "Use help or agent_guide to see supported PhonTracer CLI commands."
+            }))
+
     def _check_item_has_empty_data(self, item):
         """Returns True if the item contains a 0Hz pitch in the 11-point preview."""
         if 'has_empty_data' in item:
@@ -483,14 +564,14 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
         """
         self._emit(
             True,
-            "请把 CLI 当作主操作台。先观察，再执行；每一步尽量留下可读结果。",
+            "你不是来写自动化脚本的，只能作为 PhonTracer CLI 操作者工作。每次只能输入一个内置命令，读完结果再进行下一步。",
             rules=[
-                "优先使用 CLI 命令完成导入、分析、修改、导出、工程保存。",
-                "除非用户明确要求，不要直接修改源码、删除文件、移动工程资产或绕过 CLI 改数据。",
-                "开始前用 status/list_items 了解状态；失败时把 JSON 里的 error 原样反馈给用户。",
-                "遇到数据格式不匹配、交错录音等复杂混乱的数据状况或不明错误时，务必先停下来，向用户提问并确认映射规则，切忌盲目猜测或强行处理。",
-                "工程保存用 project_export 或 autosave；数据结果导出用 export。",
-                "需要拼长音/拆长音时使用 tool_merge、tool_split、tool_sort_batch。",
+                "你不是来写自动化脚本的，只能作为 PhonTracer CLI 操作者工作。",
+                "每次只能输入一个 PhonTracer CLI 内置命令。",
+                "必须等待并阅读返回结果后再决定下一步，禁止提前生成命令清单或一次性灌入多条命令。",
+                "禁止创建或运行任何额外脚本文件，包括 .bat、.cmd、.ps1、.py、.r、.praat、.js、.vbs 等任何外部脚本或命令。",
+                "如果 CLI 返回 success:false、出现警告、路径不匹配、音频和字表无法确认对应关系，或当前 AI 工具无法稳定交互运行 CLI，必须立即停止并向用户说明情况，等待用户确认。",
+                "最终必须先 project_export 导出完整 .teproj 工程包，确保可复现；然后再按用户要求导出 xlsx/TextGrid/wav/图表等结果文件。"
             ],
             next_steps=["status", "help", "list_items all"]
         )

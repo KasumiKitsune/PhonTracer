@@ -1025,18 +1025,21 @@ exit
                             <p class="text-xs text-slate-500 mb-4 leading-relaxed">
                                 如果让 AI 帮您批量提取实验数据，可以直接将以下指令提示词发送给 Cursor / Trae 或 Codex 窗口，让其通过正规的 CLI 通道完成作业。
                             </p>
-                            <div class="bg-white border border-slate-200/80 rounded-xl p-4 font-mono text-xs text-slate-600 leading-relaxed max-h-56 overflow-y-auto" id="promptContent">请在当前项目目录中使用 PhonTracer CLI 完成任务。优先调用打包后的 PhonTracerCLI.exe；只有在明确处于源码开发环境且没有 exe 可用时，才使用 python cli.py。
-<br>
-你必须全程通过 PhonTracer CLI 的内置命令处理音频、标注、修正、检查与导出。不要直接修改源码，不要手动改写 .teproj 内部文件或缓存文件，不要额外编写/运行第三方 Python、PowerShell、R、Praat、Parselmouth、pandas、openpyxl 等脚本来绕过 CLI。如果 CLI 暂时无法完成某一步，请停止并说明缺少的 CLI 能力，不要自行另写脚本替代。
-<br>
-工作流程要求：<br>
-1. 使用 CLI 导入用户指定的音频或批量音频。<br>
-2. 使用 CLI 内置命令完成分词/标注/边界修正/参数调整/质量检查。<br>
-3. 如果 CLI 返回 success: false，必须立即停止当前步骤，根据 message 说明问题并请求用户确认，不能继续盲目导出。<br>
-4. 最终必须导出完整 .teproj 工程包，确保后续可在 PhonTracer GUI 或 CLI 中继续打开和复现。<br>
-5. 在导出 .teproj 之后，再按用户要求导出 xlsx、TextGrid、wav、图表或其他结果文件。<br>
-6. 完成后只汇报：使用了哪些 CLI 步骤、导出了哪些文件、是否有警告或失败项、下一步需要用户确认什么。<br>
-除非用户明确授权，不要直接搬运、删除、改名原始音频文件；不要把 CLI 已经支持的功能改成外部脚本实现。</div>
+                            <div class="bg-white border border-slate-200/80 rounded-xl p-4 font-mono text-xs text-slate-600 leading-relaxed max-h-56 overflow-y-auto" id="promptContent">你不是来写自动化脚本的。你只能作为 PhonTracer CLI 操作者工作。
+<br><br>
+请在当前项目目录中使用 PhonTracer CLI 完成任务。优先运行打包后的 PhonTracerCLI.exe；只有在明确处于源码开发环境且没有 exe 可用时，才使用 python cli.py。
+<br><br>
+必须使用交互式 PhonTracer CLI，一步一步完成任务。每次只能输入一个 PhonTracer CLI 内置命令；必须等待并阅读该命令返回结果后，才能决定下一条命令。
+<br><br>
+严禁创建或运行任何额外脚本文件，包括 .bat、.cmd、.ps1、.py、.r、.praat、.js、.vbs。禁止预先生成命令清单，禁止批量灌入多条命令，禁止用外部脚本处理音频、工程文件、导出文件或路径问题。
+<br><br>
+所有音频导入、标注、边界修正、参数调整、质量检查、工程保存和结果导出，必须通过 PhonTracer CLI 的内置命令完成。需要批量音频导入时，只能在交互式 CLI 中调用 PhonTracer 自带的 load_batch 等命令，不能用外部脚本替代。
+<br><br>
+如果 CLI 返回 success:false、出现警告、路径不匹配、音频和字表无法确认对应关系，或当前 AI 工具无法稳定交互运行 CLI，必须立即停止并向用户说明情况，等待用户确认。不要继续猜测，不要写脚本绕过，不要复制、改名、移动原始音频来规避问题。
+<br><br>
+最终必须先导出完整 .teproj 工程包，确保可复现；然后再按用户要求导出 xlsx、TextGrid、wav、图表或其他结果文件。
+<br><br>
+完成后只汇报：刚才逐步执行了哪些 CLI 命令、每一步是否成功、导出了哪些文件、是否有警告或失败项、下一步需要用户确认什么。</div>
                         </div>
                     </div>
                 </section>
