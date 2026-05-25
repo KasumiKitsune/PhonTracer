@@ -1304,7 +1304,7 @@ class PhoneticsApp:
                 else:
                     btn.configure(text_color="#1F2937")
 
-    def recalculate_all_audio(self, only_trim_silence=False, recompute_pitch=True):
+    def recalculate_all_audio(self, only_trim_silence=False, recompute_pitch=True, only_pitch_changed=False):
         if not self.items: return
 
         # Capture parameter values before sync
@@ -1317,8 +1317,7 @@ class PhoneticsApp:
             pass
 
         # Check if ONLY pitch floor/ceiling/voicing threshold changed
-        only_pitch_changed = False
-        if old_params and hasattr(self, 'last_params') and self.last_params:
+        if not only_pitch_changed and old_params and hasattr(self, 'last_params') and self.last_params:
             new_params = self.last_params
             pitch_changed = (
                 old_params.get('pitch_floor') != new_params.get('pitch_floor') or
@@ -2977,25 +2976,40 @@ class PhoneticsApp:
 
         self.start_loading("正在估算发音人 F0 分布...")
 
+        # 在主线程中捕获 UI 和 Tkinter 状态，保证线程安全
+        tab_mode = self.tabview.get()
+        pending_long_snd = self.pending_long_snd
+        long_audio_path = self.long_audio_path
+        
+        # 快照常规属性，避免工作线程直接读取或操作主线程的 self.items 数据字典
+        items_snapshot = []
+        for item in self.items.values():
+            items_snapshot.append({
+                'macro_start': item.get('macro_start'),
+                'macro_end': item.get('macro_end'),
+                'snd': item.get('snd'),
+                'path': item.get('path'),
+                'label': item.get('label')
+            })
+
+        params_temp = {
+            'f0_engine': self.last_params.get('f0_engine', 'praat'),
+            'pitch_floor': 50,
+            'pitch_ceiling': 700,
+            'voicing_threshold': self.last_params.get('voicing_threshold', 0.25)
+        }
+
         def run_detection():
             try:
                 import parselmouth
                 from modules.audio_core import extract_f0
 
-                tab_mode = self.tabview.get()
                 all_stable_f0 = []
 
-                params_temp = {
-                    'f0_engine': self.last_params.get('f0_engine', 'praat'),
-                    'pitch_floor': 50,
-                    'pitch_ceiling': 700,
-                    'voicing_threshold': self.last_params.get('voicing_threshold', 0.25)
-                }
-
                 if tab_mode == "单条长音频":
-                    snd = self.pending_long_snd
-                    if snd is None and self.long_audio_path and os.path.exists(self.long_audio_path):
-                        snd = parselmouth.Sound(self.long_audio_path)
+                    snd = pending_long_snd
+                    if snd is None and long_audio_path and os.path.exists(long_audio_path):
+                        snd = parselmouth.Sound(long_audio_path)
                     if snd is None:
                         self.root.after(0, self.stop_loading)
                         self.root.after(0, lambda: messagebox.showwarning("提示", "未找到已加载的长音频。"))
@@ -3006,9 +3020,13 @@ class PhoneticsApp:
                     times = pitch_data['xs']
                     freqs = pitch_data['freqs']
 
-                    for item in self.items.values():
-                        macro_start = item.get('macro_start', 0.0)
-                        macro_end = item.get('macro_end', times[-1] if len(times) > 0 else 10000.0)
+                    for item in items_snapshot:
+                        macro_start = item.get('macro_start')
+                        macro_end = item.get('macro_end')
+                        # [P2 优化]：如果没有真实的 macro_start 和 macro_end，说明是占位项/缺失项，在长音频模式下应当跳过
+                        if macro_start is None or macro_end is None:
+                            continue
+
                         mask = (times >= macro_start) & (times <= macro_end)
                         item_times = times[mask]
                         item_freqs = freqs[mask]
@@ -3016,7 +3034,8 @@ class PhoneticsApp:
                         all_stable_f0.extend(stable_f0)
 
                 elif tab_mode == "多条独立音频":
-                    valid_items = [it for it in self.items.values() if it.get('snd') or (it.get('path') and os.path.exists(it['path']))]
+                    # [P2 优化]：在快照中提取有效的独立音频项
+                    valid_items = [it for it in items_snapshot if it.get('snd') or (it.get('path') and os.path.exists(it['path']))]
                     if not valid_items:
                         self.root.after(0, self.stop_loading)
                         self.root.after(0, lambda: messagebox.showwarning("提示", "没有有效的独立音频文件。"))
@@ -3025,7 +3044,8 @@ class PhoneticsApp:
                     total_items = len(valid_items)
                     for i, item in enumerate(valid_items):
                         self.root.after(0, lambda v=((i + 1) / total_items): self.set_progress(v))
-                        self.root.after(0, lambda name=item['label']: self.set_status(f"正在分析 F0 ({i+1}/{total_items}): {name}...", "#3B82F6", "status_loading"))
+                        # [P3 优化]：精确捕获 idx = i + 1 并在 lambda 默认参数中暂存，以防延迟回调展示错误索引
+                        self.root.after(0, lambda name=item['label'], idx=i+1: self.set_status(f"正在分析 F0 ({idx}/{total_items}): {name}...", "#3B82F6", "status_loading"))
 
                         item_snd = item.get('snd')
                         if item_snd is None:
@@ -3191,6 +3211,6 @@ class PhoneticsApp:
         if hasattr(self.entry_pitch_ceiling, '_last_val'):
             self.entry_pitch_ceiling._last_val = str(int(ceiling))
 
-        # 触发参数变化逻辑并重新计算
+        # [P1 优化]：触发参数变化逻辑，并传入 only_pitch_changed=True 以保护所有非手动切分边界不被重写
         self.on_param_change()
-        self.recalculate_all_audio(recompute_pitch=True)
+        self.recalculate_all_audio(recompute_pitch=True, only_pitch_changed=True)
