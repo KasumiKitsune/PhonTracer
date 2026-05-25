@@ -93,6 +93,10 @@ class AcousticChartExporter:
 
             # overview specific
             'overview_metric': lambda: getattr(self, 'combo_overview_metric').get() if hasattr(self, 'combo_overview_metric') else None,
+
+            # legend specific
+            'legend_loc': lambda: getattr(self, 'combo_legend_loc').get() if hasattr(self, 'combo_legend_loc') else None,
+            'legend_outside': lambda: getattr(self, 'var_legend_outside').get() if hasattr(self, 'var_legend_outside') else None,
         }
 
         if name in gui_mappings:
@@ -103,6 +107,30 @@ class AcousticChartExporter:
             except Exception:
                 pass
         return default
+
+    def _get_legend_kwargs(self):
+        loc_val = self.get_param('legend_loc', '右上')
+        outside_val = self.get_param('legend_outside', False)
+        
+        loc_map = {
+            "右上": "upper right",
+            "右下": "lower right",
+            "左上": "upper left",
+            "左下": "lower left",
+        }
+        loc_str = loc_map.get(loc_val, "upper right")
+        
+        if outside_val:
+            if loc_val == "右上":
+                return {"loc": "upper left", "bbox_to_anchor": (1.02, 1)}
+            elif loc_val == "右下":
+                return {"loc": "lower left", "bbox_to_anchor": (1.02, 0)}
+            elif loc_val == "左上":
+                return {"loc": "upper right", "bbox_to_anchor": (-0.02, 1)}
+            elif loc_val == "左下":
+                return {"loc": "lower right", "bbox_to_anchor": (-0.02, 0)}
+        
+        return {"loc": loc_str}
 
     # --- CORE DATA EXTRACTION ENGINE ---
     def _extract_active_data(self, speakers_list):
@@ -456,12 +484,20 @@ class AcousticChartExporter:
                     ax.axvline(k * num_points + 0.5, color='gray', linestyle='--', alpha=0.5)
 
             if g_color_idx >= 0:
-                ax.legend(loc="upper right", fontsize=8)
+                legend_kwargs = self._get_legend_kwargs()
+                legend_kwargs["fontsize"] = 8
+                ax.legend(**legend_kwargs)
 
         for idx in range(n_facets, len(axes_flat)):
             axes_flat[idx].set_visible(False)
 
         fig.tight_layout()
+        if self.get_param('legend_outside', False):
+            loc_val = self.get_param('legend_loc', '右上')
+            if "右" in loc_val:
+                fig.subplots_adjust(right=0.82)
+            elif "left" in loc_val or "左" in loc_val:
+                fig.subplots_adjust(left=0.18)
         return fig
 
     def _plot_tone_overview_heatmap(self, data_entries, group_key, scale):
@@ -1074,7 +1110,14 @@ class AcousticChartExporter:
             else:
                 ax.set_ylabel("频率 (Hz)")
 
-            ax.legend(loc="upper right")
+            legend_kwargs = self._get_legend_kwargs()
+            ax.legend(**legend_kwargs)
+            if self.get_param('legend_outside', False):
+                loc_val = self.get_param('legend_loc', '右上')
+                if "右" in loc_val:
+                    fig.subplots_adjust(right=0.82)
+                elif "left" in loc_val or "左" in loc_val:
+                    fig.subplots_adjust(left=0.18)
             return fig
 
         elif view == "active_ratio":
@@ -1112,8 +1155,15 @@ class AcousticChartExporter:
                 ax.set_title("各发音人录音有效率与基频检出比例分布比较", fontsize=13, fontweight="bold")
 
                 ax.axhline(0.60, color="#EF4444", linestyle=":", label="常规建议的极低阈值 (60%)")
-                ax.legend(loc="lower left")
+                legend_kwargs = self._get_legend_kwargs()
+                ax.legend(**legend_kwargs)
                 ax.set_ylim(-0.05, 1.05)
+                if self.get_param('legend_outside', False):
+                    loc_val = self.get_param('legend_loc', '右上')
+                    if "右" in loc_val:
+                        fig.subplots_adjust(right=0.82)
+                    elif "left" in loc_val or "左" in loc_val:
+                        fig.subplots_adjust(left=0.18)
 
             return fig
 
@@ -1148,7 +1198,15 @@ class AcousticChartExporter:
 
             ax.set_title("各受试发音人基频均值及调域离散域 (用于快速排查八度音高跳变)", fontsize=12, fontweight="bold")
             ax.set_ylabel("发音基频均值 Mean F0 (Hz)")
-            ax.legend(loc="upper right", fontsize=9)
+            legend_kwargs = self._get_legend_kwargs()
+            legend_kwargs["fontsize"] = 9
+            ax.legend(**legend_kwargs)
+            if self.get_param('legend_outside', False):
+                loc_val = self.get_param('legend_loc', '右上')
+                if "右" in loc_val:
+                    fig.subplots_adjust(right=0.82)
+                elif "left" in loc_val or "左" in loc_val:
+                    fig.subplots_adjust(left=0.18)
 
             return fig
 
@@ -1369,6 +1427,9 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         self.var_live_refresh = ctk.BooleanVar(value=True)
         self._debounce_timer_id = None
 
+        # Legend configuration
+        self.var_legend_outside = ctk.BooleanVar(value=False)
+
     def _init_group_filters(self):
         # Extract all unique group names across all speakers
         all_entries = self._extract_active_data(self.all_speakers if self.all_speakers else [self.active_speaker])
@@ -1389,7 +1450,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         self.grid_rowconfigure(0, weight=1)
 
         # --- LEFT SIDE: Scrollable Configuration Frame ---
-        self.left_scroll = ctk.CTkScrollableFrame(self, width=400, label_text="📊 图表可视化高级设置", label_font=self.font_title, fg_color=("#F9FAFB", "#2D3748"))
+        self.left_scroll = ctk.CTkScrollableFrame(self, width=400, label_text="📊 图表设置", label_font=self.font_title, fg_color=("#F9FAFB", "#2D3748"))
         self.left_scroll.grid(row=0, column=0, sticky="nsew", padx=(15, 10), pady=15)
 
         self._build_settings_cards()
@@ -1462,7 +1523,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         self.bottom_frame = ctk.CTkFrame(self.right_frame, fg_color="transparent")
         self.bottom_frame.grid(row=3, column=0, sticky="ew")
 
-        ctk.CTkButton(self.bottom_frame, text="🔄 刷新预览", width=120, height=38, corner_radius=19, fg_color="#E5E7EB", text_color="#374151", hover_color="#D1D5DB", font=self.font_main, command=lambda: self.update_preview(force=True)).pack(side=tk.LEFT, padx=5)
+        ctk.CTkButton(self.bottom_frame, text="🔄 刷新预览", width=120, height=38, corner_radius=19, fg_color="#E5E7EB", text_color="#374151", hover_color="#D1D5DB", font=self.font_main, command=self.update_preview).pack(side=tk.LEFT, padx=5)
 
         self.switch_live_refresh = ctk.CTkSwitch(
             self.bottom_frame, text="实时刷新", variable=self.var_live_refresh,
@@ -1470,7 +1531,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         )
         self.switch_live_refresh.pack(side=tk.LEFT, padx=10)
 
-        self.btn_export = ctk.CTkButton(self.bottom_frame, text="💾 导出所选图表", width=180, height=38, corner_radius=19, font=self.font_title, command=self.on_confirm)
+        self.btn_export = ctk.CTkButton(self.bottom_frame, text="💾 导出", width=120, height=38, corner_radius=19, font=self.font_title, command=self.on_confirm)
         self.btn_export.pack(side=tk.RIGHT, padx=5)
 
         ctk.CTkButton(self.bottom_frame, text="取消", width=100, height=38, corner_radius=19, fg_color="#F3F4F6", text_color="#4B5563", hover_color="#E5E7EB", font=self.font_main, command=self.destroy).pack(side=tk.RIGHT, padx=5)
@@ -1617,29 +1678,49 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         # --- CARD 2: Visual Parameters ---
         card2 = ctk.CTkFrame(self.left_scroll, fg_color=("#FFFFFF", "#1E293B"), border_width=1, border_color=("#E5E7EB", "#475569"), corner_radius=12)
         card2.pack(fill=tk.X, **card_padding)
+        card2.grid_columnconfigure(0, weight=1)
+        card2.grid_columnconfigure(1, weight=1)
 
-        ctk.CTkLabel(card2, text="🔹 核心维度与尺度", font=self.font_title).pack(anchor="w", padx=15, pady=(10, 5))
+        ctk.CTkLabel(card2, text="🔹 核心维度与尺度", font=self.font_title).grid(row=0, column=0, columnspan=2, sticky="w", padx=15, pady=(10, 5))
 
-        # Group By
-        ctk.CTkLabel(card2, text="分组依据 / 曲线配色:", font=self.font_small).pack(anchor="w", padx=15)
+        # Row 1 Labels
+        ctk.CTkLabel(card2, text="分组依据 / 曲线配色:", font=self.font_small).grid(row=1, column=0, sticky="w", padx=(15, 5), pady=(5, 2))
+        ctk.CTkLabel(card2, text="声学尺度 (纵轴单位):", font=self.font_small).grid(row=1, column=1, sticky="w", padx=(5, 15), pady=(5, 2))
+
+        # Row 2 OptionMenus
         self.combo_groupby = ctk.CTkOptionMenu(card2, values=["按声调类型", "按词语", "按发音人"], command=self._on_groupby_changed, **self.dropdown_kwargs)
         self.combo_groupby.set("按声调类型")
-        self.combo_groupby.pack(fill=tk.X, padx=15, pady=(0, 10))
+        self.combo_groupby.grid(row=2, column=0, sticky="ew", padx=(15, 5), pady=(0, 10))
         self._apply_custom_arrow(self.combo_groupby)
 
-        # Acoustic Scale
-        ctk.CTkLabel(card2, text="声学尺度 (纵轴单位):", font=self.font_small).pack(anchor="w", padx=15)
         self.combo_scale = ctk.CTkOptionMenu(card2, values=["T 值 (五度标调)", "Hz (基频绝对频率)"], command=lambda _: self.update_preview(), **self.dropdown_kwargs)
         self.combo_scale.set("T 值 (五度标调)")
-        self.combo_scale.pack(fill=tk.X, padx=15, pady=(0, 10))
+        self.combo_scale.grid(row=2, column=1, sticky="ew", padx=(5, 15), pady=(0, 10))
         self._apply_custom_arrow(self.combo_scale)
 
-        # Image Format
-        ctk.CTkLabel(card2, text="图像导出格式:", font=self.font_small).pack(anchor="w", padx=15)
+        # Row 3 Labels
+        ctk.CTkLabel(card2, text="图例位置:", font=self.font_small).grid(row=3, column=0, sticky="w", padx=(15, 5), pady=(5, 2))
+        ctk.CTkLabel(card2, text="图像导出格式:", font=self.font_small).grid(row=3, column=1, sticky="w", padx=(5, 15), pady=(5, 2))
+
+        # Row 4 OptionMenus
+        self.combo_legend_loc = ctk.CTkOptionMenu(card2, values=["右上", "右下", "左上", "左下"], command=lambda _: self.update_preview(), **self.dropdown_kwargs)
+        self.combo_legend_loc.set("右上")
+        self.combo_legend_loc.grid(row=4, column=0, sticky="ew", padx=(15, 5), pady=(0, 10))
+        self._apply_custom_arrow(self.combo_legend_loc)
+
         self.combo_format = ctk.CTkOptionMenu(card2, values=["PNG 图片 (.png)", "SVG 矢量图 (.svg)", "PDF 文档 (.pdf)"], **self.dropdown_kwargs)
         self.combo_format.set("PNG 图片 (.png)")
-        self.combo_format.pack(fill=tk.X, padx=15, pady=(0, 15))
+        self.combo_format.grid(row=4, column=1, sticky="ew", padx=(5, 15), pady=(0, 10))
         self._apply_custom_arrow(self.combo_format)
+
+        # Row 5 CheckBox
+        self.cb_legend_outside = ctk.CTkCheckBox(
+            card2, text="显示在图表主体的外侧", variable=self.var_legend_outside,
+            font=self.font_small, checkbox_width=18, checkbox_height=18,
+            fg_color=("#3B82F6", "#2563EB"), hover_color=("#4B5563", "#9CA3AF"), border_color=("#9CA3AF", "#4B5563"),
+            command=self.update_preview
+        )
+        self.cb_legend_outside.grid(row=5, column=0, columnspan=2, sticky="w", padx=15, pady=(0, 15))
 
         # --- CARD 3: Dynamic Options Frame ---
         self.dynamic_card = ctk.CTkFrame(self.left_scroll, fg_color=("#FFFFFF", "#1E293B"), border_width=1, border_color=("#E5E7EB", "#475569"), corner_radius=12)
@@ -2003,7 +2084,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
     def _on_group_filter_changed(self):
         self.current_preview_page = 0
         self.current_group_page = 0
-        self.update_preview()
+        self.trigger_preview_update()
 
     def _select_all_groups(self):
         for var in self.group_checkbox_vars.values():

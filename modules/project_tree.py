@@ -2083,12 +2083,12 @@ class ProjectTreePanel:
                     logger.error(f"Error generating integrated Excel chart: {chart_err}", exc_info=True)
             workbook.close()
         elif format_mode == 'txt':
-            with open(out_file, 'w', encoding='utf-8') as f_out:
+            with open(out_file, 'w', encoding='utf-8-sig') as f_out:
                 headers = ["发音人", "组别", "编号", "词语", "总时长(s)"]
                 for k in range(1, max_syls + 1):
                     headers.append(f"字{k}_时长(s)")
                     for i in range(1, num_points + 1): headers.append(f"字{k}_T{i}")
-                f_out.write("\\t".join(headers) + "\\n")
+                f_out.write("\t".join(headers) + "\n")
                 for speaker in all_speakers:
                     rows = speaker_rows.get(speaker.id, [])
                     s_min, s_max = speaker_stats.get(speaker.id, (0, 0))
@@ -2103,23 +2103,44 @@ class ProjectTreePanel:
                         for _ in range(fill_count):
                             line_parts.append("0.0000")
                             for _ in range(num_points): line_parts.append("0.00")
-                        f_out.write("\\t".join(line_parts) + "\\n")
+                        f_out.write("\t".join(line_parts) + "\n")
                         global_idx += 1
 
     def _export_txt(self, out_file, tree_structure=None):
         is_continuous = (self.num_rule_var.get() == "continuous")
         if tree_structure is None: tree_structure = self._get_all_items_by_group()
 
-        with open(out_file, "w", encoding="utf-8") as f:
+        with open(out_file, "w", encoding="utf-8-sig") as f:
             global_idx = 1
             for grp_name, children in tree_structure:
                 if not is_continuous: global_idx = 1
-                f.write(f"{grp_name}\n")
+                f.write(f"{grp_name}\n\n")
                 for child in children:
                     item = self.items[child]
                     if item['start'] is not None:
                         txt_data = get_export_text_for_item(item, global_idx, self.app_state_params['pts'], pitch_floor=self.app_state_params.get('pitch_floor', 75.0), pitch_ceiling=self.app_state_params.get('pitch_ceiling', 600.0), voicing_threshold=self.app_state_params.get('voicing_threshold', 0.25))
-                        f.write(txt_data)
+                        
+                        syls = split_into_syllables(item.get('label', ''))
+                        expected_sections = len(syls)
+                        shown_sections = 0
+                        if expected_sections > 1:
+                            lines = txt_data.splitlines()
+                            subsection_prefix = f"{global_idx}_"
+                            single_prefix = f"{global_idx}."
+                            shown_sections = sum(1 for line in lines if line.startswith(subsection_prefix))
+                            if shown_sections == 0 and any(line.startswith(single_prefix) for line in lines):
+                                shown_sections = 1
+                        
+                        preview_mismatch = expected_sections > 1 and shown_sections == 1
+                        if preview_mismatch:
+                            txt_data = f"[致命] 检测到 {expected_sections} 个子段，但数据预览当前只显示 1 个。请检查该段边界或基频。\n\n{txt_data}"
+                        
+                        warnings = item.get('warnings', [])
+                        if warnings:
+                            warnings_text = "\n".join(warnings)
+                            txt_data = f"{warnings_text}\n\n{txt_data}"
+                        
+                        f.write(txt_data + "\n\n")
                         global_idx += 1
 
     def _collect_group_avg_data(self, tree_structure=None):

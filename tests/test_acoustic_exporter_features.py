@@ -342,5 +342,46 @@ class TestAcousticExporterFeatures(unittest.TestCase):
 
             dlg.destroy()
 
+    def test_legend_position_settings_and_auto_refresh_fix(self):
+        project_tree = MagicMock()
+        exporter = AcousticChartExporter(project_tree=project_tree)
+        
+        # Test default legend kwargs
+        kwargs = exporter._get_legend_kwargs()
+        self.assertEqual(kwargs["loc"], "upper right")
+        self.assertNotIn("bbox_to_anchor", kwargs)
+        
+        # Test various positions and outside values
+        exporter.params = {"legend_loc": "右上", "legend_outside": True}
+        kwargs = exporter._get_legend_kwargs()
+        self.assertEqual(kwargs["loc"], "upper left")
+        self.assertEqual(kwargs["bbox_to_anchor"], (1.02, 1))
+
+        exporter.params = {"legend_loc": "左下", "legend_outside": True}
+        kwargs = exporter._get_legend_kwargs()
+        self.assertEqual(kwargs["loc"], "lower right")
+        self.assertEqual(kwargs["bbox_to_anchor"], (-0.02, 0))
+
+        # Test group filter auto-refresh uses trigger_preview_update
+        speaker = MagicMock()
+        speaker.name = "Speaker 1"
+        speaker.items = {}
+        app = MagicMock()
+        app.speaker_manager.get_active_speaker.return_value = speaker
+
+        with patch.object(AcousticChartExportDialog, '_extract_active_data', return_value=[]), \
+             patch.object(AcousticChartExportDialog, 'update_preview'):
+            
+            dlg = AcousticChartExportDialog(
+                self.root, app=app, project_tree=project_tree,
+                mode='single', all_speakers=[speaker]
+            )
+            
+            with patch.object(dlg, 'trigger_preview_update') as mock_trigger:
+                dlg._on_group_filter_changed()
+                mock_trigger.assert_called_once()
+                
+            dlg.destroy()
+
 if __name__ == '__main__':
     unittest.main()
