@@ -59,6 +59,8 @@ class AcousticChartExporter:
         self.all_speakers = all_speakers or []
         self.params = {}  # CLI parameter overrides
         self.colors = ['#2563EB', '#DC2626', '#16A34A', '#9333EA', '#EA580C', '#0891B2', '#CA8A04', '#6366F1']
+        self._speaker_data_cache = {}
+        self._force_live_extract = False
 
         # Load active speaker's data items as default fallback
         self.sm = getattr(self.app, 'speaker_manager', None)
@@ -101,6 +103,45 @@ class AcousticChartExporter:
         if progress is not None:
             progress = max(0.0, min(1.0, float(progress)))
         cb(progress, message)
+
+    def _get_save_dpi(self):
+        fmt = self.get_param('format', 'png').lower()
+        if 'svg' in fmt or 'pdf' in fmt:
+            return 300
+
+        pixel_mode = self.get_param('image_pixel_mode', '默认')
+        custom_pixel = self.get_param('image_pixel_custom', 1080)
+
+        if pixel_mode == '默认':
+            return 300
+
+        pixel_map = {
+            "480 px": 480,
+            "600 px": 600,
+            "720 px": 720,
+            "1080 px": 1080,
+            "1440 px": 1440,
+            "2160 px": 2160
+        }
+        return float(pixel_map.get(pixel_mode, custom_pixel))
+
+    def _resolve_save_dpi(self, fig):
+        target_min_pixels = self._get_save_dpi()
+        if target_min_pixels == 300:
+            return 300
+
+        try:
+            width_inches, height_inches = fig.get_size_inches()
+            min_edge_inches = min(float(width_inches), float(height_inches))
+        except Exception:
+            min_edge_inches = 0.0
+
+        if min_edge_inches <= 0:
+            return 300
+        return target_min_pixels / min_edge_inches
+
+    def _save_figure(self, fig, out_path):
+        fig.savefig(out_path, dpi=self._resolve_save_dpi(fig), bbox_inches='tight')
 
     def get_param(self, name, default=None):
         runtime_params = getattr(getattr(self, "_render_runtime", None), "params", None)
@@ -148,6 +189,11 @@ class AcousticChartExporter:
             # legend specific
             'legend_loc': lambda: getattr(self, 'combo_legend_loc').get() if hasattr(self, 'combo_legend_loc') else None,
             'legend_outside': lambda: getattr(self, 'var_legend_outside').get() if hasattr(self, 'var_legend_outside') else None,
+            # Image Size & Pixels configuration
+            'image_ratio_mode': lambda: getattr(self, 'combo_ratio_mode').get() if hasattr(self, 'combo_ratio_mode') else None,
+            'image_ratio_custom': lambda: getattr(self, 'var_image_ratio_custom').get() if hasattr(self, 'var_image_ratio_custom') else None,
+            'image_pixel_mode': lambda: getattr(self, 'combo_pixel_mode').get() if hasattr(self, 'combo_pixel_mode') else None,
+            'image_pixel_custom': lambda: int(self.entry_pixel_custom.get().strip()) if (hasattr(self, 'entry_pixel_custom') and self.entry_pixel_custom.get().strip().isdigit()) else 1080,
         }
 
         if name in gui_mappings:
@@ -189,6 +235,10 @@ class AcousticChartExporter:
         data_entries = []
 
         for speaker in speakers_list:
+            if not getattr(self, '_force_live_extract', False) and hasattr(self, '_speaker_data_cache') and speaker in self._speaker_data_cache:
+                data_entries.extend(self._speaker_data_cache[speaker])
+                continue
+
             orig_items = self.project_tree.items
             self.project_tree.items = speaker.items
 
@@ -238,6 +288,7 @@ class AcousticChartExporter:
             else:
                 s_min, s_max = 75.0, 600.0
 
+            speaker_data_entries = []
             for entry in speaker_items_temp:
                 normalized_syl_data = []
                 for s_dur, freqs in entry['syl_data']:
@@ -268,9 +319,12 @@ class AcousticChartExporter:
 
                 entry['normalized_syl_data'] = normalized_syl_data
                 entry['normalized_raw_freqs'] = np.array(norm_raw_freqs)
-                data_entries.append(entry)
+                speaker_data_entries.append(entry)
 
             self.project_tree.items = orig_items
+            if hasattr(self, '_speaker_data_cache'):
+                self._speaker_data_cache[speaker] = speaker_data_entries
+            data_entries.extend(speaker_data_entries)
 
         selected_groups = self.get_param('selected_groups', None)
         if selected_groups is not None:
@@ -448,6 +502,34 @@ class AcousticChartExporter:
         else:
             fig, ax = plt.subplots()
             return fig
+
+        # Apply aspect ratio resize
+        ratio_mode = self.get_param('image_ratio_mode', '默认')
+        custom_ratio = self.get_param('image_ratio_custom', 1.5)
+
+        if ratio_mode != "默认":
+            ratio_map = {
+                "4:3": 4.0 / 3.0,
+                "16:9": 16.0 / 9.0,
+                "3:2": 3.0 / 2.0,
+                "1:1": 1.0,
+                "16:10": 16.0 / 10.0,
+                "2:1": 2.0
+            }
+            R = ratio_map.get(ratio_mode, custom_ratio)
+            S_min = 6.0
+            if R >= 1.0:
+                w_inches = R * S_min
+                h_inches = S_min
+            else:
+                w_inches = S_min
+                h_inches = S_min / R
+
+            fig.set_size_inches(w_inches, h_inches, forward=True)
+            try:
+                fig.tight_layout()
+            except Exception:
+                pass
 
         if truncated:
             fig.subplots_adjust(top=0.88)
@@ -1466,7 +1548,7 @@ class AcousticChartExporter:
                      ha='right', va='bottom', fontsize=9, color='gray')
 
             out_path = os.path.join(dir_name, f"{name_part}_第{page_idx + 1}页{ext}")
-            fig.savefig(out_path, dpi=300, bbox_inches='tight')
+            self._save_figure(fig, out_path)
             plt.close(fig)
 
     def _export_dataset(self, data, out_path, ext):
@@ -1511,7 +1593,7 @@ class AcousticChartExporter:
                 fig = self.generate_plot(data, is_preview=False)
                 self._check_export_cancelled()
                 self._report_export_progress(0.9, "正在写入文件...")
-                fig.savefig(out_path, dpi=300, bbox_inches='tight')
+                self._save_figure(fig, out_path)
                 plt.close(fig)
         self._report_export_progress(1.0, "当前任务完成")
 
@@ -1553,7 +1635,7 @@ class AcousticChartExporter:
                      ha='right', va='bottom', fontsize=9, color='gray')
 
             out_path = os.path.join(dir_name, f"{name_part}_第{page_idx + 1}页{ext}")
-            fig.savefig(out_path, dpi=300, bbox_inches='tight')
+            self._save_figure(fig, out_path)
             plt.close(fig)
 
 
@@ -1574,8 +1656,10 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         self.title("声学图表导出 - 声视化工具箱")
         self.geometry("980x640")
         self.resizable(True, True)
-        self.transient(parent)
-        self.grab_set()
+        # self.transient(parent)
+        # self.grab_set()
+        if self.app:
+            self.app.active_chart_dialog = self
         self.protocol("WM_DELETE_WINDOW", self._on_close_request)
         self._export_worker = None
         self._export_cancel_event = None
@@ -1618,6 +1702,9 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         # GUI Structure
         self._build_gui()
         self._populate_groups_list()
+
+        # Update pixel options state based on initial format
+        self._update_pixel_options_state()
 
         # Render Initial Preview
         self.update_preview()
@@ -1699,6 +1786,12 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         # Legend configuration
         self.var_legend_outside = ctk.BooleanVar(value=False)
 
+        # Image Size & Pixel configuration
+        self.var_image_ratio_mode = ctk.StringVar(value="默认")
+        self.var_image_ratio_custom = ctk.DoubleVar(value=1.5)
+        self.var_image_pixel_mode = ctk.StringVar(value="默认")
+        self.var_image_pixel_custom = ctk.IntVar(value=1080)
+
     def _init_group_filters(self):
         # Extract all unique group names across all speakers
         all_entries = self._extract_active_data(self.all_speakers if self.all_speakers else [self.active_speaker])
@@ -1733,14 +1826,21 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         self.right_frame.grid_rowconfigure(3, weight=0)
         self.right_frame.grid_columnconfigure(0, weight=1)
 
-        # Preview Canvas Container
-        self.preview_container = ctk.CTkFrame(self.right_frame, fg_color="#F3F4F6", border_width=1, border_color="#D1D5DB")
-        self.preview_container.grid(row=0, column=0, sticky="nsew", pady=(0, 15))
+        # Preview Canvas Container wrapped to maintain target aspect ratio
+        self.preview_wrapper = ctk.CTkFrame(self.right_frame, fg_color="transparent")
+        self.preview_wrapper.grid(row=0, column=0, sticky="nsew", pady=(0, 15))
+        self.preview_wrapper.grid_rowconfigure(0, weight=1)
+        self.preview_wrapper.grid_columnconfigure(0, weight=1)
+
+        self.preview_container = ctk.CTkFrame(self.preview_wrapper, fg_color="#F3F4F6", border_width=1, border_color="#D1D5DB")
+        self.preview_container.place(relx=0.5, rely=0.5, anchor="center")
         self.preview_container.grid_rowconfigure(0, weight=1)
         self.preview_container.grid_columnconfigure(0, weight=1)
 
         self.preview_lbl = ctk.CTkLabel(self.preview_container, text="正在加载图表预览...", font=self.font_title, text_color="#6B7280")
         self.preview_lbl.grid(row=0, column=0)
+
+        self.preview_wrapper.bind("<Configure>", lambda e: self.on_preview_wrapper_configure())
 
         # Pagination Frame (Hidden by default, shown when scope is separate)
         self.pagination_frame = ctk.CTkFrame(self.right_frame, fg_color="transparent")
@@ -1792,7 +1892,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         self.bottom_frame = ctk.CTkFrame(self.right_frame, fg_color="transparent")
         self.bottom_frame.grid(row=3, column=0, sticky="ew")
 
-        ctk.CTkButton(self.bottom_frame, text="🔄 刷新预览", width=120, height=38, corner_radius=19, fg_color="#E5E7EB", text_color="#374151", hover_color="#D1D5DB", font=self.font_main, command=self.update_preview).pack(side=tk.LEFT, padx=5)
+        ctk.CTkButton(self.bottom_frame, text="🔄 刷新预览", width=120, height=38, corner_radius=19, fg_color="#E5E7EB", text_color="#374151", hover_color="#D1D5DB", font=self.font_main, command=self.manual_refresh_preview).pack(side=tk.LEFT, padx=5)
 
         self.switch_live_refresh = ctk.CTkSwitch(
             self.bottom_frame, text="实时刷新", variable=self.var_live_refresh,
@@ -1951,7 +2051,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         self.combo_legend_loc.grid(row=4, column=0, sticky="ew", padx=(15, 5), pady=(0, 10))
         self._apply_custom_arrow(self.combo_legend_loc)
 
-        self.combo_format = ctk.CTkOptionMenu(card2, values=["PNG 图片 (.png)", "SVG 矢量图 (.svg)", "PDF 文档 (.pdf)"], **self.dropdown_kwargs)
+        self.combo_format = ctk.CTkOptionMenu(card2, values=["PNG 图片 (.png)", "SVG 矢量图 (.svg)", "PDF 文档 (.pdf)"], command=self._on_format_changed, **self.dropdown_kwargs)
         self.combo_format.set("PNG 图片 (.png)")
         self.combo_format.grid(row=4, column=1, sticky="ew", padx=(5, 15), pady=(0, 10))
         self._apply_custom_arrow(self.combo_format)
@@ -1964,6 +2064,52 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             command=self.update_preview
         )
         self.cb_legend_outside.grid(row=5, column=0, columnspan=2, sticky="w", padx=15, pady=(0, 15))
+
+        # --- CARD 2.5: Image Size & Pixels Settings ---
+        card_size = ctk.CTkFrame(self.left_scroll, fg_color=("#FFFFFF", "#1E293B"), border_width=1, border_color=("#E5E7EB", "#475569"), corner_radius=12)
+        card_size.pack(fill=tk.X, **card_padding)
+        card_size.grid_columnconfigure(0, weight=1)
+        card_size.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(card_size, text="📐 图像尺寸与比例", font=self.font_title).grid(row=0, column=0, columnspan=2, sticky="w", padx=15, pady=(10, 5))
+
+        # Ratio Mode Label & OptionMenu
+        ctk.CTkLabel(card_size, text="图片比例 (宽/高):", font=self.font_small).grid(row=1, column=0, sticky="w", padx=(15, 5), pady=(5, 2))
+        self.combo_ratio_mode = ctk.CTkOptionMenu(card_size, values=["默认", "4:3", "16:9", "3:2", "1:1", "16:10", "2:1", "自定义"], command=self._on_ratio_mode_changed, **self.dropdown_kwargs)
+        self.combo_ratio_mode.set("默认")
+        self.combo_ratio_mode.grid(row=2, column=0, sticky="ew", padx=(15, 5), pady=(0, 10))
+        self._apply_custom_arrow(self.combo_ratio_mode)
+
+        # Pixel Mode Label & OptionMenu
+        ctk.CTkLabel(card_size, text="最小边像素 (对于PNG):", font=self.font_small).grid(row=1, column=1, sticky="w", padx=(5, 15), pady=(5, 2))
+        self.combo_pixel_mode = ctk.CTkOptionMenu(card_size, values=["默认", "480 px", "600 px", "720 px", "1080 px", "1440 px", "2160 px", "自定义"], command=self._on_pixel_mode_changed, **self.dropdown_kwargs)
+        self.combo_pixel_mode.set("默认")
+        self.combo_pixel_mode.grid(row=2, column=1, sticky="ew", padx=(5, 15), pady=(0, 10))
+        self._apply_custom_arrow(self.combo_pixel_mode)
+
+        # Row 3: Custom Controls
+        # Custom Ratio Slider Row (Left column)
+        self.ratio_custom_frame = ctk.CTkFrame(card_size, fg_color="transparent")
+        self.ratio_custom_frame.grid(row=3, column=0, sticky="nsew", padx=(15, 5), pady=(0, 10))
+        self.ratio_custom_frame.grid_columnconfigure(0, weight=1)
+
+        self.slider_ratio_custom = ctk.CTkSlider(self.ratio_custom_frame, from_=0.5, to=2.5, number_of_steps=40, variable=self.var_image_ratio_custom, command=self._on_ratio_slider_change)
+        self.slider_ratio_custom.grid(row=0, column=0, sticky="ew")
+        self.slider_ratio_custom.configure(state="disabled")
+
+        self.lbl_ratio_val = ctk.CTkLabel(self.ratio_custom_frame, text="1.50", font=self.font_small)
+        self.lbl_ratio_val.grid(row=0, column=1, padx=(5, 0))
+
+        # Custom Pixel Entry Row (Right column)
+        self.pixel_custom_frame = ctk.CTkFrame(card_size, fg_color="transparent")
+        self.pixel_custom_frame.grid(row=3, column=1, sticky="nsew", padx=(5, 15), pady=(0, 10))
+        self.pixel_custom_frame.grid_columnconfigure(0, weight=1)
+
+        self.entry_pixel_custom = ctk.CTkEntry(self.pixel_custom_frame, placeholder_text="1080", font=self.font_small, height=28, border_width=1, border_color="#D1D5DB")
+        self.entry_pixel_custom.insert(0, "1080")
+        self.entry_pixel_custom.grid(row=0, column=0, sticky="ew")
+        self.entry_pixel_custom.configure(state="disabled")
+        self.entry_pixel_custom.bind("<KeyRelease>", lambda e: self.trigger_preview_update())
 
         # --- CARD 3: Dynamic Options Frame ---
         self.dynamic_card = ctk.CTkFrame(self.left_scroll, fg_color=("#FFFFFF", "#1E293B"), border_width=1, border_color=("#E5E7EB", "#475569"), corner_radius=12)
@@ -2529,6 +2675,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             'density_m_min', 'density_m_max', 'density_max_points',
             'qc_view', 'overview_metric',
             'legend_loc', 'legend_outside', 'intention',
+            'image_ratio_mode', 'image_ratio_custom', 'image_pixel_mode', 'image_pixel_custom',
         ]
         snapshot = {}
         for key in keys:
@@ -2722,6 +2869,132 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             self._preview_poll_job = None
         self.destroy()
 
+    def destroy(self):
+        if self.app and getattr(self.app, 'active_chart_dialog', None) == self:
+            try:
+                self.app.active_chart_dialog = None
+            except Exception:
+                pass
+        ctk.CTkToplevel.destroy(self)
+
+    def manual_refresh_preview(self):
+        if getattr(self, 'sm', None):
+            active_spk = self.sm.get_active_speaker()
+            if active_spk:
+                self.active_speaker = active_spk
+        self._force_live_extract = True
+        try:
+            self._update_group_filters()
+            self.update_preview()
+        finally:
+            self._force_live_extract = False
+
+    def _update_group_filters(self):
+        all_entries = self._extract_active_data(self.all_speakers if self.all_speakers else [self.active_speaker])
+        new_group_counts = {}
+        for entry in all_entries:
+            g = entry['group']
+            new_group_counts[g] = new_group_counts.get(g, 0) + 1
+
+        new_available_groups = sorted(list(new_group_counts.keys()))
+        new_group_checkbox_vars = {}
+        for g in new_available_groups:
+            if hasattr(self, 'group_checkbox_vars') and g in self.group_checkbox_vars:
+                new_group_checkbox_vars[g] = self.group_checkbox_vars[g]
+            else:
+                new_group_checkbox_vars[g] = ctk.BooleanVar(value=True)
+
+        self.group_counts = new_group_counts
+        self.available_groups = new_available_groups
+        self.group_checkbox_vars = new_group_checkbox_vars
+
+        self._populate_groups_list()
+
+    def _on_format_changed(self, val):
+        self._update_pixel_options_state()
+        self.update_preview()
+
+    def _on_ratio_mode_changed(self, val):
+        if val == "自定义":
+            self.slider_ratio_custom.configure(state="normal")
+        else:
+            self.slider_ratio_custom.configure(state="disabled")
+        self.on_preview_wrapper_configure()
+        self.update_preview()
+
+    def _on_pixel_mode_changed(self, val):
+        if val == "自定义":
+            self.entry_pixel_custom.configure(state="normal")
+        else:
+            self.entry_pixel_custom.configure(state="disabled")
+        self.update_preview()
+
+    def _on_ratio_slider_change(self, val):
+        self.lbl_ratio_val.configure(text=f"{val:.2f}")
+        self.on_preview_wrapper_configure()
+        self.trigger_preview_update()
+
+    def on_preview_wrapper_configure(self, event=None):
+        if not hasattr(self, 'preview_wrapper') or not hasattr(self, 'preview_container'):
+            return
+        w_avail = self.preview_wrapper.winfo_width()
+        h_avail = self.preview_wrapper.winfo_height()
+        if w_avail < 50 or h_avail < 50:
+            return
+
+        ratio_mode = self.get_param('image_ratio_mode', '默认')
+        custom_ratio = self.get_param('image_ratio_custom', 1.5)
+
+        if ratio_mode == "默认":
+            self.preview_container.place_forget()
+            self.preview_container.configure(width=0, height=0)
+            self.preview_container.place(
+                relx=0.0,
+                rely=0.0,
+                x=0,
+                y=0,
+                relwidth=1.0,
+                relheight=1.0,
+                anchor="nw",
+            )
+            return
+
+        ratio_map = {
+            "4:3": 4.0 / 3.0,
+            "16:9": 16.0 / 9.0,
+            "3:2": 3.0 / 2.0,
+            "1:1": 1.0,
+            "16:10": 16.0 / 10.0,
+            "2:1": 2.0
+        }
+        R = ratio_map.get(ratio_mode, custom_ratio)
+
+        if w_avail / h_avail >= R:
+            h_target = h_avail
+            w_target = h_avail * R
+        else:
+            w_target = w_avail
+            h_target = w_avail / R
+
+        self.preview_container.place_forget()
+        self.preview_container.configure(width=int(w_target), height=int(h_target))
+        self.preview_container.place(
+            relx=0.5, rely=0.5, anchor="center"
+        )
+
+    def _update_pixel_options_state(self):
+        fmt = self.combo_format.get()
+        is_vector = "svg" in fmt.lower() or "pdf" in fmt.lower()
+        if is_vector:
+            self.combo_pixel_mode.configure(state="disabled")
+            self.entry_pixel_custom.configure(state="disabled")
+        else:
+            self.combo_pixel_mode.configure(state="normal")
+            if self.combo_pixel_mode.get() == "自定义":
+                self.entry_pixel_custom.configure(state="normal")
+            else:
+                self.entry_pixel_custom.configure(state="disabled")
+
     def _destroy_export_progress_window(self):
         if self._export_poll_job is not None:
             try:
@@ -2844,6 +3117,12 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
     def on_confirm(self):
         if self._export_worker is not None and self._export_worker.is_alive():
             return messagebox.showwarning("提示", "已有导出任务正在进行，请稍候或先取消。", parent=self)
+
+        # Sync active speaker before exporting
+        if getattr(self, 'sm', None):
+            active_spk = self.sm.get_active_speaker()
+            if active_spk:
+                self.active_speaker = active_spk
 
         scope = self.var_export_scope.get()
         fmt = self.combo_format.get()

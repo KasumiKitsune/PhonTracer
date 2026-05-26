@@ -33,6 +33,7 @@ class TestCloseConfirmation(unittest.TestCase):
         with patch('modules.app.PhoneticsApp.setup_icons'), \
              patch('modules.app.PhoneticsApp.setup_ui'), \
              patch('modules.app.PhoneticsApp._schedule_drop_queue_check'), \
+             patch('modules.app.PhoneticsApp._schedule_window_guard'), \
              patch('modules.app.PhoneticsApp.check_update'), \
              patch('windnd.hook_dropfiles'), \
              patch('modules.app.ProjectManager'), \
@@ -123,6 +124,28 @@ class TestCloseConfirmation(unittest.TestCase):
             self.assertFalse(self.app.has_changes)
             self.assertEqual(self.app.current_project_path, test_path)
             mock_info.assert_called_once()
+
+    def test_import_project_blocked_when_chart_dialog_is_open(self):
+        self.app.active_chart_dialog = MagicMock()
+        self.app.active_chart_dialog.winfo_exists.return_value = True
+
+        with patch('tkinter.messagebox.showwarning') as mock_warning:
+            self.app.on_import_project()
+
+        mock_warning.assert_called_once()
+        self.app.project_manager.load_project.assert_not_called()
+
+    def test_stale_chart_dialog_reference_is_cleared(self):
+        stale_dialog = MagicMock()
+        stale_dialog.winfo_exists.return_value = False
+        self.app.active_chart_dialog = stale_dialog
+
+        with patch('tkinter.filedialog.askopenfilename', return_value=""), \
+             patch('tkinter.messagebox.showwarning') as mock_warning:
+            self.app.on_import_project()
+
+        mock_warning.assert_not_called()
+        self.assertIsNone(self.app.active_chart_dialog)
 
     def test_on_closing_without_changes_destroys_root(self):
         """Verify that on_closing immediately destroys the app if there are no changes"""

@@ -489,5 +489,119 @@ class TestAcousticExporterFeatures(unittest.TestCase):
         self.assertEqual(pages[0][0]['row_id'], ('Group1', 'ma'))
         self.assertEqual(pages[1][0]['row_id'], ('Group2', 'ma'))
 
+    def test_aspect_ratio_and_dpi_settings(self):
+        project_tree = MagicMock()
+        project_tree.app_state_params = {'pts': 5}
+        exporter = AcousticChartExporter(project_tree=project_tree)
+
+        # 1. Test DPI calculation
+        # Default or vector formats should return 300
+        exporter.params = {'format': 'pdf', 'image_pixel_mode': '1080 px'}
+        self.assertEqual(exporter._get_save_dpi(), 300)
+
+        exporter.params = {'format': 'svg', 'image_pixel_mode': '1080 px'}
+        self.assertEqual(exporter._get_save_dpi(), 300)
+
+        # PNG with defaults should return 300
+        exporter.params = {'format': 'png', 'image_pixel_mode': '默认'}
+        self.assertEqual(exporter._get_save_dpi(), 300)
+
+        dummy_fig = MagicMock()
+        dummy_fig.get_size_inches.return_value = (12.0, 6.0)
+
+        # Custom presets should use the figure's true minimum edge
+        exporter.params = {'format': 'png', 'image_pixel_mode': '720 px'}
+        self.assertEqual(exporter._resolve_save_dpi(dummy_fig), 720 / 6.0) # 120
+
+        # Custom pixels
+        exporter.params = {'format': 'png', 'image_pixel_mode': '自定义', 'image_pixel_custom': 600}
+        self.assertEqual(exporter._resolve_save_dpi(dummy_fig), 600 / 6.0) # 100
+
+        # Different figure size should scale from the actual minimum edge, not a fixed 6-inch assumption
+        dummy_fig_wide = MagicMock()
+        dummy_fig_wide.get_size_inches.return_value = (8.0, 4.0)
+        exporter.params = {'format': 'png', 'image_pixel_mode': '720 px'}
+        self.assertEqual(exporter._resolve_save_dpi(dummy_fig_wide), 720 / 4.0) # 180
+
+        # 2. Test aspect ratio resize in generate_plot
+        dummy_data = [{
+            'speaker_name': 'S1',
+            'group': 'T1',
+            'label': 'a',
+            'syl_data': [(1.0, [100.0] * 5)],
+            'raw_xs': np.linspace(0.0, 1.0, 5),
+            'raw_freqs': np.linspace(100.0, 140.0, 5),
+            'normalized_raw_freqs': np.linspace(1.0, 4.0, 5),
+            'normalized_syl_data': [(1.0, [1.0] * 5)],
+            'raw_item': {},
+        }]
+
+        # Standard ratio (16:9)
+        exporter.params = {
+            'chart_type': 'contour',
+            'groupby': 'group',
+            'scale': 't_value',
+            'image_ratio_mode': '16:9',
+            'image_ratio_custom': 1.5,
+        }
+        fig = exporter.generate_plot(dummy_data, is_preview=True)
+        w, h = fig.get_size_inches()
+        self.assertAlmostEqual(w / h, 16/9, places=4)
+        self.assertAlmostEqual(h, 6.0)
+
+        # Custom ratio (2.5)
+        exporter.params = {
+            'chart_type': 'contour',
+            'groupby': 'group',
+            'scale': 't_value',
+            'image_ratio_mode': '自定义',
+            'image_ratio_custom': 2.5,
+        }
+        fig2 = exporter.generate_plot(dummy_data, is_preview=True)
+        w2, h2 = fig2.get_size_inches()
+        self.assertAlmostEqual(w2 / h2, 2.5, places=4)
+
+    def test_preview_wrapper_default_ratio_resets_manual_place_geometry(self):
+        project_tree = MagicMock()
+        project_tree.app_state_params = {'pts': 11}
+        project_tree._get_items_by_group_for_dict.return_value = [("Group1", ["item1"])]
+
+        speaker = MagicMock()
+        speaker.name = "Speaker 1"
+        speaker.items = {}
+
+        app = MagicMock()
+        app.speaker_manager.get_active_speaker.return_value = speaker
+
+        with patch.object(AcousticChartExportDialog, '_extract_active_data', return_value=[]), \
+             patch.object(AcousticChartExportDialog, 'update_preview'):
+            dlg = AcousticChartExportDialog(
+                self.root, app=app, project_tree=project_tree,
+                mode='single', all_speakers=[speaker]
+            )
+
+            dlg.preview_wrapper = MagicMock()
+            dlg.preview_wrapper.winfo_width.return_value = 800
+            dlg.preview_wrapper.winfo_height.return_value = 600
+            dlg.preview_container = MagicMock()
+            dlg.combo_ratio_mode = MagicMock()
+            dlg.combo_ratio_mode.get.return_value = "默认"
+
+            dlg.on_preview_wrapper_configure()
+
+            dlg.preview_container.place_forget.assert_called_once()
+            dlg.preview_container.configure.assert_called_once_with(width=0, height=0)
+            dlg.preview_container.place.assert_called_once_with(
+                relx=0.0,
+                rely=0.0,
+                x=0,
+                y=0,
+                relwidth=1.0,
+                relheight=1.0,
+                anchor="nw",
+            )
+
+            dlg.destroy()
+
 if __name__ == '__main__':
     unittest.main()

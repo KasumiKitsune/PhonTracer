@@ -1459,6 +1459,17 @@ class ProjectTreePanel:
 
         def do_export(format_mode):
             if format_mode == 'line_chart':
+                existing_dialog = getattr(self.app, 'active_chart_dialog', None)
+                if existing_dialog is not None:
+                    try:
+                        if existing_dialog.winfo_exists():
+                            dlg.destroy()
+                            existing_dialog.deiconify()
+                            existing_dialog.lift()
+                            existing_dialog.focus_force()
+                            return
+                    except Exception:
+                        self.app.active_chart_dialog = None
                 dlg.destroy()
                 from .acoustic_exporter import AcousticChartExportDialog
                 AcousticChartExportDialog(self.parent, app=self.app, project_tree=self, mode=mode, all_speakers=all_speakers)

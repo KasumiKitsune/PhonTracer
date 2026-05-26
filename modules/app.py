@@ -70,6 +70,7 @@ class PhoneticsApp:
         self.export_numbering_rule_var = ctk.StringVar(value="continuous")
         self.has_changes = False
         self.current_project_path = None
+        self.active_chart_dialog = None
 
         # Shared ProcessPoolExecutor for performance optimization
         max_workers = min(os.cpu_count() or 4, 8)
@@ -258,6 +259,18 @@ class PhoneticsApp:
         except Exception:
             pass
 
+    def _has_active_chart_dialog(self):
+        dlg = getattr(self, 'active_chart_dialog', None)
+        if dlg is None:
+            return False
+        try:
+            if dlg.winfo_exists():
+                return True
+        except Exception:
+            pass
+        self.active_chart_dialog = None
+        return False
+
     def _process_dlg_dropped_files(self, files):
         if not getattr(self, 'active_import_dlg', None) or not self.active_import_dlg.winfo_exists():
             return
@@ -381,6 +394,9 @@ class PhoneticsApp:
         self.drop_queue.put(files)
 
     def _process_dropped_files(self, files):
+        if self._has_active_chart_dialog():
+            messagebox.showwarning("提示", "图表编辑器已打开，修改图表期间禁止通过拖入文件进行导入/更改操作。")
+            return
         decoded_paths = []
         for f in files:
             if isinstance(f, bytes):
@@ -1699,6 +1715,9 @@ class PhoneticsApp:
 
     # --- 核心调度 ---
     def load_long_audio(self):
+        if self._has_active_chart_dialog():
+            messagebox.showwarning("提示", "图表编辑器已打开，修改图表期间禁止导入音频文件。")
+            return
         path = filedialog.askopenfilename(filetypes=[("Audio Files", "*.wav *.mp3")])
         if not path: return
         self.lbl_long_file.configure(text=os.path.basename(path), text_color="#9CA3AF")
@@ -2035,6 +2054,9 @@ class PhoneticsApp:
         threading.Thread(target=run, daemon=True).start()
 
     def load_batch_audio(self):
+        if self._has_active_chart_dialog():
+            messagebox.showwarning("提示", "图表编辑器已打开，修改图表期间禁止导入音频文件。")
+            return
         paths = filedialog.askopenfilenames(filetypes=[("Audio Files", "*.wav *.mp3")])
         if not paths: return
         self.pending_batch_paths = list(paths)
@@ -2275,6 +2297,9 @@ class PhoneticsApp:
         threading.Thread(target=run, daemon=True).start()
 
     def open_text_dialog(self, mode):
+        if self._has_active_chart_dialog():
+            messagebox.showwarning("提示", "图表编辑器已打开，修改图表期间禁止更改/导入字表。")
+            return
         if mode == 'long' and not self.pending_long_snd:
             return messagebox.showwarning("提示", "请先导入一条长音频。")
         if mode == 'batch' and not self.pending_batch_paths:
@@ -2895,6 +2920,9 @@ class PhoneticsApp:
         return True
 
     def on_import_project(self):
+        if self._has_active_chart_dialog():
+            messagebox.showwarning("提示", "图表编辑器已打开，修改图表期间禁止导入新工程。")
+            return
         path = filedialog.askopenfilename(filetypes=[("PhonTracer Project", "*.teproj *.zip")])
         if not path: return
         
