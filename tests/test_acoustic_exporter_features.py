@@ -383,5 +383,111 @@ class TestAcousticExporterFeatures(unittest.TestCase):
                 
             dlg.destroy()
 
+    def test_overview_heatmap_sorting_gaps_and_pagination(self):
+        project_tree = MagicMock()
+        project_tree.app_state_params = {'pts': 5}
+
+        exporter = AcousticChartExporter(project_tree=project_tree)
+        exporter.available_groups = ['Group1', 'Group2']
+        exporter.colors = ['#2563EB', '#DC2626']
+
+        dummy_data = [
+            {
+                'speaker_name': 'Speaker 1',
+                'group': 'Group2',
+                'label': 'ba',
+                'syl_data': [(0.8, [100.0, 110.0, 120.0, 130.0, 140.0])],
+                'normalized_syl_data': [(0.8, [1.0, 2.0, 3.0, 4.0, 5.0])],
+            },
+            {
+                'speaker_name': 'Speaker 1',
+                'group': 'Group1',
+                'label': 'ma',
+                'syl_data': [(0.8, [110.0, 120.0, 130.0, 140.0, 150.0])],
+                'normalized_syl_data': [(0.8, [1.5, 2.5, 3.5, 4.5, 5.0])],
+            }
+        ]
+
+        fig = exporter._plot_tone_overview_heatmap(dummy_data, "label", "T 值")
+        self.assertIsNotNone(fig)
+        
+        ax = fig.axes[0]
+        yticks = ax.get_yticks()
+        yticklabels = [t.get_text() for t in ax.get_yticklabels()]
+        self.assertEqual(list(yticks), [0, 2])
+        self.assertIn("ma", yticklabels[0])
+        self.assertIn("ba", yticklabels[1])
+
+        large_data = []
+        for i in range(25):
+            large_data.append({
+                'speaker_name': 'Speaker 1',
+                'group': 'Group1',
+                'label': f'word_{i:02d}',
+                'syl_data': [(0.8, [100.0] * 5)],
+                'normalized_syl_data': [(0.8, [1.0] * 5)],
+            })
+
+        exporter.params = {
+            'chart_type': 'overview_heatmap',
+            'groupby': '按词语',
+            'intention': '附录图册 (完整数据)',
+            'scale': 't_value',
+        }
+
+        exporter._export_overview_heatmap_paginated_pdf = MagicMock()
+        exporter._export_overview_heatmap_paginated_images = MagicMock()
+
+        exporter._export_dataset(large_data, 'dummy_out.pdf', '.pdf')
+
+        exporter._export_overview_heatmap_paginated_pdf.assert_called_once()
+        args = exporter._export_overview_heatmap_paginated_pdf.call_args[0]
+        self.assertEqual(args[0], 'dummy_out.pdf')
+        pages = args[3]
+        self.assertEqual(len(pages), 2)
+        self.assertEqual(len(pages[0]), 20)
+        self.assertEqual(len(pages[1]), 5)
+
+    def test_overview_heatmap_keeps_duplicate_labels_separate_across_groups(self):
+        project_tree = MagicMock()
+        project_tree.app_state_params = {'pts': 5}
+
+        exporter = AcousticChartExporter(project_tree=project_tree)
+        exporter.params = {
+            'chart_type': 'overview_heatmap',
+            'groupby': '按词语',
+            'intention': '附录图册 (完整数据)',
+            'scale': 't_value',
+        }
+
+        duplicate_label_data = [
+            {
+                'speaker_name': 'Speaker 1',
+                'group': 'Group1',
+                'label': 'ma',
+                'syl_data': [(0.8, [100.0] * 5)],
+                'normalized_syl_data': [(0.8, [1.0] * 5)],
+            },
+            {
+                'speaker_name': 'Speaker 1',
+                'group': 'Group2',
+                'label': 'ma',
+                'syl_data': [(0.8, [120.0] * 5)],
+                'normalized_syl_data': [(0.8, [2.0] * 5)],
+            },
+        ]
+
+        fig = exporter._plot_tone_overview_heatmap(duplicate_label_data, "label", "T 值")
+        ax = fig.axes[0]
+        yticklabels = [tick.get_text() for tick in ax.get_yticklabels()]
+        self.assertEqual(yticklabels, ["ma (N=1)", "ma (N=1)"])
+
+        exporter._export_overview_heatmap_paginated_pdf = MagicMock()
+        exporter._export_dataset(duplicate_label_data, 'dup.pdf', '.pdf')
+        pages = exporter._export_overview_heatmap_paginated_pdf.call_args[0][3]
+        self.assertEqual(len(pages), 2)
+        self.assertEqual(pages[0][0]['row_id'], ('Group1', 'ma'))
+        self.assertEqual(pages[1][0]['row_id'], ('Group2', 'ma'))
+
 if __name__ == '__main__':
     unittest.main()

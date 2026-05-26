@@ -80,6 +80,15 @@ class AcousticChartExporter:
         self._render_runtime.cancel_event = None
         self._render_runtime.params = None
 
+    def _ensure_available_groups(self):
+        if not hasattr(self, 'available_groups') or not self.available_groups:
+            all_entries = self._extract_active_data(self.all_speakers if self.all_speakers else [self.active_speaker])
+            group_counts = {}
+            for entry in all_entries:
+                g = entry['group']
+                group_counts[g] = group_counts.get(g, 0) + 1
+            self.available_groups = sorted(list(group_counts.keys()))
+
     def _check_export_cancelled(self):
         cancel_event = getattr(self._render_runtime, "cancel_event", None)
         if cancel_event is not None and cancel_event.is_set():
@@ -109,6 +118,7 @@ class AcousticChartExporter:
             'groupby': lambda: getattr(self, 'combo_groupby').get() if hasattr(self, 'combo_groupby') else None,
             'scale': lambda: getattr(self, 'combo_scale').get() if hasattr(self, 'combo_scale') else None,
             'format': lambda: getattr(self, 'combo_format').get() if hasattr(self, 'combo_format') else None,
+            'intention': lambda: getattr(self, 'combo_intention').get() if hasattr(self, 'combo_intention') else None,
 
             # contour specific
             'contour_x': lambda: getattr(self, 'combo_contour_x').get() if hasattr(self, 'combo_contour_x') else None,
@@ -288,6 +298,94 @@ class AcousticChartExporter:
         else:
             return self._extract_active_data(self.all_speakers)
 
+    def _get_group_key(self, groupby_val):
+        if groupby_val in ("按词语", "label"):
+            return 'label'
+        if groupby_val in ("按发音人", "speaker"):
+            return 'speaker_name'
+        return 'group'
+
+    def _ordered_unique(self, values):
+        ordered = []
+        seen = set()
+        for value in values:
+            if value in seen:
+                continue
+            seen.add(value)
+            ordered.append(value)
+        return ordered
+
+    def _build_overview_word_rows(self, data_entries):
+        rows = []
+        present_groups = self._ordered_unique(entry['group'] for entry in data_entries)
+        preferred_order = list(getattr(self, 'available_groups', []) or [])
+        group_order = [group_name for group_name in preferred_order if group_name in present_groups]
+        for group_name in present_groups:
+            if group_name not in group_order:
+                group_order.append(group_name)
+
+        for group_name in group_order:
+            seen_labels = set()
+            for entry in data_entries:
+                if entry['group'] != group_name:
+                    continue
+                label = entry['label']
+                if label in seen_labels:
+                    continue
+                seen_labels.add(label)
+                rows.append({
+                    'row_id': (group_name, label),
+                    'group': group_name,
+                    'label': label,
+                })
+        return rows
+
+    def _build_overview_word_pages(self, data_entries, page_size=20):
+        rows = self._build_overview_word_rows(data_entries)
+        pages = []
+        current_group = None
+        current_page = []
+
+        for row in rows:
+            if row['group'] != current_group:
+                current_group = row['group']
+                current_page = []
+            if not current_page:
+                pages.append(current_page)
+            current_page.append(row)
+            if len(current_page) >= page_size:
+                current_page = []
+
+        return rows, pages
+
+    def _get_group_pagination_state(self, data_entries, chart_type, groupby_val):
+        group_key = self._get_group_key(groupby_val)
+        unique_groups = self._ordered_unique(entry[group_key] for entry in data_entries)
+        total_groups = len(unique_groups)
+        is_paginated_heatmap = (
+            chart_type == "overview_heatmap"
+            and group_key == "label"
+            and self.get_param('intention') == "附录图册 (完整数据)"
+        )
+
+        state = {
+            'group_key': group_key,
+            'unique_groups': unique_groups,
+            'total_groups': total_groups,
+            'is_paginated_heatmap': is_paginated_heatmap,
+            'total_pages': 1,
+            'pages': [],
+        }
+
+        if is_paginated_heatmap:
+            _, pages = self._build_overview_word_pages(data_entries)
+            state['pages'] = pages
+            state['total_pages'] = len(pages) if pages else 1
+        else:
+            state['total_pages'] = math.ceil(total_groups / 8) if total_groups > 0 else 1
+
+        return state
+
     # --- ADVANCED SCIENTIFIC PLOTTING ENGINE ---
     def generate_plot(self, data_entries, is_preview=True):
         plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS', 'sans-serif']
@@ -296,13 +394,7 @@ class AcousticChartExporter:
         chart_type = self.get_param('chart_type', 'contour')
         groupby_val = self.get_param('groupby', 'group')
         scale_val = self.get_param('scale', 't_value')
-
-        if groupby_val in ("按词语", "label"):
-            group_key = 'label'
-        elif groupby_val in ("按发音人", "speaker"):
-            group_key = 'speaker_name'
-        else:
-            group_key = 'group'
+        group_key = self._get_group_key(groupby_val)
 
         if not data_entries:
             fig, ax = plt.subplots(figsize=(6, 4))
@@ -310,15 +402,12 @@ class AcousticChartExporter:
             ax.axis('off')
             return fig
 
-        unique_groups = []
-        for e in data_entries:
-            val = e[group_key]
-            if val not in unique_groups:
-                unique_groups.append(val)
-
-        total_groups = len(unique_groups)
         page_size = 8
-        total_pages = math.ceil(total_groups / page_size) if total_groups > 0 else 1
+        pagination_state = self._get_group_pagination_state(data_entries, chart_type, groupby_val)
+        total_pages = pagination_state['total_pages']
+        total_groups = pagination_state['total_groups']
+        unique_groups = pagination_state['unique_groups']
+        is_paginated_heatmap = pagination_state['is_paginated_heatmap']
 
         if self.current_group_page < 0:
             self.current_group_page = 0
@@ -328,12 +417,18 @@ class AcousticChartExporter:
         P = self.current_group_page
 
         truncated = False
-        if is_preview and total_groups > page_size and chart_type != "overview_heatmap":
-            truncated = True
-            start_idx = P * page_size
-            end_idx = min(total_groups, start_idx + page_size)
-            allowed_groups = set(unique_groups[start_idx:end_idx])
-            data_entries = [e for e in data_entries if e[group_key] in allowed_groups]
+        if is_preview:
+            if is_paginated_heatmap:
+                truncated = True
+                current_page_rows = pagination_state['pages'][P] if P < len(pagination_state['pages']) else []
+                allowed_pairs = {row['row_id'] for row in current_page_rows}
+                data_entries = [e for e in data_entries if (e['group'], e['label']) in allowed_pairs]
+            elif total_groups > page_size and chart_type != "overview_heatmap":
+                truncated = True
+                start_idx = P * page_size
+                end_idx = min(total_groups, start_idx + page_size)
+                allowed_groups = set(unique_groups[start_idx:end_idx])
+                data_entries = [e for e in data_entries if e[group_key] in allowed_groups]
 
         if scale_val and ("T" in str(scale_val) or "t_value" in str(scale_val).lower()):
             scale = "T 值"
@@ -356,9 +451,16 @@ class AcousticChartExporter:
 
         if truncated:
             fig.subplots_adjust(top=0.88)
-            fig.text(0.5, 0.96, f"[预览提示] 当前共 {total_groups} 组，分 {total_pages} 页显示。当前预览第 {P+1} 页（显示第 {start_idx+1}~{end_idx} 组）。导出时将自动分页/完整输出。",
-                     ha='center', va='center', fontsize=10, color='#991B1B', weight='bold',
-                     bbox=dict(facecolor='#FEF2F2', edgecolor='#FCA5A5', boxstyle='round,pad=0.4'))
+            if is_paginated_heatmap:
+                current_page_rows = pagination_state['pages'][P] if P < len(pagination_state['pages']) else []
+                tg_name = current_page_rows[0]['group'] if current_page_rows else ""
+                fig.text(0.5, 0.96, f"[预览提示] 附录图册模式已自动分页。当前第 {P+1}/{total_pages} 页 (组别: {tg_name}，包含 {len(current_page_rows)} 个词语)。",
+                         ha='center', va='center', fontsize=10, color='#991B1B', weight='bold',
+                         bbox=dict(facecolor='#FEF2F2', edgecolor='#FCA5A5', boxstyle='round,pad=0.4'))
+            else:
+                fig.text(0.5, 0.96, f"[预览提示] 当前共 {total_groups} 组，分 {total_pages} 页显示。当前预览第 {P+1} 页（显示第 {start_idx+1}~{end_idx} 组）。导出时将自动分页/完整输出。",
+                         ha='center', va='center', fontsize=10, color='#991B1B', weight='bold',
+                         bbox=dict(facecolor='#FEF2F2', edgecolor='#FCA5A5', boxstyle='round,pad=0.4'))
 
         return fig
 
@@ -554,22 +656,47 @@ class AcousticChartExporter:
 
         grouped_data = {}
         for entry in data_entries:
-            val = entry[group_key]
+            val = (entry['group'], entry['label']) if group_key == 'label' else entry[group_key]
             if val not in grouped_data:
                 grouped_data[val] = []
             grouped_data[val].append(entry)
 
-        groups_sorted = sorted(list(grouped_data.keys()))
+        if group_key == 'label':
+            overview_rows = self._build_overview_word_rows(data_entries)
+            groups_sorted = [row['row_id'] for row in overview_rows if row['row_id'] in grouped_data]
+        else:
+            if group_key == 'group':
+                self._ensure_available_groups()
+                group_order = self.available_groups
+            else:
+                group_order = self._ordered_unique(entry[group_key] for entry in data_entries)
+            row_order = {value: idx for idx, value in enumerate(group_order)}
+            groups_sorted = sorted(list(grouped_data.keys()), key=lambda value: row_order.get(value, 999999))
+
         if not groups_sorted:
             fig, ax = plt.subplots(figsize=(6, 4))
             ax.text(0.5, 0.5, "没有找到有效的声调数据用于生成概览图", ha='center', va='center')
             return fig
 
         matrix = []
-        row_labels = []
+        y_ticks = []
+        y_labels = []
+        
+        last_tg = None
+        current_row_idx = 0
 
         for g_name in groups_sorted:
             entries = grouped_data[g_name]
+
+            if group_key == 'label':
+                tg, label_name = g_name
+                if last_tg is not None and tg != last_tg:
+                    matrix.append(np.full(total_points, np.nan))
+                    current_row_idx += 1
+                last_tg = tg
+            else:
+                label_name = g_name
+
             vectors = []
             for entry in entries:
                 syl_list = entry['normalized_syl_data'] if "T 值" in scale else entry['syl_data']
@@ -594,11 +721,13 @@ class AcousticChartExporter:
                 matrix.append(row_vec)
 
                 count = len(entries)
-                row_labels.append(f"{g_name} (N={count})")
+                y_ticks.append(current_row_idx)
+                y_labels.append(f"{label_name} (N={count})")
+                current_row_idx += 1
 
         matrix = np.array(matrix)
 
-        fig_height = max(4, len(row_labels) * 0.35 + 1.5)
+        fig_height = max(4, current_row_idx * 0.35 + 1.5)
         fig, ax = plt.subplots(figsize=(8, fig_height))
 
         if "均值" in metric:
@@ -610,7 +739,13 @@ class AcousticChartExporter:
             vmin = 0.0
             vmax = None
 
-        im = ax.imshow(matrix, cmap=cmap, aspect='auto', vmin=vmin, vmax=vmax)
+        try:
+            current_cmap = plt.colormaps.get_cmap(cmap).copy()
+        except AttributeError:
+            current_cmap = plt.cm.get_cmap(cmap).copy()
+        current_cmap.set_bad(color='white', alpha=0.0)
+
+        im = ax.imshow(matrix, cmap=current_cmap, aspect='auto', vmin=vmin, vmax=vmax)
 
         cbar = fig.colorbar(im, ax=ax, pad=0.02)
         if "均值" in metric:
@@ -618,8 +753,8 @@ class AcousticChartExporter:
         else:
             cbar.set_label("标准差 (SD)" if "T 值" in scale else "标准差 (Hz)")
 
-        ax.set_yticks(np.arange(len(row_labels)))
-        ax.set_yticklabels(row_labels, fontsize=9)
+        ax.set_yticks(y_ticks)
+        ax.set_yticklabels(y_labels, fontsize=9)
 
         ax.set_xticks(np.arange(total_points))
         x_labels = []
@@ -636,6 +771,9 @@ class AcousticChartExporter:
                 ax.axvline(k * num_points - 0.5, color='white', linestyle='--', linewidth=1.5, alpha=0.8)
 
         title_text = f"声调组别概览图 - {metric}"
+        unique_entry_groups = set(e['group'] for e in data_entries)
+        if len(unique_entry_groups) == 1:
+            title_text += f" (组别: {list(unique_entry_groups)[0]})"
         if len(set(e['speaker_name'] for e in data_entries)) == 1:
             title_text = f"{data_entries[0]['speaker_name']} - {title_text}"
         ax.set_title(title_text, fontsize=12, fontweight="bold", pad=15)
@@ -1336,12 +1474,7 @@ class AcousticChartExporter:
         self._report_export_progress(0.05, "正在准备导出数据...")
         chart_type = self.get_param('chart_type', 'contour')
         groupby = self.get_param('groupby', 'group')
-
-        group_key = 'group'
-        if groupby in ("按词语", "label"):
-            group_key = 'label'
-        elif groupby in ("按发音人", "speaker"):
-            group_key = 'speaker_name'
+        group_key = self._get_group_key(groupby)
 
         unique_groups = []
         for e in data:
@@ -1354,6 +1487,16 @@ class AcousticChartExporter:
             scale = "T 值"
         else:
             scale = "Hz"
+
+        pagination_state = self._get_group_pagination_state(data, chart_type, groupby)
+        if pagination_state['is_paginated_heatmap'] and pagination_state['pages']:
+            with _MATPLOTLIB_LOCK:
+                if ext == ".pdf":
+                    self._export_overview_heatmap_paginated_pdf(out_path, data, scale, pagination_state['pages'])
+                else:
+                    self._export_overview_heatmap_paginated_images(out_path, data, scale, ext, pagination_state['pages'])
+            self._report_export_progress(1.0, "当前任务完成")
+            return
 
         if len(unique_groups) > 8 and chart_type != "overview_heatmap":
             with _MATPLOTLIB_LOCK:
@@ -1371,6 +1514,47 @@ class AcousticChartExporter:
                 fig.savefig(out_path, dpi=300, bbox_inches='tight')
                 plt.close(fig)
         self._report_export_progress(1.0, "当前任务完成")
+
+    def _export_overview_heatmap_paginated_pdf(self, out_file, data, scale, pages):
+        from matplotlib.backends.backend_pdf import PdfPages
+        pdf_pages = PdfPages(out_file)
+        total_pages = len(pages)
+        try:
+            for page_idx, page_rows in enumerate(pages):
+                self._check_export_cancelled()
+                self._report_export_progress(0.15 + 0.75 * (page_idx / total_pages), f"正在导出分页概览图 {page_idx + 1}/{total_pages}...")
+
+                allowed_pairs = {row['row_id'] for row in page_rows}
+                chunk_entries = [e for e in data if (e['group'], e['label']) in allowed_pairs]
+                fig = self.generate_plot(chunk_entries, is_preview=False)
+
+                fig.text(0.95, 0.02, f"第 {page_idx + 1} 页 / 共 {total_pages} 页",
+                         ha='right', va='bottom', fontsize=9, color='gray')
+
+                pdf_pages.savefig(fig, bbox_inches='tight')
+                plt.close(fig)
+        finally:
+            pdf_pages.close()
+
+    def _export_overview_heatmap_paginated_images(self, base_path, data, scale, ext, pages):
+        total_pages = len(pages)
+        dir_name, file_name = os.path.split(base_path)
+        name_part, _ = os.path.splitext(file_name)
+
+        for page_idx, page_rows in enumerate(pages):
+            self._check_export_cancelled()
+            self._report_export_progress(0.15 + 0.75 * (page_idx / max(1, total_pages)), f"正在导出分页概览图 {page_idx + 1}/{total_pages}...")
+
+            allowed_pairs = {row['row_id'] for row in page_rows}
+            chunk_entries = [e for e in data if (e['group'], e['label']) in allowed_pairs]
+            fig = self.generate_plot(chunk_entries, is_preview=False)
+
+            fig.text(0.95, 0.02, f"第 {page_idx + 1} 页 / 共 {total_pages} 页",
+                     ha='right', va='bottom', fontsize=9, color='gray')
+
+            out_path = os.path.join(dir_name, f"{name_part}_第{page_idx + 1}页{ext}")
+            fig.savefig(out_path, dpi=300, bbox_inches='tight')
+            plt.close(fig)
 
 
 class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
@@ -1634,47 +1818,21 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         self.update_preview()
 
     def _prev_group_page(self):
-        import math
         data = self._get_current_data_entries()
-        if not data: return
-        groupby = self.combo_groupby.get()
-        group_key = 'group'
-        if groupby == "按词语":
-            group_key = 'label'
-        elif groupby == "按发音人":
-            group_key = 'speaker_name'
-
-        unique_groups = []
-        for e in data:
-            val = e[group_key]
-            if val not in unique_groups:
-                unique_groups.append(val)
-
-        total_groups = len(unique_groups)
-        total_pages = math.ceil(total_groups / 8) if total_groups > 0 else 1
+        if not data:
+            return
+        pagination_state = self._get_group_pagination_state(data, self.var_chart_type.get(), self.combo_groupby.get())
+        total_pages = pagination_state['total_pages']
 
         self.current_group_page = (self.current_group_page - 1) % total_pages
         self.update_preview()
 
     def _next_group_page(self):
-        import math
         data = self._get_current_data_entries()
-        if not data: return
-        groupby = self.combo_groupby.get()
-        group_key = 'group'
-        if groupby == "按词语":
-            group_key = 'label'
-        elif groupby == "按发音人":
-            group_key = 'speaker_name'
-
-        unique_groups = []
-        for e in data:
-            val = e[group_key]
-            if val not in unique_groups:
-                unique_groups.append(val)
-
-        total_groups = len(unique_groups)
-        total_pages = math.ceil(total_groups / 8) if total_groups > 0 else 1
+        if not data:
+            return
+        pagination_state = self._get_group_pagination_state(data, self.var_chart_type.get(), self.combo_groupby.get())
+        total_pages = pagination_state['total_pages']
 
         self.current_group_page = (self.current_group_page + 1) % total_pages
         self.update_preview()
@@ -2005,6 +2163,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             self.var_chart_type.set("overview_heatmap")
             self.dynamic_title.configure(text="⚙️ 声调组别概览图专有选项")
             self._build_overview_heatmap_settings()
+            self.combo_groupby.set("按词语")
 
         self._bind_left_scroll_wheel_recursive(self.dynamic_content_frame)
         self.update_preview()
@@ -2369,7 +2528,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             'density_normalization', 'density_p_low', 'density_p_high',
             'density_m_min', 'density_m_max', 'density_max_points',
             'qc_view', 'overview_metric',
-            'legend_loc', 'legend_outside',
+            'legend_loc', 'legend_outside', 'intention',
         ]
         snapshot = {}
         for key in keys:
@@ -2485,36 +2644,30 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
                 self.group_pagination_frame.grid_forget()
                 return
 
-            # Determine unique groups for pagination UI
             groupby = self.combo_groupby.get()
-            group_key = 'group'
-            if groupby == "按词语":
-                group_key = 'label'
-            elif groupby == "按发音人":
-                group_key = 'speaker_name'
-
-            unique_groups = []
-            for e in data:
-                val = e[group_key]
-                if val not in unique_groups:
-                    unique_groups.append(val)
-
-            total_groups = len(unique_groups)
             chart_type = self.var_chart_type.get()
-
-            show_group_pagination = (total_groups > 8 and chart_type != "overview_heatmap")
+            pagination_state = self._get_group_pagination_state(data, chart_type, groupby)
+            total_groups = pagination_state['total_groups']
+            total_pages = pagination_state['total_pages']
+            is_paginated_heatmap = pagination_state['is_paginated_heatmap']
+            show_group_pagination = (total_groups > 8 and chart_type != "overview_heatmap") or is_paginated_heatmap
             if show_group_pagination:
                 self.group_pagination_frame.grid(row=2, column=0, pady=(0, 10))
-                import math
-                total_pages = math.ceil(total_groups / 8)
                 if self.current_group_page < 0:
                     self.current_group_page = 0
                 elif self.current_group_page >= total_pages:
                     self.current_group_page = max(0, total_pages - 1)
 
-                self.lbl_group_page_info.configure(
-                    text=f"组别页码: {self.current_group_page+1}/{total_pages} (当前显示第 {self.current_group_page*8+1}~{min(total_groups, (self.current_group_page+1)*8)} 组，共 {total_groups} 组)"
-                )
+                if is_paginated_heatmap:
+                    current_chunk = pagination_state['pages'][self.current_group_page] if self.current_group_page < len(pagination_state['pages']) else []
+                    tg_name = current_chunk[0]['group'] if current_chunk else ""
+                    self.lbl_group_page_info.configure(
+                        text=f"组别页码: {self.current_group_page+1}/{total_pages} (当前显示组别: {tg_name}，共 {len(current_chunk)} 个词语)"
+                    )
+                else:
+                    self.lbl_group_page_info.configure(
+                        text=f"组别页码: {self.current_group_page+1}/{total_pages} (当前显示第 {self.current_group_page*8+1}~{min(total_groups, (self.current_group_page+1)*8)} 组，共 {total_groups} 组)"
+                    )
             else:
                 self.group_pagination_frame.grid_forget()
 
