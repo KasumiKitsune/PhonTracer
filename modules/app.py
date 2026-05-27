@@ -3789,16 +3789,21 @@ class PhoneticsApp:
                     self.root.after(0, lambda: messagebox.showwarning("无法可靠建议", "有效有声数据太少，无法进行可靠建议。请先导入更多音频，或确保当前音频包含足够稳定发音段。"))
                     return
 
-                # 计算中位数
+                # 计算百分位数与稳定时长
+                p5 = float(np.percentile(all_stable_f0, 5))
+                p10 = float(np.percentile(all_stable_f0, 10))
                 p50 = float(np.percentile(all_stable_f0, 50))
+                p90 = float(np.percentile(all_stable_f0, 90))
+                p95 = float(np.percentile(all_stable_f0, 95))
+                voiced_duration = len(all_stable_f0) * 0.01
 
-                # 基于基频分类推荐共振峰预设
+                # 基于基频声腔生理特征推荐共振峰预设 (精细/推荐/保守，越低越准确，越高越保守)
                 if p50 < 160.0:
-                    rec_preset = "成年男性"
+                    rec_preset = "精细范围"
                 elif p50 <= 250.0:
-                    rec_preset = "成年女性"
+                    rec_preset = "推荐范围"
                 else:
-                    rec_preset = "儿童"
+                    rec_preset = "保守范围"
 
                 def show_result_dialog():
                     self.stop_loading()
@@ -3806,7 +3811,13 @@ class PhoneticsApp:
                     FormantDetectionDialog(
                         parent=self.root,
                         app=self,
+                        p5=p5,
+                        p10=p10,
                         p50=p50,
+                        p90=p90,
+                        p95=p95,
+                        stable_count=len(all_stable_f0),
+                        stable_duration=voiced_duration,
                         recommended_preset=rec_preset
                     )
 
