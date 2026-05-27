@@ -3,6 +3,7 @@ from tkinter import filedialog, messagebox
 import customtkinter as ctk
 # pyrefly: ignore [missing-import]
 import parselmouth
+import copy
 import os
 import threading
 import concurrent.futures
@@ -731,17 +732,17 @@ class PhoneticsApp:
         self.tabview.pack(fill=tk.X, pady=(0, 10))
         self.tabview._segmented_button.configure(corner_radius=20)
 
-        # 基频提取引擎 (药丸型按钮)
-        self.engine_frame = ctk.CTkFrame(left_scrollable, fg_color="white", corner_radius=10)
-        self.engine_frame.pack(fill=tk.X, pady=(0, 10))
+        # 分析模式 (药丸型按钮)
+        self.mode_frame = ctk.CTkFrame(left_scrollable, fg_color="white", corner_radius=10)
+        self.mode_frame.pack(fill=tk.X, pady=(0, 10))
 
-        lbl_engine_title = ctk.CTkLabel(self.engine_frame, text="基频提取引擎", font=self.font_title, text_color="#111827")
-        lbl_engine_title.pack(side=tk.LEFT, padx=15, pady=10)
+        lbl_mode_title = ctk.CTkLabel(self.mode_frame, text="分析模式", font=self.font_title, text_color="#111827")
+        lbl_mode_title.pack(side=tk.LEFT, padx=15, pady=10)
 
-        self.engine_button = ctk.CTkSegmentedButton(
-            self.engine_frame,
-            values=["praat", "reaper"],
-            command=self.on_engine_change,
+        self.mode_button = ctk.CTkSegmentedButton(
+            self.mode_frame,
+            values=["声调/F0", "共振峰/F1-F2"],
+            command=self.on_analysis_mode_change,
             selected_color="#3B82F6",
             selected_hover_color="#2563EB",
             fg_color="#F3F4F6",
@@ -751,9 +752,10 @@ class PhoneticsApp:
             corner_radius=20,  # Pill shaped!
             height=32
         )
-        self.engine_button.pack(side=tk.RIGHT, padx=15, pady=10)
-        self.engine_button.set(self.last_params.get('f0_engine', 'praat'))
-        self._update_engine_button_text_colors()
+        self.mode_button.pack(side=tk.RIGHT, padx=15, pady=10)
+        initial_mode = "声调/F0" if self.last_params.get('analysis_mode', 'f0') == 'f0' else "共振峰/F1-F2"
+        self.mode_button.set(initial_mode)
+        self._update_mode_button_text_colors()
         tab_long = self.tabview.add("单条长音频")
         tab_batch = self.tabview.add("多条独立音频")
 
@@ -852,8 +854,12 @@ class PhoneticsApp:
         self.entry_min_dur.pack(side=tk.RIGHT)
         self.setup_entry_behavior(self.entry_min_dur, 'skip_front')
 
+        # F0 专属参数容器
+        self.f0_params_container = ctk.CTkFrame(self.params_content_frame, fg_color="transparent")
+        self.f0_params_container.pack(fill=tk.X)
+
         # Pitch 范围参数
-        row_pitch = ctk.CTkFrame(self.params_content_frame, fg_color="transparent")
+        row_pitch = ctk.CTkFrame(self.f0_params_container, fg_color="transparent")
         row_pitch.pack(fill=tk.X, padx=15, pady=5)
         ctk.CTkLabel(row_pitch, text=" F0 范围 (Hz):", image=self.icons.get("points"), compound="left", text_color="#374151", font=self.font_main).pack(side=tk.LEFT)
         self.btn_detect_f0 = CTkReleaseButton(
@@ -880,7 +886,7 @@ class PhoneticsApp:
         self.setup_entry_behavior(self.entry_pitch_floor, 'pitch_floor')
 
         # 浊音阈值参数
-        row_voicing = ctk.CTkFrame(self.params_content_frame, fg_color="transparent")
+        row_voicing = ctk.CTkFrame(self.f0_params_container, fg_color="transparent")
         row_voicing.pack(fill=tk.X, padx=15, pady=5)
         ctk.CTkLabel(row_voicing, text=" 浊音阈值:", image=self.icons.get("points"), compound="left", text_color="#374151", font=self.font_main).pack(side=tk.LEFT)
         self.entry_voicing_threshold = ctk.CTkEntry(row_voicing, width=55, justify="center", corner_radius=20, height=26)
@@ -888,19 +894,78 @@ class PhoneticsApp:
         self.entry_voicing_threshold.pack(side=tk.RIGHT)
         self.setup_entry_behavior(self.entry_voicing_threshold, 'voicing_threshold')
 
-        row_trim = ctk.CTkFrame(self.params_content_frame, fg_color="transparent")
-        row_trim.pack(fill=tk.X, padx=15, pady=(10, 15))
-        self.lbl_trim_icon = ctk.CTkLabel(row_trim, text="", image=self.icons.get("trim"))
+        # 共振峰专属参数容器
+        self.formant_params_container = ctk.CTkFrame(self.params_content_frame, fg_color="transparent")
+
+        # 共振峰参数 row 1: Formant Count (5)
+        row_formant_count = ctk.CTkFrame(self.formant_params_container, fg_color="transparent")
+        row_formant_count.pack(fill=tk.X, padx=15, pady=4)
+        ctk.CTkLabel(row_formant_count, text=" 数量 (N):", image=self.icons.get("points"), compound="left", text_color="#374151", font=self.font_main).pack(side=tk.LEFT)
+        self.entry_formant_count = ctk.CTkEntry(row_formant_count, width=65, justify="center", corner_radius=20, height=26)
+        self.entry_formant_count.insert(0, str(self.last_params.get('formant_count', 5)))
+        self.entry_formant_count.pack(side=tk.RIGHT)
+        self.setup_entry_behavior(self.entry_formant_count, 'formant_count')
+
+        # 共振峰参数 row 2: Max Formant Hz (5500)
+        row_formant_max = ctk.CTkFrame(self.formant_params_container, fg_color="transparent")
+        row_formant_max.pack(fill=tk.X, padx=15, pady=4)
+        ctk.CTkLabel(row_formant_max, text=" 最大频率 (Hz):", image=self.icons.get("points"), compound="left", text_color="#374151", font=self.font_main).pack(side=tk.LEFT)
+        self.entry_formant_max_hz = ctk.CTkEntry(row_formant_max, width=65, justify="center", corner_radius=20, height=26)
+        self.entry_formant_max_hz.insert(0, str(self.last_params.get('formant_max_hz', 5500.0)))
+        self.entry_formant_max_hz.pack(side=tk.RIGHT)
+        self.setup_entry_behavior(self.entry_formant_max_hz, 'formant_max_hz')
+
+        # 共振峰参数 row 3: Window Length (0.025)
+        row_formant_win = ctk.CTkFrame(self.formant_params_container, fg_color="transparent")
+        row_formant_win.pack(fill=tk.X, padx=15, pady=4)
+        ctk.CTkLabel(row_formant_win, text=" 窗长 (s):", image=self.icons.get("duration"), compound="left", text_color="#374151", font=self.font_main).pack(side=tk.LEFT)
+        self.entry_formant_window_length = ctk.CTkEntry(row_formant_win, width=65, justify="center", corner_radius=20, height=26)
+        self.entry_formant_window_length.insert(0, str(self.last_params.get('formant_window_length', 0.025)))
+        self.entry_formant_window_length.pack(side=tk.RIGHT)
+        self.setup_entry_behavior(self.entry_formant_window_length, 'formant_window_length')
+
+        # 共振峰参数 row 4: Pre-emphasis (50)
+        row_formant_pre = ctk.CTkFrame(self.formant_params_container, fg_color="transparent")
+        row_formant_pre.pack(fill=tk.X, padx=15, pady=4)
+        ctk.CTkLabel(row_formant_pre, text=" 预加重 (Hz):", image=self.icons.get("duration"), compound="left", text_color="#374151", font=self.font_main).pack(side=tk.LEFT)
+        self.entry_formant_pre_emphasis = ctk.CTkEntry(row_formant_pre, width=65, justify="center", corner_radius=20, height=26)
+        self.entry_formant_pre_emphasis.insert(0, str(self.last_params.get('formant_pre_emphasis', 50.0)))
+        self.entry_formant_pre_emphasis.pack(side=tk.RIGHT)
+        self.setup_entry_behavior(self.entry_formant_pre_emphasis, 'formant_pre_emphasis')
+
+        # 共振峰参数 row 5: Sample Strategy ("整段11点" / "中段均值")
+        row_formant_strategy = ctk.CTkFrame(self.formant_params_container, fg_color="transparent")
+        row_formant_strategy.pack(fill=tk.X, padx=15, pady=4)
+        ctk.CTkLabel(row_formant_strategy, text=" 采样策略:", image=self.icons.get("tag"), compound="left", text_color="#374151", font=self.font_main).pack(side=tk.LEFT)
+        
+        self.option_formant_sample_strategy = ctk.CTkOptionMenu(
+            row_formant_strategy,
+            values=["整段11点", "中段均值"],
+            command=self.on_formant_strategy_change,
+            width=100,
+            height=26,
+            corner_radius=20,
+            fg_color="#F3F4F6",
+            text_color="#1F2937",
+            button_color="#E5E7EB",
+            button_hover_color="#D1D5DB"
+        )
+        self.option_formant_sample_strategy.set(self.last_params.get('formant_sample_strategy', '整段11点'))
+        self.option_formant_sample_strategy.pack(side=tk.RIGHT)
+
+        self.row_trim = ctk.CTkFrame(self.params_content_frame, fg_color="transparent")
+        self.row_trim.pack(fill=tk.X, padx=15, pady=(10, 15))
+        self.lbl_trim_icon = ctk.CTkLabel(self.row_trim, text="", image=self.icons.get("trim"))
         self.lbl_trim_icon.pack(side=tk.LEFT, padx=(0, 5))
-        self.switch_trim_silence = ctk.CTkSwitch(row_trim, text="开启边缘静音裁切", font=self.font_main,
+        self.switch_trim_silence = ctk.CTkSwitch(self.row_trim, text="开启边缘静音裁切", font=self.font_main,
                                                  progress_color="#10B981", text_color="#374151", command=self.on_trim_silence_toggle)
         self.switch_trim_silence.pack(side=tk.LEFT)
         self.switch_trim_silence.select()
 
-        row_export_rule = ctk.CTkFrame(self.params_content_frame, fg_color="transparent")
-        row_export_rule.pack(fill=tk.X, padx=15, pady=(0, 15))
-        ctk.CTkLabel(row_export_rule, text=" 导出编号:", image=self.icons.get("tag"), compound="left", text_color="#374151", font=self.font_main).pack(side=tk.LEFT)
-        export_rule_opts = ctk.CTkFrame(row_export_rule, fg_color="transparent")
+        self.row_export_rule = ctk.CTkFrame(self.params_content_frame, fg_color="transparent")
+        self.row_export_rule.pack(fill=tk.X, padx=15, pady=(0, 15))
+        ctk.CTkLabel(self.row_export_rule, text=" 导出编号:", image=self.icons.get("tag"), compound="left", text_color="#374151", font=self.font_main).pack(side=tk.LEFT)
+        export_rule_opts = ctk.CTkFrame(self.row_export_rule, fg_color="transparent")
         export_rule_opts.pack(side=tk.LEFT, padx=(10, 0))
 
         def on_export_rule_change():
@@ -1007,6 +1072,8 @@ class PhoneticsApp:
         # and not rely on stale preview_f0 values.
         if 'preview_f0' in item:
             item.pop('preview_f0')
+        if 'preview_formants' in item:
+            item.pop('preview_formants')
         if 'has_empty_data' in item:
             item.pop('has_empty_data')
 
@@ -1028,14 +1095,21 @@ class PhoneticsApp:
         if not item: return
         snd = item['snd']
 
-        # 重新提取 F0，以还原橡皮擦抹去的所有数据点
-        from .audio_core import extract_f0
+        # 重新提取 F0 / Formant，以还原橡皮擦抹去的数据点
+        from .audio_core import extract_f0, extract_formants
         try:
             item['pitch_data'] = extract_f0(snd, self.last_params)
             if 'pitch' in item:
                 del item['pitch']
         except Exception:
             pass
+        try:
+            item['formant_data'] = extract_formants(snd, self.last_params)
+        except Exception:
+            pass
+        item.pop('preview_f0', None)
+        item.pop('preview_formants', None)
+        item.pop('has_empty_data', None)
 
         pitch = item.get('pitch_data', item.get('pitch'))
         mac_s, mac_e = item['macro_start'], item['macro_end']
@@ -1073,6 +1147,13 @@ class PhoneticsApp:
                     item['split_warnings'] = split_warnings
                     item['split_confidence'] = split_confidence
                     item['has_empty_data'] = item.get('has_empty_data', False) or len(split_warnings) > 0
+                    item['analysis_mode'] = self.last_params.get('analysis_mode', 'f0')
+
+                    if item.get('snd') and item.get('formant_data'):
+                        pts = int(self.last_params.get('pts', 11))
+                        strategy = self.last_params.get('formant_sample_strategy', '整段11点')
+                        _, preview_f1, preview_f2 = self.sample_formant_points(item, pts, strategy)
+                        item['preview_formants'] = {"f1": preview_f1, "f2": preview_f2}
 
                     self.spectrogram_panel.var_t_start.set(f"{mic_s:.3f}")
                     self.spectrogram_panel.var_t_end.set(f"{mic_e:.3f}")
@@ -1235,9 +1316,22 @@ class PhoneticsApp:
         self.entry_pitch_floor.insert(0, str(self.last_params['pitch_floor']))
         self.entry_voicing_threshold.delete(0, tk.END)
         self.entry_voicing_threshold.insert(0, f"{self.last_params['voicing_threshold']:.2f}")
-        if hasattr(self, 'engine_button') and self.engine_button:
-            self.engine_button.set(self.last_params.get('f0_engine', 'praat'))
-            self._update_engine_button_text_colors()
+        if hasattr(self, 'mode_button') and self.mode_button:
+            initial_mode = "声调/F0" if self.last_params.get('analysis_mode', 'f0') == 'f0' else "共振峰/F1-F2"
+            self.mode_button.set(initial_mode)
+            self._update_mode_button_text_colors()
+            self.update_param_containers_visibility()
+
+        if hasattr(self, 'entry_formant_max_hz') and self.entry_formant_max_hz:
+            self.entry_formant_max_hz.delete(0, tk.END)
+            self.entry_formant_max_hz.insert(0, str(self.last_params.get('formant_max_hz', 5500.0)))
+            self.entry_formant_count.delete(0, tk.END)
+            self.entry_formant_count.insert(0, str(self.last_params.get('formant_count', 5)))
+            self.entry_formant_window_length.delete(0, tk.END)
+            self.entry_formant_window_length.insert(0, str(self.last_params.get('formant_window_length', 0.025)))
+            self.entry_formant_pre_emphasis.delete(0, tk.END)
+            self.entry_formant_pre_emphasis.insert(0, str(self.last_params.get('formant_pre_emphasis', 50.0)))
+            self.option_formant_sample_strategy.set(self.last_params.get('formant_sample_strategy', '整段11点'))
 
         if self.pending_long_snd: self.lbl_long_file.configure(text="已加载音频", text_color="#2563EB")
         else: self.lbl_long_file.configure(text="未选择", text_color="#6B7280")
@@ -1301,7 +1395,7 @@ class PhoneticsApp:
             entry.configure(border_color=["#979DA2", "#565B5E"], border_width=1)
             current_val = entry.get()
             if hasattr(entry, '_last_val') and current_val == entry._last_val: return
-            if param_key in ['pts', 'db', 'skip_front', 'pitch_floor', 'pitch_ceiling', 'voicing_threshold']: self.on_param_change()
+            if param_key in ['pts', 'db', 'skip_front', 'pitch_floor', 'pitch_ceiling', 'voicing_threshold', 'formant_max_hz', 'formant_count', 'formant_window_length', 'formant_pre_emphasis']: self.on_param_change()
 
         entry.bind("<Enter>", on_enter)
         entry.bind("<Leave>", on_leave)
@@ -1324,30 +1418,81 @@ class PhoneticsApp:
                 changed_algo = True
 
             recompute_pitch = False
-            new_floor = int(self.entry_pitch_floor.get())
-            new_ceiling = int(self.entry_pitch_ceiling.get())
-            new_voicing = float(self.entry_voicing_threshold.get())
+            
+            # F0 specific params check
+            if hasattr(self, 'entry_pitch_floor') and self.entry_pitch_floor:
+                try:
+                    new_floor = int(self.entry_pitch_floor.get())
+                    new_ceiling = int(self.entry_pitch_ceiling.get())
+                    new_voicing = float(self.entry_voicing_threshold.get())
+                    
+                    if new_floor != self.last_params.get('pitch_floor', 75):
+                        self.last_params['pitch_floor'] = new_floor
+                        recompute_pitch = True
+                    if new_ceiling != self.last_params.get('pitch_ceiling', 600):
+                        self.last_params['pitch_ceiling'] = new_ceiling
+                        recompute_pitch = True
+                    if new_voicing != self.last_params.get('voicing_threshold', 0.25):
+                        self.last_params['voicing_threshold'] = new_voicing
+                        recompute_pitch = True
+                except ValueError: pass
 
-            # 无论如何先更新全局 last_params
-            if new_floor != self.last_params['pitch_floor']:
-                self.last_params['pitch_floor'] = new_floor
-                recompute_pitch = True
-            if new_ceiling != self.last_params['pitch_ceiling']:
-                self.last_params['pitch_ceiling'] = new_ceiling
-                recompute_pitch = True
-            if new_voicing != self.last_params['voicing_threshold']:
-                self.last_params['voicing_threshold'] = new_voicing
-                recompute_pitch = True
+            # Formant specific params check
+            recompute_formant = False
+            if hasattr(self, 'entry_formant_max_hz') and self.entry_formant_max_hz:
+                try:
+                    new_formant_max = float(self.entry_formant_max_hz.get())
+                    if new_formant_max != self.last_params.get('formant_max_hz', 5500.0):
+                        self.last_params['formant_max_hz'] = new_formant_max
+                        recompute_formant = True
+                except ValueError: pass
+                
+                try:
+                    new_formant_count = int(self.entry_formant_count.get())
+                    if new_formant_count != self.last_params.get('formant_count', 5):
+                        self.last_params['formant_count'] = new_formant_count
+                        recompute_formant = True
+                except ValueError: pass
+                
+                try:
+                    new_formant_window = float(self.entry_formant_window_length.get())
+                    if new_formant_window != self.last_params.get('formant_window_length', 0.025):
+                        self.last_params['formant_window_length'] = new_formant_window
+                        recompute_formant = True
+                except ValueError: pass
+                
+                try:
+                    new_formant_pre = float(self.entry_formant_pre_emphasis.get())
+                    if new_formant_pre != self.last_params.get('formant_pre_emphasis', 50.0):
+                        self.last_params['formant_pre_emphasis'] = new_formant_pre
+                        recompute_formant = True
+                except ValueError: pass
 
             # 即使全局 last_params 没变，只要当前输入框的值与“当前选中项的专属参数”不同，也要强制重算当前项
             curr_item = getattr(self, 'spectrogram_panel', None) and self.spectrogram_panel.current_item
             if curr_item:
-                if new_floor != curr_item.get('pitch_floor', self.last_params['pitch_floor']): recompute_pitch = True
-                if new_ceiling != curr_item.get('pitch_ceiling', self.last_params['pitch_ceiling']): recompute_pitch = True
-                if new_voicing != curr_item.get('voicing_threshold', self.last_params.get('voicing_threshold', 0.25)): recompute_pitch = True
+                if hasattr(self, 'entry_pitch_floor') and self.entry_pitch_floor:
+                    try:
+                        if int(self.entry_pitch_floor.get()) != curr_item.get('pitch_floor', self.last_params.get('pitch_floor', 75)): recompute_pitch = True
+                        if int(self.entry_pitch_ceiling.get()) != curr_item.get('pitch_ceiling', self.last_params.get('pitch_ceiling', 600)): recompute_pitch = True
+                        if float(self.entry_voicing_threshold.get()) != curr_item.get('voicing_threshold', self.last_params.get('voicing_threshold', 0.25)): recompute_pitch = True
+                    except ValueError: pass
+                    
+                if hasattr(self, 'entry_formant_max_hz') and self.entry_formant_max_hz:
+                    try:
+                        if float(self.entry_formant_max_hz.get()) != curr_item.get('formant_max_hz', self.last_params.get('formant_max_hz', 5500.0)): recompute_formant = True
+                        if int(self.entry_formant_count.get()) != curr_item.get('formant_count', self.last_params.get('formant_count', 5)): recompute_formant = True
+                        if float(self.entry_formant_window_length.get()) != curr_item.get('formant_window_length', self.last_params.get('formant_window_length', 0.025)): recompute_formant = True
+                        if float(self.entry_formant_pre_emphasis.get()) != curr_item.get('formant_pre_emphasis', self.last_params.get('formant_pre_emphasis', 50.0)): recompute_formant = True
+                    except ValueError: pass
 
-            if recalculate_current and (changed_algo or recompute_pitch):
-                self.recalculate_current_item(recompute_pitch=recompute_pitch)
+            need_recompute = (changed_algo or recompute_pitch or recompute_formant)
+            if recalculate_current and need_recompute:
+                if recompute_formant and not recompute_pitch and not changed_algo:
+                    self.recalculate_current_item(recompute_formant_only=True)
+                else:
+                    self.recalculate_current_item(recompute_pitch=True)
+                
             if new_pts != self.last_params['pts']:
                 self.last_params['pts'] = new_pts
                 for iid in list(self.items.keys()):
@@ -1366,13 +1511,194 @@ class PhoneticsApp:
         self.recalculate_current_item(recompute_pitch=True)
 
     def _update_engine_button_text_colors(self):
-        current_val = self.engine_button.get()
-        if hasattr(self.engine_button, "_buttons_dict"):
-            for val, btn in self.engine_button._buttons_dict.items():
+        pass
+
+    def on_formant_strategy_change(self, value):
+        self.last_params['formant_sample_strategy'] = value
+        self.on_param_change()
+
+    def _mode_state_key(self, mode):
+        return f"_mode_state_{mode}"
+
+    def _save_item_mode_state(self, item, mode):
+        fields = ('start', 'end', 'raw_start', 'raw_end', 'inner_splits', 'chars_bounds', 'split_warnings', 'split_confidence')
+        state = {}
+        for field in fields:
+            if field in item:
+                state[field] = copy.deepcopy(item[field])
+        if state:
+            item[self._mode_state_key(mode)] = state
+
+    def _load_item_mode_state(self, item, mode):
+        fields = ('start', 'end', 'raw_start', 'raw_end', 'inner_splits', 'chars_bounds', 'split_warnings', 'split_confidence')
+        state = item.get(self._mode_state_key(mode))
+        if state:
+            for field in fields:
+                if field in state:
+                    item[field] = copy.deepcopy(state[field])
+        else:
+            base_start = float(item.get('macro_start', item.get('start', 0.0)))
+            base_end = float(item.get('macro_end', item.get('end', base_start + 0.01)))
+            if base_end <= base_start:
+                base_start = float(item.get('start', base_start))
+                base_end = float(item.get('end', base_start + 0.01))
+            item['start'] = base_start
+            item['end'] = max(base_end, base_start + 0.01)
+            item['raw_start'] = item['start']
+            item['raw_end'] = item['end']
+            item['inner_splits'] = []
+            item['chars_bounds'] = [[item['start'], item['end']]]
+            item['split_warnings'] = []
+            item['split_confidence'] = 1.0
+
+        item.pop('preview_f0', None)
+        item.pop('preview_formants', None)
+        item.pop('has_empty_data', None)
+        item.pop('warnings', None)
+        item['analysis_mode'] = mode
+
+    def _reset_item_mode_boundaries(self, item, mode):
+        base_start = float(item.get('macro_start', item.get('start', 0.0)))
+        base_end = float(item.get('macro_end', item.get('end', base_start + 0.01)))
+        if base_end <= base_start:
+            base_start = float(item.get('start', base_start))
+            base_end = float(item.get('end', base_start + 0.01))
+        if base_end <= base_start:
+            base_end = base_start + 0.01
+
+        label = item.get('label', '').replace(" (缺失)", "")
+        syls = split_into_syllables(label)
+        syl_count = max(1, len(syls))
+        splits = np.linspace(base_start, base_end, syl_count + 1).tolist()
+        chars_bounds = [[splits[i], splits[i + 1]] for i in range(syl_count)]
+        inner_splits = splits[1:-1] if syl_count > 1 else []
+
+        item['start'] = chars_bounds[0][0]
+        item['end'] = chars_bounds[-1][1]
+        item['raw_start'] = item['start']
+        item['raw_end'] = item['end']
+        item['chars_bounds'] = chars_bounds
+        item['inner_splits'] = inner_splits
+        item['split_warnings'] = []
+        item['split_confidence'] = 1.0
+        item['is_manual_edited'] = False
+        item['analysis_mode'] = mode
+        item.pop('preview_f0', None)
+        item.pop('preview_formants', None)
+        item.pop('has_empty_data', None)
+        item.pop('warnings', None)
+
+    def on_analysis_mode_change(self, value):
+        old_mode = self.last_params.get('analysis_mode', 'f0')
+        mode = 'f0' if value == "声调/F0" else 'formant'
+        if mode == old_mode:
+            return
+        self.last_params['analysis_mode'] = mode
+        for item in self.items.values():
+            self._save_item_mode_state(item, old_mode)
+            # Switching mode should start from a clean boundary state in that mode.
+            self._reset_item_mode_boundaries(item, mode)
+        self._update_mode_button_text_colors()
+        self.update_param_containers_visibility()
+        # Refresh current spectrogram panel erasure button text
+        if hasattr(self, 'spectrogram_panel') and self.spectrogram_panel:
+            self.spectrogram_panel.update_eraser_button_text()
+        if mode == 'formant':
+            self.recalculate_current_item(recompute_formant_only=True)
+        else:
+            if self.spectrogram_panel and self.spectrogram_panel.current_item:
+                self.spectrogram_panel.plot_item_spectrogram()
+                self.spectrogram_panel.update_ui_times()
+            self.tree_panel.update_preview()
+        self.mark_modified()
+
+    def _update_mode_button_text_colors(self):
+        current_val = self.mode_button.get()
+        if hasattr(self.mode_button, "_buttons_dict"):
+            for val, btn in self.mode_button._buttons_dict.items():
                 if val == current_val:
                     btn.configure(text_color="white")
                 else:
                     btn.configure(text_color="#1F2937")
+
+    def update_param_containers_visibility(self):
+        mode = self.last_params.get('analysis_mode', 'f0')
+        if mode == 'formant':
+            self.f0_params_container.pack_forget()
+            self.row_trim.pack_forget()
+            self.row_export_rule.pack_forget()
+            
+            self.formant_params_container.pack(fill=tk.X)
+            self.row_trim.pack(fill=tk.X, padx=15, pady=(10, 15))
+            self.row_export_rule.pack(fill=tk.X, padx=15, pady=(0, 15))
+        else:
+            self.formant_params_container.pack_forget()
+            self.row_trim.pack_forget()
+            self.row_export_rule.pack_forget()
+            
+            self.f0_params_container.pack(fill=tk.X)
+            self.row_trim.pack(fill=tk.X, padx=15, pady=(10, 15))
+            self.row_export_rule.pack(fill=tk.X, padx=15, pady=(0, 15))
+
+    def sample_formant_points(self, item, pts=11, strategy='整段11点'):
+        start = item['start']
+        end = item['end']
+        preview_times = np.linspace(start, end, pts)
+        
+        f_data = item.get('formant_data')
+        if not f_data or 'xs' not in f_data or 'f1' not in f_data or 'f2' not in f_data:
+            nan_list = [np.nan] * pts
+            return preview_times, nan_list, nan_list
+            
+        xs = f_data['xs']
+        f1_arr = f_data['f1']
+        f2_arr = f_data['f2']
+        
+        if strategy == '中段均值':
+            duration = end - start
+            m_start = start + duration / 3.0
+            m_end = start + 2.0 * duration / 3.0
+            
+            mask = (xs >= m_start) & (xs <= m_end)
+            f1_slice = f1_arr[mask]
+            f2_slice = f2_arr[mask]
+            
+            f1_vals = f1_slice[~np.isnan(f1_slice)]
+            f2_vals = f2_slice[~np.isnan(f2_slice)]
+            
+            mean_f1 = np.nanmean(f1_vals) if len(f1_vals) > 0 else np.nan
+            mean_f2 = np.nanmean(f2_vals) if len(f2_vals) > 0 else np.nan
+            
+            preview_f1 = [mean_f1] * pts
+            preview_f2 = [mean_f2] * pts
+        else:
+            preview_f1 = []
+            preview_f2 = []
+            
+            f1_valid_idx = np.where(~np.isnan(f1_arr))[0]
+            f2_valid_idx = np.where(~np.isnan(f2_arr))[0]
+            
+            for t in preview_times:
+                # F1
+                if len(f1_valid_idx) == 0 or t < xs[0] or t > xs[-1]:
+                    preview_f1.append(np.nan)
+                else:
+                    nearest_idx = np.argmin(np.abs(xs[f1_valid_idx] - t))
+                    if np.abs(xs[f1_valid_idx][nearest_idx] - t) > 0.04:
+                        preview_f1.append(np.nan)
+                    else:
+                        preview_f1.append(float(np.interp(t, xs[f1_valid_idx], f1_arr[f1_valid_idx])))
+                # F2
+                if len(f2_valid_idx) == 0 or t < xs[0] or t > xs[-1]:
+                    preview_f2.append(np.nan)
+                else:
+                    nearest_idx = np.argmin(np.abs(xs[f2_valid_idx] - t))
+                    if np.abs(xs[f2_valid_idx][nearest_idx] - t) > 0.04:
+                        preview_f2.append(np.nan)
+                    else:
+                        preview_f2.append(float(np.interp(t, xs[f2_valid_idx], f2_arr[f2_valid_idx])))
+                        
+        return preview_times.tolist(), preview_f1, preview_f2
 
     def recalculate_all_audio(self, only_trim_silence=False, recompute_pitch=True, only_pitch_changed=False):
         if not self.items: return
@@ -1386,7 +1712,7 @@ class PhoneticsApp:
         except Exception:
             pass
 
-        # Check if ONLY pitch floor/ceiling/voicing threshold changed
+        # Check if ONLY acoustic parameters (pitch or formant) changed
         if not only_pitch_changed and old_params and hasattr(self, 'last_params') and self.last_params:
             new_params = self.last_params
             pitch_changed = (
@@ -1394,11 +1720,19 @@ class PhoneticsApp:
                 old_params.get('pitch_ceiling') != new_params.get('pitch_ceiling') or
                 old_params.get('voicing_threshold') != new_params.get('voicing_threshold')
             )
+            formant_changed = (
+                old_params.get('formant_max_hz') != new_params.get('formant_max_hz') or
+                old_params.get('formant_count') != new_params.get('formant_count') or
+                old_params.get('formant_window_length') != new_params.get('formant_window_length') or
+                old_params.get('formant_pre_emphasis') != new_params.get('formant_pre_emphasis') or
+                old_params.get('formant_sample_strategy') != new_params.get('formant_sample_strategy') or
+                old_params.get('analysis_mode') != new_params.get('analysis_mode')
+            )
             boundary_params_changed = (
                 old_params.get('db') != new_params.get('db') or
                 old_params.get('skip_front') != new_params.get('skip_front')
             )
-            if pitch_changed and not boundary_params_changed:
+            if (pitch_changed or formant_changed) and not boundary_params_changed:
                 only_pitch_changed = True
 
         items_snapshot = list(self.items.items())
@@ -1442,7 +1776,14 @@ class PhoneticsApp:
                     'pitch_floor': self.last_params['pitch_floor'],
                     'pitch_ceiling': self.last_params['pitch_ceiling'],
                     'voicing_threshold': self.last_params.get('voicing_threshold', 0.25),
-                    'f0_engine': self.last_params.get('f0_engine', 'praat')
+                    'f0_engine': self.last_params.get('f0_engine', 'praat'),
+                    'analysis_mode': self.last_params.get('analysis_mode', 'f0'),
+                    'formant_max_hz': self.last_params.get('formant_max_hz', 5500.0),
+                    'formant_count': self.last_params.get('formant_count', 5),
+                    'formant_window_length': self.last_params.get('formant_window_length', 0.025),
+                    'formant_pre_emphasis': self.last_params.get('formant_pre_emphasis', 50.0),
+                    'formant_sample_strategy': self.last_params.get('formant_sample_strategy', '整段11点'),
+                    'pts': self.last_params.get('pts', 11),
                 }
 
                 valid_items = []
@@ -1539,6 +1880,10 @@ class PhoneticsApp:
                                             del target_item['pitch']
                                         target_item.pop('has_empty_data', None)
                                         target_item['preview_f0'] = res.get('preview_f0', [])
+                                        if 'formant_data' in res:
+                                            target_item['formant_data'] = res['formant_data']
+                                        if 'preview_formants' in res:
+                                            target_item['preview_formants'] = res['preview_formants']
                                         # 如果是独立音频，还需要把 Cache 也更新了，防止下次加载又是旧的
                                         if target_item.get('path'):
                                             self.audio_cache[target_item['path']] = res
@@ -1555,6 +1900,10 @@ class PhoneticsApp:
                                             target_item['split_confidence'] = res.get('split_confidence', 1.0)
                                         target_item.pop('has_empty_data', None)
                                         target_item['preview_f0'] = res.get('preview_f0', [])
+                                        if 'formant_data' in res:
+                                            target_item['formant_data'] = res['formant_data']
+                                        if 'preview_formants' in res:
+                                            target_item['preview_formants'] = res['preview_formants']
                             except Exception: pass
 
                             completed += 1
@@ -1577,7 +1926,7 @@ class PhoneticsApp:
             self.root.after(0, finalize)
         threading.Thread(target=run, daemon=True).start()
 
-    def recalculate_current_item(self, only_trim_silence=False, recompute_pitch=False):
+    def recalculate_current_item(self, only_trim_silence=False, recompute_pitch=False, recompute_formant_only=False):
         """仅针对当前正在编辑的项重新计算参数（暂不影响全局）"""
         item = self.spectrogram_panel.current_item
         if not item: return
@@ -1599,23 +1948,45 @@ class PhoneticsApp:
                     else:
                         return extract_f0(snd, last_params)
 
+                def get_segmented_formant(snd, last_params):
+                    from modules.audio_core import extract_formants
+                    total_dur = snd.get_total_duration()
+                    if 'macro_start' in item and 'macro_end' in item and total_dur > 15.0:
+                        padding = 1.0
+                        seg_start = max(0.0, item['macro_start'] - padding)
+                        seg_end = min(total_dur, item['macro_end'] + padding)
+                        part_snd = snd.extract_part(from_time=seg_start, to_time=seg_end)
+                        part_formant_data = extract_formants(part_snd, last_params)
+                        part_formant_data['xs'] = part_formant_data['xs'] + seg_start
+                        return part_formant_data
+                    else:
+                        return extract_formants(snd, last_params)
+
                 # 如果是独立音频模式且没有加载 Sound 对象
                 if not item.get('snd') and item.get('path'):
                     item['snd'] = parselmouth.Sound(item['path'])
                     # 总是为单项重新生成 pitch 确保准确性
-                    item['pitch_data'] = get_segmented_f0(item['snd'], self.last_params)
-                    if 'pitch' in item:
-                        del item['pitch']
-                    item['pitch_floor'] = self.last_params['pitch_floor']
-                    item['pitch_ceiling'] = self.last_params['pitch_ceiling']
-                    item['voicing_threshold'] = self.last_params.get('voicing_threshold', 0.25)
-                    item['f0_engine'] = self.last_params.get('f0_engine', 'praat')
+                    if not recompute_formant_only:
+                        item['pitch_data'] = get_segmented_f0(item['snd'], self.last_params)
+                        if 'pitch' in item:
+                            del item['pitch']
+                        item['pitch_floor'] = self.last_params['pitch_floor']
+                        item['pitch_ceiling'] = self.last_params['pitch_ceiling']
+                        item['voicing_threshold'] = self.last_params.get('voicing_threshold', 0.25)
+                        item['f0_engine'] = self.last_params.get('f0_engine', 'praat')
+                    
+                    # 总是为单项重新生成 formant
+                    item['formant_data'] = get_segmented_formant(item['snd'], self.last_params)
+                    
                     # 独立音频的宏观边界就是全文
                     item['macro_start'] = 0.0
                     item['macro_end'] = item['snd'].get_total_duration()
 
-                # 如果修改了 Pitch Floor/Ceiling，重新计算该项 of Pitch
-                if recompute_pitch and item.get('snd'):
+                # 如果是仅重新计算共振峰且 Sound 对象已存在
+                if recompute_formant_only and item.get('snd'):
+                    item['formant_data'] = get_segmented_formant(item['snd'], self.last_params)
+                # 如果修改了 Pitch Floor/Ceiling 或 Formant 参数，且非仅重算共振峰，重新计算该项
+                elif recompute_pitch and item.get('snd'):
                     item['pitch_data'] = get_segmented_f0(item['snd'], self.last_params)
                     if 'pitch' in item:
                         del item['pitch']
@@ -1623,8 +1994,12 @@ class PhoneticsApp:
                     item['pitch_ceiling'] = self.last_params['pitch_ceiling']
                     item['voicing_threshold'] = self.last_params.get('voicing_threshold', 0.25)
                     item['f0_engine'] = self.last_params.get('f0_engine', 'praat')
+                    
+                    # 重新生成 formant
+                    item['formant_data'] = get_segmented_formant(item['snd'], self.last_params)
 
-                if item.get('snd') and 'macro_start' in item and 'macro_end' in item:
+                # 仅在非 recompute_formant_only 时才重新计算/定位边界，从而完美保护手动边界修改
+                if not recompute_formant_only and item.get('snd') and 'macro_start' in item and 'macro_end' in item:
                     current_pitch = item.get('pitch_data', item.get('pitch'))
                     if only_trim_silence:
                         mic_s, mic_e = recalculate_bounds_fast(
@@ -1687,6 +2062,13 @@ class PhoneticsApp:
                     item['preview_f0'] = preview_f0
                     # 清除缓存标记，让后续 update_item_icon 通过 _check_item_has_empty_data 精准重算
                     item.pop('has_empty_data', None)
+
+                # 同时重新生成 preview_formants
+                if item.get('snd') and item.get('formant_data'):
+                    pts = int(self.last_params.get('pts', 11))
+                    strategy = self.last_params.get('formant_sample_strategy', '整段11点')
+                    _, preview_f1, preview_f2 = self.sample_formant_points(item, pts, strategy)
+                    item['preview_formants'] = {"f1": preview_f1, "f2": preview_f2}
 
                 def finalize():
                     self.spectrogram_panel.plot_item_spectrogram()

@@ -13,7 +13,13 @@ class SpeakerState:
             'pitch_floor': 75,
             'pitch_ceiling': 600,
             'voicing_threshold': 0.25,
-            'f0_engine': 'praat'
+            'f0_engine': 'praat',
+            'analysis_mode': 'f0',
+            'formant_max_hz': 5500.0,
+            'formant_count': 5,
+            'formant_window_length': 0.025,
+            'formant_pre_emphasis': 50.0,
+            'formant_sample_strategy': '整段11点'
         }
         self.pending_long_snd = None
         self.long_audio_path = None

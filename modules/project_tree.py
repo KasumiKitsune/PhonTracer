@@ -663,7 +663,12 @@ class ProjectTreePanel:
 
         item = self.items[self.current_iid]
         real_idx = self._get_item_index(self.current_iid)
-        text = get_export_text_for_item(item, real_idx, self.app_state_params['pts'], pitch_floor=self.app_state_params.get('pitch_floor', 75.0), pitch_ceiling=self.app_state_params.get('pitch_ceiling', 600.0), voicing_threshold=self.app_state_params.get('voicing_threshold', 0.25))
+        mode = getattr(self, 'app_state_params', {}).get('analysis_mode', 'f0')
+        if mode == 'formant':
+            from .data_utils import get_formant_export_text_for_item
+            text = get_formant_export_text_for_item(item, real_idx, self.app_state_params['pts'])
+        else:
+            text = get_export_text_for_item(item, real_idx, self.app_state_params['pts'], pitch_floor=self.app_state_params.get('pitch_floor', 75.0), pitch_ceiling=self.app_state_params.get('pitch_ceiling', 600.0), voicing_threshold=self.app_state_params.get('voicing_threshold', 0.25))
 
         syls = split_into_syllables(item.get('label', ''))
         expected_sections = len(syls)
@@ -708,16 +713,28 @@ class ProjectTreePanel:
             elif line.startswith("[提示]"):
                 self.text_preview.tag_add("tip_msg", f"{line_idx}.0", f"{line_idx}.end")
             else:
-                parts = line.split()
-                if len(parts) == 2 and parts[1] == "0.000000":
-                    first_len = len(parts[0])
-                    sub_str = line[first_len:]
-                    f0_start_offset = sub_str.find("0.000000")
-                    if f0_start_offset != -1:
-                        start_char = first_len + f0_start_offset
-                        pos_start = f"{line_idx}.{start_char}"
-                        pos_end = f"{line_idx}.{start_char + 8}"
+                mode = getattr(self, 'app_state_params', {}).get('analysis_mode', 'f0')
+                if mode == 'formant':
+                    start_offset = 0
+                    while True:
+                        idx = line.find("--", start_offset)
+                        if idx == -1:
+                            break
+                        pos_start = f"{line_idx}.{idx}"
+                        pos_end = f"{line_idx}.{idx + 2}"
                         self.text_preview.tag_add("zero", pos_start, pos_end)
+                        start_offset = idx + 2
+                else:
+                    parts = line.split()
+                    if len(parts) == 2 and parts[1] == "0.000000":
+                        first_len = len(parts[0])
+                        sub_str = line[first_len:]
+                        f0_start_offset = sub_str.find("0.000000")
+                        if f0_start_offset != -1:
+                            start_char = first_len + f0_start_offset
+                            pos_start = f"{line_idx}.{start_char}"
+                            pos_end = f"{line_idx}.{start_char + 8}"
+                            self.text_preview.tag_add("zero", pos_start, pos_end)
 
         self.text_preview.configure(state='disabled')
 
@@ -727,6 +744,61 @@ class ProjectTreePanel:
         if item.get('preview_segment_mismatch'):
             item['has_empty_data'] = True
             return True
+
+        mode = getattr(self, 'app_state_params', {}).get('analysis_mode', 'f0')
+        if mode == 'formant':
+            f_data = item.get('formant_data')
+            if not f_data:
+                # "未分析" (Not Analyzed) — not counted as having empty/warning data
+                item['has_empty_data'] = False
+                return False
+            f_xs = f_data.get('xs', np.array([]))
+            f1 = f_data.get('f1', np.array([]))
+            f2 = f_data.get('f2', np.array([]))
+            if len(f_xs) == 0:
+                item['has_empty_data'] = True
+                return True
+
+            t_s, t_e = item['start'], item['end']
+            label = item.get('label', '')
+            syls = split_into_syllables(label)
+            chars_bounds = item.get('chars_bounds', [])
+            if chars_bounds and len(chars_bounds) == len(syls):
+                bounds = chars_bounds
+            else:
+                inner_splits = item.get('inner_splits', [])
+                splits = [t_s] + [s for s in inner_splits if t_s < s < t_e] + [t_e]
+                if len(syls) > 1 and len(splits) != len(syls) + 1:
+                    splits = np.linspace(t_s, t_e, len(syls) + 1).tolist()
+                elif len(syls) <= 1:
+                    splits = [t_s, t_e]
+                bounds = [[splits[i], splits[i+1]] for i in range(len(splits)-1)]
+
+            has_empty = False
+            for idx, (c_s, c_e) in enumerate(bounds):
+                dur = c_e - c_s
+                if dur <= 0:
+                    has_empty = True
+                    break
+                margin = dur * 0.125
+                core_s = c_s + margin
+                core_e = c_e - margin
+                
+                mask = (f_xs >= core_s) & (f_xs <= core_e)
+                seg_xs = f_xs[mask]
+                seg_f1 = f1[mask]
+                seg_f2 = f2[mask]
+                if len(seg_xs) == 0:
+                    has_empty = True
+                    break
+                valid_mask = ~np.isnan(seg_f1) & ~np.isnan(seg_f2) & (seg_f2 > seg_f1)
+                ratio = np.sum(valid_mask) / len(seg_xs)
+                if ratio < 0.40:
+                    has_empty = True
+                    break
+
+            item['has_empty_data'] = has_empty
+            return has_empty
 
         # 1. 如果 Pitch 数据已加载，优先执行最高精度的实时重新计算，并更新缓存
         # 注：此分支仅使用 pitch 数组进行检测，不需要 snd 对象
@@ -1016,6 +1088,100 @@ class ProjectTreePanel:
 
         if item.get('preview_segment_mismatch'):
             warnings.append("[致命] 子段数量与预览不匹配")
+
+        mode = getattr(self, 'app_state_params', {}).get('analysis_mode', 'f0')
+        if mode == 'formant':
+            f_data = item.get('formant_data')
+            if not f_data:
+                # "未分析" (Not Analyzed) — No warnings!
+                return []
+            f_xs = f_data.get('xs', np.array([]))
+            f1 = f_data.get('f1', np.array([]))
+            f2 = f_data.get('f2', np.array([]))
+            if len(f_xs) == 0:
+                warnings.append("[致命] 共振峰数据为空")
+                return warnings
+            if self._check_item_has_empty_data(item):
+                warnings.append("[警告] 共振峰存在明显缺失帧或无效帧，建议复核边界与参数")
+
+            t_s, t_e = item.get('start'), item.get('end')
+            label = item.get('label', '')
+            syls = split_into_syllables(label)
+            chars_bounds = item.get('chars_bounds', [])
+            if chars_bounds and len(chars_bounds) == len(syls):
+                bounds = chars_bounds
+            else:
+                inner_splits = item.get('inner_splits', [])
+                splits = [t_s] + [s for s in inner_splits if t_s < s < t_e] + [t_e]
+                if len(syls) > 1 and len(splits) != len(syls) + 1:
+                    splits = np.linspace(t_s, t_e, len(syls) + 1).tolist()
+                elif len(syls) <= 1:
+                    splits = [t_s, t_e]
+                bounds = [[splits[i], splits[i+1]] for i in range(len(splits)-1)]
+
+            for idx, (c_s, c_e) in enumerate(bounds):
+                char = syls[idx] if idx < len(syls) else f"音节{idx+1}"
+                dur = c_e - c_s
+                if dur <= 0:
+                    warnings.append(f"[致命] 音节 [{char}] 时间边界无效")
+                    continue
+                margin = dur * 0.125
+                core_s = c_s + margin
+                core_e = c_e - margin
+                
+                mask = (f_xs >= core_s) & (f_xs <= core_e)
+                seg_xs = f_xs[mask]
+                seg_f1 = f1[mask]
+                seg_f2 = f2[mask]
+                if len(seg_xs) == 0:
+                    warnings.append(f"[致命] 音节 [{char}] 核心区间无共振峰数据")
+                    continue
+                valid_mask = ~np.isnan(seg_f1) & ~np.isnan(seg_f2) & (seg_f2 > seg_f1)
+                ratio = np.sum(valid_mask) / len(seg_xs)
+                if ratio < 0.30:
+                    warnings.append(f"[致命] 音节 [{char}] 共振峰有效帧比例过低 ({ratio:.1%} < 30%)")
+                elif ratio < 0.55:
+                    warnings.append(f"[警告] 音节 [{char}] 共振峰有效帧比例偏低 ({ratio:.1%} < 55%)")
+
+                finite_pair = np.isfinite(seg_f1) & np.isfinite(seg_f2)
+                if np.any(finite_pair):
+                    bad_order_ratio = float(np.sum(seg_f2[finite_pair] <= seg_f1[finite_pair])) / float(np.sum(finite_pair))
+                    if bad_order_ratio >= 0.20:
+                        warnings.append(f"[警告] 音节 [{char}] 出现较多 F2<=F1 的异常帧 ({bad_order_ratio:.1%})")
+
+                # Track-level anomaly detection: catch sharp F1/F2 cliffs even when coverage ratio is high.
+                if np.sum(valid_mask) >= 4:
+                    v_f1 = seg_f1[valid_mask]
+                    v_f2 = seg_f2[valid_mask]
+
+                    f2_diff = np.abs(np.diff(v_f2))
+                    med_f2 = float(np.nanmedian(v_f2)) if len(v_f2) > 0 else 0.0
+                    if med_f2 > 0:
+                        f2_rel = f2_diff / max(med_f2, 1e-9)
+                        if np.any((f2_diff > 260.0) & (f2_rel > 0.20)):
+                            max_jump = float(np.max(f2_diff))
+                            warnings.append(f"[警告] 音节 [{char}] F2 轨迹跳变异常 (最大跳变 {max_jump:.0f}Hz)")
+
+                    f1_diff = np.abs(np.diff(v_f1))
+                    med_f1 = float(np.nanmedian(v_f1)) if len(v_f1) > 0 else 0.0
+                    if med_f1 > 0:
+                        f1_rel = f1_diff / max(med_f1, 1e-9)
+                        if np.any((f1_diff > 180.0) & (f1_rel > 0.30)):
+                            max_jump = float(np.max(f1_diff))
+                            warnings.append(f"[提示] 音节 [{char}] F1 轨迹波动较大 (最大跳变 {max_jump:.0f}Hz)")
+
+            split_warnings = item.get('split_warnings', [])
+            for sw in split_warnings:
+                if sw == 'tiny_segment':
+                    warnings.append("[致命] 边界过短 (某个子段短于 80ms)")
+                elif sw == 'imbalanced_duration':
+                    warnings.append("[警告] 时长严重失衡 (子段时长比例不均)")
+                elif sw == 'no_clear_valley':
+                    warnings.append("[警告] 未能识别到能量谷 (子音节切分谷底不明显)")
+                elif sw == 'fallback_equal_split':
+                    warnings.append("[提示] 采用等分兜底切割")
+            # Keep warning panel readable: preserve order while removing duplicate messages.
+            return list(dict.fromkeys(warnings))
 
         if self._check_item_has_empty_data(item):
             warnings.append("[致命] 基频数据含有0值 (F0 缺失)")
@@ -3109,3 +3275,215 @@ class ProjectTreePanel:
                 tg.append(char_tier)
 
             tg.write(tg_path)
+
+    def _show_formant_export_menu(self, mode='single', all_speakers=None):
+        dlg = ctk.CTkToplevel(self.parent)
+        dlg.title("选择共振峰导出内容")
+        dlg.geometry("320x300")
+        dlg.resizable(False, False)
+        dlg.transient(self.parent)
+        dlg.grab_set()
+        dlg.update_idletasks()
+        main_win = self.parent.winfo_toplevel()
+        x = main_win.winfo_rootx() + (main_win.winfo_width() - 320) // 2
+        y = main_win.winfo_rooty() + (main_win.winfo_height() - 300) // 2
+        dlg.geometry(f"+{x}+{y}")
+        
+        ctk.CTkLabel(dlg, text="请选择共振峰导出内容", font=self.font_title, text_color=("#111827", "#F9FAFB")).pack(pady=(20, 15))
+        btn_kwargs = {"corner_radius": 22, "height": 44, "font": self.font_main, "anchor": "w", "compound": "left", "border_width": 1.5}
+        
+        btn_table = CTkReleaseButton(
+            dlg,
+            text=" 导出共振峰数据表 (.xlsx)",
+            image=self.icons.get("excel"),
+            command=lambda: [dlg.destroy(), self._export_formant_table_dialog(all_speakers)],
+            fg_color="#FFFFFF",
+            text_color="#10B981",
+            hover_color="#F0FDF4",
+            border_color="#10B981",
+            **btn_kwargs
+        )
+        btn_table.pack(fill=tk.X, padx=30, pady=8)
+        
+        btn_space = CTkReleaseButton(
+            dlg,
+            text=" 共振峰可视化工具箱...",
+            image=self.icons.get("chart"),
+            command=lambda: [dlg.destroy(), self._open_formant_visualization_dialog(mode, all_speakers)],
+            fg_color="#FFFFFF",
+            text_color="#3B82F6",
+            hover_color="#EFF6FF",
+            border_color="#3B82F6",
+            **btn_kwargs
+        )
+        btn_space.pack(fill=tk.X, padx=30, pady=8)
+        
+        btn_cancel = ctk.CTkButton(
+            dlg,
+            text="取消",
+            height=36,
+            corner_radius=18,
+            fg_color=("#F3F4F6", "#374151"),
+            text_color=("#4B5563", "#D1D5DB"),
+            hover_color=("#E5E7EB", "#4B5563"),
+            border_width=1,
+            border_color=("#D1D5DB", "#475569"),
+            font=self.font_main,
+            command=dlg.destroy
+        )
+        btn_cancel.pack(fill=tk.X, padx=30, pady=(15, 10))
+
+    def _export_formant_table_dialog(self, all_speakers):
+        path = filedialog.asksaveasfilename(
+            defaultextension=".xlsx",
+            filetypes=[("Excel Spreadsheet", "*.xlsx")],
+            title="保存共振峰数据表"
+        )
+        if path:
+            self._export_formant_table(path, all_speakers)
+
+    def _open_formant_visualization_dialog(self, mode, all_speakers):
+        existing_dialog = getattr(self.app, 'active_chart_dialog', None)
+        if existing_dialog is not None:
+            try:
+                if existing_dialog.winfo_exists():
+                    existing_dialog.deiconify()
+                    existing_dialog.deiconify()
+                    existing_dialog.lift()
+                    existing_dialog.focus_force()
+                    return
+            except Exception:
+                self.app.active_chart_dialog = None
+                
+        from .acoustic_exporter import AcousticChartExportDialog
+        AcousticChartExportDialog(self.parent, app=self.app, project_tree=self, mode=mode, all_speakers=all_speakers)
+
+    def _export_formant_table(self, out_file, all_speakers=None):
+        try:
+            import xlsxwriter
+        except ImportError:
+            messagebox.showerror("错误", "缺少 xlsxwriter 库，请先安装：pip install xlsxwriter")
+            return
+
+        if all_speakers is None:
+            all_speakers = [self.app.speaker_manager.get_active_speaker()]
+
+        workbook = xlsxwriter.Workbook(out_file)
+        ws_raw = workbook.add_worksheet("逐点数据")
+        ws_sum = workbook.add_worksheet("摘要数据")
+
+        raw_headers = ["发音人", "组别", "编号", "词语", "音节序号", "单字", "时间点序号", "时间(s)", "F1(Hz)", "F2(Hz)"]
+        for col, h in enumerate(raw_headers):
+            ws_raw.write(0, col, h)
+
+        sum_headers = ["发音人", "组别", "编号", "词语", "音节序号", "单字", "F1_均值(Hz)", "F2_均值(Hz)", "F1_中位数(Hz)", "F2_中位数(Hz)", "有效帧数"]
+        for col, h in enumerate(sum_headers):
+            ws_sum.write(0, col, h)
+
+        raw_row = 1
+        sum_row = 1
+
+        for spk in all_speakers:
+            is_continuous = (self.num_rule_var.get() == "continuous")
+            pts = int(self.app_state_params.get('pts', 11))
+            strategy = self.app_state_params.get('formant_sample_strategy', '整段11点')
+
+            groups = {}
+            for item_id, item in spk.items.items():
+                g = item.get('group', '导入内容')
+                if g not in groups:
+                    groups[g] = []
+                groups[g].append(item)
+
+            from .data_utils import clean_str, get_item_syllable_bounds, sample_formant_points_by_bounds, split_into_syllables
+            sorted_groups = sorted(groups.keys(), key=clean_str)
+
+            global_idx = 1
+            for grp_name in sorted_groups:
+                if not is_continuous:
+                    global_idx = 1
+                items_in_grp = groups[grp_name]
+                items_in_grp = sorted(items_in_grp, key=lambda x: clean_str(x.get('label', '')))
+
+                for item in items_in_grp:
+                    self._ensure_item_loaded(item)
+                    if not item.get('snd') or not item.get('formant_data'):
+                        continue
+
+                    bounds = get_item_syllable_bounds(item)
+                    syls = split_into_syllables(item.get('label', ''))
+                    preview_times, f1_vals, f2_vals = sample_formant_points_by_bounds(item, bounds, pts, strategy)
+
+                    # 逐字写入逐点数据和摘要数据
+                    for idx_syl, (c_s, c_e) in enumerate(bounds):
+                        char = syls[idx_syl] if idx_syl < len(syls) else f"字{idx_syl+1}"
+                        flat_start = idx_syl * pts
+                        flat_end = flat_start + pts
+
+                        f1_slice = f1_vals[flat_start:flat_end]
+                        f2_slice = f2_vals[flat_start:flat_end]
+
+                        # 逐点数据写入
+                        for idx_pt in range(pts):
+                            ws_raw.write(raw_row, 0, spk.name)
+                            ws_raw.write(raw_row, 1, grp_name)
+                            ws_raw.write(raw_row, 2, global_idx)
+                            ws_raw.write(raw_row, 3, item.get('label', ''))
+                            ws_raw.write(raw_row, 4, idx_syl + 1)
+                            ws_raw.write(raw_row, 5, char)
+                            ws_raw.write(raw_row, 6, idx_pt + 1)
+                            ws_raw.write(raw_row, 7, preview_times[flat_start + idx_pt])
+
+                            f1_v = f1_slice[idx_pt]
+                            f2_v = f2_slice[idx_pt]
+
+                            if np.isnan(f1_v):
+                                ws_raw.write_string(raw_row, 8, "--")
+                            else:
+                                ws_raw.write(raw_row, 8, round(f1_v, 1))
+
+                            if np.isnan(f2_v):
+                                ws_raw.write_string(raw_row, 9, "--")
+                            else:
+                                ws_raw.write(raw_row, 9, round(f2_v, 1))
+                            raw_row += 1
+
+                        # 计算共振峰的成对有效统计特征
+                        f1_arr = np.array(f1_slice)
+                        f2_arr = np.array(f2_slice)
+                        valid_mask = ~np.isnan(f1_arr) & ~np.isnan(f2_arr) & (f2_arr > f1_arr)
+                        paired_f1 = f1_arr[valid_mask]
+                        paired_f2 = f2_arr[valid_mask]
+
+                        valid_cnt = int(np.sum(valid_mask))
+
+                        ws_sum.write(sum_row, 0, spk.name)
+                        ws_sum.write(sum_row, 1, grp_name)
+                        ws_sum.write(sum_row, 2, global_idx)
+                        ws_sum.write(sum_row, 3, item.get('label', ''))
+                        ws_sum.write(sum_row, 4, idx_syl + 1)
+                        ws_sum.write(sum_row, 5, char)
+
+                        if valid_cnt > 0:
+                            mean_f1 = float(np.nanmean(paired_f1))
+                            mean_f2 = float(np.nanmean(paired_f2))
+                            med_f1 = float(np.nanmedian(paired_f1))
+                            med_f2 = float(np.nanmedian(paired_f2))
+
+                            ws_sum.write(sum_row, 6, round(mean_f1, 1))
+                            ws_sum.write(sum_row, 7, round(mean_f2, 1))
+                            ws_sum.write(sum_row, 8, round(med_f1, 1))
+                            ws_sum.write(sum_row, 9, round(med_f2, 1))
+                        else:
+                            ws_sum.write_string(sum_row, 6, "--")
+                            ws_sum.write_string(sum_row, 7, "--")
+                            ws_sum.write_string(sum_row, 8, "--")
+                            ws_sum.write_string(sum_row, 9, "--")
+
+                        ws_sum.write(sum_row, 10, valid_cnt)
+                        sum_row += 1
+
+                    global_idx += 1
+
+        workbook.close()
+        messagebox.showinfo("成功", f"数据已成功导出至：\n{out_file}")

@@ -131,6 +131,7 @@ class ProjectManager:
             for item in spk_data.get("items", {}).values():
                 self._add_managed_ref(refs, item.get("path"))
                 self._add_managed_ref(refs, item.get("pitch_data_file"))
+                self._add_managed_ref(refs, item.get("formant_data_file"))
         return refs
 
     def _prune_unused_workspace_files(self, referenced_files):
@@ -266,7 +267,7 @@ class ProjectManager:
                 for item_id, item in spk.items.items():
                     item_dict = {}
                     for k, v in item.items():
-                        if k in ['snd', 'pitch']: continue
+                        if k in ['snd', 'pitch', 'formant']: continue
                         if k == 'pitch_data' and v is not None:
                             # Save numpy arrays to npz
                             npz_name = f"{self._safe_token(spk_id)}_{self._safe_token(item_id)}.npz"
@@ -274,6 +275,17 @@ class ProjectManager:
                             if isinstance(v, dict) and 'xs' in v and 'freqs' in v:
                                 np.savez_compressed(npz_path, xs=v['xs'], freqs=v['freqs'])
                                 item_dict['pitch_data_file'] = os.path.join("data", npz_name).replace(os.sep, "/")
+                            else:
+                                item_dict[k] = v
+                        elif k == 'formant_data' and v is not None:
+                            npz_name = f"{self._safe_token(spk_id)}_{self._safe_token(item_id)}_formant.npz"
+                            npz_path = os.path.join(data_dir, npz_name)
+                            if isinstance(v, dict) and 'xs' in v and 'f1' in v and 'f2' in v:
+                                save_kwargs = {'xs': v['xs'], 'f1': v['f1'], 'f2': v['f2']}
+                                if 'f3' in v:
+                                    save_kwargs['f3'] = v['f3']
+                                np.savez_compressed(npz_path, **save_kwargs)
+                                item_dict['formant_data_file'] = os.path.join("data", npz_name).replace(os.sep, "/")
                             else:
                                 item_dict[k] = v
                         elif k == 'path':
@@ -463,6 +475,20 @@ class ProjectManager:
                         with np.load(npz_path) as loaded:
                             item['pitch_data'] = {'xs': loaded['xs'].copy(), 'freqs': loaded['freqs'].copy()}
                     del item['pitch_data_file']
+
+                if 'formant_data_file' in item:
+                    npz_path = self._resolve_project_path(item['formant_data_file'])
+                    if os.path.exists(npz_path):
+                        with np.load(npz_path) as loaded:
+                            formant_dict = {
+                                'xs': loaded['xs'].copy(),
+                                'f1': loaded['f1'].copy(),
+                                'f2': loaded['f2'].copy()
+                            }
+                            if 'f3' in loaded:
+                                formant_dict['f3'] = loaded['f3'].copy()
+                            item['formant_data'] = formant_dict
+                    del item['formant_data_file']
 
                 spk.items[item_id] = item
 

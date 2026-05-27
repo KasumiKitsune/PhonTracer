@@ -244,6 +244,135 @@ def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: 
             
     return output
 
+
+def get_item_syllable_bounds(item: Dict[str, Any]) -> List[List[float]]:
+    """
+    Get the syllable boundaries for an item. Fallback to linear segmentation if chars_bounds is invalid.
+    """
+    t_s, t_e = item['start'], item['end']
+    label = item.get('label', '')
+    syls = split_into_syllables(label)
+    chars_bounds = item.get('chars_bounds', [])
+    if chars_bounds and len(chars_bounds) == len(syls):
+        return chars_bounds
+    else:
+        inner_splits = item.get('inner_splits', [])
+        splits = [t_s] + [s for s in inner_splits if t_s < s < t_e] + [t_e]
+        if len(syls) > 1 and len(splits) != len(syls) + 1:
+            splits = np.linspace(t_s, t_e, len(syls) + 1).tolist()
+        elif len(syls) <= 1:
+            splits = [t_s, t_e]
+        return [[splits[i], splits[i+1]] for i in range(len(splits)-1)]
+
+
+def sample_formant_points_by_bounds(
+    item: Dict[str, Any], bounds: List[List[float]], pts: int = 11, strategy: str = '整段11点'
+) -> Tuple[List[float], List[float], List[float]]:
+    """
+    统一的共振峰采样工具。按 bounds (音节/字边界列表) 采样共振峰曲线。
+    使用同一帧配对掩码过滤并计算插值点：valid = mask & isfinite(f1) & isfinite(f2) & (f2 > f1)。
+    返回: (times, f1_sampled, f2_sampled) — 均为扁平化列表 (T1_1..T1_N, T2_1..T2_N, ...)
+    """
+    f_data = item.get('formant_data')
+    if not f_data or 'xs' not in f_data or 'f1' not in f_data or 'f2' not in f_data:
+        total_pts = len(bounds) * pts
+        dummy_times = [0.0] * total_pts
+        dummy_nans = [np.nan] * total_pts
+        return dummy_times, dummy_nans, dummy_nans
+        
+    xs = f_data['xs']
+    f1_arr = f_data['f1']
+    f2_arr = f_data['f2']
+    
+    all_times = []
+    all_f1 = []
+    all_f2 = []
+    
+    # 强制在提取时使用成对过滤的掩码以保证每一帧数据都成对有效
+    valid_mask = ~np.isnan(f1_arr) & ~np.isnan(f2_arr) & (f2_arr > f1_arr)
+    valid_indices = np.where(valid_mask)[0]
+    
+    for c_s, c_e in bounds:
+        times = np.linspace(c_s, c_e, pts)
+        all_times.extend(times.tolist())
+        
+        if strategy == '中段均值':
+            duration = c_e - c_s
+            m_start = c_s + duration / 3.0
+            m_end = c_s + 2.0 * duration / 3.0
+            
+            mask = (xs >= m_start) & (xs <= m_end) & valid_mask
+            f1_slice = f1_arr[mask]
+            f2_slice = f2_arr[mask]
+            
+            mean_f1 = np.nanmean(f1_slice) if len(f1_slice) > 0 else np.nan
+            mean_f2 = np.nanmean(f2_slice) if len(f2_slice) > 0 else np.nan
+            
+            all_f1.extend([mean_f1] * pts)
+            all_f2.extend([mean_f2] * pts)
+        else:
+            for t in times:
+                # 寻找在该点附近的共振峰（共振峰插值和跳变缝隙门限：0.04秒）
+                if len(valid_indices) == 0 or t < xs[0] or t > xs[-1]:
+                    all_f1.append(np.nan)
+                    all_f2.append(np.nan)
+                else:
+                    # 寻找距离采样点 t 最近的有效帧索引
+                    nearest_idx = np.argmin(np.abs(xs[valid_indices] - t))
+                    if np.abs(xs[valid_indices][nearest_idx] - t) > 0.04:
+                        all_f1.append(np.nan)
+                        all_f2.append(np.nan)
+                    else:
+                        # 进行插值，仅引用成对有效的 F1/F2 点
+                        val_f1 = float(np.interp(t, xs[valid_indices], f1_arr[valid_indices]))
+                        val_f2 = float(np.interp(t, xs[valid_indices], f2_arr[valid_indices]))
+                        if val_f2 > val_f1:
+                            all_f1.append(val_f1)
+                            all_f2.append(val_f2)
+                        else:
+                            all_f1.append(np.nan)
+                            all_f2.append(np.nan)
+                        
+    return all_times, all_f1, all_f2
+
+
+def get_formant_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: int) -> str:
+    if item.get('start') is None or item.get('end') is None: return ""
+    bounds = get_item_syllable_bounds(item)
+    label = item.get('label', '')
+    syls = split_into_syllables(label)
+    
+    strategy = '整段11点'
+    if 'formant_sample_strategy' in item:
+        strategy = item['formant_sample_strategy']
+    elif hasattr(item, 'app') and item.app:
+        strategy = item.app.last_params.get('formant_sample_strategy', '整段11点')
+        
+    times, f1_vals, f2_vals = sample_formant_points_by_bounds(item, bounds, num_points, strategy)
+    
+    output = ""
+    for idx_syl, (c_s, c_e) in enumerate(bounds):
+        char = syls[idx_syl] if idx_syl < len(syls) else f"字{idx_syl+1}"
+        duration = c_e - c_s
+        if len(bounds) > 1:
+            output += f"{real_index}_{idx_syl+1}.{char} ({label})\n{duration:.3f}\n"
+        else:
+            output += f"{real_index}.{label}\n{duration:.3f}\n"
+            
+        output += "时间(s)\tF1(Hz)\tF2(Hz)\n"
+        for i in range(num_points):
+            flat_idx = idx_syl * num_points + i
+            t = times[flat_idx]
+            f1_v = f1_vals[flat_idx]
+            f2_v = f2_vals[flat_idx]
+            
+            f1_str = "--" if np.isnan(f1_v) else f"{f1_v:.1f}"
+            f2_str = "--" if np.isnan(f2_v) else f"{f2_v:.1f}"
+            output += f"{t:.6f}\t{f1_str}\t{f2_str}\n"
+            
+    return output
+
+
 def write_analysis_sheet_with_formulas(workbook, ws_res, group_list, num_points, max_syls,
                                        last_data_row, data_sheet_name='数据', speaker_col=None):
     """

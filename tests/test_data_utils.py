@@ -193,3 +193,66 @@ def test_fuzzy_match_smart_latin_filtering():
     assert fuzzy_match_word_to_path("bro/ther", paths) == 0
     assert fuzzy_match_word_to_path("brother", paths) == 0
 
+
+def test_get_item_syllable_bounds():
+    from modules.data_utils import get_item_syllable_bounds
+    
+    # 1. Normal chars_bounds matched with label syllables
+    item = {
+        'start': 0.0,
+        'end': 1.0,
+        'label': '北京',
+        'chars_bounds': [[0.0, 0.4], [0.4, 1.0]]
+    }
+    assert get_item_syllable_bounds(item) == [[0.0, 0.4], [0.4, 1.0]]
+
+    # 2. Falling back to inner_splits
+    item = {
+        'start': 0.0,
+        'end': 1.0,
+        'label': '北京',
+        'inner_splits': [0.35]
+    }
+    assert get_item_syllable_bounds(item) == [[0.0, 0.35], [0.35, 1.0]]
+
+    # 3. Falling back to linear splits
+    item = {
+        'start': 0.0,
+        'end': 1.0,
+        'label': '北京',
+    }
+    assert get_item_syllable_bounds(item) == [[0.0, 0.5], [0.5, 1.0]]
+
+
+def test_sample_formant_points_by_bounds():
+    from modules.data_utils import sample_formant_points_by_bounds
+    
+    # 1. Empty data
+    item = {
+        'start': 0.0,
+        'end': 1.0,
+        'label': '北京'
+    }
+    bounds = [[0.0, 0.5], [0.5, 1.0]]
+    times, f1, f2 = sample_formant_points_by_bounds(item, bounds, pts=3)
+    assert len(times) == 6
+    assert np.isnan(f1).all()
+    assert np.isnan(f2).all()
+
+    # 2. Valid data
+    item = {
+        'start': 0.0,
+        'end': 1.0,
+        'label': 'A',
+        'formant_data': {
+            'xs': np.array([0.0, 0.25, 0.5, 0.75, 1.0]),
+            'f1': np.array([500.0, 520.0, 540.0, 560.0, 580.0]),
+            'f2': np.array([1500.0, 1520.0, 1540.0, 1560.0, 1580.0])
+        }
+    }
+    bounds = [[0.0, 1.0]]
+    times, f1, f2 = sample_formant_points_by_bounds(item, bounds, pts=5, strategy='整段11点')
+    assert len(times) == 5
+    assert not np.isnan(f1).any()
+    assert (np.array(f2) > np.array(f1)).all()
+

@@ -515,67 +515,89 @@ class SpectrogramPanel:
         
         self.ax.pcolormesh(X, Y, sg_db, vmin=sg_db.max()-50, vmax=sg_db.max(), cmap='Greys')
         
-        if item.get('pitch_data'):
-            p_xs = item['pitch_data']['xs']
-            p_freqs = item['pitch_data']['freqs']
-            mask = (p_xs >= view_s) & (p_xs <= view_e)
-            p_xs = p_xs[mask]
-            p_vals = p_freqs[mask].copy()
-            p_vals[p_vals == 0] = np.nan
-        elif item.get('pitch'):
-            global_pitch = item['pitch']
-            p_xs = global_pitch.xs()
-            p_freqs = global_pitch.selected_array['frequency']
-            mask = (p_xs >= view_s) & (p_xs <= view_e)
-            p_xs = p_xs[mask]
-            p_vals = p_freqs[mask].copy()
-            p_vals[p_vals == 0] = np.nan
-        else:
-            p_xs = np.array([])
-            p_vals = np.array([])
-        self.ax2.plot(p_xs, p_vals, '-o', markersize=4, linewidth=1.5, color='#3B82F6', zorder=5)
-        
-        # Highlight anomalies (pitch jumps)
-        p_xs_raw, p_freqs_raw = None, None
-        if item.get('pitch_data'):
-            p_xs_raw = np.asarray(item['pitch_data'].get('xs'))
-            p_freqs_raw = np.asarray(item['pitch_data'].get('freqs'))
-        elif item.get('pitch'):
-            global_pitch = item['pitch']
-            try:
-                p_xs_raw = np.asarray(global_pitch.xs())
-                p_freqs_raw = np.asarray(global_pitch.selected_array['frequency'])
-            except Exception:
-                pass
-
-        anomaly_points = []
-        if p_xs_raw is not None and p_freqs_raw is not None and len(p_xs_raw) > 0:
-            bounds = chars_bounds if chars_bounds else [[t_s, t_e]]
-            anomaly_points = detect_pitch_anomaly_points(
-                p_xs_raw, p_freqs_raw, bounds=bounds, start=t_s, end=t_e
-            )
-
-            if anomaly_points:
-                jumps_x = [t for t, _ in anomaly_points]
-                jumps_y = [f for _, f in anomaly_points]
-                self.ax2.plot(jumps_x, jumps_y, 'o', color='#EF4444', markersize=6, zorder=6, label="异常点")
-
-
-        self.ax.set_ylim([0, 5000])
-        self.ax.set_xlim([view_s, view_e])
-        self.ax.set_ylabel("Frequency (Hz)")
-
         app_params = getattr(self.app, 'last_params', {}) if self.app else {}
-        pitch_floor = float(item.get('pitch_floor', app_params.get('pitch_floor', 75.0)))
-        pitch_ceiling = float(item.get('pitch_ceiling', app_params.get('pitch_ceiling', 600.0)))
-        visible_vals = p_vals[np.isfinite(p_vals)] if len(p_vals) else np.array([])
-        visible_high = float(np.max(visible_vals)) if len(visible_vals) else pitch_ceiling
-        anomaly_high = max((f for _, f in anomaly_points), default=pitch_ceiling)
-        y_min = max(0.0, min(50.0, pitch_floor - 25.0))
-        y_max = max(500.0, pitch_ceiling, visible_high, anomaly_high) + 25.0
-        self.ax2.set_ylim([y_min, y_max])
-        self.ax2.set_ylabel("F0 (Hz)", color='#3B82F6')
-        self.ax2.tick_params(axis='y', labelcolor='#3B82F6')
+        analysis_mode = item.get('analysis_mode', app_params.get('analysis_mode', 'f0'))
+        self.update_eraser_button_text()
+
+        if analysis_mode == 'formant':
+            self.ax2.set_visible(False)
+            formant_max_hz = float(item.get('formant_max_hz', app_params.get('formant_max_hz', 5500.0)))
+            self.ax.set_ylim([0, max(5000.0, formant_max_hz)])
+            self.ax.set_xlim([view_s, view_e])
+            self.ax.set_ylabel("Frequency (Hz)")
+            
+            if item.get('formant_data'):
+                f_xs = item['formant_data']['xs']
+                f1_arr = item['formant_data']['f1']
+                f2_arr = item['formant_data']['f2']
+                mask = (f_xs >= view_s) & (f_xs <= view_e)
+                f_xs_filtered = f_xs[mask]
+                f1_plot = f1_arr[mask].copy()
+                f2_plot = f2_arr[mask].copy()
+                
+                self.ax.plot(f_xs_filtered, f1_plot, '-o', markersize=4, linewidth=1.5, color='#F97316', zorder=5, label="F1")
+                self.ax.plot(f_xs_filtered, f2_plot, '-o', markersize=4, linewidth=1.5, color='#22C55E', zorder=5, label="F2")
+        else:
+            self.ax2.set_visible(True)
+            self.ax.set_ylim([0, 5000])
+            self.ax.set_xlim([view_s, view_e])
+            self.ax.set_ylabel("Frequency (Hz)")
+            
+            if item.get('pitch_data'):
+                p_xs = item['pitch_data']['xs']
+                p_freqs = item['pitch_data']['freqs']
+                mask = (p_xs >= view_s) & (p_xs <= view_e)
+                p_xs = p_xs[mask]
+                p_vals = p_freqs[mask].copy()
+                p_vals[p_vals == 0] = np.nan
+            elif item.get('pitch'):
+                global_pitch = item['pitch']
+                p_xs = global_pitch.xs()
+                p_freqs = global_pitch.selected_array['frequency']
+                mask = (p_xs >= view_s) & (p_xs <= view_e)
+                p_xs = p_xs[mask]
+                p_vals = p_freqs[mask].copy()
+                p_vals[p_vals == 0] = np.nan
+            else:
+                p_xs = np.array([])
+                p_vals = np.array([])
+            self.ax2.plot(p_xs, p_vals, '-o', markersize=4, linewidth=1.5, color='#3B82F6', zorder=5)
+            
+            # Highlight anomalies (pitch jumps)
+            p_xs_raw, p_freqs_raw = None, None
+            if item.get('pitch_data'):
+                p_xs_raw = np.asarray(item['pitch_data'].get('xs'))
+                p_freqs_raw = np.asarray(item['pitch_data'].get('freqs'))
+            elif item.get('pitch'):
+                global_pitch = item['pitch']
+                try:
+                    p_xs_raw = np.asarray(global_pitch.xs())
+                    p_freqs_raw = np.asarray(global_pitch.selected_array['frequency'])
+                except Exception:
+                    pass
+
+            anomaly_points = []
+            if p_xs_raw is not None and p_freqs_raw is not None and len(p_xs_raw) > 0:
+                bounds = chars_bounds if chars_bounds else [[t_s, t_e]]
+                anomaly_points = detect_pitch_anomaly_points(
+                    p_xs_raw, p_freqs_raw, bounds=bounds, start=t_s, end=t_e
+                )
+
+                if anomaly_points:
+                    jumps_x = [t for t, _ in anomaly_points]
+                    jumps_y = [f for _, f in anomaly_points]
+                    self.ax2.plot(jumps_x, jumps_y, 'o', color='#EF4444', markersize=6, zorder=6, label="异常点")
+
+            pitch_floor = float(item.get('pitch_floor', app_params.get('pitch_floor', 75.0)))
+            pitch_ceiling = float(item.get('pitch_ceiling', app_params.get('pitch_ceiling', 600.0)))
+            visible_vals = p_vals[np.isfinite(p_vals)] if len(p_vals) else np.array([])
+            visible_high = float(np.max(visible_vals)) if len(visible_vals) else pitch_ceiling
+            anomaly_high = max((f for _, f in anomaly_points), default=pitch_ceiling)
+            y_min = max(0.0, min(50.0, pitch_floor - 25.0))
+            y_max = max(500.0, pitch_ceiling, visible_high, anomaly_high) + 25.0
+            self.ax2.set_ylim([y_min, y_max])
+            self.ax2.set_ylabel("F0 (Hz)", color='#3B82F6')
+            self.ax2.tick_params(axis='y', labelcolor='#3B82F6')
         self.ax.set_title(f"编辑区: {label}", pad=10)
         
         from .data_utils import split_into_syllables
@@ -823,8 +845,12 @@ class SpectrogramPanel:
                 self.erasing = False
                 item = self.current_item
                 if item:
+                    app_params = getattr(self.app, 'last_params', {}) if self.app else {}
+                    mode = item.get('analysis_mode', app_params.get('analysis_mode', 'f0'))
                     if 'preview_f0' in item:
                         item.pop('preview_f0')
+                    if mode == 'formant' and 'preview_formants' in item:
+                        item.pop('preview_formants')
                     if 'has_empty_data' in item:
                         item.pop('has_empty_data')
                 self.update_ui_times()
@@ -1118,62 +1144,146 @@ class SpectrogramPanel:
         item = self.current_item
         if not item: return
         
-        # Limit eraser interactions specifically to the pitch axis (ax2) to prevent accidental
-        # erasure when the mouse cursor is moved or dragged in the spectrogram axis (ax) or outside
-        if event.inaxes != self.ax2: return
+        app_params = getattr(self.app, 'last_params', {}) if self.app else {}
+        mode = item.get('analysis_mode', app_params.get('analysis_mode', 'f0'))
         
-        if not item.get('pitch_data') and item.get('pitch'):
-            pitch = item['pitch']
-            item['pitch_data'] = {
-                'xs': pitch.xs(),
-                'freqs': pitch.selected_array['frequency'].copy()
-            }
-            if 'pitch' in item:
-                del item['pitch']
-                
-        if not item.get('pitch_data'): return
-        
-        xs = item['pitch_data']['xs']
-        freqs = item['pitch_data']['freqs']
-        if len(xs) == 0: return
-        
-        # Transform data to screen coordinates
-        pts_data = np.column_stack((xs, freqs))
-        pts_pixels = self.ax2.transData.transform(pts_data)
-        
-        # Calculate Euclidean distances in pixels
-        dists = np.hypot(pts_pixels[:, 0] - event.x, pts_pixels[:, 1] - event.y)
-        
-        erase_radius = self.erase_radius  # pixels
-        mask_to_erase = (dists <= erase_radius) & (freqs > 0)
-        
-        if np.any(mask_to_erase):
-            freqs[mask_to_erase] = 0.0
-            item['is_manual_edited'] = True
-            panel = None
-            if self.app:
-                self.app.mark_modified()
-                if hasattr(self.app, 'tree_panel') and self.app.tree_panel:
-                    panel = self.app.tree_panel
-                elif hasattr(self.app, 'project_panel') and self.app.project_panel:
-                    panel = self.app.project_panel
-            if panel:
-                panel.update_item_icon(self.current_item_iid)
+        if mode == 'formant':
+            if event.inaxes != self.ax: return
+            if not item.get('formant_data'): return
             
-            # Live visual update: update F0 line data in real time
-            if self.ax2.lines:
-                f0_line = self.ax2.lines[0]
+            xs = item['formant_data']['xs']
+            f1 = item['formant_data']['f1']
+            f2 = item['formant_data']['f2']
+            if len(xs) == 0: return
+            
+            f1_clean = f1.copy()
+            f1_clean[np.isnan(f1_clean)] = 0.0
+            pts_f1 = np.column_stack((xs, f1_clean))
+            pixels_f1 = self.ax.transData.transform(pts_f1)
+            dists_f1 = np.hypot(pixels_f1[:, 0] - event.x, pixels_f1[:, 1] - event.y)
+            dists_f1[np.isnan(f1)] = np.inf
+            
+            f2_clean = f2.copy()
+            f2_clean[np.isnan(f2_clean)] = 0.0
+            pts_f2 = np.column_stack((xs, f2_clean))
+            pixels_f2 = self.ax.transData.transform(pts_f2)
+            dists_f2 = np.hypot(pixels_f2[:, 0] - event.x, pixels_f2[:, 1] - event.y)
+            dists_f2[np.isnan(f2)] = np.inf
+            
+            erase_radius = self.erase_radius
+            # Formant mode erases only the nearest single point to avoid wiping an entire time strip.
+            nearest_f1_idx = int(np.argmin(dists_f1)) if len(dists_f1) > 0 else -1
+            nearest_f2_idx = int(np.argmin(dists_f2)) if len(dists_f2) > 0 else -1
+            nearest_f1_dist = dists_f1[nearest_f1_idx] if nearest_f1_idx >= 0 else np.inf
+            nearest_f2_dist = dists_f2[nearest_f2_idx] if nearest_f2_idx >= 0 else np.inf
+
+            target_curve = None
+            target_idx = -1
+            nearest_dist = min(nearest_f1_dist, nearest_f2_dist)
+            if nearest_dist <= erase_radius:
+                if nearest_f1_dist <= nearest_f2_dist:
+                    target_curve = "f1"
+                    target_idx = nearest_f1_idx
+                else:
+                    target_curve = "f2"
+                    target_idx = nearest_f2_idx
+
+            if target_idx >= 0:
+                if target_curve == "f1":
+                    f1[target_idx] = np.nan
+                else:
+                    f2[target_idx] = np.nan
+                item['is_manual_edited'] = True
+                
+                if self.app:
+                    self.app.mark_modified()
+                    pts = int(self.app.last_params.get('pts', 11))
+                    strategy = self.app.last_params.get('formant_sample_strategy', '整段11点')
+                    _, preview_f1, preview_f2 = self.app.sample_formant_points(item, pts, strategy)
+                    item['preview_formants'] = {"f1": preview_f1, "f2": preview_f2}
+                    item.pop('has_empty_data', None)
+                    
+                    panel = None
+                    if hasattr(self.app, 'tree_panel') and self.app.tree_panel:
+                        panel = self.app.tree_panel
+                    elif hasattr(self.app, 'project_panel') and self.app.project_panel:
+                        panel = self.app.project_panel
+                    if panel:
+                        panel.update_item_icon(self.current_item_iid)
+                        panel.update_preview()
+                
+                updated_lines = False
                 view_s, view_e = self.ax.get_xlim()
                 mask = (xs >= view_s) & (xs <= view_e)
-                p_vals = freqs[mask].copy()
-                p_vals[p_vals == 0] = np.nan
+                f1_plot = f1[mask].copy()
+                f2_plot = f2[mask].copy()
                 
-                # Verify that masked shape matches plotted F0 line y-data length
-                if len(p_vals) == len(f0_line.get_ydata()):
-                    f0_line.set_ydata(p_vals)
-                    self.canvas.draw_idle()
-                else:
+                formant_lines = [l for l in self.ax.lines if l.get_label() in ["F1", "F2"]]
+                if len(formant_lines) == 2:
+                    try:
+                        f1_line = [l for l in formant_lines if l.get_label() == "F1"][0]
+                        f2_line = [l for l in formant_lines if l.get_label() == "F2"][0]
+                        if len(f1_plot) == len(f1_line.get_ydata()):
+                            f1_line.set_ydata(f1_plot)
+                            f2_line.set_ydata(f2_plot)
+                            self.canvas.draw_idle()
+                            updated_lines = True
+                    except Exception:
+                        pass
+                
+                if not updated_lines:
                     self.plot_item_spectrogram()
+        else:
+            if event.inaxes != self.ax2: return
+            
+            if not item.get('pitch_data') and item.get('pitch'):
+                pitch = item['pitch']
+                item['pitch_data'] = {
+                    'xs': pitch.xs(),
+                    'freqs': pitch.selected_array['frequency'].copy()
+                }
+                if 'pitch' in item:
+                    del item['pitch']
+                    
+            if not item.get('pitch_data'): return
+            
+            xs = item['pitch_data']['xs']
+            freqs = item['pitch_data']['freqs']
+            if len(xs) == 0: return
+            
+            pts_data = np.column_stack((xs, freqs))
+            pts_pixels = self.ax2.transData.transform(pts_data)
+            
+            dists = np.hypot(pts_pixels[:, 0] - event.x, pts_pixels[:, 1] - event.y)
+            
+            erase_radius = self.erase_radius
+            mask_to_erase = (dists <= erase_radius) & (freqs > 0)
+            
+            if np.any(mask_to_erase):
+                freqs[mask_to_erase] = 0.0
+                item['is_manual_edited'] = True
+                panel = None
+                if self.app:
+                    self.app.mark_modified()
+                    if hasattr(self.app, 'tree_panel') and self.app.tree_panel:
+                        panel = self.app.tree_panel
+                    elif hasattr(self.app, 'project_panel') and self.app.project_panel:
+                        panel = self.app.project_panel
+                if panel:
+                    panel.update_item_icon(self.current_item_iid)
+                
+                if self.ax2.lines:
+                    f0_line = self.ax2.lines[0]
+                    view_s, view_e = self.ax.get_xlim()
+                    mask = (xs >= view_s) & (xs <= view_e)
+                    p_vals = freqs[mask].copy()
+                    p_vals[p_vals == 0] = np.nan
+                    
+                    if len(p_vals) == len(f0_line.get_ydata()):
+                        f0_line.set_ydata(p_vals)
+                        self.canvas.draw_idle()
+                    else:
+                        self.plot_item_spectrogram()
 
     def on_draw(self, event):
         self.background = self.canvas.copy_from_bbox(self.fig.bbox)
@@ -1181,7 +1291,15 @@ class SpectrogramPanel:
             self._blit_cursor()
 
     def update_eraser_circle(self, event=None):
-        if not self.eraser_mode or not self.ax2:
+        app_params = getattr(self.app, 'last_params', {}) if self.app else {}
+        mode = 'f0'
+        if self.current_item is not None:
+            mode = self.current_item.get('analysis_mode', app_params.get('analysis_mode', 'f0'))
+        else:
+            mode = app_params.get('analysis_mode', 'f0')
+        target_ax = self.ax if mode == 'formant' else self.ax2
+
+        if not self.eraser_mode or not target_ax:
             if self.eraser_circle:
                 try:
                     self.eraser_circle.remove()
@@ -1196,7 +1314,7 @@ class SpectrogramPanel:
                         self.canvas.draw_idle()
             return
 
-        if event is None or event.x is None or event.y is None or event.inaxes != self.ax2:
+        if event is None or event.x is None or event.y is None or event.inaxes != target_ax:
             if self.eraser_circle:
                 self.eraser_circle.set_visible(False)
                 if self.background is not None:
@@ -1207,8 +1325,7 @@ class SpectrogramPanel:
                         self.canvas.draw_idle()
             return
 
-        # If circle doesn't exist or was cleared, create a new one
-        if self.eraser_circle is None or self.eraser_circle not in self.ax2.patches:
+        if self.eraser_circle is None or self.eraser_circle not in target_ax.patches:
             from matplotlib.patches import Circle
             self.eraser_circle = Circle(
                 (event.x, event.y), 
@@ -1222,7 +1339,7 @@ class SpectrogramPanel:
                 zorder=100,
                 animated=True
             )
-            self.ax2.add_patch(self.eraser_circle)
+            target_ax.add_patch(self.eraser_circle)
         else:
             self.eraser_circle.set_center((event.x, event.y))
             self.eraser_circle.set_radius(self.erase_radius)
@@ -1231,7 +1348,7 @@ class SpectrogramPanel:
         if self.background is not None:
             try:
                 self.canvas.restore_region(self.background)
-                self.ax2.draw_artist(self.eraser_circle)
+                target_ax.draw_artist(self.eraser_circle)
                 self.canvas.blit(self.fig.bbox)
             except Exception:
                 self.canvas.draw_idle()
@@ -1251,3 +1368,16 @@ class SpectrogramPanel:
     def on_leave_fig(self, event):
         if self.eraser_mode:
             self.update_eraser_circle(None)
+
+    def update_eraser_button_text(self):
+        if not hasattr(self, 'btn_eraser') or not self.btn_eraser:
+            return
+        app_params = getattr(self.app, 'last_params', {}) if self.app else {}
+        if self.current_item is not None:
+            mode = self.current_item.get('analysis_mode', app_params.get('analysis_mode', 'f0'))
+        else:
+            mode = app_params.get('analysis_mode', 'f0')
+        if mode == 'formant':
+            self.btn_eraser.configure(text=" 剔除点")
+        else:
+            self.btn_eraser.configure(text=" 橡皮擦")

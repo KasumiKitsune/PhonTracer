@@ -78,10 +78,10 @@ class AcousticChartCLIAdapter:
         has_snd = item.get('snd') is not None
         has_pitch = (item.get('pitch') is not None) or (item.get('pitch_data') is not None)
 
-        if not has_snd or not has_pitch:
+        if not has_snd or not has_pitch or (self.app_state_params.get('analysis_mode') == 'formant' and not item.get('formant_data')):
             try:
                 import parselmouth
-                from modules.audio_core import extract_f0
+                from modules.audio_core import extract_f0, extract_formants
                 if not has_snd:
                     item['snd'] = parselmouth.Sound(item['path'])
                 if not has_pitch:
@@ -94,6 +94,9 @@ class AcousticChartCLIAdapter:
                         item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=pf, pitch_ceiling=pc, voicing_threshold=vt, very_accurate=True, octave_jump_cost=0.9)
                     else:
                         item['pitch_data'] = extract_f0(item['snd'], self.app_state_params)
+
+                if self.app_state_params.get('analysis_mode') == 'formant' and not item.get('formant_data'):
+                    item['formant_data'] = extract_formants(item['snd'], self.app_state_params)
             except Exception:
                 pass
 
@@ -369,7 +372,7 @@ Type 'help' or '?' to list commands. Use 'agent_guide' for AI operating rules.
             print(json.dumps({
                 "success": False,
                 "error": f"Unknown CLI command: {line_stripped}",
-                "message": "Detected an external shell/script style command. PhonTracerCLI does not execute external commands directly; please use built-in CLI commands.",
+                "message": "Detected an external shell/script style command (External automation attempt). PhonTracerCLI does not execute external commands directly; please use built-in CLI commands.",
                 "next_steps": ["help", "agent_guide", "status"]
             }))
         else:
@@ -391,8 +394,8 @@ Type 'help' or '?' to list commands. Use 'agent_guide' for AI operating rules.
         """
         Set analysis parameters.
         Usage: set_params key=value [key=value ...]
-        Valid keys: pts, db, skip_front, pitch_floor, pitch_ceiling, voicing_threshold, trim_silence, f0_engine
-        Example: set_params db=50.0 trim_silence=False f0_engine=reaper
+        Valid keys: pts, db, skip_front, pitch_floor, pitch_ceiling, voicing_threshold, trim_silence, f0_engine, analysis_mode, formant_max_hz, formant_count, formant_window_length, formant_pre_emphasis, formant_sample_strategy
+        Example: set_params db=50.0 trim_silence=False analysis_mode=formant formant_max_hz=5500
         """
         args = shlex.split(arg)
         if not args:
@@ -407,18 +410,20 @@ Type 'help' or '?' to list commands. Use 'agent_guide' for AI operating rules.
                     try:
                         if k == 'trim_silence':
                             self.params[k] = v.lower() in ('true', '1', 'yes')
-                        elif k in ('pts', 'pitch_floor', 'pitch_ceiling'):
+                        elif k in ('pts', 'pitch_floor', 'pitch_ceiling', 'formant_count'):
                             self.params[k] = int(v)
-                        elif k == 'f0_engine':
+                        elif k in ('f0_engine', 'analysis_mode', 'formant_sample_strategy'):
                             self.params[k] = str(v)
+                        elif k in ('formant_max_hz', 'formant_window_length', 'formant_pre_emphasis'):
+                            self.params[k] = float(v)
                         else:
                             self.params[k] = float(v)
                         updated = True
                     except ValueError:
-                        print(f'{{"success": False, "error": "Invalid value for {k}"}}')
+                        print(json.dumps({"success": False, "error": f"Invalid value for {k}"}))
                         return
                 else:
-                    print(f'{{"success": False, "error": "Unknown parameter {k}"}}')
+                    print(json.dumps({"success": False, "error": f"Unknown parameter {k}"}))
                     return
 
         print(json.dumps({"success": True, "message": "Parameters updated", "params": self.params}))
@@ -1919,6 +1924,15 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
             return
 
         try:
+            if fmt == 'formant_table':
+                self._export_formant_table(out_file, speakers_to_process)
+                print(json.dumps({"success": True, "message": f"Exported formant_table to {out_file}"}))
+                return
+            elif fmt == 'formant_space':
+                self._export_vowel_space_chart(out_file, speakers_to_process)
+                print(json.dumps({"success": True, "message": f"Exported formant_space to {out_file}"}))
+                return
+
             if target == 'separate':
                 # Export individually to out_file (treated as directory)
                 os.makedirs(out_file, exist_ok=True)
@@ -3176,6 +3190,269 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
             self.log_file = None
         self.executor.shutdown(wait=False)
         return True
+
+
+    def _export_formant_table(self, out_file, speakers_to_process):
+        try:
+            import xlsxwriter
+        except ImportError:
+            print(json.dumps({"success": False, "error": "Missing xlsxwriter library. Please install via: pip install xlsxwriter"}))
+            return
+
+        workbook = xlsxwriter.Workbook(out_file)
+        ws_raw = workbook.add_worksheet("逐点数据")
+        ws_sum = workbook.add_worksheet("摘要数据")
+
+        raw_headers = ["发音人", "组别", "编号", "词语", "音节序号", "单字", "时间点序号", "时间(s)", "F1(Hz)", "F2(Hz)"]
+        for col, h in enumerate(raw_headers):
+            ws_raw.write(0, col, h)
+
+        sum_headers = ["发音人", "组别", "编号", "词语", "音节序号", "单字", "F1_均值(Hz)", "F2_均值(Hz)", "F1_中位数(Hz)", "F2_中位数(Hz)", "有效帧数"]
+        for col, h in enumerate(sum_headers):
+            ws_sum.write(0, col, h)
+
+        raw_row = 1
+        sum_row = 1
+
+        for spk in speakers_to_process:
+            is_continuous = (self.params.get('num_rule', 'continuous') == 'continuous')
+            pts = int(self.params.get('pts', 11))
+            strategy = self.params.get('formant_sample_strategy', '整段11点')
+
+            groups = {}
+            for item_id, item in spk.items.items():
+                g = item.get('group', '导入内容')
+                if g not in groups:
+                    groups[g] = []
+                groups[g].append(item)
+
+            from modules.data_utils import clean_str, get_item_syllable_bounds, sample_formant_points_by_bounds, split_into_syllables
+            sorted_groups = sorted(groups.keys(), key=clean_str)
+
+            global_idx = 1
+            for grp_name in sorted_groups:
+                if not is_continuous:
+                    global_idx = 1
+                items_in_grp = groups[grp_name]
+                items_in_grp = sorted(items_in_grp, key=lambda x: clean_str(x.get('label', '')))
+
+                for item in items_in_grp:
+                    self._ensure_item_loaded(item)
+                    if not item.get('snd') or not item.get('formant_data'):
+                        continue
+
+                    bounds = get_item_syllable_bounds(item)
+                    syls = split_into_syllables(item.get('label', ''))
+                    preview_times, f1_vals, f2_vals = sample_formant_points_by_bounds(item, bounds, pts, strategy)
+
+                    # 逐字写入逐点数据和摘要数据
+                    for idx_syl, (c_s, c_e) in enumerate(bounds):
+                        char = syls[idx_syl] if idx_syl < len(syls) else f"字{idx_syl+1}"
+                        flat_start = idx_syl * pts
+                        flat_end = flat_start + pts
+
+                        f1_slice = f1_vals[flat_start:flat_end]
+                        f2_slice = f2_vals[flat_start:flat_end]
+
+                        # 逐点数据写入
+                        for idx_pt in range(pts):
+                            ws_raw.write(raw_row, 0, spk.name)
+                            ws_raw.write(raw_row, 1, grp_name)
+                            ws_raw.write(raw_row, 2, global_idx)
+                            ws_raw.write(raw_row, 3, item.get('label', ''))
+                            ws_raw.write(raw_row, 4, idx_syl + 1)
+                            ws_raw.write(raw_row, 5, char)
+                            ws_raw.write(raw_row, 6, idx_pt + 1)
+                            ws_raw.write(raw_row, 7, preview_times[flat_start + idx_pt])
+
+                            f1_v = f1_slice[idx_pt]
+                            f2_v = f2_slice[idx_pt]
+
+                            if np.isnan(f1_v):
+                                ws_raw.write_string(raw_row, 8, "--")
+                            else:
+                                ws_raw.write(raw_row, 8, round(f1_v, 1))
+
+                            if np.isnan(f2_v):
+                                ws_raw.write_string(raw_row, 9, "--")
+                            else:
+                                ws_raw.write(raw_row, 9, round(f2_v, 1))
+                            raw_row += 1
+
+                        # 计算共振峰的成对有效统计特征
+                        f1_arr = np.array(f1_slice)
+                        f2_arr = np.array(f2_slice)
+                        valid_mask = ~np.isnan(f1_arr) & ~np.isnan(f2_arr) & (f2_arr > f1_arr)
+                        paired_f1 = f1_arr[valid_mask]
+                        paired_f2 = f2_arr[valid_mask]
+
+                        valid_cnt = int(np.sum(valid_mask))
+
+                        ws_sum.write(sum_row, 0, spk.name)
+                        ws_sum.write(sum_row, 1, grp_name)
+                        ws_sum.write(sum_row, 2, global_idx)
+                        ws_sum.write(sum_row, 3, item.get('label', ''))
+                        ws_sum.write(sum_row, 4, idx_syl + 1)
+                        ws_sum.write(sum_row, 5, char)
+
+                        if valid_cnt > 0:
+                            mean_f1 = float(np.nanmean(paired_f1))
+                            mean_f2 = float(np.nanmean(paired_f2))
+                            med_f1 = float(np.nanmedian(paired_f1))
+                            med_f2 = float(np.nanmedian(paired_f2))
+
+                            ws_sum.write(sum_row, 6, round(mean_f1, 1))
+                            ws_sum.write(sum_row, 7, round(mean_f2, 1))
+                            ws_sum.write(sum_row, 8, round(med_f1, 1))
+                            ws_sum.write(sum_row, 9, round(med_f2, 1))
+                        else:
+                            ws_sum.write_string(sum_row, 6, "--")
+                            ws_sum.write_string(sum_row, 7, "--")
+                            ws_sum.write_string(sum_row, 8, "--")
+                            ws_sum.write_string(sum_row, 9, "--")
+
+                        ws_sum.write(sum_row, 10, valid_cnt)
+                        sum_row += 1
+
+                    global_idx += 1
+
+        workbook.close()
+
+    def _cli_sample_formant_points(self, item, pts=11, strategy='整段11点'):
+        start = item['start']
+        end = item['end']
+        preview_times = np.linspace(start, end, pts)
+        
+        f_data = item.get('formant_data')
+        if not f_data or 'xs' not in f_data or 'f1' not in f_data or 'f2' not in f_data:
+            nan_list = [np.nan] * pts
+            return preview_times, nan_list, nan_list
+            
+        xs = f_data['xs']
+        f1_arr = f_data['f1']
+        f2_arr = f_data['f2']
+        
+        if strategy == '中段均值':
+            duration = end - start
+            m_start = start + duration / 3.0
+            m_end = start + 2.0 * duration / 3.0
+            
+            mask = (xs >= m_start) & (xs <= m_end)
+            f1_slice = f1_arr[mask]
+            f2_slice = f2_arr[mask]
+            
+            f1_vals = f1_slice[~np.isnan(f1_slice)]
+            f2_vals = f2_slice[~np.isnan(f2_slice)]
+            
+            mean_f1 = np.nanmean(f1_vals) if len(f1_vals) > 0 else np.nan
+            mean_f2 = np.nanmean(f2_vals) if len(f2_vals) > 0 else np.nan
+            
+            preview_f1 = [mean_f1] * pts
+            preview_f2 = [mean_f2] * pts
+        else:
+            preview_f1 = []
+            preview_f2 = []
+            
+            f1_valid_idx = np.where(~np.isnan(f1_arr))[0]
+            f2_valid_idx = np.where(~np.isnan(f2_arr))[0]
+            
+            for t in preview_times:
+                if len(f1_valid_idx) == 0 or t < xs[0] or t > xs[-1]:
+                    preview_f1.append(np.nan)
+                else:
+                    nearest_idx = np.argmin(np.abs(xs[f1_valid_idx] - t))
+                    if np.abs(xs[f1_valid_idx][nearest_idx] - t) > 0.04:
+                        preview_f1.append(np.nan)
+                    else:
+                        preview_f1.append(float(np.interp(t, xs[f1_valid_idx], f1_arr[f1_valid_idx])))
+                if len(f2_valid_idx) == 0 or t < xs[0] or t > xs[-1]:
+                    preview_f2.append(np.nan)
+                else:
+                    nearest_idx = np.argmin(np.abs(xs[f2_valid_idx] - t))
+                    if np.abs(xs[f2_valid_idx][nearest_idx] - t) > 0.04:
+                        preview_f2.append(np.nan)
+                    else:
+                        preview_f2.append(float(np.interp(t, xs[f2_valid_idx], f2_arr[f2_valid_idx])))
+                        
+        return preview_times.tolist(), preview_f1, preview_f2
+
+    def _export_vowel_space_chart(self, out_file, speakers_to_process):
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        
+        data_points = []
+        for spk in speakers_to_process:
+            for item_id, item in spk.items.items():
+                self._ensure_item_loaded(item)
+                if not item.get('snd') or not item.get('formant_data'):
+                    continue
+                    
+                f_data = item['formant_data']
+                f1_arr = f_data['f1']
+                f2_arr = f_data['f2']
+                
+                t_s, t_e = item['start'], item['end']
+                xs = f_data['xs']
+                mask = (xs >= t_s) & (xs <= t_e)
+                
+                valid_f1 = f1_arr[mask][~np.isnan(f1_arr[mask])]
+                valid_f2 = f2_arr[mask][~np.isnan(f2_arr[mask])]
+                
+                if len(valid_f1) > 0 and len(valid_f2) > 0:
+                    med_f1 = np.nanmedian(valid_f1)
+                    med_f2 = np.nanmedian(valid_f2)
+                    
+                    data_points.append({
+                        'spk': spk.name,
+                        'label': item.get('label', ''),
+                        'f1': med_f1,
+                        'f2': med_f2
+                    })
+                    
+        if not data_points:
+            print(json.dumps({"success": False, "error": "No valid formant data found"}))
+            return
+            
+        fig, ax = plt.subplots(figsize=(8, 7), dpi=300)
+        
+        unique_labels = sorted(list(set(pt['label'] for pt in data_points)))
+        cmap = plt.get_cmap('tab10')
+        colors = {lbl: cmap(i % 10) for i, lbl in enumerate(unique_labels)}
+        
+        for pt in data_points:
+            ax.scatter(pt['f2'], pt['f1'], color=colors[pt['label']], s=60, alpha=0.8, edgecolors='none', zorder=4)
+            ax.text(pt['f2'] - 15, pt['f1'] + 10, pt['label'], fontsize=9, fontweight='bold', color='#374151', zorder=5)
+            
+        if len(unique_labels) >= 3:
+            mean_points = {}
+            for lbl in unique_labels:
+                lbl_pts = [pt for pt in data_points if pt['label'] == lbl]
+                mean_f1 = np.mean([pt['f1'] for pt in lbl_pts])
+                mean_f2 = np.mean([pt['f2'] for pt in lbl_pts])
+                mean_points[lbl] = (mean_f2, mean_f1)
+            
+            for lbl, (m_f2, m_f1) in mean_points.items():
+                ax.scatter(m_f2, m_f1, color=colors[lbl], s=150, marker='*', edgecolors='black', linewidth=1, zorder=6, label=f"{lbl} 均值")
+        
+        ax.invert_xaxis()
+        ax.invert_yaxis()
+        
+        ax.set_xlabel("F2 (Hz)  [← Front / Back →]", fontsize=12, fontweight='bold', labelpad=10)
+        ax.set_ylabel("F1 (Hz)  [← High / Low →]", fontsize=12, fontweight='bold', labelpad=10)
+        
+        spk_str = speakers_to_process[0].name if len(speakers_to_process) == 1 else "多发音人"
+        ax.set_title(f"Vowel Space Chart ({spk_str}) - PhonTracer", fontsize=14, fontweight='bold', pad=15)
+        
+        ax.grid(True, linestyle='--', alpha=0.5, zorder=1)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.spines['left'].set_color('#9CA3AF')
+        ax.spines['bottom'].set_color('#9CA3AF')
+        
+        plt.tight_layout()
+        fig.savefig(out_file, bbox_inches='tight')
+        plt.close(fig)
 
     def do_EOF(self, arg):
         """Exit cleanly when the host closes stdin."""

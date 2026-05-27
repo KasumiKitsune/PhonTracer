@@ -535,6 +535,116 @@ def extract_f0(snd: parselmouth.Sound, params: Dict[str, Any]) -> Dict[str, Any]
             "engine": "praat"
         }
 
+
+def extract_formants(snd: parselmouth.Sound, params: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    使用 Parselmouth (Burg 方法) 提取共振峰数据。
+    返回结构:
+    {
+        "xs": np.ndarray,      # 时间点的一维 Numpy 数组
+        "f1": np.ndarray,      # F1 值的一维 Numpy 数组 (np.nan 表示无效/未检测到)
+        "f2": np.ndarray,      # F2 值的一维 Numpy 数组 (np.nan 表示无效/未检测到)
+        "f3": np.ndarray,      # F3 值的一维 Numpy 数组 (np.nan 表示无效/未检测到)
+        "engine": "praat_burg",
+        "params": dict
+    }
+    """
+    formant_count = float(params.get('formant_count', 5))
+    formant_max_hz = float(params.get('formant_max_hz', 5500.0))
+    formant_window_length = float(params.get('formant_window_length', 0.025))
+    formant_pre_emphasis = float(params.get('formant_pre_emphasis', 50.0))
+
+    formant = snd.to_formant_burg(
+        time_step=None,
+        max_number_of_formants=formant_count,
+        maximum_formant=formant_max_hz,
+        window_length=formant_window_length,
+        pre_emphasis_from=formant_pre_emphasis
+    )
+
+    xs = formant.xs()
+    num_frames = len(xs)
+    f1 = np.zeros(num_frames, dtype=np.float64)
+    f2 = np.zeros(num_frames, dtype=np.float64)
+    f3 = np.zeros(num_frames, dtype=np.float64)
+
+    for i, t in enumerate(xs):
+        v1 = formant.get_value_at_time(1, t)
+        v2 = formant.get_value_at_time(2, t)
+        v3 = formant.get_value_at_time(3, t)
+
+        if np.isnan(v1) or v1 <= 0 or v1 > formant_max_hz:
+            v1 = np.nan
+        if np.isnan(v2) or v2 <= 0:
+            v2 = np.nan
+        if np.isnan(v3) or v3 <= 0:
+            v3 = np.nan
+
+        if not np.isnan(v1) and not np.isnan(v2) and v2 <= v1:
+            v1 = np.nan
+            v2 = np.nan
+
+        f1[i] = v1
+        f2[i] = v2
+        f3[i] = v3
+
+    return {
+        "xs": xs.astype(np.float64),
+        "f1": f1,
+        "f2": f2,
+        "f3": f3,
+        "engine": "praat_burg",
+        "params": params
+    }
+
+
+def _sample_formants_helper(snd: parselmouth.Sound, mic_s: float, mic_e: float, params: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    formant_data = extract_formants(snd, params)
+    pts = int(params.get('pts', 11))
+    strategy = params.get('formant_sample_strategy', '整段11点')
+    f_xs = formant_data['xs']
+    f1_arr = formant_data['f1']
+    f2_arr = formant_data['f2']
+    preview_times = np.linspace(mic_s, mic_e, pts)
+
+    if strategy == '中段均值':
+        duration = mic_e - mic_s
+        m_start = mic_s + duration / 3.0
+        m_end = mic_s + 2.0 * duration / 3.0
+        mask = (f_xs >= m_start) & (f_xs <= m_end)
+        f1_slice = f1_arr[mask]
+        f2_slice = f2_arr[mask]
+        f1_vals = f1_slice[~np.isnan(f1_slice)]
+        f2_vals = f2_slice[~np.isnan(f2_slice)]
+        mean_f1 = np.nanmean(f1_vals) if len(f1_vals) > 0 else np.nan
+        mean_f2 = np.nanmean(f2_vals) if len(f2_vals) > 0 else np.nan
+        preview_f1 = [mean_f1] * pts
+        preview_f2 = [mean_f2] * pts
+    else:
+        preview_f1 = []
+        preview_f2 = []
+        f1_valid_idx = np.where(~np.isnan(f1_arr))[0]
+        f2_valid_idx = np.where(~np.isnan(f2_arr))[0]
+        for t in preview_times:
+            if len(f1_valid_idx) == 0 or t < f_xs[0] or t > f_xs[-1]:
+                preview_f1.append(np.nan)
+            else:
+                nearest_idx = np.argmin(np.abs(f_xs[f1_valid_idx] - t))
+                if np.abs(f_xs[f1_valid_idx][nearest_idx] - t) > 0.04:
+                    preview_f1.append(np.nan)
+                else:
+                    preview_f1.append(float(np.interp(t, f_xs[f1_valid_idx], f1_arr[f1_valid_idx])))
+            if len(f2_valid_idx) == 0 or t < f_xs[0] or t > f_xs[-1]:
+                preview_f2.append(np.nan)
+            else:
+                nearest_idx = np.argmin(np.abs(f_xs[f2_valid_idx] - t))
+                if np.abs(f_xs[f2_valid_idx][nearest_idx] - t) > 0.04:
+                    preview_f2.append(np.nan)
+                else:
+                    preview_f2.append(float(np.interp(t, f_xs[f2_valid_idx], f2_arr[f2_valid_idx])))
+    return formant_data, {"f1": preview_f1, "f2": preview_f2}
+
+
 def auto_split_to_chars_bounds(snd: parselmouth.Sound, mic_s: float, mic_e: float, inner_splits: List[float], label_len: int, params: Dict[str, float]) -> List[List[float]]:
     splits = [mic_s] + [s for s in inner_splits if mic_s < s < mic_e] + [mic_e]
     if len(splits) != label_len + 1:
@@ -613,6 +723,11 @@ def batch_process_worker(path: str, params: Dict[str, float], trim_silence: bool
 
         has_empty_data = any(f == 0.0 for f in preview_f0)
 
+        formant_data = None
+        preview_formants = None
+        if params.get('analysis_mode') == 'formant':
+            formant_data, preview_formants = _sample_formants_helper(snd, mic_s, mic_e, params)
+
         return {
             'label': name,
             'path': path,
@@ -626,6 +741,8 @@ def batch_process_worker(path: str, params: Dict[str, float], trim_silence: bool
             'chars_bounds': chars_bounds,
             'preview_f0': preview_f0,
             'pitch_data': pitch_data,
+            'formant_data': formant_data,
+            'preview_formants': preview_formants,
             'success': True,
             'has_empty_data': has_empty_data,
             'split_warnings': split_warnings,
@@ -714,12 +831,22 @@ def long_process_worker(snd_values: np.ndarray, snd_sf: float, pitch_xs: np.ndar
 
         has_empty_data = any(f == 0.0 for f in preview_f0)
 
+        formant_data = None
+        preview_formants = None
+        if params.get('analysis_mode') == 'formant':
+            rel_s = mic_s - ms
+            rel_e = mic_e - ms
+            formant_data, preview_formants = _sample_formants_helper(snd_part, rel_s, rel_e, params)
+            formant_data['xs'] = formant_data['xs'] + ms
+
         return {
             'ms': ms, 'me': me,
             'mis': mic_s, 'mie': mic_e,
             'raw_s': raw_s, 'raw_e': raw_e,
             'inner_splits': inner_splits,
             'chars_bounds': chars_bounds,
+            'formant_data': formant_data,
+            'preview_formants': preview_formants,
             'has_empty_data': has_empty_data,
             'split_warnings': split_warnings,
             'split_confidence': split_confidence,
@@ -746,6 +873,8 @@ def process_single_long_word(snd_values: np.ndarray, snd_sf: float, word: str, m
             'raw_end': res['raw_e'],
             'inner_splits': res.get('inner_splits', []),
             'chars_bounds': res.get('chars_bounds', []),
+            'formant_data': res.get('formant_data'),
+            'preview_formants': res.get('preview_formants'),
             'has_empty_data': res.get('has_empty_data', False),
             'split_warnings': res.get('split_warnings', []),
             'split_confidence': res.get('split_confidence', 1.0),
@@ -863,6 +992,11 @@ def batch_process_worker_with_textgrid(path: str, tg_path: str, params: Dict[str
 
         has_empty_data = any(f == 0.0 for f in preview_f0)
 
+        formant_data = None
+        preview_formants = None
+        if params.get('analysis_mode') == 'formant':
+            formant_data, preview_formants = _sample_formants_helper(snd, mic_s, mic_e, params)
+
         return {
             'label': lbl,
             'path': path,
@@ -877,6 +1011,8 @@ def batch_process_worker_with_textgrid(path: str, tg_path: str, params: Dict[str
             'chars_bounds': chars_bounds,
             'preview_f0': preview_f0,
             'pitch_data': pitch_data,
+            'formant_data': formant_data,
+            'preview_formants': preview_formants,
             'success': True,
             'has_empty_data': has_empty_data
         }

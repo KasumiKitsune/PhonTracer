@@ -9,7 +9,7 @@ import matplotlib
 matplotlib.use("Agg", force=True)
 
 from scipy.stats import gaussian_kde
-from .data_utils import split_into_syllables, get_export_text_for_item
+from .data_utils import split_into_syllables, get_export_text_for_item, get_item_syllable_bounds, sample_formant_points_by_bounds
 
 _GUI_IMPORT_ERROR = None
 
@@ -71,6 +71,9 @@ class AcousticChartExporter:
         self.current_preview_page = 0
         self.current_group_page = 0
         self._render_runtime = threading.local()
+
+    def _is_formant_mode(self):
+        return self.project_tree.app_state_params.get('analysis_mode', 'f0') == 'formant'
 
     def _set_export_runtime(self, progress_callback=None, cancel_event=None, params=None):
         self._render_runtime.progress_callback = progress_callback
@@ -186,6 +189,14 @@ class AcousticChartExporter:
             # overview specific
             'overview_metric': lambda: getattr(self, 'combo_overview_metric').get() if hasattr(self, 'combo_overview_metric') else None,
 
+            # formant space specific
+            'formant_ellipse': lambda: getattr(self, 'combo_formant_ellipse').get() if hasattr(self, 'combo_formant_ellipse') else None,
+            'formant_label_mode': lambda: getattr(self, 'combo_formant_label_mode').get() if hasattr(self, 'combo_formant_label_mode') else None,
+            'formant_show_raw': lambda: getattr(self, 'var_formant_show_raw').get() if hasattr(self, 'var_formant_show_raw') else None,
+
+            # formant trajectory specific
+            'formant_traj_style': lambda: getattr(self, 'combo_formant_traj_style').get() if hasattr(self, 'combo_formant_traj_style') else None,
+
             # legend specific
             'legend_loc': lambda: getattr(self, 'combo_legend_loc').get() if hasattr(self, 'combo_legend_loc') else None,
             'legend_outside': lambda: getattr(self, 'var_legend_outside').get() if hasattr(self, 'var_legend_outside') else None,
@@ -231,6 +242,9 @@ class AcousticChartExporter:
 
     # --- CORE DATA EXTRACTION ENGINE ---
     def _extract_active_data(self, speakers_list):
+        analysis_mode = self.project_tree.app_state_params.get('analysis_mode', 'f0')
+        if analysis_mode == 'formant':
+            return self._extract_active_formant_data(speakers_list)
         num_points = self.project_tree.app_state_params.get('pts', 11)
         data_entries = []
 
@@ -435,6 +449,8 @@ class AcousticChartExporter:
             _, pages = self._build_overview_word_pages(data_entries)
             state['pages'] = pages
             state['total_pages'] = len(pages) if pages else 1
+        elif chart_type in ("formant_space", "formant_trajectory"):
+            state['total_pages'] = 1
         else:
             state['total_pages'] = math.ceil(total_groups / 8) if total_groups > 0 else 1
 
@@ -477,6 +493,8 @@ class AcousticChartExporter:
                 current_page_rows = pagination_state['pages'][P] if P < len(pagination_state['pages']) else []
                 allowed_pairs = {row['row_id'] for row in current_page_rows}
                 data_entries = [e for e in data_entries if (e['group'], e['label']) in allowed_pairs]
+            elif chart_type in ("formant_space", "formant_trajectory"):
+                pass
             elif total_groups > page_size and chart_type != "overview_heatmap":
                 truncated = True
                 start_idx = P * page_size
@@ -499,6 +517,10 @@ class AcousticChartExporter:
             fig = self._plot_quality_check(data_entries)
         elif chart_type == "overview_heatmap":
             fig = self._plot_tone_overview_heatmap(data_entries, group_key, scale)
+        elif chart_type == "formant_space":
+            fig = self._plot_formant_vowel_space(data_entries, group_key, scale)
+        elif chart_type == "formant_trajectory":
+            fig = self._plot_formant_trajectories(data_entries, group_key, scale)
         else:
             fig, ax = plt.subplots()
             return fig
@@ -1597,6 +1619,374 @@ class AcousticChartExporter:
                 plt.close(fig)
         self._report_export_progress(1.0, "当前任务完成")
 
+    def _extract_active_formant_data(self, speakers_list):
+        num_points = self.project_tree.app_state_params.get('pts', 11)
+        data_entries = []
+
+        for speaker in speakers_list:
+            if not getattr(self, '_force_live_extract', False) and hasattr(self, '_speaker_data_cache') and speaker in self._speaker_data_cache:
+                data_entries.extend(self._speaker_data_cache[speaker])
+                continue
+
+            orig_items = self.project_tree.items
+            self.project_tree.items = speaker.items
+
+            s_struct = self.project_tree._get_items_by_group_for_dict(speaker.items)
+            speaker_data_entries = []
+
+            for grp_name, children in s_struct:
+                for child in children:
+                    item = speaker.items[child]
+                    self.project_tree._ensure_item_loaded(item)
+                    if item.get('start') is None or not item.get('snd') or not item.get('formant_data'):
+                        continue
+
+                    # Get bounds and split into syllables
+                    bounds = get_item_syllable_bounds(item)
+                    label = item.get('label', '')
+                    syls = split_into_syllables(label)
+
+                    # Get sample strategy
+                    strategy = item.get('formant_sample_strategy')
+                    if not strategy and hasattr(self.app, 'last_params'):
+                        strategy = self.app.last_params.get('formant_sample_strategy', '整段11点')
+                    if not strategy:
+                        strategy = '整段11点'
+
+                    times, f1_vals, f2_vals = sample_formant_points_by_bounds(item, bounds, num_points, strategy)
+
+                    # Formant data is syllable-level structured
+                    syl_formants = []
+                    for idx_syl, (c_s, c_e) in enumerate(bounds):
+                        char = syls[idx_syl] if idx_syl < len(syls) else f"字{idx_syl+1}"
+                        s_idx = idx_syl * num_points
+                        e_idx = s_idx + num_points
+                        s_times = times[s_idx:e_idx]
+                        s_f1 = f1_vals[s_idx:e_idx]
+                        s_f2 = f2_vals[s_idx:e_idx]
+                        syl_formants.append({
+                            'syllable_index': idx_syl,
+                            'char': char,
+                            'bounds': [c_s, c_e],
+                            'times': s_times,
+                            'f1': s_f1,
+                            'f2': s_f2
+                        })
+
+                    warnings = item.get('warnings', [])
+
+                    speaker_data_entries.append({
+                        'speaker_name': speaker.name,
+                        'group': grp_name,
+                        'label': label,
+                        'syl_formants': syl_formants,
+                        'raw_xs': item['formant_data'].get('xs', []),
+                        'raw_f1': item['formant_data'].get('f1', []),
+                        'raw_f2': item['formant_data'].get('f2', []),
+                        'warnings': warnings,
+                        'raw_item': item
+                    })
+
+            self.project_tree.items = orig_items
+            if hasattr(self, '_speaker_data_cache'):
+                self._speaker_data_cache[speaker] = speaker_data_entries
+            data_entries.extend(speaker_data_entries)
+
+        selected_groups = self.get_param('selected_groups', None)
+        if selected_groups is not None:
+            if isinstance(selected_groups, str):
+                selected_groups = [g.strip() for g in selected_groups.split(',') if g.strip()]
+            selected_groups = set(selected_groups)
+            data_entries = [e for e in data_entries if e['group'] in selected_groups]
+        elif hasattr(self, 'group_checkbox_vars') and self.group_checkbox_vars:
+            selected_groups = {g for g, var in self.group_checkbox_vars.items() if var.get()}
+            data_entries = [e for e in data_entries if e['group'] in selected_groups]
+
+        return data_entries
+
+    def _get_syl_category(self, entry, syl, groupby_val):
+        if groupby_val in ("按词语", "label"):
+            return entry['label']
+        if groupby_val in ("按单字/音节", "syl_char"):
+            return syl['char']
+        if groupby_val in ("按发音人", "speaker"):
+            return entry['speaker_name']
+        return entry['group']
+
+    def _draw_confidence_ellipse(self, x, y, ax, n_std=1.0, facecolor='none', **kwargs):
+        if len(x) < 3:
+            return None
+        from matplotlib.patches import Ellipse
+        try:
+            cov = np.cov(x, y)
+            if np.any(np.isnan(cov)) or np.any(np.isinf(cov)):
+                return None
+            
+            vals, vecs = np.linalg.eigh(cov)
+            order = vals.argsort()[::-1]
+            vals, vecs = vals[order], vecs[:, order]
+            
+            theta = np.degrees(np.arctan2(*vecs[:, 0][::-1]))
+            width, height = 2 * n_std * np.sqrt(np.maximum(vals, 0))
+            
+            ellipse = Ellipse(xy=(np.mean(x), np.mean(y)), width=width, height=height,
+                              angle=theta, facecolor=facecolor, **kwargs)
+            return ax.add_patch(ellipse)
+        except Exception:
+            return None
+
+    def _plot_formant_vowel_space(self, data_entries, group_key, scale):
+        fig, ax = plt.subplots(figsize=(8.6, 7.2))
+        ax.set_facecolor("#F8FAFC")
+        ax.grid(True, linestyle="--", alpha=0.25, linewidth=0.8)
+
+        groupby_val = self.get_param('groupby', 'group')
+        label_mode = self.get_param('formant_label_mode', '显示分组标签')
+        ellipse_mode = self.get_param('formant_ellipse', '1-sigma 置信椭圆')
+        show_raw = self.get_param('formant_show_raw', True)
+
+        category_data = {}
+        
+        for entry in data_entries:
+            for syl in entry.get('syl_formants', []):
+                c_s, c_e = syl['bounds']
+                xs = np.asarray(entry.get('raw_xs', []), dtype=float)
+                f1_arr = np.asarray(entry.get('raw_f1', []), dtype=float)
+                f2_arr = np.asarray(entry.get('raw_f2', []), dtype=float)
+                
+                if len(xs) == 0 or len(f1_arr) == 0 or len(f2_arr) == 0:
+                    continue
+                    
+                mask = (xs >= c_s) & (xs <= c_e) & np.isfinite(f1_arr) & np.isfinite(f2_arr) & (f2_arr > f1_arr)
+                s_f1 = f1_arr[mask]
+                s_f2 = f2_arr[mask]
+                
+                if len(s_f1) == 0:
+                    continue
+                
+                cat = self._get_syl_category(entry, syl, groupby_val)
+                if cat not in category_data:
+                    category_data[cat] = {'f1': [], 'f2': [], 'entries_labels': [], 'syl_chars': []}
+                
+                category_data[cat]['f1'].extend(s_f1.tolist())
+                category_data[cat]['f2'].extend(s_f2.tolist())
+                category_data[cat]['entries_labels'].append(entry['label'])
+                category_data[cat]['syl_chars'].append(syl['char'])
+
+        if not category_data:
+            ax.text(0.5, 0.5, "没有找到有效的共振峰分析数据！", ha='center', va='center', color='red', fontsize=12)
+            return fig
+
+        categories = sorted(list(category_data.keys()))
+        cmap = plt.get_cmap('tab10')
+        cat_colors = {cat: cmap(i % 10) for i, cat in enumerate(categories)}
+
+        all_f1_plotted = []
+        all_f2_plotted = []
+
+        for cat in categories:
+            color = cat_colors[cat]
+            f1_list = np.array(category_data[cat]['f1'])
+            f2_list = np.array(category_data[cat]['f2'])
+            
+            if len(f1_list) == 0:
+                continue
+                
+            all_f1_plotted.extend(f1_list)
+            all_f2_plotted.extend(f2_list)
+            
+            if show_raw:
+                ax.scatter(f2_list, f1_list, color=color, s=14, alpha=0.12, edgecolors='none', zorder=2)
+
+        for cat in categories:
+            color = cat_colors[cat]
+            f1_list = np.array(category_data[cat]['f1'])
+            f2_list = np.array(category_data[cat]['f2'])
+            
+            if len(f1_list) == 0:
+                continue
+                
+            mean_f1 = np.mean(f1_list)
+            mean_f2 = np.mean(f2_list)
+            
+            ax.scatter(mean_f2, mean_f1, color=color, s=150, marker='o', edgecolors='black', linewidth=1.2, zorder=6, label=str(cat))
+            
+            if label_mode == "显示分组标签":
+                lbl_text = str(cat)
+                ax.text(mean_f2, mean_f1 - 15, lbl_text, fontsize=11, fontweight='bold', color='#111827', ha='center', va='bottom', zorder=7,
+                        bbox=dict(boxstyle="round,pad=0.2", fc="white", ec=color, alpha=0.8, lw=1))
+            elif label_mode == "显示单字标签":
+                syl_chars = category_data[cat]['syl_chars']
+                lbl_text = max(set(syl_chars), key=syl_chars.count) if syl_chars else cat
+                ax.text(mean_f2, mean_f1 - 15, lbl_text, fontsize=11, fontweight='bold', color='#111827', ha='center', va='bottom', zorder=7,
+                        bbox=dict(boxstyle="round,pad=0.2", fc="white", ec=color, alpha=0.8, lw=1))
+            elif label_mode == "显示词语标签":
+                entries_labels = category_data[cat]['entries_labels']
+                lbl_text = str(cat) if groupby_val == "按词语" else (max(set(entries_labels), key=entries_labels.count) if entries_labels else cat)
+                ax.text(mean_f2, mean_f1 - 15, lbl_text, fontsize=11, fontweight='bold', color='#111827', ha='center', va='bottom', zorder=7,
+                        bbox=dict(boxstyle="round,pad=0.2", fc="white", ec=color, alpha=0.8, lw=1))
+
+            if "1-sigma" in ellipse_mode:
+                self._draw_confidence_ellipse(f2_list, f1_list, ax, n_std=1.0, facecolor='none', edgecolor=color, linestyle='--', linewidth=1.5, zorder=4)
+            elif "2-sigma" in ellipse_mode:
+                self._draw_confidence_ellipse(f2_list, f1_list, ax, n_std=2.0, facecolor='none', edgecolor=color, linestyle='-.', linewidth=1.5, zorder=4)
+
+        ax.invert_xaxis()
+        ax.invert_yaxis()
+
+        if all_f1_plotted and all_f2_plotted:
+            f1_p1, f1_p99 = np.percentile(all_f1_plotted, 1.0), np.percentile(all_f1_plotted, 99.0)
+            f2_p1, f2_p99 = np.percentile(all_f2_plotted, 1.0), np.percentile(all_f2_plotted, 99.0)
+            
+            f1_pad = (f1_p99 - f1_p1) * 0.15 if f1_p99 > f1_p1 else 100.0
+            f2_pad = (f2_p99 - f2_p1) * 0.15 if f2_p99 > f2_p1 else 150.0
+            
+            ax.set_ylim(f1_p99 + f1_pad, max(50.0, f1_p1 - f1_pad))
+            ax.set_xlim(f2_p99 + f2_pad, max(500.0, f2_p1 - f2_pad))
+
+        ax.set_xlabel("F2 (Hz)", fontsize=12, fontweight='bold', labelpad=10)
+        ax.set_ylabel("F1 (Hz)", fontsize=12, fontweight='bold', labelpad=10)
+        
+        legend_kwargs = self._get_legend_kwargs()
+        legend_kwargs["fontsize"] = 9
+        ax.legend(**legend_kwargs)
+        
+        title_text = "元音共振峰空间分布图"
+        if len(set(e['speaker_name'] for e in data_entries)) == 1:
+            title_text = f"{data_entries[0]['speaker_name']} - {title_text}"
+        ax.set_title(title_text, fontsize=13, fontweight='bold', pad=15)
+        
+        fig.tight_layout()
+        return fig
+
+    def _plot_formant_trajectories(self, data_entries, group_key, scale):
+        fig, ax = plt.subplots(figsize=(9.2, 5.8))
+        ax.set_facecolor("#F8FAFC")
+        ax.grid(True, linestyle="--", alpha=0.25, linewidth=0.8)
+
+        groupby_val = self.get_param('groupby', 'group')
+        traj_style = self.get_param('formant_traj_style', '平均曲线 + 置信区间阴影')
+        num_points = self.project_tree.app_state_params.get('pts', 11)
+
+        category_trajs = {}
+
+        for entry in data_entries:
+            for syl in entry.get('syl_formants', []):
+                cat = self._get_syl_category(entry, syl, groupby_val)
+                if cat not in category_trajs:
+                    category_trajs[cat] = {'f1': [], 'f2': []}
+                
+                f1_pts = np.array(syl['f1'], dtype=float)
+                f2_pts = np.array(syl['f2'], dtype=float)
+                
+                if len(f1_pts) == num_points and len(f2_pts) == num_points:
+                    category_trajs[cat]['f1'].append(f1_pts)
+                    category_trajs[cat]['f2'].append(f2_pts)
+
+        if not category_trajs:
+            ax.text(0.5, 0.5, "没有找到有效的共振峰时序数据！", ha='center', va='center', color='red', fontsize=12)
+            return fig
+
+        categories = sorted(list(category_trajs.keys()))
+        cmap = plt.get_cmap('tab10')
+        cat_colors = {cat: cmap(i % 10) for i, cat in enumerate(categories)}
+
+        x_pts = np.linspace(0, 100, num_points)
+
+        for cat in categories:
+            color = cat_colors[cat]
+            f1_arr = np.array(category_trajs[cat]['f1'])
+            f2_arr = np.array(category_trajs[cat]['f2'])
+            
+            if len(f1_arr) == 0 or len(f2_arr) == 0:
+                continue
+
+            with np.errstate(all='ignore'):
+                mean_f1 = np.nanmean(f1_arr, axis=0)
+                std_f1 = np.nanstd(f1_arr, axis=0)
+                mean_f2 = np.nanmean(f2_arr, axis=0)
+                std_f2 = np.nanstd(f2_arr, axis=0)
+
+            if "个体浅色细线" in traj_style:
+                for single_f1, single_f2 in zip(f1_arr, f2_arr):
+                    ax.plot(x_pts, single_f1, color=color, alpha=0.1, linewidth=0.8)
+                    ax.plot(x_pts, single_f2, color=color, alpha=0.1, linewidth=0.8)
+            elif "置信区间阴影" in traj_style:
+                ax.fill_between(x_pts, mean_f1 - std_f1, mean_f1 + std_f1, color=color, alpha=0.1)
+                ax.fill_between(x_pts, mean_f2 - std_f2, mean_f2 + std_f2, color=color, alpha=0.1)
+
+            ax.plot(x_pts, mean_f1, linestyle='--', marker='s', markersize=4.5, color=color, linewidth=2.1, label=f"{cat} F1")
+            ax.plot(x_pts, mean_f2, linestyle='-', marker='o', markersize=4.5, color=color, linewidth=2.3, label=f"{cat} F2")
+
+        ax.set_xlabel("音节物理时长百分比 (%)", fontsize=12, fontweight='bold', labelpad=10)
+        ax.set_ylabel("频率 (Hz)", fontsize=12, fontweight='bold', labelpad=10)
+        ax.margins(x=0.02)
+        
+        legend_kwargs = self._get_legend_kwargs()
+        legend_kwargs["fontsize"] = 9
+        ax.legend(**legend_kwargs)
+        
+        title_text = "共振峰 F1-F2 时序轨迹平均曲线图"
+        if len(set(e['speaker_name'] for e in data_entries)) == 1:
+            title_text = f"{data_entries[0]['speaker_name']} - {title_text}"
+        ax.set_title(title_text, fontsize=13, fontweight='bold', pad=15)
+        
+        fig.tight_layout()
+        return fig
+
+    def _build_formant_space_settings(self):
+        # Confidence Ellipse
+        ctk.CTkLabel(self.dynamic_content_frame, text="置信椭圆 (Confidence Ellipse):", font=self.font_small).pack(anchor="w", pady=(5, 2))
+        self.combo_formant_ellipse = ctk.CTkOptionMenu(
+            self.dynamic_content_frame, 
+            values=["1-sigma 置信椭圆", "2-sigma 置信椭圆", "无置信椭圆"], 
+            command=lambda _: self.trigger_preview_update(), 
+            **self.dropdown_kwargs
+        )
+        self.combo_formant_ellipse.set("1-sigma 置信椭圆")
+        self.combo_formant_ellipse.pack(fill=tk.X, pady=2)
+        self._apply_custom_arrow(self.combo_formant_ellipse)
+
+        # Label Mode
+        ctk.CTkLabel(self.dynamic_content_frame, text="标签显示模式:", font=self.font_small).pack(anchor="w", pady=(5, 2))
+        self.combo_formant_label_mode = ctk.CTkOptionMenu(
+            self.dynamic_content_frame, 
+            values=["显示分组标签", "显示单字标签", "显示词语标签", "不显示标签"], 
+            command=lambda _: self.trigger_preview_update(), 
+            **self.dropdown_kwargs
+        )
+        self.combo_formant_label_mode.set("显示分组标签")
+        self.combo_formant_label_mode.pack(fill=tk.X, pady=2)
+        self._apply_custom_arrow(self.combo_formant_label_mode)
+
+        # Show raw scatter points
+        self.cb_formant_show_raw = ctk.CTkCheckBox(
+            self.dynamic_content_frame, 
+            text="显示个体测量帧 (散点背景)", 
+            variable=self.var_formant_show_raw,
+            font=self.font_small, 
+            checkbox_width=18, 
+            checkbox_height=18,
+            fg_color=("#3B82F6", "#2563EB"), 
+            hover_color=("#4B5563", "#9CA3AF"), 
+            border_color=("#9CA3AF", "#4B5563"),
+            command=self.update_preview
+        )
+        self.cb_formant_show_raw.pack(anchor="w", pady=(10, 5))
+
+    def _build_formant_trajectory_settings(self):
+        # Trajectory style
+        ctk.CTkLabel(self.dynamic_content_frame, text="曲线展现形式:", font=self.font_small).pack(anchor="w", pady=(5, 2))
+        self.combo_formant_traj_style = ctk.CTkOptionMenu(
+            self.dynamic_content_frame, 
+            values=["仅平均曲线", "平均曲线 + 个体浅色细线", "平均曲线 + 置信区间阴影"], 
+            command=lambda _: self.trigger_preview_update(), 
+            **self.dropdown_kwargs
+        )
+        self.combo_formant_traj_style.set("平均曲线 + 置信区间阴影")
+        self.combo_formant_traj_style.pack(fill=tk.X, pady=(2, 10))
+        self._apply_custom_arrow(self.combo_formant_traj_style)
+
     def _export_overview_heatmap_paginated_pdf(self, out_file, data, scale, pages):
         from matplotlib.backends.backend_pdf import PdfPages
         pdf_pages = PdfPages(out_file)
@@ -1734,7 +2124,11 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
 
     def _init_variables(self):
         # 1. Chart Type
-        self.var_chart_type = ctk.StringVar(value="contour")  # contour, distribution, density, quality, overview_heatmap
+        analysis_mode = self.project_tree.app_state_params.get('analysis_mode', 'f0')
+        if analysis_mode == 'formant':
+            self.var_chart_type = ctk.StringVar(value="formant_space")
+        else:
+            self.var_chart_type = ctk.StringVar(value="contour")  # contour, distribution, density, quality, overview_heatmap
 
         # 2. Export Scope
         scope_default = "active"
@@ -1785,6 +2179,14 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
 
         # Legend configuration
         self.var_legend_outside = ctk.BooleanVar(value=False)
+
+        # Dynamic Options - Formant Space
+        self.var_formant_ellipse = ctk.StringVar(value="1-sigma 置信椭圆")
+        self.var_formant_label_mode = ctk.StringVar(value="显示分组标签")
+        self.var_formant_show_raw = ctk.BooleanVar(value=True)
+
+        # Dynamic Options - Formant Trajectory
+        self.var_formant_traj_style = ctk.StringVar(value="平均曲线 + 置信区间阴影")
 
         # Image Size & Pixel configuration
         self.var_image_ratio_mode = ctk.StringVar(value="默认")
@@ -1985,18 +2387,24 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         ctk.CTkLabel(card1, text="🔹 基础类型与范围", font=self.font_title).pack(anchor="w", padx=15, pady=(10, 5))
 
         # Chart Type OptionMenu
+        if self._is_formant_mode():
+            type_values = ["元音共振峰空间图", "共振峰时序轨迹图"]
+            default_type = "元音共振峰空间图"
+            intention_values = ["论文主图 (清晰对比)", "附录图册 (完整数据)"]
+        else:
+            type_values = ["声调轮廓图", "声调分布图", "时序密度图", "数据质量检查", "声调组别概览图"]
+            default_type = "声调轮廓图"
+            intention_values = ["论文主图 (清晰对比)", "附录图册 (完整数据)", "数据诊断 (质量排查)"]
+
         ctk.CTkLabel(card1, text="图表类型:", font=self.font_small).pack(anchor="w", padx=15)
-        self.combo_type = ctk.CTkOptionMenu(card1, values=["声调轮廓图", "声调分布图", "时序密度图", "数据质量检查", "声调组别概览图"], command=self._on_type_changed, **self.dropdown_kwargs)
-        self.combo_type.set("声调轮廓图")
+        self.combo_type = ctk.CTkOptionMenu(card1, values=type_values, command=self._on_type_changed, **self.dropdown_kwargs)
+        self.combo_type.set(default_type)
         self.combo_type.pack(fill=tk.X, padx=15, pady=(0, 10))
         self._apply_custom_arrow(self.combo_type)
 
         # Export Intention OptionMenu
         ctk.CTkLabel(card1, text="导出意图 (自动匹配推荐设置):", font=self.font_small).pack(anchor="w", padx=15)
-        self.combo_intention = ctk.CTkOptionMenu(
-            card1, values=["论文主图 (清晰对比)", "附录图册 (完整数据)", "数据诊断 (质量排查)"],
-            command=self._on_intention_changed, **self.dropdown_kwargs
-        )
+        self.combo_intention = ctk.CTkOptionMenu(card1, values=intention_values, command=self._on_intention_changed, **self.dropdown_kwargs)
         self.combo_intention.set("论文主图 (清晰对比)")
         self.combo_intention.pack(fill=tk.X, padx=15, pady=(0, 10))
         self._apply_custom_arrow(self.combo_intention)
@@ -2027,19 +2435,36 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         ctk.CTkLabel(card2, text="🔹 核心维度与尺度", font=self.font_title).grid(row=0, column=0, columnspan=2, sticky="w", padx=15, pady=(10, 5))
 
         # Row 1 Labels
-        ctk.CTkLabel(card2, text="分组依据 / 曲线配色:", font=self.font_small).grid(row=1, column=0, sticky="w", padx=(15, 5), pady=(5, 2))
-        ctk.CTkLabel(card2, text="声学尺度 (纵轴单位):", font=self.font_small).grid(row=1, column=1, sticky="w", padx=(5, 15), pady=(5, 2))
+        if self._is_formant_mode():
+            groupby_values = ["按字表组", "按词语", "按单字/音节", "按发音人"]
+            groupby_default = "按字表组"
+            scale_values = ["Hz (共振峰频率)"]
+            scale_default = "Hz (共振峰频率)"
+            groupby_label_text = "分组依据 / 配色:"
+            scale_label_text = "频率单位:"
+        else:
+            groupby_values = ["按声调类型", "按词语", "按发音人"]
+            groupby_default = "按声调类型"
+            scale_values = ["T 值 (五度标调)", "Hz (基频绝对频率)"]
+            scale_default = "T 值 (五度标调)"
+            groupby_label_text = "分组依据 / 曲线配色:"
+            scale_label_text = "声学尺度 (纵轴单位):"
+
+        ctk.CTkLabel(card2, text=groupby_label_text, font=self.font_small).grid(row=1, column=0, sticky="w", padx=(15, 5), pady=(5, 2))
+        ctk.CTkLabel(card2, text=scale_label_text, font=self.font_small).grid(row=1, column=1, sticky="w", padx=(5, 15), pady=(5, 2))
 
         # Row 2 OptionMenus
-        self.combo_groupby = ctk.CTkOptionMenu(card2, values=["按声调类型", "按词语", "按发音人"], command=self._on_groupby_changed, **self.dropdown_kwargs)
-        self.combo_groupby.set("按声调类型")
+        self.combo_groupby = ctk.CTkOptionMenu(card2, values=groupby_values, command=self._on_groupby_changed, **self.dropdown_kwargs)
+        self.combo_groupby.set(groupby_default)
         self.combo_groupby.grid(row=2, column=0, sticky="ew", padx=(15, 5), pady=(0, 10))
         self._apply_custom_arrow(self.combo_groupby)
 
-        self.combo_scale = ctk.CTkOptionMenu(card2, values=["T 值 (五度标调)", "Hz (基频绝对频率)"], command=lambda _: self.update_preview(), **self.dropdown_kwargs)
-        self.combo_scale.set("T 值 (五度标调)")
+        self.combo_scale = ctk.CTkOptionMenu(card2, values=scale_values, command=lambda _: self.update_preview(), **self.dropdown_kwargs)
+        self.combo_scale.set(scale_default)
         self.combo_scale.grid(row=2, column=1, sticky="ew", padx=(5, 15), pady=(0, 10))
         self._apply_custom_arrow(self.combo_scale)
+        if self._is_formant_mode():
+            self.combo_scale.configure(state="disabled")
 
         # Row 3 Labels
         ctk.CTkLabel(card2, text="图例位置:", font=self.font_small).grid(row=3, column=0, sticky="w", padx=(15, 5), pady=(5, 2))
@@ -2121,8 +2546,13 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         self.dynamic_content_frame = ctk.CTkFrame(self.dynamic_card, fg_color="transparent")
         self.dynamic_content_frame.pack(fill=tk.X, padx=15, pady=(0, 15))
 
-        # Build initial dynamic UI for Tone Contour
-        self._build_contour_settings()
+        # Build initial dynamic UI for Tone Contour / Formant Space
+        if self._is_formant_mode():
+            self.dynamic_title.configure(text="⚙️ 元音空间图专有选项")
+            self._build_formant_space_settings()
+        else:
+            self.dynamic_title.configure(text="⚙️ 声调轮廓图专有选项")
+            self._build_contour_settings()
 
         # --- CARD 4: Group Filter ---
         self.card_filter = ctk.CTkFrame(self.left_scroll, fg_color=("#FFFFFF", "#1E293B"), border_width=1, border_color=("#E5E7EB", "#475569"), corner_radius=12)
@@ -2310,6 +2740,14 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             self.dynamic_title.configure(text="⚙️ 声调组别概览图专有选项")
             self._build_overview_heatmap_settings()
             self.combo_groupby.set("按词语")
+        elif val == "元音共振峰空间图":
+            self.var_chart_type.set("formant_space")
+            self.dynamic_title.configure(text="⚙️ 元音空间图专有选项")
+            self._build_formant_space_settings()
+        elif val == "共振峰时序轨迹图":
+            self.var_chart_type.set("formant_trajectory")
+            self.dynamic_title.configure(text="⚙️ 共振峰轨迹图专有选项")
+            self._build_formant_trajectory_settings()
 
         self._bind_left_scroll_wheel_recursive(self.dynamic_content_frame)
         self.update_preview()
@@ -2319,15 +2757,27 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         self.current_group_page = 0
         if "整合" in val:
             self.var_export_scope.set("integrated")
-            # Force scale to T-value for integrated speaker plots
-            self.combo_scale.set("T 值 (五度标调)")
-            self.combo_scale.configure(state="disabled")
+            # In F0 integrated mode we force T-value scale; formant mode stays in Hz.
+            if self._is_formant_mode():
+                self.combo_scale.set("Hz (共振峰频率)")
+                self.combo_scale.configure(state="disabled")
+            else:
+                self.combo_scale.set("T 值 (五度标调)")
+                self.combo_scale.configure(state="disabled")
         elif "分别" in val:
             self.var_export_scope.set("separate")
-            self.combo_scale.configure(state="normal")
+            if self._is_formant_mode():
+                self.combo_scale.set("Hz (共振峰频率)")
+                self.combo_scale.configure(state="disabled")
+            else:
+                self.combo_scale.configure(state="normal")
         else:
             self.var_export_scope.set("active")
-            self.combo_scale.configure(state="normal")
+            if self._is_formant_mode():
+                self.combo_scale.set("Hz (共振峰频率)")
+                self.combo_scale.configure(state="disabled")
+            else:
+                self.combo_scale.configure(state="normal")
         self.update_preview()
 
     def _on_groupby_changed(self, val):
@@ -2335,6 +2785,22 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         self.update_preview()
 
     def _on_intention_changed(self, val):
+        if self._is_formant_mode():
+            if "论文主图" in val:
+                selected_count = sum(1 for v in self.group_checkbox_vars.values() if v.get())
+                if selected_count > 8 and messagebox.askyesno("论文主图模式", f"当前选中了 {selected_count} 个组，论文主图建议展示 8 组以内以保证可读性。\n是否自动精选样本量最大的 8 组？"):
+                    self._apply_featured_contrast_mode()
+                if self.var_chart_type.get() == "formant_space":
+                    self.combo_formant_label_mode.set("显示分组标签")
+            elif "附录图册" in val:
+                for var in self.group_checkbox_vars.values():
+                    var.set(True)
+                self._populate_groups_list()
+                self.combo_format.set("PDF 文档 (.pdf)")
+                self._on_group_filter_changed()
+                messagebox.showinfo("附录图册模式", "已选中所有组别，并将导出格式设为 PDF。导出时将自动分页绘制完整图册。")
+            return
+
         if "论文主图" in val:
             selected_count = sum(1 for v in self.group_checkbox_vars.values() if v.get())
             if selected_count > 8:
@@ -2391,6 +2857,12 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         self._on_group_filter_changed()
 
     def _apply_overall_overview_mode(self):
+        if self._is_formant_mode():
+            self.combo_type.set("元音共振峰空间图")
+            self._on_type_changed("元音共振峰空间图")
+            self.combo_groupby.set("按字表组")
+            self._on_groupby_changed("按字表组")
+            return
         self.combo_type.set("声调组别概览图")
         self._on_type_changed("声调组别概览图")
 
@@ -2400,7 +2872,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
 
         selected_iids = self.project_tree.tree.selection()
         if not selected_iids:
-            messagebox.showinfo("提示", "当前主界面的目录树中没有选中任何项。\n请先在主界面目录树中选择声调组或词条。")
+            messagebox.showinfo("提示", "当前主界面的目录树中没有选中任何项。\n请先在主界面目录树中选择组别或词条。")
             return
 
         selected_groups = set()
@@ -2417,7 +2889,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
                     selected_groups.add(item['tone'])
 
         if not selected_groups:
-            messagebox.showinfo("提示", "未能在当前目录树选中项中识别到有效的声调组别。")
+            messagebox.showinfo("提示", "未能在当前目录树选中项中识别到有效组别。")
             return
 
         for g, var in self.group_checkbox_vars.items():
@@ -2766,7 +3238,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
 
         preview_status = ctk.CTkFrame(self.preview_container, fg_color="transparent")
         preview_status.grid(row=0, column=0)
-        self.preview_lbl = ctk.CTkLabel(preview_status, text="正在实时渲染声图，请稍候...", font=self.font_title, text_color="#6B7280")
+        self.preview_lbl = ctk.CTkLabel(preview_status, text="正在实时渲染图表，请稍候...", font=self.font_title, text_color="#6B7280")
         self.preview_lbl.pack(pady=(0, 8))
         ctk.CTkButton(preview_status, text="取消预览", width=90, height=30, command=self._cancel_preview_render).pack()
 
@@ -2787,7 +3259,12 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         try:
             data = self._get_current_data_entries()
             if not data:
-                self.preview_lbl.configure(text="❌ 没有检索到有效基频曲线，请导入有发音数据的项目！", text_color="#EF4444")
+                analysis_mode = self.project_tree.app_state_params.get('analysis_mode', 'f0')
+                if analysis_mode == 'formant':
+                    msg = "❌ 没有检索到有效共振峰数据，请先完成共振峰分析。"
+                else:
+                    msg = "❌ 没有检索到有效基频曲线，请导入有发音数据的项目！"
+                self.preview_lbl.configure(text=msg, text_color="#EF4444")
                 self.group_pagination_frame.grid_forget()
                 return
 
@@ -3143,7 +3620,11 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
                 data = self._extract_active_data([speaker])
                 if not data:
                     continue
-                out_path = os.path.join(out_dir, f"{speaker.name}_声调可视化图表{ext}")
+                if self._is_formant_mode():
+                    name_suffix = "共振峰可视化图表"
+                else:
+                    name_suffix = "声调可视化图表"
+                out_path = os.path.join(out_dir, f"{speaker.name}_{name_suffix}{ext}")
                 jobs.append({
                     "speaker_name": speaker.name,
                     "data": data,
@@ -3151,14 +3632,19 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
                     "ext": ext
                 })
             if not jobs:
+                if self._is_formant_mode():
+                    return messagebox.showwarning("提示", "没有可导出的有效共振峰数据。", parent=self)
                 return messagebox.showwarning("提示", "没有可导出的有效基频数据。", parent=self)
 
             self._start_async_export(jobs, f"批量图表成功导出至:\n{out_dir}", params_snapshot=params_snapshot)
             return
 
-        default_name = "tone_integrated_acoustic_charts" if scope == "integrated" else "tone_acoustic_charts"
+        if self._is_formant_mode():
+            default_name = "formant_integrated_charts" if scope == "integrated" else "formant_charts"
+        else:
+            default_name = "tone_integrated_acoustic_charts" if scope == "integrated" else "tone_acoustic_charts"
         out_file = filedialog.asksaveasfilename(
-            title="导出声图",
+            title="导出图表",
             defaultextension=ext,
             initialfile=default_name,
             filetypes=[("图像文件", f"*{ext}")]
@@ -3168,6 +3654,8 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
 
         data = self._get_current_data_entries()
         if not data:
+            if self._is_formant_mode():
+                return messagebox.showwarning("提示", "没有有效共振峰曲线，无法导出！", parent=self)
             return messagebox.showwarning("提示", "没有有效基频曲线，无法导出！", parent=self)
 
         jobs = [{
