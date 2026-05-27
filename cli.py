@@ -74,31 +74,7 @@ class AcousticChartCLIAdapter:
         return [(g, groups[g]) for g in groups]
 
     def _ensure_item_loaded(self, item):
-        if not item or not item.get('path'): return
-        has_snd = item.get('snd') is not None
-        has_pitch = (item.get('pitch') is not None) or (item.get('pitch_data') is not None)
-
-        if not has_snd or not has_pitch or (self.app_state_params.get('analysis_mode') == 'formant' and not item.get('formant_data')):
-            try:
-                import parselmouth
-                from modules.audio_core import extract_f0, extract_formants
-                if not has_snd:
-                    item['snd'] = parselmouth.Sound(item['path'])
-                if not has_pitch:
-                    pf = item.get('pitch_floor', self.app_state_params.get('pitch_floor', 75))
-                    pc = item.get('pitch_ceiling', self.app_state_params.get('pitch_ceiling', 600))
-                    vt = item.get('voicing_threshold', self.app_state_params.get('voicing_threshold', 0.25))
-                    engine = item.get('f0_engine', self.app_state_params.get('f0_engine', 'praat'))
-
-                    if engine == 'praat':
-                        item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=pf, pitch_ceiling=pc, voicing_threshold=vt, very_accurate=True, octave_jump_cost=0.9)
-                    else:
-                        item['pitch_data'] = extract_f0(item['snd'], self.app_state_params)
-
-                if self.app_state_params.get('analysis_mode') == 'formant' and not item.get('formant_data'):
-                    item['formant_data'] = extract_formants(item['snd'], self.app_state_params)
-            except Exception:
-                pass
+        self.cli._ensure_item_loaded(item)
 
     def _extract_syl_data(self, item, num_points):
         return self.cli._extract_syl_data(item, num_points)
@@ -2116,6 +2092,54 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                         txt_data = get_export_text_for_item(item, global_idx, speaker.last_params['pts'], pitch_floor=speaker.last_params['pitch_floor'], pitch_ceiling=speaker.last_params['pitch_ceiling'], voicing_threshold=speaker.last_params.get('voicing_threshold', 0.25))
                         f.write(txt_data)
                         global_idx += 1
+
+    def _ensure_item_loaded(self, item):
+        if not item: return
+        has_snd = item.get('snd') is not None
+        has_pitch = (item.get('pitch') is not None) or (item.get('pitch_data') is not None)
+
+        if not has_snd and item.get('path'):
+            try:
+                import parselmouth
+                item['snd'] = parselmouth.Sound(item['path'])
+                has_snd = True
+            except Exception:
+                pass
+
+        if not has_snd:
+            return
+
+        if not has_pitch:
+            try:
+                from modules.audio_core import extract_f0
+                pf = item.get('pitch_floor', self.params.get('pitch_floor', 75))
+                pc = item.get('pitch_ceiling', self.params.get('pitch_ceiling', 600))
+                vt = item.get('voicing_threshold', self.params.get('voicing_threshold', 0.25))
+                engine = item.get('f0_engine', self.params.get('f0_engine', 'praat'))
+
+                if engine == 'praat':
+                    item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=pf, pitch_ceiling=pc, voicing_threshold=vt, very_accurate=True, octave_jump_cost=0.9)
+                else:
+                    item['pitch_data'] = extract_f0(item['snd'], self.params)
+            except Exception:
+                pass
+
+        if self.params.get('analysis_mode') == 'formant' and not item.get('formant_data'):
+            try:
+                from modules.audio_core import extract_formants
+                total_dur = item['snd'].get_total_duration()
+                if 'macro_start' in item and 'macro_end' in item and total_dur > 15.0:
+                    padding = 1.0
+                    seg_start = max(0.0, item['macro_start'] - padding)
+                    seg_end = min(total_dur, item['macro_end'] + padding)
+                    part_snd = item['snd'].extract_part(from_time=seg_start, to_time=seg_end)
+                    part_formant_data = extract_formants(part_snd, self.params)
+                    part_formant_data['xs'] = part_formant_data['xs'] + seg_start
+                    item['formant_data'] = part_formant_data
+                else:
+                    item['formant_data'] = extract_formants(item['snd'], self.params)
+            except Exception:
+                pass
 
     def _extract_syl_data(self, item, num_points):
         if item.get('start') is None or not item.get('snd'): return 0, []
