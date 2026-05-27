@@ -910,6 +910,19 @@ class PhoneticsApp:
         row_formant_max = ctk.CTkFrame(self.formant_params_container, fg_color="transparent")
         row_formant_max.pack(fill=tk.X, padx=15, pady=4)
         ctk.CTkLabel(row_formant_max, text=" 最大频率 (Hz):", image=self.icons.get("points"), compound="left", text_color="#374151", font=self.font_main).pack(side=tk.LEFT)
+        self.btn_detect_formant = CTkReleaseButton(
+            row_formant_max,
+            text="检测",
+            command=self.on_detect_formant_clicked,
+            width=50,
+            height=22,
+            font=self.font_main,
+            corner_radius=11,
+            fg_color="#F3F4F6",
+            text_color="#2563EB",
+            hover_color="#E5E7EB"
+        )
+        self.btn_detect_formant.pack(side=tk.LEFT, padx=(6, 8))
         self.entry_formant_max_hz = ctk.CTkEntry(row_formant_max, width=65, justify="center", corner_radius=20, height=26)
         self.entry_formant_max_hz.insert(0, str(self.last_params.get('formant_max_hz', 5500.0)))
         self.entry_formant_max_hz.pack(side=tk.RIGHT)
@@ -3678,3 +3691,150 @@ class PhoneticsApp:
         # [P1 优化]：触发参数变化逻辑，并传入 only_pitch_changed=True 以保护所有非手动切分边界不被重写
         self.on_param_change(recalculate_current=False)
         self.recalculate_all_audio(recompute_pitch=True, only_pitch_changed=True)
+
+    def on_detect_formant_clicked(self):
+        if not self.items:
+            messagebox.showwarning("提示", "请先导入音频文件以进行检测。")
+            return
+
+        self.start_loading("正在估算发音人 F0 分布以推荐共振峰参数...")
+
+        # 在主线程中捕获 UI 和 Tkinter 状态，保证线程安全
+        tab_mode = self.tabview.get()
+        pending_long_snd = self.pending_long_snd
+        long_audio_path = self.long_audio_path
+        
+        # 快照常规属性
+        items_snapshot = []
+        for item in self.items.values():
+            items_snapshot.append({
+                'macro_start': item.get('macro_start'),
+                'macro_end': item.get('macro_end'),
+                'snd': item.get('snd'),
+                'path': item.get('path'),
+                'label': item.get('label')
+            })
+
+        params_temp = {
+            'f0_engine': self.last_params.get('f0_engine', 'praat'),
+            'pitch_floor': 50,
+            'pitch_ceiling': 700,
+            'voicing_threshold': self.last_params.get('voicing_threshold', 0.25)
+        }
+
+        def run_detection():
+            try:
+                import parselmouth
+                import os
+                import numpy as np
+                from modules.audio_core import extract_f0
+
+                all_stable_f0 = []
+
+                if tab_mode == "单条长音频":
+                    snd = pending_long_snd
+                    if snd is None and long_audio_path and os.path.exists(long_audio_path):
+                        snd = parselmouth.Sound(long_audio_path)
+                    if snd is None:
+                        self.root.after(0, self.stop_loading)
+                        self.root.after(0, lambda: messagebox.showwarning("提示", "未找到已加载的长音频。"))
+                        return
+
+                    # 提取整段长音频的 F0
+                    pitch_data = extract_f0(snd, params_temp)
+                    times = pitch_data['xs']
+                    freqs = pitch_data['freqs']
+
+                    for item in items_snapshot:
+                        macro_start = item.get('macro_start')
+                        macro_end = item.get('macro_end')
+                        if macro_start is None or macro_end is None:
+                            continue
+
+                        mask = (times >= macro_start) & (times <= macro_end)
+                        item_times = times[mask]
+                        item_freqs = freqs[mask]
+                        stable_f0 = self.extract_stable_f0_values(item_times, item_freqs)
+                        all_stable_f0.extend(stable_f0)
+
+                elif tab_mode == "多条独立音频":
+                    valid_items = [it for it in items_snapshot if it.get('snd') or (it.get('path') and os.path.exists(it['path']))]
+                    if not valid_items:
+                        self.root.after(0, self.stop_loading)
+                        self.root.after(0, lambda: messagebox.showwarning("提示", "没有有效的独立音频文件。"))
+                        return
+
+                    total_items = len(valid_items)
+                    for i, item in enumerate(valid_items):
+                        self.root.after(0, lambda v=((i + 1) / total_items): self.set_progress(v))
+                        self.root.after(0, lambda name=item['label'], idx=i+1: self.set_status(f"正在分析 F0 ({idx}/{total_items}): {name}...", "#3B82F6", "status_loading"))
+
+                        item_snd = item.get('snd')
+                        if item_snd is None:
+                            try:
+                                item_snd = parselmouth.Sound(item['path'])
+                            except Exception:
+                                continue
+
+                        try:
+                            pitch_data = extract_f0(item_snd, params_temp)
+                            stable_f0 = self.extract_stable_f0_values(pitch_data['xs'], pitch_data['freqs'])
+                            all_stable_f0.extend(stable_f0)
+                        except Exception:
+                            continue
+
+                # 判断有效有声帧是否足够
+                if len(all_stable_f0) < 50:
+                    self.root.after(0, self.stop_loading)
+                    self.root.after(0, lambda: messagebox.showwarning("无法可靠建议", "有效有声数据太少，无法进行可靠建议。请先导入更多音频，或确保当前音频包含足够稳定发音段。"))
+                    return
+
+                # 计算中位数
+                p50 = float(np.percentile(all_stable_f0, 50))
+
+                # 基于基频分类推荐共振峰预设
+                if p50 < 160.0:
+                    rec_preset = "成年男性"
+                elif p50 <= 250.0:
+                    rec_preset = "成年女性"
+                else:
+                    rec_preset = "儿童"
+
+                def show_result_dialog():
+                    self.stop_loading()
+                    from modules.formant_detection_dialog import FormantDetectionDialog
+                    FormantDetectionDialog(
+                        parent=self.root,
+                        app=self,
+                        p50=p50,
+                        recommended_preset=rec_preset
+                    )
+
+                self.root.after(0, show_result_dialog)
+
+            except Exception as e:
+                self.root.after(0, self.stop_loading)
+                self.root.after(0, lambda: messagebox.showerror("错误", f"检测过程中发生错误: {e}"))
+
+        import threading
+        threading.Thread(target=run_detection, daemon=True).start()
+
+    def apply_formant_bounds(self, max_hz, win_len, pre_emphasis):
+        self.entry_formant_max_hz.delete(0, tk.END)
+        self.entry_formant_max_hz.insert(0, str(float(max_hz)))
+        if hasattr(self.entry_formant_max_hz, '_last_val'):
+            self.entry_formant_max_hz._last_val = str(float(max_hz))
+
+        self.entry_formant_window_length.delete(0, tk.END)
+        self.entry_formant_window_length.insert(0, f"{win_len:.3f}")
+        if hasattr(self.entry_formant_window_length, '_last_val'):
+            self.entry_formant_window_length._last_val = f"{win_len:.3f}"
+
+        self.entry_formant_pre_emphasis.delete(0, tk.END)
+        self.entry_formant_pre_emphasis.insert(0, str(float(pre_emphasis)))
+        if hasattr(self.entry_formant_pre_emphasis, '_last_val'):
+            self.entry_formant_pre_emphasis._last_val = str(float(pre_emphasis))
+
+        self.on_param_change(recalculate_current=False)
+        self.recalculate_all_audio(recompute_pitch=False, only_pitch_changed=True)
+

@@ -194,6 +194,7 @@ class AcousticChartExporter:
             'formant_label_mode': lambda: getattr(self, 'combo_formant_label_mode').get() if hasattr(self, 'combo_formant_label_mode') else None,
             'formant_show_raw': lambda: getattr(self, 'var_formant_show_raw').get() if hasattr(self, 'var_formant_show_raw') else None,
             'formant_time_gradient': lambda: getattr(self, 'var_formant_time_gradient').get() if hasattr(self, 'var_formant_time_gradient') else None,
+            'formant_density_band': lambda: getattr(self, 'var_formant_density_band').get() if hasattr(self, 'var_formant_density_band') else None,
 
             # formant trajectory specific
             'formant_traj_style': lambda: getattr(self, 'combo_formant_traj_style').get() if hasattr(self, 'combo_formant_traj_style') else None,
@@ -1746,6 +1747,7 @@ class AcousticChartExporter:
         ellipse_mode = self.get_param('formant_ellipse', '1-sigma 置信椭圆')
         show_raw = self.get_param('formant_show_raw', True)
         time_gradient = self.get_param('formant_time_gradient', False)
+        density_band = self.get_param('formant_density_band', False)
 
         category_data = {}
         
@@ -1824,7 +1826,8 @@ class AcousticChartExporter:
             lbl_x = np.nan
             lbl_y = np.nan
             
-            if time_gradient and len(trajs_f1) > 0 and len(trajs_f2) > 0:
+            has_trajs = len(trajs_f1) > 0 and len(trajs_f2) > 0
+            if (time_gradient or density_band) and has_trajs:
                 with np.errstate(all='ignore'):
                     mean_traj_f1 = np.nanmean(trajs_f1, axis=0)
                     mean_traj_f2 = np.nanmean(trajs_f2, axis=0)
@@ -1835,17 +1838,54 @@ class AcousticChartExporter:
                     v_f2 = mean_traj_f2[valid_mask]
                     n_pts = len(v_f1)
                     
-                    # Plot the trajectory line using the category color
-                    ax.plot(v_f2, v_f1, color=color, linewidth=2.5, alpha=0.8, label=str(cat), zorder=5)
+                    # 1. Plot density band if active
+                    if density_band:
+                        cmap = plt.get_cmap('coolwarm_r')
+                        from matplotlib.patches import Ellipse
+                        for i in range(n_pts):
+                            col_val = i / max(1, n_pts - 1)
+                            ellipse_color = cmap(col_val)
+                            
+                            # F2/F1 slice at time point i
+                            x_i = trajs_f2[:, i] if trajs_f2.ndim > 1 else np.array([trajs_f2[i]])
+                            y_i = trajs_f1[:, i] if trajs_f1.ndim > 1 else np.array([trajs_f1[i]])
+                            
+                            valid_i = np.isfinite(x_i) & np.isfinite(y_i)
+                            x_i_valid = x_i[valid_i]
+                            y_i_valid = y_i[valid_i]
+                            
+                            if len(x_i_valid) >= 3:
+                                self._draw_confidence_ellipse(
+                                    x_i_valid, y_i_valid, ax, n_std=1.0, 
+                                    facecolor=ellipse_color, edgecolor='none', 
+                                    alpha=0.18, zorder=3
+                                )
+                            elif len(x_i_valid) > 0:
+                                mean_x = np.mean(x_i_valid)
+                                mean_y = np.mean(y_i_valid)
+                                ellipse = Ellipse(xy=(mean_x, mean_y), width=100.0, height=100.0,
+                                                  angle=0, facecolor=ellipse_color, edgecolor='none',
+                                                  alpha=0.18, zorder=3)
+                                ax.add_patch(ellipse)
+                                
+                    # 2. Draw trajectory elements
+                    if time_gradient:
+                        ax.plot(v_f2, v_f1, color=color, linewidth=2.5, alpha=0.8, label=str(cat), zorder=5)
+                        
+                        cmap = plt.get_cmap('coolwarm_r')
+                        marker_colors = cmap(np.linspace(0, 1, n_pts))
+                        for i in range(n_pts):
+                            ax.scatter(v_f2[i], v_f1[i], color=marker_colors[i], s=80, 
+                                       edgecolors='black', linewidth=0.8, zorder=6)
+                    else:
+                        # thin dashed category line over the band for structure
+                        ax.plot(v_f2, v_f1, color=color, linestyle='--', linewidth=1.5, alpha=0.7, label=str(cat), zorder=4)
+                        
+                        # start (Red) and end (Blue) small indicator markers
+                        cmap = plt.get_cmap('coolwarm_r')
+                        ax.scatter(v_f2[0], v_f1[0], color=cmap(0.0), s=40, edgecolors='black', linewidth=0.6, zorder=5)
+                        ax.scatter(v_f2[-1], v_f1[-1], color=cmap(1.0), s=40, edgecolors='black', linewidth=0.6, zorder=5)
                     
-                    # Plot gradient dots (Red to Blue, i.e., coolwarm_r reversed)
-                    cmap = plt.get_cmap('coolwarm_r')
-                    marker_colors = cmap(np.linspace(0, 1, n_pts))
-                    for i in range(n_pts):
-                        ax.scatter(v_f2[i], v_f1[i], color=marker_colors[i], s=80, 
-                                   edgecolors='black', linewidth=0.8, zorder=6)
-                    
-                    # Store midpoint for label placement
                     mid_idx = n_pts // 2
                     lbl_x = v_f2[mid_idx]
                     lbl_y = v_f1[mid_idx]
@@ -2035,6 +2075,21 @@ class AcousticChartExporter:
             command=self.update_preview
         )
         self.cb_formant_time_gradient.pack(anchor="w", pady=(5, 5))
+
+        # Show density band (melting transition)
+        self.cb_formant_density_band = ctk.CTkCheckBox(
+            self.dynamic_content_frame, 
+            text="显示置信渐变轨迹带 (化开过渡)", 
+            variable=self.var_formant_density_band,
+            font=self.font_small, 
+            checkbox_width=18, 
+            checkbox_height=18,
+            fg_color=("#3B82F6", "#2563EB"), 
+            hover_color=("#4B5563", "#9CA3AF"), 
+            border_color=("#9CA3AF", "#4B5563"),
+            command=self.update_preview
+        )
+        self.cb_formant_density_band.pack(anchor="w", pady=(5, 5))
 
     def _build_formant_trajectory_settings(self):
         # Trajectory style
@@ -2247,6 +2302,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         self.var_formant_label_mode = ctk.StringVar(value="显示分组标签")
         self.var_formant_show_raw = ctk.BooleanVar(value=True)
         self.var_formant_time_gradient = ctk.BooleanVar(value=False)
+        self.var_formant_density_band = ctk.BooleanVar(value=False)
 
         # Dynamic Options - Formant Trajectory
         self.var_formant_traj_style = ctk.StringVar(value="平均曲线 + 置信区间阴影")

@@ -603,5 +603,68 @@ class TestAcousticExporterFeatures(unittest.TestCase):
 
             dlg.destroy()
 
+    def test_formant_density_band_plot(self):
+        project_tree = MagicMock()
+        project_tree.app_state_params = {'pts': 11}
+        exporter = AcousticChartExporter(project_tree=project_tree)
+        
+        # Mock some dummy formant data entries
+        dummy_data = [
+            {
+                'speaker_name': 'Speaker 1',
+                'group': 'Group1',
+                'label': 'ma',
+                'syl_formants': [
+                    {
+                        'char': 'ma',
+                        'bounds': (0.1, 0.9),
+                        # 11 points for F1 and F2
+                        'f1': [500.0, 510.0, 520.0, 530.0, 540.0, 550.0, 560.0, 570.0, 580.0, 590.0, 600.0],
+                        'f2': [1500.0, 1490.0, 1480.0, 1470.0, 1460.0, 1450.0, 1440.0, 1430.0, 1420.0, 1410.0, 1400.0]
+                    }
+                ],
+                'raw_xs': np.linspace(0.0, 1.0, 20),
+                'raw_f1': np.linspace(500.0, 600.0, 20),
+                'raw_f2': np.linspace(1500.0, 1400.0, 20)
+            }
+        ]
+
+        # 1. Test with density_band=True, but only 1 sample (triggers fallback circle logic)
+        exporter.params = {
+            'groupby': 'group',
+            'formant_label_mode': '显示分组标签',
+            'formant_ellipse': '1-sigma 置信椭圆',
+            'formant_show_raw': True,
+            'formant_time_gradient': False,
+            'formant_density_band': True,
+            'legend_loc': '右上',
+            'legend_outside': False,
+        }
+        fig = exporter._plot_formant_vowel_space(dummy_data, 'group', 'Hz')
+        self.assertIsNotNone(fig)
+
+        # 2. Test with density_band=True and at least 3 samples (triggers covariance ellipse logic)
+        dummy_data_3 = [
+            {
+                'speaker_name': 'Speaker 1',
+                'group': 'Group1',
+                'label': 'ma',
+                'syl_formants': [
+                    {
+                        'char': 'ma',
+                        'bounds': (0.1, 0.9),
+                        'f1': [500.0 + k]*11,
+                        'f2': [1500.0 - k]*11
+                    }
+                ],
+                'raw_xs': np.linspace(0.0, 1.0, 20),
+                'raw_f1': np.linspace(500.0, 600.0, 20),
+                'raw_f2': np.linspace(1500.0, 1400.0, 20)
+            }
+            for k in [-10, 0, 10]
+        ]
+        fig3 = exporter._plot_formant_vowel_space(dummy_data_3, 'group', 'Hz')
+        self.assertIsNotNone(fig3)
+
 if __name__ == '__main__':
     unittest.main()
