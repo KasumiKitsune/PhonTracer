@@ -10,11 +10,29 @@ class CTkReleaseButton(ctk.CTkButton):
         self._release_command = kwargs.pop("command", None)
         # 2. 调用父类初始化
         super().__init__(master, **kwargs)
-        # 3. 绑定左键松开事件
+        # 3. 绑定左键按下与松开事件至控件及其子控件，以防止下拉菜单等浮层关闭时产生的释放穿透问题
+        self._is_pressed = False
         if self._release_command:
-            self.bind("<ButtonRelease-1>", self._on_release)
+            widgets = [self]
+            for attr in ("_canvas", "_text_label", "_image_label"):
+                if hasattr(self, attr):
+                    w = getattr(self, attr)
+                    if w:
+                        widgets.append(w)
+            for w in widgets:
+                w.bind("<ButtonPress-1>", self._on_press, add="+")
+                w.bind("<ButtonRelease-1>", self._on_release, add="+")
             
+    def _on_press(self, event):
+        if self.cget("state") == "disabled":
+            return
+        self._is_pressed = True
+        
     def _on_release(self, event):
+        if not getattr(self, "_is_pressed", False):
+            return
+        self._is_pressed = False
+        
         # 如果按钮被禁用，则不响应
         if self.cget("state") == "disabled":
             return

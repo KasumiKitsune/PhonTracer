@@ -40,10 +40,28 @@ class CTkReleaseButton(ctk.CTkButton):
     def __init__(self, master=None, **kwargs):
         self._release_command = kwargs.pop("command", None)
         super().__init__(master, **kwargs)
+        self._is_pressed = False
         if self._release_command:
-            self.bind("<ButtonRelease-1>", self._on_release)
+            widgets = [self]
+            for attr in ("_canvas", "_text_label", "_image_label"):
+                if hasattr(self, attr):
+                    w = getattr(self, attr)
+                    if w:
+                        widgets.append(w)
+            for w in widgets:
+                w.bind("<ButtonPress-1>", self._on_press, add="+")
+                w.bind("<ButtonRelease-1>", self._on_release, add="+")
             
+    def _on_press(self, event):
+        if self.cget("state") == "disabled":
+            return
+        self._is_pressed = True
+
     def _on_release(self, event):
+        if not getattr(self, "_is_pressed", False):
+            return
+        self._is_pressed = False
+
         if self.cget("state") == "disabled":
             return
         x, y = self.winfo_pointerxy()
