@@ -191,6 +191,7 @@ class AcousticChartExporter:
 
             # overview specific
             'overview_metric': lambda: getattr(self, 'combo_overview_metric').get() if hasattr(self, 'combo_overview_metric') else None,
+            'formant_overview_mode': lambda: getattr(self, 'combo_formant_overview_mode').get() if hasattr(self, 'combo_formant_overview_mode') else None,
 
             # formant space specific
             'formant_ellipse': lambda: getattr(self, 'combo_formant_ellipse').get() if hasattr(self, 'combo_formant_ellipse') else None,
@@ -393,6 +394,9 @@ class AcousticChartExporter:
             return 'speaker_name'
         return 'group'
 
+    def _is_overview_heatmap_chart(self, chart_type):
+        return chart_type in ("overview_heatmap", "formant_overview_heatmap")
+
     def _ordered_unique(self, values):
         ordered = []
         seen = set()
@@ -451,7 +455,7 @@ class AcousticChartExporter:
         unique_groups = self._ordered_unique(entry[group_key] for entry in data_entries)
         total_groups = len(unique_groups)
         is_paginated_heatmap = (
-            chart_type == "overview_heatmap"
+            self._is_overview_heatmap_chart(chart_type)
             and group_key == "label"
             and self.get_param('intention') == "附录图册 (完整数据)"
         )
@@ -515,7 +519,7 @@ class AcousticChartExporter:
                 data_entries = [e for e in data_entries if (e['group'], e['label']) in allowed_pairs]
             elif chart_type in ("formant_trajectory", "formant_density"):
                 pass
-            elif total_groups > page_size and chart_type != "overview_heatmap":
+            elif total_groups > page_size and not self._is_overview_heatmap_chart(chart_type):
                 truncated = True
                 start_idx = P * page_size
                 end_idx = min(total_groups, start_idx + page_size)
@@ -537,6 +541,8 @@ class AcousticChartExporter:
             fig = self._plot_quality_check(data_entries)
         elif chart_type == "overview_heatmap":
             fig = self._plot_tone_overview_heatmap(data_entries, group_key, scale)
+        elif chart_type == "formant_overview_heatmap":
+            fig = self._plot_formant_overview_heatmap(data_entries, group_key, scale)
         elif chart_type == "formant_space":
             fig = self._plot_formant_vowel_space(data_entries, group_key, scale)
         elif chart_type == "formant_trajectory":
@@ -906,6 +912,246 @@ class AcousticChartExporter:
         ax.set_title(title_text, fontsize=12, fontweight="bold", pad=15)
 
         fig.tight_layout()
+        return fig
+
+    def _resample_formant_track(self, values, target_len):
+        arr = np.asarray(values, dtype=float)
+        if target_len <= 0:
+            return np.array([], dtype=float)
+        if arr.size == 0:
+            return np.full(target_len, np.nan, dtype=float)
+        if arr.size == target_len:
+            return arr
+
+        src_x = np.linspace(0.0, 1.0, arr.size)
+        dst_x = np.linspace(0.0, 1.0, target_len)
+        finite_mask = np.isfinite(arr)
+        if np.count_nonzero(finite_mask) == 0:
+            return np.full(target_len, np.nan, dtype=float)
+        if np.count_nonzero(finite_mask) == 1:
+            only_val = float(arr[finite_mask][0])
+            return np.full(target_len, only_val, dtype=float)
+
+        src_x_valid = src_x[finite_mask]
+        arr_valid = arr[finite_mask]
+        return np.interp(dst_x, src_x_valid, arr_valid)
+
+    def _plot_formant_overview_heatmap(self, data_entries, group_key, scale):
+        metric_val = self.get_param('overview_metric', 'mean')
+        if metric_val in ("sd", "标准差热图 (SD Map)"):
+            metric = "标准差热图 (SD Map)"
+        else:
+            metric = "均值热图 (Mean Map)"
+
+        overview_mode = str(self.get_param('formant_overview_mode', 'F1 & F2 双轨'))
+        is_ratio_mode = ("比值" in overview_mode) or ("ratio" in overview_mode.lower())
+
+        max_syls = max((len(e.get('syl_formants', [])) for e in data_entries), default=0)
+        num_points = int(self.project_tree.app_state_params.get('pts', 11))
+        total_points = max_syls * num_points
+        if total_points <= 0:
+            fig, ax = plt.subplots(figsize=(6, 4))
+            ax.text(0.5, 0.5, "没有找到有效的共振峰采样点用于生成概览图", ha='center', va='center')
+            return fig
+
+        grouped_data = {}
+        for entry in data_entries:
+            val = (entry['group'], entry['label']) if group_key == 'label' else entry[group_key]
+            if val not in grouped_data:
+                grouped_data[val] = []
+            grouped_data[val].append(entry)
+
+        if group_key == 'label':
+            overview_rows = self._build_overview_word_rows(data_entries)
+            groups_sorted = [row['row_id'] for row in overview_rows if row['row_id'] in grouped_data]
+        else:
+            if group_key == 'group':
+                self._ensure_available_groups()
+                group_order = self.available_groups
+            else:
+                group_order = self._ordered_unique(entry[group_key] for entry in data_entries)
+            row_order = {value: idx for idx, value in enumerate(group_order)}
+            groups_sorted = sorted(list(grouped_data.keys()), key=lambda value: row_order.get(value, 999999))
+
+        if not groups_sorted:
+            fig, ax = plt.subplots(figsize=(6, 4))
+            ax.text(0.5, 0.5, "没有找到有效的共振峰数据用于生成概览图", ha='center', va='center')
+            return fig
+
+        normalization_mode = self.get_param('formant_normalization', '原始频率 (Hz)')
+        transform_fn = self._build_formant_normalizer(data_entries, normalization_mode)
+
+        matrix_f1 = []
+        matrix_f2 = []
+        matrix_ratio = []
+        y_ticks = []
+        y_labels = []
+        last_tg = None
+        current_row_idx = 0
+
+        for g_name in groups_sorted:
+            entries = grouped_data[g_name]
+            if group_key == 'label':
+                tg, label_name = g_name
+                if last_tg is not None and tg != last_tg:
+                    blank = np.full(total_points, np.nan)
+                    matrix_f1.append(blank.copy())
+                    matrix_f2.append(blank.copy())
+                    matrix_ratio.append(blank.copy())
+                    current_row_idx += 1
+                last_tg = tg
+            else:
+                label_name = g_name
+
+            vectors_f1 = []
+            vectors_f2 = []
+            vectors_ratio = []
+            for entry in entries:
+                f1_flat = []
+                f2_flat = []
+                ratio_flat = []
+
+                syl_formants = entry.get('syl_formants', [])
+                for syl_idx in range(max_syls):
+                    if syl_idx < len(syl_formants):
+                        syl = syl_formants[syl_idx]
+                        f1_track = self._resample_formant_track(syl.get('f1', []), num_points)
+                        f2_track = self._resample_formant_track(syl.get('f2', []), num_points)
+                    else:
+                        f1_track = np.full(num_points, np.nan)
+                        f2_track = np.full(num_points, np.nan)
+
+                    t_f1, t_f2 = transform_fn(f1_track, f2_track)
+                    t_f1 = np.asarray(t_f1, dtype=float)
+                    t_f2 = np.asarray(t_f2, dtype=float)
+
+                    with np.errstate(divide='ignore', invalid='ignore'):
+                        ratio_track = np.where((f1_track > 1e-6) & np.isfinite(f1_track) & np.isfinite(f2_track), f2_track / f1_track, np.nan)
+
+                    f1_flat.extend(t_f1.tolist())
+                    f2_flat.extend(t_f2.tolist())
+                    ratio_flat.extend(ratio_track.tolist())
+
+                vectors_f1.append(f1_flat[:total_points])
+                vectors_f2.append(f2_flat[:total_points])
+                vectors_ratio.append(ratio_flat[:total_points])
+
+            with np.errstate(all='ignore'):
+                vectors_f1 = np.asarray(vectors_f1, dtype=float)
+                vectors_f2 = np.asarray(vectors_f2, dtype=float)
+                vectors_ratio = np.asarray(vectors_ratio, dtype=float)
+                if "均值" in metric:
+                    row_f1 = np.nanmean(vectors_f1, axis=0)
+                    row_f2 = np.nanmean(vectors_f2, axis=0)
+                    row_ratio = np.nanmean(vectors_ratio, axis=0)
+                else:
+                    row_f1 = np.nanstd(vectors_f1, axis=0)
+                    row_f2 = np.nanstd(vectors_f2, axis=0)
+                    row_ratio = np.nanstd(vectors_ratio, axis=0)
+
+            matrix_f1.append(row_f1)
+            matrix_f2.append(row_f2)
+            matrix_ratio.append(row_ratio)
+            y_ticks.append(current_row_idx)
+            y_labels.append(f"{label_name} (N={len(entries)})")
+            current_row_idx += 1
+
+        matrix_f1 = np.asarray(matrix_f1, dtype=float)
+        matrix_f2 = np.asarray(matrix_f2, dtype=float)
+        matrix_ratio = np.asarray(matrix_ratio, dtype=float)
+
+        fig_height = max(4.0, current_row_idx * 0.35 + 1.5)
+
+        if "Lobanov" in normalization_mode or "归一化" in normalization_mode or "L-归一化" in normalization_mode:
+            unit_text = "Z-score"
+        else:
+            unit_text = "Hz"
+
+        if "均值" in metric:
+            cmap_main = 'viridis'
+            ratio_cmap = 'viridis'
+            vmin_main = None
+            vmax_main = None
+            vmin_ratio = None
+            vmax_ratio = None
+        else:
+            cmap_main = 'Reds'
+            ratio_cmap = 'Reds'
+            vmin_main = 0.0
+            vmax_main = None
+            vmin_ratio = 0.0
+            vmax_ratio = None
+
+        def _copy_cmap(name):
+            try:
+                return plt.colormaps.get_cmap(name).copy()
+            except AttributeError:
+                return plt.cm.get_cmap(name).copy()
+
+        if is_ratio_mode:
+            fig, ax = plt.subplots(figsize=(8.6, fig_height))
+            cmap = _copy_cmap(ratio_cmap)
+            cmap.set_bad(color='white', alpha=0.0)
+            im = ax.imshow(matrix_ratio, cmap=cmap, aspect='auto', vmin=vmin_ratio, vmax=vmax_ratio)
+            cbar = fig.colorbar(im, ax=ax, pad=0.02)
+            if "均值" in metric:
+                cbar.set_label("平均 F2/F1 比值")
+            else:
+                cbar.set_label("F2/F1 比值标准差 (SD)")
+            axes_to_label = [ax]
+        else:
+            fig, axes = plt.subplots(2, 1, figsize=(8.6, max(5.6, fig_height + 1.2)), sharex=True)
+            ax_f1, ax_f2 = axes
+
+            cmap_f1 = _copy_cmap(cmap_main)
+            cmap_f2 = _copy_cmap(cmap_main)
+            cmap_f1.set_bad(color='white', alpha=0.0)
+            cmap_f2.set_bad(color='white', alpha=0.0)
+
+            im1 = ax_f1.imshow(matrix_f1, cmap=cmap_f1, aspect='auto', vmin=vmin_main, vmax=vmax_main)
+            im2 = ax_f2.imshow(matrix_f2, cmap=cmap_f2, aspect='auto', vmin=vmin_main, vmax=vmax_main)
+            cb1 = fig.colorbar(im1, ax=ax_f1, pad=0.02)
+            cb2 = fig.colorbar(im2, ax=ax_f2, pad=0.02)
+            if "均值" in metric:
+                cb1.set_label(f"平均 F1 ({unit_text})")
+                cb2.set_label(f"平均 F2 ({unit_text})")
+            else:
+                cb1.set_label(f"F1 标准差 ({unit_text})")
+                cb2.set_label(f"F2 标准差 ({unit_text})")
+            ax_f1.set_title(f"F1 轨迹热图 - {metric}", fontsize=11, fontweight="bold", pad=10)
+            ax_f2.set_title(f"F2 轨迹热图 - {metric}", fontsize=11, fontweight="bold", pad=10)
+            axes_to_label = [ax_f1, ax_f2]
+
+        for ax in axes_to_label:
+            ax.set_yticks(y_ticks)
+            ax.set_yticklabels(y_labels, fontsize=9)
+            if max_syls > 1:
+                for k in range(1, max_syls):
+                    ax.axvline(k * num_points - 0.5, color='white', linestyle='--', linewidth=1.3, alpha=0.8)
+
+        x_ticks = np.arange(total_points)
+        x_labels = []
+        for s_idx in range(max_syls):
+            for p_idx in range(num_points):
+                if p_idx == 0 or p_idx == num_points // 2 or p_idx == num_points - 1:
+                    x_labels.append(f"音节{s_idx + 1}_点{p_idx + 1}")
+                else:
+                    x_labels.append("")
+        axes_to_label[-1].set_xticks(x_ticks)
+        axes_to_label[-1].set_xticklabels(x_labels, rotation=45, ha='right', fontsize=8)
+        if len(axes_to_label) > 1:
+            axes_to_label[0].tick_params(axis='x', labelbottom=False)
+
+        title_mode_text = "F2/F1 比值单轨" if is_ratio_mode else "F1 & F2 双轨"
+        title_text = f"共振峰组别概览图 - {title_mode_text} - {metric}"
+        unique_entry_groups = set(e['group'] for e in data_entries)
+        if len(unique_entry_groups) == 1:
+            title_text += f" (组别: {list(unique_entry_groups)[0]})"
+        if len(set(e['speaker_name'] for e in data_entries)) == 1:
+            title_text = f"{data_entries[0]['speaker_name']} - {title_text}"
+        fig.suptitle(title_text, fontsize=12, fontweight="bold", y=0.995)
+
+        fig.tight_layout(rect=[0, 0, 1, 0.98])
         return fig
 
     def _plot_tone_distribution(self, data_entries, group_key, scale):
@@ -1625,7 +1871,7 @@ class AcousticChartExporter:
             self._report_export_progress(1.0, "当前任务完成")
             return
 
-        if len(unique_groups) > 8 and chart_type != "overview_heatmap":
+        if len(unique_groups) > 8 and not self._is_overview_heatmap_chart(chart_type):
             with _MATPLOTLIB_LOCK:
                 if ext == ".pdf":
                     self._export_paginated_pdf(out_path, data, group_key, scale)
@@ -2781,7 +3027,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         if analysis_mode == 'formant':
             self.var_chart_type = ctk.StringVar(value="formant_space")
         else:
-            self.var_chart_type = ctk.StringVar(value="contour")  # contour, distribution, density, quality, overview_heatmap
+            self.var_chart_type = ctk.StringVar(value="contour")  # contour, distribution, density, quality, overview_heatmap, formant_overview_heatmap
 
         # 2. Export Scope
         scope_default = "active"
@@ -2850,6 +3096,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
 
         # Dynamic Options - Formant Trajectory
         self.var_formant_traj_style = ctk.StringVar(value="平均曲线 + 置信区间阴影")
+        self.var_formant_overview_mode = ctk.StringVar(value="F1 & F2 双轨")
 
         # Image Size & Pixel configuration
         self.var_image_ratio_mode = ctk.StringVar(value="默认")
@@ -3051,7 +3298,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
 
         # Chart Type OptionMenu
         if self._is_formant_mode():
-            type_values = ["元音共振峰空间图", "共振峰时序轨迹图"]
+            type_values = ["元音共振峰空间图", "共振峰时序轨迹图", "共振峰组别概览图"]
             default_type = "元音共振峰空间图"
             intention_values = ["论文主图 (清晰对比)", "附录图册 (完整数据)"]
         else:
@@ -3415,6 +3662,11 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             self.var_chart_type.set("formant_density")
             self.dynamic_title.configure(text="⚙️ 共振峰时空密度图专有选项")
             self._build_formant_density_settings()
+        elif val == "共振峰组别概览图":
+            self.var_chart_type.set("formant_overview_heatmap")
+            self.dynamic_title.configure(text="⚙️ 共振峰组别概览图专有选项")
+            self._build_formant_overview_heatmap_settings()
+            self.combo_groupby.set("按词语")
 
         self._bind_left_scroll_wheel_recursive(self.dynamic_content_frame)
         self.update_preview()
@@ -3525,10 +3777,8 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
 
     def _apply_overall_overview_mode(self):
         if self._is_formant_mode():
-            self.combo_type.set("元音共振峰空间图")
-            self._on_type_changed("元音共振峰空间图")
-            self.combo_groupby.set("按字表组")
-            self._on_groupby_changed("按字表组")
+            self.combo_type.set("共振峰组别概览图")
+            self._on_type_changed("共振峰组别概览图")
             return
         self.combo_type.set("声调组别概览图")
         self._on_type_changed("声调组别概览图")
@@ -3643,6 +3893,40 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         self.combo_overview_metric.set("均值热图 (Mean Map)")
         self.combo_overview_metric.pack(fill=tk.X, pady=(2, 10))
         self._apply_custom_arrow(self.combo_overview_metric)
+
+    def _build_formant_overview_heatmap_settings(self):
+        ctk.CTkLabel(self.dynamic_content_frame, text="热图展示维度:", font=self.font_small).pack(anchor="w", pady=(5, 2))
+        self.combo_overview_metric = ctk.CTkOptionMenu(
+            self.dynamic_content_frame,
+            values=["均值热图 (Mean Map)", "标准差热图 (SD Map)"],
+            command=lambda _: self.trigger_preview_update(),
+            **self.dropdown_kwargs
+        )
+        self.combo_overview_metric.set("均值热图 (Mean Map)")
+        self.combo_overview_metric.pack(fill=tk.X, pady=(2, 8))
+        self._apply_custom_arrow(self.combo_overview_metric)
+
+        ctk.CTkLabel(self.dynamic_content_frame, text="共振峰轨道模式:", font=self.font_small).pack(anchor="w", pady=(6, 2))
+        self.combo_formant_overview_mode = ctk.CTkOptionMenu(
+            self.dynamic_content_frame,
+            values=["F1 & F2 双轨", "F2 / F1 比值"],
+            command=lambda _: self.trigger_preview_update(),
+            **self.dropdown_kwargs
+        )
+        self.combo_formant_overview_mode.set(self.var_formant_overview_mode.get())
+        self.combo_formant_overview_mode.pack(fill=tk.X, pady=(2, 8))
+        self._apply_custom_arrow(self.combo_formant_overview_mode)
+
+        ctk.CTkLabel(self.dynamic_content_frame, text="共振峰归一化:", font=self.font_small).pack(anchor="w", pady=(6, 2))
+        self.combo_formant_normalization = ctk.CTkOptionMenu(
+            self.dynamic_content_frame,
+            values=["原始频率 (Hz)", "Lobanov z-score (学术标准)"],
+            command=lambda _: self.trigger_preview_update(),
+            **self.dropdown_kwargs
+        )
+        self.combo_formant_normalization.set(self.var_formant_normalization.get())
+        self.combo_formant_normalization.pack(fill=tk.X, pady=(2, 10))
+        self._apply_custom_arrow(self.combo_formant_normalization)
 
     # --- DYNAMIC CONFIGURATION UI BUILDERS ---
     def _build_contour_settings(self):
@@ -3814,7 +4098,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             'density_m_min', 'density_m_max', 'density_max_points',
             'formant_density_overlay', 'formant_density_bw', 'formant_density_facet',
             'formant_density_show_raw', 'formant_density_show_contours',
-            'formant_normalization', 'formant_axis_lock',
+            'formant_normalization', 'formant_axis_lock', 'formant_overview_mode',
             'qc_view', 'overview_metric',
             'legend_loc', 'legend_outside', 'intention',
             'image_ratio_mode', 'image_ratio_custom', 'image_pixel_mode', 'image_pixel_custom',
@@ -3950,7 +4234,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             total_groups = pagination_state['total_groups']
             total_pages = pagination_state['total_pages']
             is_paginated_heatmap = pagination_state['is_paginated_heatmap']
-            show_group_pagination = (total_groups > 8 and chart_type != "overview_heatmap") or is_paginated_heatmap
+            show_group_pagination = (total_groups > 8 and not self._is_overview_heatmap_chart(chart_type)) or is_paginated_heatmap
             if show_group_pagination:
                 self.group_pagination_frame.grid(row=2, column=0, pady=(0, 10))
                 if self.current_group_page < 0:

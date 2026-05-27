@@ -489,6 +489,51 @@ class TestAcousticExporterFeatures(unittest.TestCase):
         self.assertEqual(pages[0][0]['row_id'], ('Group1', 'ma'))
         self.assertEqual(pages[1][0]['row_id'], ('Group2', 'ma'))
 
+    def test_formant_overview_heatmap_uses_same_paginated_album_flow(self):
+        project_tree = MagicMock()
+        project_tree.app_state_params = {'pts': 5}
+        exporter = AcousticChartExporter(project_tree=project_tree)
+
+        large_data = []
+        for i in range(25):
+            large_data.append({
+                'speaker_name': 'Speaker 1',
+                'group': 'Group1',
+                'label': f'word_{i:02d}',
+                'syl_formants': [{
+                    'char': 'a',
+                    'bounds': (0.0, 1.0),
+                    'f1': [500.0, 510.0, 520.0, 530.0, 540.0],
+                    'f2': [1500.0, 1490.0, 1480.0, 1470.0, 1460.0],
+                }],
+                'raw_xs': np.linspace(0.0, 1.0, 20),
+                'raw_f1': np.linspace(500.0, 540.0, 20),
+                'raw_f2': np.linspace(1500.0, 1460.0, 20),
+            })
+
+        exporter.params = {
+            'chart_type': 'formant_overview_heatmap',
+            'groupby': '按词语',
+            'intention': '附录图册 (完整数据)',
+            'scale': 'hz',
+            'overview_metric': 'mean',
+            'formant_overview_mode': 'F1 & F2 双轨',
+            'formant_normalization': '原始频率 (Hz)',
+        }
+
+        exporter._export_overview_heatmap_paginated_pdf = MagicMock()
+        exporter._export_overview_heatmap_paginated_images = MagicMock()
+
+        exporter._export_dataset(large_data, 'formant_dummy_out.pdf', '.pdf')
+
+        exporter._export_overview_heatmap_paginated_pdf.assert_called_once()
+        args = exporter._export_overview_heatmap_paginated_pdf.call_args[0]
+        self.assertEqual(args[0], 'formant_dummy_out.pdf')
+        pages = args[3]
+        self.assertEqual(len(pages), 2)
+        self.assertEqual(len(pages[0]), 20)
+        self.assertEqual(len(pages[1]), 5)
+
     def test_aspect_ratio_and_dpi_settings(self):
         project_tree = MagicMock()
         project_tree.app_state_params = {'pts': 5}
@@ -816,6 +861,54 @@ class TestAcousticExporterFeatures(unittest.TestCase):
         ax1, ax2 = fig.axes[0], fig.axes[1]
         self.assertEqual(ax1.get_xlim(), ax2.get_xlim())
         self.assertEqual(ax1.get_ylim(), ax2.get_ylim())
+
+    def test_formant_overview_heatmap_plot(self):
+        project_tree = MagicMock()
+        project_tree.app_state_params = {'pts': 11}
+        exporter = AcousticChartExporter(project_tree=project_tree)
+        exporter.available_groups = ['Group1']
+        exporter.colors = ['#2563EB']
+        
+        dummy_data = [
+            {
+                'speaker_name': 'Speaker 1',
+                'group': 'Group1',
+                'label': 'ma',
+                'syl_formants': [
+                    {
+                        'char': 'ma',
+                        'bounds': (0.1, 0.9),
+                        'f1': [500.0, 510.0, 520.0, 530.0, 540.0, 550.0, 560.0, 570.0, 580.0, 590.0, 600.0],
+                        'f2': [1500.0, 1490.0, 1480.0, 1470.0, 1460.0, 1450.0, 1440.0, 1430.0, 1420.0, 1410.0, 1400.0]
+                    }
+                ],
+                'raw_xs': np.linspace(0.0, 1.0, 20),
+                'raw_f1': np.linspace(500.0, 600.0, 20),
+                'raw_f2': np.linspace(1500.0, 1400.0, 20)
+            }
+        ]
+
+        # 1. Test F1 & F2 dual-track
+        exporter.params = {
+            'groupby': 'group',
+            'overview_metric': 'mean',
+            'formant_overview_mode': 'F1 & F2 双轨',
+            'formant_normalization': '原始频率 (Hz)',
+        }
+        fig = exporter._plot_formant_overview_heatmap(dummy_data, 'group', 'Hz')
+        self.assertIsNotNone(fig)
+        self.assertEqual(len(fig.axes), 4) # 2 subplots + 2 colorbars = 4 axes
+
+        # 2. Test Ratio track
+        exporter.params = {
+            'groupby': 'group',
+            'overview_metric': 'sd',
+            'formant_overview_mode': 'F2 / F1 比值',
+            'formant_normalization': '原始频率 (Hz)',
+        }
+        fig2 = exporter._plot_formant_overview_heatmap(dummy_data, 'group', 'Hz')
+        self.assertIsNotNone(fig2)
+        self.assertEqual(len(fig2.axes), 2) # 1 subplot + 1 colorbar = 2 axes
 
 if __name__ == '__main__':
     unittest.main()

@@ -477,7 +477,7 @@ PhonTracer 是一款高精度的声学声调格局分析工具。
      `recalculate`
 4. 数据导出：
    - `export <格式> <输出路径> [规则] [目标范围] [高级参数=值 ...]`
-     * 支持的导出格式：txt, xlsx, line_chart, kde, wav, merged_wav, textgrid, contour (声调轮廓图), distribution (声调分布图), density (时序密度图), quality (数据质量检查), overview_heatmap (声调组别概览图)
+     * 支持的导出格式：txt, xlsx, line_chart, kde, wav, merged_wav, textgrid, contour (声调轮廓图), distribution (声调分布图), density (时序密度图), quality (数据质量检查), overview_heatmap (声调组别概览图), formant_overview_heatmap (共振峰组别概览图)
 
 --- 声学参数与调优指南 ---
 * pts: 等分插值采样点数（默认：11）
@@ -534,7 +534,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
      `recalculate`
 4. Export:
    - `export <format> <output_file> [rule] [target] [key=val ...]`
-     * format: txt, xlsx, line_chart, kde, wav, merged_wav, textgrid, contour, distribution, density, quality, overview_heatmap
+     * format: txt, xlsx, line_chart, kde, wav, merged_wav, textgrid, contour, distribution, density, quality, overview_heatmap, formant_overview_heatmap
 
 --- CURRENT CONFIG & SCHEMAS ---
 - Global parameters (modifiable via `set_params`):
@@ -1795,7 +1795,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
         Export data to various formats.
         Usage: export <format> <output_file> [rule] [target] [key=val ...]
         Advanced charts: export <chart_type> <output_file_or_dir> [target] [key=val ...]
-        Formats: txt, xlsx, line_chart, kde, wav, merged_wav, textgrid, contour, distribution, density, quality, overview_heatmap
+        Formats: txt, xlsx, line_chart, kde, wav, merged_wav, textgrid, contour, distribution, density, quality, overview_heatmap, formant_overview_heatmap
         Rule: continuous (default) or per_group (For 'wav' and 'merged_wav', rule can also be buffer_sec or gap_sec like 0.5)
         Target (Multi-speaker): active (default), separate (multiple files per speaker), integrated (merged T-value calculation)
         Example: export xlsx output.xlsx continuous integrated
@@ -1812,7 +1812,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
         out_file = args[1]
 
         # Scientific/Advanced Visualization Toolbox integration
-        scientific_charts = {'contour', 'distribution', 'density', 'quality', 'overview_heatmap', 'formant_space', 'formant_trajectory', 'formant_density'}
+        scientific_charts = {'contour', 'distribution', 'density', 'quality', 'overview_heatmap', 'formant_space', 'formant_trajectory', 'formant_density', 'formant_overview_heatmap'}
         if fmt in scientific_charts:
             # Parse parameters:
             # Positional arguments: target
