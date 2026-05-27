@@ -666,5 +666,104 @@ class TestAcousticExporterFeatures(unittest.TestCase):
         fig3 = exporter._plot_formant_vowel_space(dummy_data_3, 'group', 'Hz')
         self.assertIsNotNone(fig3)
 
+    def test_formant_density_heatmap_plot(self):
+        project_tree = MagicMock()
+        project_tree.app_state_params = {'pts': 11}
+        exporter = AcousticChartExporter(project_tree=project_tree)
+        
+        dummy_data = [
+            {
+                'speaker_name': 'Speaker 1',
+                'group': 'Group1',
+                'label': 'ma',
+                'syl_formants': [
+                    {
+                        'char': 'ma',
+                        'bounds': (0.1, 0.9),
+                        'f1': [500.0, 510.0, 520.0, 530.0, 540.0, 550.0, 560.0, 570.0, 580.0, 590.0, 600.0],
+                        'f2': [1500.0, 1490.0, 1480.0, 1470.0, 1460.0, 1450.0, 1440.0, 1430.0, 1420.0, 1410.0, 1400.0]
+                    }
+                ],
+                'raw_xs': np.linspace(0.0, 1.0, 20),
+                'raw_f1': np.linspace(500.0, 600.0, 20),
+                'raw_f2': np.linspace(1500.0, 1400.0, 20)
+            }
+        ]
+
+        exporter.params = {
+            'groupby': 'group',
+            'formant_density_show_raw': True,
+            'formant_density_show_contours': True,
+        }
+        fig = exporter._plot_formant_density_heatmap(dummy_data, 'group', 'Hz')
+        self.assertIsNotNone(fig)
+
+    def test_formant_density_colorbar_stays_outside_axes_with_external_legend(self):
+        project_tree = MagicMock()
+        project_tree.app_state_params = {'pts': 11}
+        exporter = AcousticChartExporter(project_tree=project_tree)
+
+        dummy_data = []
+        for idx, group in enumerate(["Group1", "Group2"]):
+            dummy_data.append({
+                'speaker_name': 'Speaker 1',
+                'group': group,
+                'label': f'ma{idx}',
+                'syl_formants': [{
+                    'char': f'ma{idx}',
+                    'bounds': (0.1, 0.9),
+                    'f1': [500.0 + idx * 80 + k * 4 for k in range(11)],
+                    'f2': [1600.0 - idx * 120 - k * 8 for k in range(11)]
+                }],
+                'raw_xs': np.linspace(0.0, 1.0, 24),
+                'raw_f1': np.linspace(500.0 + idx * 80, 620.0 + idx * 80, 24),
+                'raw_f2': np.linspace(1600.0 - idx * 120, 1380.0 - idx * 120, 24)
+            })
+
+        exporter.params = {
+            'groupby': 'group',
+            'formant_label_mode': '显示分组标签',
+            'formant_ellipse': '1-sigma 置信椭圆',
+            'formant_show_raw': True,
+            'formant_time_gradient': False,
+            'formant_density_overlay': True,
+            'formant_density_bw': 0.14,
+            'formant_density_show_raw': False,
+            'formant_density_show_contours': True,
+            'formant_density_facet': '单图展示 (不分面)',
+            'legend_loc': '右上',
+            'legend_outside': True,
+        }
+
+        fig = exporter._plot_formant_vowel_space(dummy_data, 'group', 'Hz')
+        self.assertIsNotNone(fig)
+        self.assertTrue(getattr(fig, "_phontracer_skip_tight_layout", False))
+
+        plot_ax = fig.axes[0]
+        colorbar_ax = fig.axes[-1]
+        self.assertGreater(colorbar_ax.get_position().x0, plot_ax.get_position().x1)
+
+    def test_formant_space_group_pagination_uses_multiple_pages(self):
+        project_tree = MagicMock()
+        project_tree.app_state_params = {'pts': 11}
+        exporter = AcousticChartExporter(project_tree=project_tree)
+
+        dummy_data = [
+            {
+                'speaker_name': 'Speaker 1',
+                'group': f'G{i}',
+                'label': f'L{i}',
+                'syl_formants': [],
+                'raw_xs': [],
+                'raw_f1': [],
+                'raw_f2': [],
+            }
+            for i in range(10)
+        ]
+
+        state = exporter._get_group_pagination_state(dummy_data, 'formant_space', 'group')
+        self.assertEqual(state['total_groups'], 10)
+        self.assertEqual(state['total_pages'], 2)
+
 if __name__ == '__main__':
     unittest.main()

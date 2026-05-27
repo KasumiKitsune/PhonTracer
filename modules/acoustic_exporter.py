@@ -194,7 +194,13 @@ class AcousticChartExporter:
             'formant_label_mode': lambda: getattr(self, 'combo_formant_label_mode').get() if hasattr(self, 'combo_formant_label_mode') else None,
             'formant_show_raw': lambda: getattr(self, 'var_formant_show_raw').get() if hasattr(self, 'var_formant_show_raw') else None,
             'formant_time_gradient': lambda: getattr(self, 'var_formant_time_gradient').get() if hasattr(self, 'var_formant_time_gradient') else None,
-            'formant_density_band': lambda: getattr(self, 'var_formant_density_band').get() if hasattr(self, 'var_formant_density_band') else None,
+
+            # formant density specific
+            'formant_density_overlay': lambda: getattr(self, 'var_formant_density_overlay').get() if hasattr(self, 'var_formant_density_overlay') else None,
+            'formant_density_bw': lambda: getattr(self, 'var_formant_density_bw').get() if hasattr(self, 'var_formant_density_bw') else None,
+            'formant_density_facet': lambda: getattr(self, 'combo_formant_density_facet').get() if hasattr(self, 'combo_formant_density_facet') else None,
+            'formant_density_show_raw': lambda: getattr(self, 'var_formant_density_show_raw').get() if hasattr(self, 'var_formant_density_show_raw') else None,
+            'formant_density_show_contours': lambda: getattr(self, 'var_formant_density_show_contours').get() if hasattr(self, 'var_formant_density_show_contours') else None,
 
             # formant trajectory specific
             'formant_traj_style': lambda: getattr(self, 'combo_formant_traj_style').get() if hasattr(self, 'combo_formant_traj_style') else None,
@@ -451,7 +457,7 @@ class AcousticChartExporter:
             _, pages = self._build_overview_word_pages(data_entries)
             state['pages'] = pages
             state['total_pages'] = len(pages) if pages else 1
-        elif chart_type in ("formant_space", "formant_trajectory"):
+        elif chart_type in ("formant_trajectory", "formant_density"):
             state['total_pages'] = 1
         else:
             state['total_pages'] = math.ceil(total_groups / 8) if total_groups > 0 else 1
@@ -495,7 +501,7 @@ class AcousticChartExporter:
                 current_page_rows = pagination_state['pages'][P] if P < len(pagination_state['pages']) else []
                 allowed_pairs = {row['row_id'] for row in current_page_rows}
                 data_entries = [e for e in data_entries if (e['group'], e['label']) in allowed_pairs]
-            elif chart_type in ("formant_space", "formant_trajectory"):
+            elif chart_type in ("formant_trajectory", "formant_density"):
                 pass
             elif total_groups > page_size and chart_type != "overview_heatmap":
                 truncated = True
@@ -523,6 +529,8 @@ class AcousticChartExporter:
             fig = self._plot_formant_vowel_space(data_entries, group_key, scale)
         elif chart_type == "formant_trajectory":
             fig = self._plot_formant_trajectories(data_entries, group_key, scale)
+        elif chart_type == "formant_density":
+            fig = self._plot_formant_density_heatmap(data_entries, group_key, scale)
         else:
             fig, ax = plt.subplots()
             return fig
@@ -550,10 +558,11 @@ class AcousticChartExporter:
                 h_inches = S_min / R
 
             fig.set_size_inches(w_inches, h_inches, forward=True)
-            try:
-                fig.tight_layout()
-            except Exception:
-                pass
+            if not getattr(fig, "_phontracer_skip_tight_layout", False):
+                try:
+                    fig.tight_layout()
+                except Exception:
+                    pass
 
         if truncated:
             fig.subplots_adjust(top=0.88)
@@ -1720,6 +1729,20 @@ class AcousticChartExporter:
             return None
         from matplotlib.patches import Ellipse
         try:
+            x = np.asarray(x, dtype=float)
+            y = np.asarray(y, dtype=float)
+            finite = np.isfinite(x) & np.isfinite(y)
+            x = x[finite]
+            y = y[finite]
+            if len(x) < 3:
+                return None
+            if len(x) >= 10:
+                x_lo, x_hi = np.percentile(x, [5, 95])
+                y_lo, y_hi = np.percentile(y, [5, 95])
+                core = (x >= x_lo) & (x <= x_hi) & (y >= y_lo) & (y <= y_hi)
+                if np.sum(core) >= 3:
+                    x = x[core]
+                    y = y[core]
             cov = np.cov(x, y)
             if np.any(np.isnan(cov)) or np.any(np.isinf(cov)):
                 return None
@@ -1737,17 +1760,161 @@ class AcousticChartExporter:
         except Exception:
             return None
 
-    def _plot_formant_vowel_space(self, data_entries, group_key, scale):
-        fig, ax = plt.subplots(figsize=(8.6, 7.2))
+    def _get_formant_time_cmap(self):
+        from matplotlib.colors import LinearSegmentedColormap
+        return LinearSegmentedColormap.from_list(
+            "formant_time_red_blue",
+            ["#D73027", "#B64D7A", "#2166AC"],
+            N=256
+        )
+
+    def _slice_formant_entries_for_syllable(self, data_entries, syllable_index):
+        sliced = []
+        for entry in data_entries:
+            syls = [s for s in entry.get('syl_formants', []) if int(s.get('syllable_index', -1)) == syllable_index]
+            if syls:
+                copied = dict(entry)
+                copied['syl_formants'] = syls
+                sliced.append(copied)
+        return sliced
+
+    def _get_formant_density_points(self, data_entries):
+        all_f1, all_f2, all_tau = [], [], []
+        for entry in data_entries:
+            xs = np.asarray(entry.get('raw_xs', []), dtype=float)
+            f1_arr = np.asarray(entry.get('raw_f1', []), dtype=float)
+            f2_arr = np.asarray(entry.get('raw_f2', []), dtype=float)
+            if len(xs) == 0 or len(f1_arr) == 0 or len(f2_arr) == 0:
+                continue
+            for syl in entry.get('syl_formants', []):
+                c_s, c_e = syl['bounds']
+                if c_e <= c_s:
+                    continue
+                mask = (xs >= c_s) & (xs <= c_e) & np.isfinite(f1_arr) & np.isfinite(f2_arr) & (f2_arr > f1_arr)
+                if not np.any(mask):
+                    continue
+                s_tau = np.clip((xs[mask] - c_s) / (c_e - c_s), 0.0, 1.0)
+                all_f1.extend(f1_arr[mask].tolist())
+                all_f2.extend(f2_arr[mask].tolist())
+                all_tau.extend(s_tau.tolist())
+        return np.asarray(all_f1, dtype=float), np.asarray(all_f2, dtype=float), np.asarray(all_tau, dtype=float)
+
+    def _draw_formant_density_layer(self, ax, data_entries, show_raw=False, show_contours=True, bw_method=None, alpha_max=0.58, zorder=1):
+        self._report_export_progress(0.24, "正在收集共振峰时空密度数据...")
+        all_f1, all_f2, all_tau = self._get_formant_density_points(data_entries)
+        if len(all_f1) < 4:
+            return None, [], []
+
+        finite_mask = np.isfinite(all_f1) & np.isfinite(all_f2) & np.isfinite(all_tau)
+        all_f1, all_f2, all_tau = all_f1[finite_mask], all_f2[finite_mask], all_tau[finite_mask]
+        if len(all_f1) < 4:
+            return None, [], []
+
+        f1_p1, f1_p99 = np.percentile(all_f1, 1.0), np.percentile(all_f1, 99.0)
+        f2_p1, f2_p99 = np.percentile(all_f2, 1.0), np.percentile(all_f2, 99.0)
+        f1_pad = (f1_p99 - f1_p1) * 0.16 if f1_p99 > f1_p1 else 100.0
+        f2_pad = (f2_p99 - f2_p1) * 0.16 if f2_p99 > f2_p1 else 150.0
+        f1_grid_min, f1_grid_max = max(50.0, f1_p1 - f1_pad), f1_p99 + f1_pad
+        f2_grid_min, f2_grid_max = max(500.0, f2_p1 - f2_pad), f2_p99 + f2_pad
+
+        grid_n = 190
+        grid_f2, grid_f1 = np.meshgrid(
+            np.linspace(f2_grid_min, f2_grid_max, grid_n),
+            np.linspace(f1_grid_min, f1_grid_max, grid_n)
+        )
+        grid_points = np.vstack([grid_f2.ravel(), grid_f1.ravel()])
+
+        try:
+            bw = float(bw_method if bw_method is not None else self.get_param('formant_density_bw', 0.14))
+        except (TypeError, ValueError):
+            bw = 0.14
+        bw = float(np.clip(bw, 0.06, 0.32))
+
+        tau_layers = np.linspace(0.0, 1.0, 9)
+        kde_layers = []
+        sigma_tau = 0.11
+        for layer_idx, tau_k in enumerate(tau_layers):
+            self._check_export_cancelled()
+            self._report_export_progress(
+                0.30 + 0.44 * (layer_idx / max(1, len(tau_layers))),
+                f"正在计算时空密度层 {layer_idx + 1}/{len(tau_layers)}..."
+            )
+            weights = np.exp(-((all_tau - tau_k) ** 2) / (2 * sigma_tau ** 2))
+            if np.sum(weights) < 1e-5:
+                kde_layers.append(np.zeros(grid_f2.shape))
+                continue
+            try:
+                kde = gaussian_kde(np.vstack([all_f2, all_f1]), weights=weights, bw_method=bw)
+                kde_layers.append(kde(grid_points).reshape(grid_f2.shape) * np.sum(weights))
+            except Exception:
+                kde_layers.append(np.zeros(grid_f2.shape))
+
+        kde_stack = np.stack(kde_layers, axis=0)
+        self._report_export_progress(0.76, "正在合成时空密度热力图...")
+        D = np.sum(kde_stack, axis=0)
+        TD = np.sum(tau_layers[:, np.newaxis, np.newaxis] * kde_stack, axis=0)
+
+        try:
+            from scipy.ndimage import gaussian_filter
+            D = gaussian_filter(D, sigma=0.65)
+            TD = gaussian_filter(TD, sigma=0.65)
+        except Exception:
+            pass
+
+        D_max = float(np.nanmax(D)) if np.size(D) else 0.0
+        if D_max <= 0:
+            return None, all_f1.tolist(), all_f2.tolist()
+
+        with np.errstate(divide='ignore', invalid='ignore'):
+            T = np.nan_to_num(TD / D, nan=0.0)
+        density_norm = D / D_max
+        low = 0.025
+        alpha = np.clip((density_norm - low) / (1.0 - low), 0.0, 1.0) ** 0.52
+        alpha = np.clip(alpha * alpha_max, 0.0, alpha_max)
+
+        time_cmap = self._get_formant_time_cmap()
+        color_rgba = time_cmap(T)
+        color_rgba[:, :, 3] = alpha
+        ax.imshow(
+            color_rgba,
+            extent=[f2_grid_min, f2_grid_max, f1_grid_min, f1_grid_max],
+            origin='lower',
+            aspect='auto',
+            interpolation='bicubic',
+            zorder=zorder
+        )
+
+        if show_contours:
+            self._report_export_progress(0.84, "正在绘制等密度轮廓线...")
+            contour_levels = np.linspace(D_max * 0.12, D_max * 0.88, 6)
+            ax.contour(grid_f2, grid_f1, D, levels=contour_levels, colors='#111827', alpha=0.34, linewidths=0.75, zorder=zorder + 0.2)
+
+        if show_raw:
+            ax.scatter(all_f2, all_f1, c=all_tau, cmap=time_cmap, s=9, alpha=0.15, edgecolors='none', zorder=zorder + 0.4)
+
+        from matplotlib.colors import Normalize
+        sm = plt.cm.ScalarMappable(cmap=time_cmap, norm=Normalize(vmin=0.0, vmax=100.0))
+        sm.set_array([])
+        return sm, all_f1.tolist(), all_f2.tolist()
+
+    def _draw_formant_space_panel(self, ax, data_entries, groupby_val, label_mode, ellipse_mode, show_raw, time_gradient, density_overlay, density_sm_holder=None):
         ax.set_facecolor("#F8FAFC")
         ax.grid(True, linestyle="--", alpha=0.25, linewidth=0.8)
 
-        groupby_val = self.get_param('groupby', 'group')
-        label_mode = self.get_param('formant_label_mode', '显示分组标签')
-        ellipse_mode = self.get_param('formant_ellipse', '1-sigma 置信椭圆')
-        show_raw = self.get_param('formant_show_raw', True)
-        time_gradient = self.get_param('formant_time_gradient', False)
-        density_band = self.get_param('formant_density_band', False)
+        if density_overlay:
+            sm, density_f1, density_f2 = self._draw_formant_density_layer(
+                ax,
+                data_entries,
+                show_raw=self.get_param('formant_density_show_raw', False),
+                show_contours=self.get_param('formant_density_show_contours', True),
+                bw_method=self.get_param('formant_density_bw', 0.14),
+                alpha_max=0.52,
+                zorder=1
+            )
+            if sm is not None and density_sm_holder is not None and density_sm_holder.get('sm') is None:
+                density_sm_holder['sm'] = sm
+        else:
+            density_f1, density_f2 = [], []
 
         category_data = {}
         
@@ -1789,7 +1956,7 @@ class AcousticChartExporter:
 
         if not category_data:
             ax.text(0.5, 0.5, "没有找到有效的共振峰分析数据！", ha='center', va='center', color='red', fontsize=12)
-            return fig
+            return [], []
 
         categories = sorted(list(category_data.keys()))
         cmap = plt.get_cmap('tab10')
@@ -1810,7 +1977,7 @@ class AcousticChartExporter:
             all_f2_plotted.extend(f2_list)
             
             if show_raw:
-                ax.scatter(f2_list, f1_list, color=color, s=14, alpha=0.12, edgecolors='none', zorder=2)
+                ax.scatter(f2_list, f1_list, color=color, s=14, alpha=0.20 if density_overlay else 0.12, edgecolors='none', zorder=3)
 
         for cat in categories:
             color = cat_colors[cat]
@@ -1826,8 +1993,7 @@ class AcousticChartExporter:
             lbl_x = np.nan
             lbl_y = np.nan
             
-            has_trajs = len(trajs_f1) > 0 and len(trajs_f2) > 0
-            if (time_gradient or density_band) and has_trajs:
+            if time_gradient and len(trajs_f1) > 0 and len(trajs_f2) > 0:
                 with np.errstate(all='ignore'):
                     mean_traj_f1 = np.nanmean(trajs_f1, axis=0)
                     mean_traj_f2 = np.nanmean(trajs_f2, axis=0)
@@ -1838,54 +2004,16 @@ class AcousticChartExporter:
                     v_f2 = mean_traj_f2[valid_mask]
                     n_pts = len(v_f1)
                     
-                    # 1. Plot density band if active
-                    if density_band:
-                        cmap = plt.get_cmap('coolwarm_r')
-                        from matplotlib.patches import Ellipse
-                        for i in range(n_pts):
-                            col_val = i / max(1, n_pts - 1)
-                            ellipse_color = cmap(col_val)
-                            
-                            # F2/F1 slice at time point i
-                            x_i = trajs_f2[:, i] if trajs_f2.ndim > 1 else np.array([trajs_f2[i]])
-                            y_i = trajs_f1[:, i] if trajs_f1.ndim > 1 else np.array([trajs_f1[i]])
-                            
-                            valid_i = np.isfinite(x_i) & np.isfinite(y_i)
-                            x_i_valid = x_i[valid_i]
-                            y_i_valid = y_i[valid_i]
-                            
-                            if len(x_i_valid) >= 3:
-                                self._draw_confidence_ellipse(
-                                    x_i_valid, y_i_valid, ax, n_std=1.0, 
-                                    facecolor=ellipse_color, edgecolor='none', 
-                                    alpha=0.18, zorder=3
-                                )
-                            elif len(x_i_valid) > 0:
-                                mean_x = np.mean(x_i_valid)
-                                mean_y = np.mean(y_i_valid)
-                                ellipse = Ellipse(xy=(mean_x, mean_y), width=100.0, height=100.0,
-                                                  angle=0, facecolor=ellipse_color, edgecolor='none',
-                                                  alpha=0.18, zorder=3)
-                                ax.add_patch(ellipse)
-                                
-                    # 2. Draw trajectory elements
-                    if time_gradient:
-                        ax.plot(v_f2, v_f1, color=color, linewidth=2.5, alpha=0.8, label=str(cat), zorder=5)
-                        
-                        cmap = plt.get_cmap('coolwarm_r')
-                        marker_colors = cmap(np.linspace(0, 1, n_pts))
-                        for i in range(n_pts):
-                            ax.scatter(v_f2[i], v_f1[i], color=marker_colors[i], s=80, 
-                                       edgecolors='black', linewidth=0.8, zorder=6)
-                    else:
-                        # thin dashed category line over the band for structure
-                        ax.plot(v_f2, v_f1, color=color, linestyle='--', linewidth=1.5, alpha=0.7, label=str(cat), zorder=4)
-                        
-                        # start (Red) and end (Blue) small indicator markers
-                        cmap = plt.get_cmap('coolwarm_r')
-                        ax.scatter(v_f2[0], v_f1[0], color=cmap(0.0), s=40, edgecolors='black', linewidth=0.6, zorder=5)
-                        ax.scatter(v_f2[-1], v_f1[-1], color=cmap(1.0), s=40, edgecolors='black', linewidth=0.6, zorder=5)
+                    # Plot the trajectory line using the category color
+                    ax.plot(v_f2, v_f1, color=color, linewidth=1.2, alpha=0.55, label=str(cat), zorder=5)
                     
+                    cmap = self._get_formant_time_cmap()
+                    marker_colors = cmap(np.linspace(0, 1, n_pts))
+                    for i in range(n_pts):
+                        ax.scatter(v_f2[i], v_f1[i], color=marker_colors[i], s=80, 
+                                   edgecolors='black', linewidth=0.8, zorder=6)
+                    
+                    # Store midpoint for label placement
                     mid_idx = n_pts // 2
                     lbl_x = v_f2[mid_idx]
                     lbl_y = v_f1[mid_idx]
@@ -1922,8 +2050,10 @@ class AcousticChartExporter:
         ax.invert_yaxis()
 
         if all_f1_plotted and all_f2_plotted:
-            f1_p1, f1_p99 = np.percentile(all_f1_plotted, 1.0), np.percentile(all_f1_plotted, 99.0)
-            f2_p1, f2_p99 = np.percentile(all_f2_plotted, 1.0), np.percentile(all_f2_plotted, 99.0)
+            limit_f1 = all_f1_plotted + density_f1
+            limit_f2 = all_f2_plotted + density_f2
+            f1_p1, f1_p99 = np.percentile(limit_f1, 1.0), np.percentile(limit_f1, 99.0)
+            f2_p1, f2_p99 = np.percentile(limit_f2, 1.0), np.percentile(limit_f2, 99.0)
             
             f1_pad = (f1_p99 - f1_p1) * 0.15 if f1_p99 > f1_p1 else 100.0
             f2_pad = (f2_p99 - f2_p1) * 0.15 if f2_p99 > f2_p1 else 150.0
@@ -1933,17 +2063,147 @@ class AcousticChartExporter:
 
         ax.set_xlabel("F2 (Hz)", fontsize=12, fontweight='bold', labelpad=10)
         ax.set_ylabel("F1 (Hz)", fontsize=12, fontweight='bold', labelpad=10)
+        return all_f1_plotted, all_f2_plotted
+
+    def _add_formant_density_colorbar(self, fig, axes, sm):
+        axes_list = [ax for ax in axes if getattr(ax, "get_visible", lambda: True)()]
+        if not axes_list:
+            return None
+
+        legend_outside = bool(self.get_param('legend_outside', False))
+        legend_loc = str(self.get_param('legend_loc', '右上'))
+        right_legend = legend_outside and legend_loc.startswith("右")
+        left_legend = legend_outside and legend_loc.startswith("左")
+
+        if right_legend:
+            fig.subplots_adjust(left=0.08, right=0.76, top=0.91, bottom=0.10, wspace=0.26, hspace=0.28)
+            cax = fig.add_axes([0.79, 0.18, 0.018, 0.66])
+        elif left_legend:
+            fig.subplots_adjust(left=0.18, right=0.88, top=0.91, bottom=0.10, wspace=0.26, hspace=0.28)
+            cax = fig.add_axes([0.91, 0.18, 0.018, 0.66])
+        else:
+            fig.subplots_adjust(left=0.08, right=0.88, top=0.91, bottom=0.10, wspace=0.24, hspace=0.28)
+            cax = fig.add_axes([0.91, 0.18, 0.018, 0.66])
+
+        cb = fig.colorbar(sm, cax=cax, orientation='vertical')
+        cb.set_label("相对时间 0-100% (红=早, 蓝=晚)", fontsize=10, fontweight='bold')
+        setattr(fig, "_phontracer_skip_tight_layout", True)
+        return cb
+
+    def _plot_formant_vowel_space(self, data_entries, group_key, scale):
+        groupby_val = self.get_param('groupby', 'group')
+        label_mode = self.get_param('formant_label_mode', '显示分组标签')
+        ellipse_mode = self.get_param('formant_ellipse', '1-sigma 置信椭圆')
+        show_raw = self.get_param('formant_show_raw', True)
+        time_gradient = self.get_param('formant_time_gradient', False)
+        density_overlay = bool(self.get_param('formant_density_overlay', False))
+        facet_val = self.get_param('formant_density_facet', '单图展示 (不分面)')
+
+        facet_specs = [("Default", data_entries)]
+        if facet_val in ("按字表组分面", "group"):
+            facet_specs = [(g, [e for e in data_entries if e['group'] == g]) for g in sorted(set(e['group'] for e in data_entries))]
+        elif facet_val in ("按发音人分面", "speaker"):
+            facet_specs = [(s, [e for e in data_entries if e['speaker_name'] == s]) for s in sorted(set(e['speaker_name'] for e in data_entries))]
+        elif facet_val in ("按音节位置分面", "syllable_position"):
+            max_syls = max((len(e.get('syl_formants', [])) for e in data_entries), default=0)
+            facet_specs = [(f"第 {i + 1} 音节", self._slice_formant_entries_for_syllable(data_entries, i)) for i in range(max_syls)]
+
+        facet_specs = [(name, entries) for name, entries in facet_specs if entries]
+        if not facet_specs:
+            fig, ax = plt.subplots(figsize=(8.6, 7.2))
+            ax.text(0.5, 0.5, "没有找到有效的共振峰分析数据！", ha='center', va='center', color='red', fontsize=12)
+            return fig
+
+        n_facets = len(facet_specs)
+        if n_facets == 1:
+            fig, ax = plt.subplots(figsize=(8.6, 7.2))
+            axes_flat = [ax]
+        else:
+            n_cols = min(2, n_facets)
+            n_rows = math.ceil(n_facets / n_cols)
+            fig, axes = plt.subplots(n_rows, n_cols, figsize=(8.0 * n_cols, 6.5 * n_rows), squeeze=False)
+            axes_flat = axes.flatten()
+
+        density_sm_holder = {'sm': None}
+        for idx, (facet_name, facet_entries) in enumerate(facet_specs):
+            ax = axes_flat[idx]
+            self._draw_formant_space_panel(
+                ax, facet_entries, groupby_val, label_mode, ellipse_mode,
+                show_raw, time_gradient, density_overlay, density_sm_holder
+            )
+            title_text = "元音共振峰空间分布图" if facet_name == "Default" else str(facet_name)
+            if len(title_text) > 28:
+                title_text = title_text[:25] + "..."
+            ax.set_title(title_text, fontsize=12 if n_facets > 1 else 13, fontweight='bold', pad=12)
+
+        for idx in range(n_facets, len(axes_flat)):
+            axes_flat[idx].set_visible(False)
+
+        if density_overlay and density_sm_holder.get('sm') is not None:
+            self._add_formant_density_colorbar(fig, axes_flat[:n_facets], density_sm_holder['sm'])
         
         legend_kwargs = self._get_legend_kwargs()
         legend_kwargs["fontsize"] = 9
-        ax.legend(**legend_kwargs)
+        if density_overlay and self.get_param('legend_outside', False):
+            legend_loc = str(self.get_param('legend_loc', '右上'))
+            if legend_loc.startswith("右"):
+                y_anchor = 1 if "上" in legend_loc else 0
+                legend_kwargs["bbox_to_anchor"] = (1.34, y_anchor)
+            elif legend_loc.startswith("左"):
+                y_anchor = 1 if "上" in legend_loc else 0
+                legend_kwargs["bbox_to_anchor"] = (-0.14, y_anchor)
+        for ax in axes_flat[:n_facets]:
+            handles, labels = ax.get_legend_handles_labels()
+            if handles:
+                ax.legend(**legend_kwargs)
         
-        title_text = "元音共振峰空间分布图"
+        if not density_overlay:
+            fig.tight_layout()
+        return fig
+
+    def _plot_formant_density_heatmap(self, data_entries, group_key, scale):
+        fig, ax = plt.subplots(figsize=(8.6, 7.2))
+        ax.set_facecolor("#F8FAFC")
+        ax.grid(True, linestyle="--", alpha=0.25, linewidth=0.8)
+
+        show_raw = self.get_param('formant_density_show_raw', False)
+        show_contours = self.get_param('formant_density_show_contours', True)
+        sm, all_f1, all_f2 = self._draw_formant_density_layer(
+            ax,
+            data_entries,
+            show_raw=show_raw,
+            show_contours=show_contours,
+            bw_method=self.get_param('formant_density_bw', 0.14),
+            alpha_max=0.78,
+            zorder=2
+        )
+
+        if sm is None:
+            ax.text(0.5, 0.5, "没有找到有效的共振峰时空密度数据！", ha='center', va='center', color='red', fontsize=12)
+            return fig
+
+        ax.invert_xaxis()
+        ax.invert_yaxis()
+
+        if all_f1 and all_f2:
+            f1_p1, f1_p99 = np.percentile(all_f1, 1.0), np.percentile(all_f1, 99.0)
+            f2_p1, f2_p99 = np.percentile(all_f2, 1.0), np.percentile(all_f2, 99.0)
+            f1_pad = (f1_p99 - f1_p1) * 0.16 if f1_p99 > f1_p1 else 100.0
+            f2_pad = (f2_p99 - f2_p1) * 0.16 if f2_p99 > f2_p1 else 150.0
+            ax.set_ylim(f1_p99 + f1_pad, max(50.0, f1_p1 - f1_pad))
+            ax.set_xlim(f2_p99 + f2_pad, max(500.0, f2_p1 - f2_pad))
+
+        ax.set_xlabel("F2 (Hz)", fontsize=12, fontweight='bold', labelpad=10)
+        ax.set_ylabel("F1 (Hz)", fontsize=12, fontweight='bold', labelpad=10)
+
+        self._add_formant_density_colorbar(fig, [ax], sm)
+
+        title_text = "共振峰时空密度图"
         if len(set(e['speaker_name'] for e in data_entries)) == 1:
             title_text = f"{data_entries[0]['speaker_name']} - {title_text}"
         ax.set_title(title_text, fontsize=13, fontweight='bold', pad=15)
-        
-        fig.tight_layout()
+
+        setattr(fig, "_phontracer_skip_tight_layout", True)
         return fig
 
     def _plot_formant_trajectories(self, data_entries, group_key, scale):
@@ -2076,11 +2336,73 @@ class AcousticChartExporter:
         )
         self.cb_formant_time_gradient.pack(anchor="w", pady=(5, 5))
 
-        # Show density band (melting transition)
-        self.cb_formant_density_band = ctk.CTkCheckBox(
+        self.cb_formant_density_overlay = ctk.CTkCheckBox(
+            self.dynamic_content_frame,
+            text="叠加时空密度热力层 (红→蓝)",
+            variable=self.var_formant_density_overlay,
+            font=self.font_small,
+            checkbox_width=18,
+            checkbox_height=18,
+            fg_color=("#3B82F6", "#2563EB"),
+            hover_color=("#4B5563", "#9CA3AF"),
+            border_color=("#9CA3AF", "#4B5563"),
+            command=self.update_preview
+        )
+        self.cb_formant_density_overlay.pack(anchor="w", pady=(10, 5))
+
+        bw_val_frame = ctk.CTkFrame(self.dynamic_content_frame, fg_color="transparent")
+        bw_val_frame.pack(fill=tk.X, pady=(4, 2))
+        ctk.CTkLabel(bw_val_frame, text="密度带宽 (越小越清晰):", font=self.font_small).pack(side=tk.LEFT)
+        self.lbl_formant_density_bw = ctk.CTkLabel(bw_val_frame, text=f"{self.var_formant_density_bw.get():.2f}", font=self.font_small)
+        self.lbl_formant_density_bw.pack(side=tk.RIGHT)
+        self.slider_formant_density_bw = ctk.CTkSlider(
+            self.dynamic_content_frame,
+            from_=0.06,
+            to=0.32,
+            number_of_steps=26,
+            command=self._on_formant_density_bw_changed
+        )
+        self.slider_formant_density_bw.set(float(self.var_formant_density_bw.get()))
+        self.slider_formant_density_bw.pack(fill=tk.X, pady=(0, 8))
+
+        self.cb_formant_density_show_contours = ctk.CTkCheckBox(
+            self.dynamic_content_frame,
+            text="叠加等密度轮廓线",
+            variable=self.var_formant_density_show_contours,
+            font=self.font_small,
+            checkbox_width=18,
+            checkbox_height=18,
+            fg_color=("#3B82F6", "#2563EB"),
+            hover_color=("#4B5563", "#9CA3AF"),
+            border_color=("#9CA3AF", "#4B5563"),
+            command=self.update_preview
+        )
+        self.cb_formant_density_show_contours.pack(anchor="w", pady=(2, 5))
+
+        ctk.CTkLabel(self.dynamic_content_frame, text="分面子图排版 (Facet):", font=self.font_small).pack(anchor="w", pady=(8, 2))
+        self.combo_formant_density_facet = ctk.CTkOptionMenu(
+            self.dynamic_content_frame,
+            values=["单图展示 (不分面)", "按字表组分面", "按音节位置分面", "按发音人分面"],
+            command=lambda _: self.trigger_preview_update(),
+            **self.dropdown_kwargs
+        )
+        self.combo_formant_density_facet.set(self.var_formant_density_facet.get())
+        self.combo_formant_density_facet.pack(fill=tk.X, pady=(2, 10))
+        self._apply_custom_arrow(self.combo_formant_density_facet)
+
+    def _on_formant_density_bw_changed(self, val):
+        bw = float(val)
+        self.var_formant_density_bw.set(bw)
+        if hasattr(self, 'lbl_formant_density_bw'):
+            self.lbl_formant_density_bw.configure(text=f"{bw:.2f}")
+        self.trigger_preview_update()
+
+    def _build_formant_density_settings(self):
+        # Checkbox for show raw points
+        self.cb_formant_density_show_raw = ctk.CTkCheckBox(
             self.dynamic_content_frame, 
-            text="显示置信渐变轨迹带 (化开过渡)", 
-            variable=self.var_formant_density_band,
+            text="显示个体测量帧 (极淡散点)", 
+            variable=self.var_formant_density_show_raw,
             font=self.font_small, 
             checkbox_width=18, 
             checkbox_height=18,
@@ -2089,7 +2411,22 @@ class AcousticChartExporter:
             border_color=("#9CA3AF", "#4B5563"),
             command=self.update_preview
         )
-        self.cb_formant_density_band.pack(anchor="w", pady=(5, 5))
+        self.cb_formant_density_show_raw.pack(anchor="w", pady=(10, 5))
+
+        # Checkbox for show contour lines
+        self.cb_formant_density_show_contours = ctk.CTkCheckBox(
+            self.dynamic_content_frame, 
+            text="叠加等密度轮廓线", 
+            variable=self.var_formant_density_show_contours,
+            font=self.font_small, 
+            checkbox_width=18, 
+            checkbox_height=18,
+            fg_color=("#3B82F6", "#2563EB"), 
+            hover_color=("#4B5563", "#9CA3AF"), 
+            border_color=("#9CA3AF", "#4B5563"),
+            command=self.update_preview
+        )
+        self.cb_formant_density_show_contours.pack(anchor="w", pady=(5, 5))
 
     def _build_formant_trajectory_settings(self):
         # Trajectory style
@@ -2282,6 +2619,13 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         self.var_density_m_max = ctk.StringVar(value="600")
         self.var_density_facet = ctk.StringVar(value="none")  # none, group, label
 
+        # Dynamic Options - Formant Density (KDE Heatmap)
+        self.var_formant_density_overlay = tk.BooleanVar(value=False)
+        self.var_formant_density_bw = ctk.DoubleVar(value=0.14)
+        self.var_formant_density_show_raw = tk.BooleanVar(value=False)
+        self.var_formant_density_show_contours = tk.BooleanVar(value=True)
+        self.var_formant_density_facet = ctk.StringVar(value="单图展示 (不分面)")
+
         # Dynamic Options - Quality Check
         self.var_qc_view = ctk.StringVar(value="raw_overlay")  # raw_overlay, active_ratio, speaker_means
 
@@ -2302,7 +2646,6 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         self.var_formant_label_mode = ctk.StringVar(value="显示分组标签")
         self.var_formant_show_raw = ctk.BooleanVar(value=True)
         self.var_formant_time_gradient = ctk.BooleanVar(value=False)
-        self.var_formant_density_band = ctk.BooleanVar(value=False)
 
         # Dynamic Options - Formant Trajectory
         self.var_formant_traj_style = ctk.StringVar(value="平均曲线 + 置信区间阴影")
@@ -2867,6 +3210,10 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             self.var_chart_type.set("formant_trajectory")
             self.dynamic_title.configure(text="⚙️ 共振峰轨迹图专有选项")
             self._build_formant_trajectory_settings()
+        elif val == "共振峰时空密度图":
+            self.var_chart_type.set("formant_density")
+            self.dynamic_title.configure(text="⚙️ 共振峰时空密度图专有选项")
+            self._build_formant_density_settings()
 
         self._bind_left_scroll_wheel_recursive(self.dynamic_content_frame)
         self.update_preview()
@@ -3264,6 +3611,8 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             'density_bw', 'density_f0_mode', 'density_facet',
             'density_normalization', 'density_p_low', 'density_p_high',
             'density_m_min', 'density_m_max', 'density_max_points',
+            'formant_density_overlay', 'formant_density_bw', 'formant_density_facet',
+            'formant_density_show_raw', 'formant_density_show_contours',
             'qc_view', 'overview_metric',
             'legend_loc', 'legend_outside', 'intention',
             'image_ratio_mode', 'image_ratio_custom', 'image_pixel_mode', 'image_pixel_custom',
@@ -3293,6 +3642,9 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
                 message = payload.get("message")
                 if message and hasattr(self, "preview_lbl"):
                     self.preview_lbl.configure(text=message, text_color="#6B7280")
+                progress = payload.get("progress")
+                if progress is not None and hasattr(self, "preview_progress"):
+                    self.preview_progress.set(max(0.0, min(1.0, float(progress))))
             elif msg_type == "done":
                 done_payload = payload
 
@@ -3359,6 +3711,9 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         preview_status.grid(row=0, column=0)
         self.preview_lbl = ctk.CTkLabel(preview_status, text="正在实时渲染图表，请稍候...", font=self.font_title, text_color="#6B7280")
         self.preview_lbl.pack(pady=(0, 8))
+        self.preview_progress = ctk.CTkProgressBar(preview_status, width=220, height=8)
+        self.preview_progress.set(0.05)
+        self.preview_progress.pack(pady=(0, 10))
         ctk.CTkButton(preview_status, text="取消预览", width=90, height=30, command=self._cancel_preview_render).pack()
 
         scope = self.var_export_scope.get()
@@ -3423,14 +3778,16 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             def worker():
                 try:
                     self._set_export_runtime(
-                        progress_callback=lambda _p, msg=None: progress_queue.put(("progress", {"message": msg})),
+                        progress_callback=lambda p=None, msg=None: progress_queue.put(("progress", {"progress": p, "message": msg})),
                         cancel_event=cancel_event,
                         params=params_snapshot,
                     )
                     with _MATPLOTLIB_LOCK:
                         self._check_export_cancelled()
+                        progress_queue.put(("progress", {"progress": 0.10, "message": "正在准备图表数据..."}))
                         fig = self.generate_plot(data, is_preview=True)
                         self._check_export_cancelled()
+                    progress_queue.put(("progress", {"progress": 0.95, "message": "正在生成预览画布..."}))
                     progress_queue.put(("done", {"status": "ok", "fig": fig}))
                 except ExportCancelled:
                     progress_queue.put(("done", {"status": "cancelled"}))
