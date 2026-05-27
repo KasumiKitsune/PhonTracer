@@ -193,6 +193,7 @@ class AcousticChartExporter:
             'formant_ellipse': lambda: getattr(self, 'combo_formant_ellipse').get() if hasattr(self, 'combo_formant_ellipse') else None,
             'formant_label_mode': lambda: getattr(self, 'combo_formant_label_mode').get() if hasattr(self, 'combo_formant_label_mode') else None,
             'formant_show_raw': lambda: getattr(self, 'var_formant_show_raw').get() if hasattr(self, 'var_formant_show_raw') else None,
+            'formant_time_gradient': lambda: getattr(self, 'var_formant_time_gradient').get() if hasattr(self, 'var_formant_time_gradient') else None,
 
             # formant trajectory specific
             'formant_traj_style': lambda: getattr(self, 'combo_formant_traj_style').get() if hasattr(self, 'combo_formant_traj_style') else None,
@@ -1744,6 +1745,7 @@ class AcousticChartExporter:
         label_mode = self.get_param('formant_label_mode', '显示分组标签')
         ellipse_mode = self.get_param('formant_ellipse', '1-sigma 置信椭圆')
         show_raw = self.get_param('formant_show_raw', True)
+        time_gradient = self.get_param('formant_time_gradient', False)
 
         category_data = {}
         
@@ -1766,12 +1768,22 @@ class AcousticChartExporter:
                 
                 cat = self._get_syl_category(entry, syl, groupby_val)
                 if cat not in category_data:
-                    category_data[cat] = {'f1': [], 'f2': [], 'entries_labels': [], 'syl_chars': []}
+                    category_data[cat] = {
+                        'f1': [], 'f2': [], 'entries_labels': [], 'syl_chars': [],
+                        'trajs_f1': [], 'trajs_f2': []
+                    }
                 
                 category_data[cat]['f1'].extend(s_f1.tolist())
                 category_data[cat]['f2'].extend(s_f2.tolist())
                 category_data[cat]['entries_labels'].append(entry['label'])
                 category_data[cat]['syl_chars'].append(syl['char'])
+                
+                # Collect normalized trajectory data (typically 11 points)
+                traj_f1 = np.asarray(syl.get('f1', []), dtype=float)
+                traj_f2 = np.asarray(syl.get('f2', []), dtype=float)
+                if len(traj_f1) > 0 and len(traj_f2) > 0:
+                    category_data[cat]['trajs_f1'].append(traj_f1)
+                    category_data[cat]['trajs_f2'].append(traj_f2)
 
         if not category_data:
             ax.text(0.5, 0.5, "没有找到有效的共振峰分析数据！", ha='center', va='center', color='red', fontsize=12)
@@ -1806,25 +1818,60 @@ class AcousticChartExporter:
             if len(f1_list) == 0:
                 continue
                 
-            mean_f1 = np.mean(f1_list)
-            mean_f2 = np.mean(f2_list)
+            trajs_f1 = np.array(category_data[cat]['trajs_f1'])
+            trajs_f2 = np.array(category_data[cat]['trajs_f2'])
             
-            ax.scatter(mean_f2, mean_f1, color=color, s=150, marker='o', edgecolors='black', linewidth=1.2, zorder=6, label=str(cat))
+            lbl_x = np.nan
+            lbl_y = np.nan
             
-            if label_mode == "显示分组标签":
-                lbl_text = str(cat)
-                ax.text(mean_f2, mean_f1 - 15, lbl_text, fontsize=11, fontweight='bold', color='#111827', ha='center', va='bottom', zorder=7,
-                        bbox=dict(boxstyle="round,pad=0.2", fc="white", ec=color, alpha=0.8, lw=1))
-            elif label_mode == "显示单字标签":
-                syl_chars = category_data[cat]['syl_chars']
-                lbl_text = max(set(syl_chars), key=syl_chars.count) if syl_chars else cat
-                ax.text(mean_f2, mean_f1 - 15, lbl_text, fontsize=11, fontweight='bold', color='#111827', ha='center', va='bottom', zorder=7,
-                        bbox=dict(boxstyle="round,pad=0.2", fc="white", ec=color, alpha=0.8, lw=1))
-            elif label_mode == "显示词语标签":
-                entries_labels = category_data[cat]['entries_labels']
-                lbl_text = str(cat) if groupby_val == "按词语" else (max(set(entries_labels), key=entries_labels.count) if entries_labels else cat)
-                ax.text(mean_f2, mean_f1 - 15, lbl_text, fontsize=11, fontweight='bold', color='#111827', ha='center', va='bottom', zorder=7,
-                        bbox=dict(boxstyle="round,pad=0.2", fc="white", ec=color, alpha=0.8, lw=1))
+            if time_gradient and len(trajs_f1) > 0 and len(trajs_f2) > 0:
+                with np.errstate(all='ignore'):
+                    mean_traj_f1 = np.nanmean(trajs_f1, axis=0)
+                    mean_traj_f2 = np.nanmean(trajs_f2, axis=0)
+                
+                valid_mask = np.isfinite(mean_traj_f1) & np.isfinite(mean_traj_f2)
+                if np.any(valid_mask):
+                    v_f1 = mean_traj_f1[valid_mask]
+                    v_f2 = mean_traj_f2[valid_mask]
+                    n_pts = len(v_f1)
+                    
+                    # Plot the trajectory line using the category color
+                    ax.plot(v_f2, v_f1, color=color, linewidth=2.5, alpha=0.8, label=str(cat), zorder=5)
+                    
+                    # Plot gradient dots (Red to Blue, i.e., coolwarm_r reversed)
+                    cmap = plt.get_cmap('coolwarm_r')
+                    marker_colors = cmap(np.linspace(0, 1, n_pts))
+                    for i in range(n_pts):
+                        ax.scatter(v_f2[i], v_f1[i], color=marker_colors[i], s=80, 
+                                   edgecolors='black', linewidth=0.8, zorder=6)
+                    
+                    # Store midpoint for label placement
+                    mid_idx = n_pts // 2
+                    lbl_x = v_f2[mid_idx]
+                    lbl_y = v_f1[mid_idx]
+            
+            if np.isnan(lbl_x) or np.isnan(lbl_y):
+                mean_f1 = np.mean(f1_list)
+                mean_f2 = np.mean(f2_list)
+                ax.scatter(mean_f2, mean_f1, color=color, s=150, marker='o', edgecolors='black', linewidth=1.2, zorder=6, label=str(cat))
+                lbl_x = mean_f2
+                lbl_y = mean_f1
+            
+            if not np.isnan(lbl_x) and not np.isnan(lbl_y):
+                if label_mode == "显示分组标签":
+                    lbl_text = str(cat)
+                    ax.text(lbl_x, lbl_y - 15, lbl_text, fontsize=11, fontweight='bold', color='#111827', ha='center', va='bottom', zorder=7,
+                            bbox=dict(boxstyle="round,pad=0.2", fc="white", ec=color, alpha=0.8, lw=1))
+                elif label_mode == "显示单字标签":
+                    syl_chars = category_data[cat]['syl_chars']
+                    lbl_text = max(set(syl_chars), key=syl_chars.count) if syl_chars else cat
+                    ax.text(lbl_x, lbl_y - 15, lbl_text, fontsize=11, fontweight='bold', color='#111827', ha='center', va='bottom', zorder=7,
+                            bbox=dict(boxstyle="round,pad=0.2", fc="white", ec=color, alpha=0.8, lw=1))
+                elif label_mode == "显示词语标签":
+                    entries_labels = category_data[cat]['entries_labels']
+                    lbl_text = str(cat) if groupby_val == "按词语" else (max(set(entries_labels), key=entries_labels.count) if entries_labels else cat)
+                    ax.text(lbl_x, lbl_y - 15, lbl_text, fontsize=11, fontweight='bold', color='#111827', ha='center', va='bottom', zorder=7,
+                            bbox=dict(boxstyle="round,pad=0.2", fc="white", ec=color, alpha=0.8, lw=1))
 
             if "1-sigma" in ellipse_mode:
                 self._draw_confidence_ellipse(f2_list, f1_list, ax, n_std=1.0, facecolor='none', edgecolor=color, linestyle='--', linewidth=1.5, zorder=4)
@@ -1973,6 +2020,21 @@ class AcousticChartExporter:
             command=self.update_preview
         )
         self.cb_formant_show_raw.pack(anchor="w", pady=(10, 5))
+
+        # Show time gradient (red to blue)
+        self.cb_formant_time_gradient = ctk.CTkCheckBox(
+            self.dynamic_content_frame, 
+            text="显示时序渐变轨迹线 (红→蓝)", 
+            variable=self.var_formant_time_gradient,
+            font=self.font_small, 
+            checkbox_width=18, 
+            checkbox_height=18,
+            fg_color=("#3B82F6", "#2563EB"), 
+            hover_color=("#4B5563", "#9CA3AF"), 
+            border_color=("#9CA3AF", "#4B5563"),
+            command=self.update_preview
+        )
+        self.cb_formant_time_gradient.pack(anchor="w", pady=(5, 5))
 
     def _build_formant_trajectory_settings(self):
         # Trajectory style
@@ -2184,6 +2246,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         self.var_formant_ellipse = ctk.StringVar(value="1-sigma 置信椭圆")
         self.var_formant_label_mode = ctk.StringVar(value="显示分组标签")
         self.var_formant_show_raw = ctk.BooleanVar(value=True)
+        self.var_formant_time_gradient = ctk.BooleanVar(value=False)
 
         # Dynamic Options - Formant Trajectory
         self.var_formant_traj_style = ctk.StringVar(value="平均曲线 + 置信区间阴影")
