@@ -45,7 +45,6 @@ a = Analysis(
     pathex=['.'],
     binaries=[],
     datas=[
-        ('icons', 'icons'), 
         ('assets', 'assets'),
         (ctk_path, 'customtkinter')
     ] + package_datas,

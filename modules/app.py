@@ -521,9 +521,9 @@ class PhoneticsApp:
 
     def setup_icons(self):
         # 预加载所有图标
-        icon_path = "icons"
+        icon_path = os.path.join("assets", "icons")
         if not os.path.exists(icon_path):
-            icon_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "icons")
+            icon_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "icons")
 
         self.icons = {}
         icon_files = {

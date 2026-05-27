@@ -21,7 +21,6 @@
 # 4. 白名单：核心代码与资源目录
 !modules/**
 !assets/**
-!icons/**
 !tests/**
 !.github/**
 
