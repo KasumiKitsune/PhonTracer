@@ -507,22 +507,39 @@ class SpectrogramPanel:
         self.playback_domain_end = view_e
         
         part = snd.extract_part(from_time=view_s, to_time=view_e)
-        spectrogram = part.to_spectrogram(window_length=0.005, maximum_frequency=5000)
+        
+        app_params = getattr(self.app, 'last_params', {}) if self.app else {}
+        analysis_mode = item.get('analysis_mode', app_params.get('analysis_mode', 'f0'))
+        self.update_eraser_button_text()
+
+        spec_max_freq = 5000.0
+        if analysis_mode == 'formant':
+            formant_max_hz = float(item.get('formant_max_hz', app_params.get('formant_max_hz', 5500.0)))
+            spec_max_freq = max(5000.0, formant_max_hz)
+
+        try:
+            nyquist = part.sampling_frequency / 2.0
+            spec_max_freq = min(spec_max_freq, nyquist)
+        except Exception:
+            pass
+
+        spectrogram = part.to_spectrogram(window_length=0.005, maximum_frequency=spec_max_freq)
         X = spectrogram.x_grid() + view_s 
         Y = spectrogram.y_grid()
         vals = np.where(spectrogram.values > 0, spectrogram.values, 1e-10)
         sg_db = 10 * np.log10(vals)
         
         self.ax.pcolormesh(X, Y, sg_db, vmin=sg_db.max()-50, vmax=sg_db.max(), cmap='Greys')
-        
-        app_params = getattr(self.app, 'last_params', {}) if self.app else {}
-        analysis_mode = item.get('analysis_mode', app_params.get('analysis_mode', 'f0'))
-        self.update_eraser_button_text()
 
         if analysis_mode == 'formant':
             self.ax2.set_visible(False)
             formant_max_hz = float(item.get('formant_max_hz', app_params.get('formant_max_hz', 5500.0)))
-            self.ax.set_ylim([0, max(5000.0, formant_max_hz)])
+            try:
+                nyquist = part.sampling_frequency / 2.0
+                plot_max_hz = min(max(5000.0, formant_max_hz), nyquist)
+            except Exception:
+                plot_max_hz = max(5000.0, formant_max_hz)
+            self.ax.set_ylim([0, plot_max_hz])
             self.ax.set_xlim([view_s, view_e])
             self.ax.set_ylabel("Frequency (Hz)")
             
