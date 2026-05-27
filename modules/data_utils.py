@@ -533,6 +533,195 @@ def write_analysis_sheet_with_formulas(workbook, ws_res, group_list, num_points,
     return res_row, min_cell_abs, max_cell_abs
 
 
+def write_formant_analysis_sheet_with_formulas(
+        workbook, ws_res, group_char_pairs, last_data_row,
+        data_sheet_name='提取数据'):
+    """
+    在分析图表 Sheet 中写入 Excel 公式，引用提取数据 Sheet 的 F1/F2 值进行计算。
+
+    布局:
+      Section A (F1/F2 统计): AVERAGEIFS / COUNTIFS 公式，按 (组别, 单字) 计算均值与有效帧数
+      Section B (F1/F2 中位数): MEDIAN(IF(...)) 数组公式
+      Section C: 元音空间散点图 (Excel 原生图表，引用上方数据)
+
+    Parameters
+    ----------
+    workbook : xlsxwriter.Workbook
+    ws_res : xlsxwriter worksheet
+    group_char_pairs : list of (group_name, char) tuples — 有序的 (组别, 单字) 唯一列表
+    last_data_row : int — 提取数据 Sheet 中最后一行数据的 0-indexed 行号
+    data_sheet_name : str
+
+    Returns
+    -------
+    res_row : int — 数据区之后的下一行（用于在下方插入其他内容）
+    """
+    from xlsxwriter.utility import xl_rowcol_to_cell
+
+    ds = data_sheet_name
+    lr = last_data_row + 1  # 1-indexed last data row
+
+    CHART_COLORS = [
+        '#2563EB', '#DC2626', '#16A34A', '#9333EA',
+        '#EA580C', '#0891B2', '#CA8A04', '#6366F1',
+    ]
+
+    # ── 格式 ──
+    bold_fmt = workbook.add_format({'bold': True, 'bg_color': '#F2F2F2'})
+    section_fmt = workbook.add_format({
+        'bold': True, 'font_size': 12, 'bg_color': '#D9E2F3',
+    })
+
+    # ── 列宽 ──
+    ws_res.set_column(0, 0, 14)   # 组别
+    ws_res.set_column(1, 1, 10)   # 单字
+    ws_res.set_column(2, 6, 18)   # 统计列
+
+    # 提取数据 Sheet 列布局 (0-indexed):
+    #   A=发音人  B=组别  C=编号  D=词语  E=音节序号
+    #   F=单字  G=时间点序号  H=时间(s)  I=F1(Hz)  J=F2(Hz)
+    grp_range = f"'{ds}'!$B$2:$B${lr}"
+    char_range = f"'{ds}'!$F$2:$F${lr}"
+    f1_range = f"'{ds}'!$I$2:$I${lr}"
+    f2_range = f"'{ds}'!$J$2:$J${lr}"
+
+    # ══════════ Section A: F1/F2 均值 + 中位数 + 有效帧数 ══════════
+    sec_a_row = 0
+    ws_res.merge_range(
+        sec_a_row, 0, sec_a_row, 6,
+        '各组别/单字 F1·F2 统计  —— 由 AVERAGEIFS / COUNTIFS / MEDIAN 公式自动从「提取数据」表计算',
+        section_fmt,
+    )
+
+    header_row = 1
+    headers = [
+        '组别', '单字',
+        'F1_均值(Hz)', 'F2_均值(Hz)',
+        'F1_中位数(Hz)', 'F2_中位数(Hz)',
+        '有效帧数',
+    ]
+    for col, h in enumerate(headers):
+        ws_res.write(header_row, col, h, bold_fmt)
+
+    data_start = 2  # first formula-data row (0-indexed)
+
+    for idx, (grp, char) in enumerate(group_char_pairs):
+        r = data_start + idx
+        ws_res.write(r, 0, grp)
+        ws_res.write(r, 1, char)
+
+        grp_ref = f'$A{r + 1}'
+        char_ref = f'$B{r + 1}'
+
+        # ── F1 均值 ──
+        ws_res.write_formula(
+            r, 2,
+            f'=IFERROR(AVERAGEIFS({f1_range},{grp_range},{grp_ref},'
+            f'{char_range},{char_ref},{f1_range},">0",{f2_range},">0"),"")',
+        )
+
+        # ── F2 均值 ──
+        ws_res.write_formula(
+            r, 3,
+            f'=IFERROR(AVERAGEIFS({f2_range},{grp_range},{grp_ref},'
+            f'{char_range},{char_ref},{f1_range},">0",{f2_range},">0"),"")',
+        )
+
+        # ── F1 中位数 (数组公式) ──
+        median_f1 = (
+            f'=IFERROR(MEDIAN(IF(({grp_range}={grp_ref})*({char_range}={char_ref})'
+            f'*({f1_range}>0)*({f2_range}>0),{f1_range})),"")'
+        )
+        ws_res.write_array_formula(r, 4, r, 4, '{' + median_f1 + '}')
+
+        # ── F2 中位数 (数组公式) ──
+        median_f2 = (
+            f'=IFERROR(MEDIAN(IF(({grp_range}={grp_ref})*({char_range}={char_ref})'
+            f'*({f1_range}>0)*({f2_range}>0),{f2_range})),"")'
+        )
+        ws_res.write_array_formula(r, 5, r, 5, '{' + median_f2 + '}')
+
+        # ── 有效帧数 ──
+        ws_res.write_formula(
+            r, 6,
+            f'=COUNTIFS({grp_range},{grp_ref},{char_range},{char_ref},'
+            f'{f1_range},">0",{f2_range},">0")',
+        )
+
+    res_row = data_start + len(group_char_pairs)
+
+    # ══════════ Chart: 元音空间散点图 ══════════
+    if group_char_pairs:
+        ws_name = ws_res.name
+
+        # 按组别分组，确定每组的起止行
+        groups_ordered = []
+        group_rows = {}
+        for idx, (grp, _char) in enumerate(group_char_pairs):
+            r = data_start + idx
+            if grp not in group_rows:
+                group_rows[grp] = []
+                groups_ordered.append(grp)
+            group_rows[grp].append((r, idx))
+
+        chart = workbook.add_chart({'type': 'scatter'})
+
+        for g_idx, grp in enumerate(groups_ordered):
+            rows_info = group_rows[grp]
+            first_r = rows_info[0][0]
+            last_r = rows_info[-1][0]
+            color = CHART_COLORS[g_idx % len(CHART_COLORS)]
+
+            # 构建自定义数据标签（显示单字）
+            custom_labels = []
+            for _r, pair_idx in rows_info:
+                custom_labels.append({'value': group_char_pairs[pair_idx][1]})
+
+            chart.add_series({
+                'name':       grp,
+                'categories': [ws_name, first_r, 3, last_r, 3],  # F2 均值 (col 3)
+                'values':     [ws_name, first_r, 2, last_r, 2],  # F1 均值 (col 2)
+                'line':       {'none': True},
+                'marker':     {
+                    'type': 'circle', 'size': 8,
+                    'fill': {'color': color},
+                    'border': {'color': color},
+                },
+                'data_labels': {
+                    'value': False,
+                    'custom': custom_labels,
+                    'font': {'size': 9, 'bold': True},
+                },
+            })
+
+        chart.set_x_axis({
+            'name':      'F2 (Hz)',
+            'name_font': {'name': 'Microsoft YaHei', 'size': 10},
+            'num_font':  {'name': 'Arial', 'size': 9},
+            'reverse':   True,
+        })
+        chart.set_y_axis({
+            'name':      'F1 (Hz)',
+            'name_font': {'name': 'Microsoft YaHei', 'size': 10},
+            'num_font':  {'name': 'Arial', 'size': 9},
+            'reverse':   True,
+        })
+        chart.set_title({
+            'name':      '元音空间散点图 (F1 × F2)',
+            'name_font': {'name': 'Microsoft YaHei', 'size': 14, 'bold': True},
+        })
+        chart.set_legend({
+            'position': 'right',
+            'font':     {'name': 'Microsoft YaHei', 'size': 9},
+        })
+        chart.set_size({'width': 650, 'height': 450})
+        chart.set_plotarea({'border': {'none': True}})
+
+        ws_res.insert_chart(f'A{res_row + 2}', chart)
+
+    return res_row
+
+
 def build_five_point_chart(workbook, target_sheet, dict_data, avg_points_map,
                            num_points, max_syls, min_hz, max_hz,
                            insert_cell='A1', chart_title='各声调平均基频五度标调图（保留真实时长）'):

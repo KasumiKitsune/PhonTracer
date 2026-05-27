@@ -13,7 +13,7 @@ matplotlib.use("Agg", force=True)
 import matplotlib.pyplot as plt
 import logging
 import threading
-from .data_utils import get_export_text_for_item, build_five_point_chart, write_analysis_sheet_with_formulas, split_into_syllables
+from .data_utils import get_export_text_for_item, build_five_point_chart, write_analysis_sheet_with_formulas, write_formant_analysis_sheet_with_formulas, split_into_syllables
 from .anomaly_detection import detect_pitch_anomaly_points
 from .ui_widgets import CTkReleaseButton, AutoScrollbar
 from PIL import Image, ImageDraw, ImageTk
@@ -3413,19 +3413,19 @@ class ProjectTreePanel:
             all_speakers = [self.app.speaker_manager.get_active_speaker()]
 
         workbook = xlsxwriter.Workbook(out_file)
-        ws_raw = workbook.add_worksheet("逐点数据")
-        ws_sum = workbook.add_worksheet("摘要数据")
+        ws_data = workbook.add_worksheet("提取数据")
+        ws_analysis = workbook.add_worksheet("分析图表")
+        ws_raw = workbook.add_worksheet("原始数据")
 
-        raw_headers = ["发音人", "组别", "编号", "词语", "音节序号", "单字", "时间点序号", "时间(s)", "F1(Hz)", "F2(Hz)"]
-        for col, h in enumerate(raw_headers):
-            ws_raw.write(0, col, h)
+        # ══════════ Sheet 1: 提取数据 ══════════
+        data_headers = ["发音人", "组别", "编号", "词语", "音节序号", "单字", "时间点序号", "时间(s)", "F1(Hz)", "F2(Hz)"]
+        for col, h in enumerate(data_headers):
+            ws_data.write(0, col, h)
 
-        sum_headers = ["发音人", "组别", "编号", "词语", "音节序号", "单字", "F1_均值(Hz)", "F2_均值(Hz)", "F1_中位数(Hz)", "F2_中位数(Hz)", "有效帧数"]
-        for col, h in enumerate(sum_headers):
-            ws_sum.write(0, col, h)
-
-        raw_row = 1
-        sum_row = 1
+        data_row = 1
+        group_char_pairs = []  # 有序的 (组别, 单字) 唯一列表 —— 用于分析图表页
+        seen_pairs = set()
+        raw_formant_entries = []  # 收集原始帧数据入口信息
 
         for spk in all_speakers:
             is_continuous = (self.num_rule_var.get() == "continuous")
@@ -3458,120 +3458,112 @@ class ProjectTreePanel:
                     syls = split_into_syllables(item.get('label', ''))
                     preview_times, f1_vals, f2_vals = sample_formant_points_by_bounds(item, bounds, pts, strategy)
 
-                    # 逐字写入逐点数据和摘要数据
+                    # 记录原始帧数据入口
+                    raw_formant_entries.append({
+                        'speaker': spk.name,
+                        'group': grp_name,
+                        'index': global_idx,
+                        'item': item,
+                    })
+
                     for idx_syl, (c_s, c_e) in enumerate(bounds):
                         char = syls[idx_syl] if idx_syl < len(syls) else f"字{idx_syl+1}"
                         flat_start = idx_syl * pts
-                        flat_end = flat_start + pts
 
-                        f1_slice = f1_vals[flat_start:flat_end]
-                        f2_slice = f2_vals[flat_start:flat_end]
+                        # 收集唯一的 (组别, 单字) 对
+                        pair_key = (grp_name, char)
+                        if pair_key not in seen_pairs:
+                            seen_pairs.add(pair_key)
+                            group_char_pairs.append(pair_key)
 
-                        # 逐点数据写入
                         for idx_pt in range(pts):
-                            ws_raw.write(raw_row, 0, spk.name)
-                            ws_raw.write(raw_row, 1, grp_name)
-                            ws_raw.write(raw_row, 2, global_idx)
-                            ws_raw.write(raw_row, 3, item.get('label', ''))
-                            ws_raw.write(raw_row, 4, idx_syl + 1)
-                            ws_raw.write(raw_row, 5, char)
-                            ws_raw.write(raw_row, 6, idx_pt + 1)
-                            ws_raw.write(raw_row, 7, preview_times[flat_start + idx_pt])
+                            ws_data.write(data_row, 0, spk.name)
+                            ws_data.write(data_row, 1, grp_name)
+                            ws_data.write(data_row, 2, global_idx)
+                            ws_data.write(data_row, 3, item.get('label', ''))
+                            ws_data.write(data_row, 4, idx_syl + 1)
+                            ws_data.write(data_row, 5, char)
+                            ws_data.write(data_row, 6, idx_pt + 1)
+                            ws_data.write(data_row, 7, preview_times[flat_start + idx_pt])
 
-                            f1_v = f1_slice[idx_pt]
-                            f2_v = f2_slice[idx_pt]
+                            f1_v = f1_vals[flat_start + idx_pt]
+                            f2_v = f2_vals[flat_start + idx_pt]
 
+                            # 使用空单元格代替 "--"，以便分析图表页的公式能正确引用
                             if np.isnan(f1_v):
-                                ws_raw.write_string(raw_row, 8, "--")
+                                ws_data.write(data_row, 8, "")
                             else:
-                                ws_raw.write(raw_row, 8, round(f1_v, 1))
+                                ws_data.write(data_row, 8, round(f1_v, 1))
 
                             if np.isnan(f2_v):
-                                ws_raw.write_string(raw_row, 9, "--")
+                                ws_data.write(data_row, 9, "")
                             else:
-                                ws_raw.write(raw_row, 9, round(f2_v, 1))
-                            raw_row += 1
-
-                        # 计算共振峰的成对有效统计特征
-                        f1_arr = np.array(f1_slice)
-                        f2_arr = np.array(f2_slice)
-                        valid_mask = ~np.isnan(f1_arr) & ~np.isnan(f2_arr) & (f2_arr > f1_arr)
-                        paired_f1 = f1_arr[valid_mask]
-                        paired_f2 = f2_arr[valid_mask]
-
-                        valid_cnt = int(np.sum(valid_mask))
-
-                        ws_sum.write(sum_row, 0, spk.name)
-                        ws_sum.write(sum_row, 1, grp_name)
-                        ws_sum.write(sum_row, 2, global_idx)
-                        ws_sum.write(sum_row, 3, item.get('label', ''))
-                        ws_sum.write(sum_row, 4, idx_syl + 1)
-                        ws_sum.write(sum_row, 5, char)
-
-                        if valid_cnt > 0:
-                            mean_f1 = float(np.nanmean(paired_f1))
-                            mean_f2 = float(np.nanmean(paired_f2))
-                            med_f1 = float(np.nanmedian(paired_f1))
-                            med_f2 = float(np.nanmedian(paired_f2))
-
-                            ws_sum.write(sum_row, 6, round(mean_f1, 1))
-                            ws_sum.write(sum_row, 7, round(mean_f2, 1))
-                            ws_sum.write(sum_row, 8, round(med_f1, 1))
-                            ws_sum.write(sum_row, 9, round(med_f2, 1))
-                        else:
-                            ws_sum.write_string(sum_row, 6, "--")
-                            ws_sum.write_string(sum_row, 7, "--")
-                            ws_sum.write_string(sum_row, 8, "--")
-                            ws_sum.write_string(sum_row, 9, "--")
-
-                        ws_sum.write(sum_row, 10, valid_cnt)
-                        sum_row += 1
+                                ws_data.write(data_row, 9, round(f2_v, 1))
+                            data_row += 1
 
                     global_idx += 1
 
-        tmp_path = None
-        if include_chart:
-            try:
-                from .acoustic_exporter import AcousticChartExporter
-                import tempfile
-                import time
-                import matplotlib.pyplot as plt
-                
-                exporter = AcousticChartExporter(self, self.app, all_speakers)
-                exporter.params = {
-                    'chart_type': 'formant_space',
-                    'groupby': self.app_state_params.get('groupby', 'group'),
-                    'formant_label_mode': self.app_state_params.get('formant_label_mode', '显示分组标签'),
-                    'formant_ellipse': self.app_state_params.get('formant_ellipse', '1-sigma 置信椭圆'),
-                    'formant_show_raw': self.app_state_params.get('formant_show_raw', True),
-                    'formant_time_gradient': self.app_state_params.get('formant_time_gradient', False),
-                    'formant_density_overlay': self.app_state_params.get('formant_density_overlay', False),
-                    'formant_normalization': self.app_state_params.get('formant_normalization', '原始频率 (Hz)'),
-                    'formant_axis_lock': self.app_state_params.get('formant_axis_lock', False)
-                }
-                
-                data_entries = exporter._extract_active_data(all_speakers)
-                if data_entries:
-                    fig = exporter.generate_plot(data_entries, is_preview=False)
-                    if fig:
-                        tmp_dir = os.path.join(os.path.expanduser("~"), ".phon_tracer", "tmp")
-                        os.makedirs(tmp_dir, exist_ok=True)
-                        tmp_path = os.path.join(tmp_dir, f"formant_vowel_space_{int(time.time() * 1000)}.png")
-                        fig.savefig(tmp_path, dpi=120, bbox_inches='tight')
-                        plt.close(fig)
-                        
-                        ws_sum.insert_image('M2', tmp_path)
-            except Exception as chart_err:
-                import logging
-                logging.getLogger(__name__).error(f"Error inserting formant chart: {chart_err}", exc_info=True)
+        ws_data.freeze_panes(1, 0)
+        ws_data.autofilter(0, 0, max(data_row - 1, 1), len(data_headers) - 1)
+
+        # ══════════ Sheet 2: 分析图表（全部通过 Excel 公式引用提取数据表） ══════════
+        last_data_row = data_row - 1  # 0-indexed
+        write_formant_analysis_sheet_with_formulas(
+            workbook, ws_analysis, group_char_pairs, last_data_row,
+            data_sheet_name='提取数据',
+        )
+
+        # ══════════ Sheet 3: 原始数据（逐帧共振峰帧数据） ══════════
+        raw_headers = [
+            "发音人", "组别", "编号", "词语", "音节序号", "单字",
+            "绝对时间(s)", "字内相对时间(s)", "F1(Hz)", "F2(Hz)", "状态"
+        ]
+        for col, h in enumerate(raw_headers):
+            ws_raw.write(0, col, h)
+
+        raw_row = 1
+        for entry in raw_formant_entries:
+            item = entry['item']
+            f_data = item.get('formant_data')
+            if not f_data or 'xs' not in f_data:
+                continue
+
+            xs = f_data['xs']
+            f1_arr = f_data.get('f1', np.array([]))
+            f2_arr = f_data.get('f2', np.array([]))
+
+            bounds = get_item_syllable_bounds(item)
+            syls = split_into_syllables(item.get('label', ''))
+
+            for syl_idx, (c_s, c_e) in enumerate(bounds):
+                char = syls[syl_idx] if syl_idx < len(syls) else f"字{syl_idx+1}"
+                mask = (xs >= c_s) & (xs <= c_e)
+                indices = np.where(mask)[0]
+
+                for frame_idx in indices:
+                    t = float(xs[frame_idx])
+                    f1 = float(f1_arr[frame_idx]) if frame_idx < len(f1_arr) and np.isfinite(f1_arr[frame_idx]) else 0.0
+                    f2 = float(f2_arr[frame_idx]) if frame_idx < len(f2_arr) and np.isfinite(f2_arr[frame_idx]) else 0.0
+
+                    status = "有效" if (f1 > 0 and f2 > 0 and f2 > f1) else "无效"
+
+                    ws_raw.write(raw_row, 0, entry['speaker'])
+                    ws_raw.write(raw_row, 1, entry['group'])
+                    ws_raw.write(raw_row, 2, entry['index'])
+                    ws_raw.write(raw_row, 3, item.get('label', ''))
+                    ws_raw.write(raw_row, 4, syl_idx + 1)
+                    ws_raw.write(raw_row, 5, char)
+                    ws_raw.write(raw_row, 6, round(t, 6))
+                    ws_raw.write(raw_row, 7, round(t - c_s, 6))
+                    ws_raw.write(raw_row, 8, round(f1, 1) if f1 > 0 else 0.0)
+                    ws_raw.write(raw_row, 9, round(f2, 1) if f2 > 0 else 0.0)
+                    ws_raw.write(raw_row, 10, status)
+                    raw_row += 1
+
+        ws_raw.freeze_panes(1, 0)
+        ws_raw.autofilter(0, 0, max(raw_row - 1, 1), len(raw_headers) - 1)
 
         workbook.close()
-        
-        if tmp_path and os.path.exists(tmp_path):
-            try:
-                os.remove(tmp_path)
-            except Exception:
-                pass
 
         if show_popup:
             messagebox.showinfo("成功", f"数据已成功导出至：\n{out_file}")

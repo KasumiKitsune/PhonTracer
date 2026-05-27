@@ -241,17 +241,24 @@ class AcousticChartExporter:
         }
         loc_str = loc_map.get(loc_val, "upper right")
         
+        kwargs = {
+            "markerscale": 0.55,
+            "labelspacing": 0.65
+        }
+        
         if outside_val:
             if loc_val == "右上":
-                return {"loc": "upper left", "bbox_to_anchor": (1.02, 1)}
+                kwargs.update({"loc": "upper left", "bbox_to_anchor": (1.02, 1)})
             elif loc_val == "右下":
-                return {"loc": "lower left", "bbox_to_anchor": (1.02, 0)}
+                kwargs.update({"loc": "lower left", "bbox_to_anchor": (1.02, 0)})
             elif loc_val == "左上":
-                return {"loc": "upper right", "bbox_to_anchor": (-0.02, 1)}
+                kwargs.update({"loc": "upper right", "bbox_to_anchor": (-0.02, 1)})
             elif loc_val == "左下":
-                return {"loc": "lower right", "bbox_to_anchor": (-0.02, 0)}
-        
-        return {"loc": loc_str}
+                kwargs.update({"loc": "lower right", "bbox_to_anchor": (-0.02, 0)})
+        else:
+            kwargs["loc"] = loc_str
+            
+        return kwargs
 
     # --- CORE DATA EXTRACTION ENGINE ---
     def _extract_active_data(self, speakers_list):
