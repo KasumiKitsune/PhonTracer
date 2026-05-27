@@ -535,8 +535,8 @@ class SpectrogramPanel:
                 f1_plot = f1_arr[mask].copy()
                 f2_plot = f2_arr[mask].copy()
                 
-                self.ax.plot(f_xs_filtered, f1_plot, '-o', markersize=4, linewidth=1.5, color='#F97316', zorder=5, label="F1")
-                self.ax.plot(f_xs_filtered, f2_plot, '-o', markersize=4, linewidth=1.5, color='#22C55E', zorder=5, label="F2")
+                self.ax.scatter(f_xs_filtered, f1_plot, s=18, color='#F97316', alpha=0.9, edgecolors='none', zorder=5, label="F1")
+                self.ax.scatter(f_xs_filtered, f2_plot, s=18, color='#22C55E', alpha=0.9, edgecolors='none', zorder=5, label="F2")
         else:
             self.ax2.set_visible(True)
             self.ax.set_ylim([0, 5000])

@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import customtkinter as ctk
 import csv
+import os
 import parselmouth
 import numpy as np
 import math
@@ -1647,6 +1648,43 @@ class ProjectTreePanel:
             dlg.destroy()
             def execute_export(out_path, inc_chart=False):
                 try:
+                    analysis_mode = getattr(self, 'app_state_params', {}).get('analysis_mode', 'f0')
+                    if analysis_mode == 'formant':
+                        if format_mode == 'xlsx':
+                            if mode == 'single':
+                                self._export_formant_table(out_path, all_speakers, include_chart=inc_chart, show_popup=False)
+                            elif mode == 'separate':
+                                import os
+                                for s in all_speakers:
+                                    if os.path.isdir(out_path): s_out = os.path.join(out_path, f"{s.name}.xlsx")
+                                    else:
+                                        base, ext = os.path.splitext(out_path)
+                                        s_out = f"{base}_{s.name}{ext}"
+                                    self._export_formant_table(s_out, [s], include_chart=inc_chart, show_popup=False)
+                            elif mode == 'integrated':
+                                self._export_formant_table(out_path, all_speakers, include_chart=inc_chart, show_popup=False)
+                            return True
+                        elif format_mode == 'txt':
+                            if mode == 'single':
+                                self._export_txt(out_path, tree_structure=tree_structure)
+                            elif mode == 'separate':
+                                import os
+                                for s in all_speakers:
+                                    if os.path.isdir(out_path): s_out = os.path.join(out_path, f"{s.name}.txt")
+                                    else:
+                                        base, ext = os.path.splitext(out_path)
+                                        s_out = f"{base}_{s.name}{ext}"
+                                    s_struct = self._get_items_by_group_for_dict(s.items)
+                                    orig_items = self.items
+                                    self.items = s.items
+                                    try:
+                                        self._export_txt(s_out, tree_structure=s_struct)
+                                    finally:
+                                        self.items = orig_items
+                            elif mode == 'integrated':
+                                self._export_formant_table_txt(out_path, all_speakers)
+                            return True
+
                     if mode == 'single':
                         orig_items = self.items
                         if all_speakers and len(all_speakers) == 1:
@@ -2317,6 +2355,8 @@ class ProjectTreePanel:
         is_continuous = (self.num_rule_var.get() == "continuous")
         if tree_structure is None: tree_structure = self._get_all_items_by_group()
 
+        mode = getattr(self, 'app_state_params', {}).get('analysis_mode', 'f0')
+
         with open(out_file, "w", encoding="utf-8-sig") as f:
             global_idx = 1
             for grp_name, children in tree_structure:
@@ -2326,7 +2366,11 @@ class ProjectTreePanel:
                 for child in children:
                     item = self.items[child]
                     if item['start'] is not None:
-                        txt_data = get_export_text_for_item(item, global_idx, self.app_state_params['pts'], pitch_floor=self.app_state_params.get('pitch_floor', 75.0), pitch_ceiling=self.app_state_params.get('pitch_ceiling', 600.0), voicing_threshold=self.app_state_params.get('voicing_threshold', 0.25))
+                        if mode == 'formant':
+                            from .data_utils import get_formant_export_text_for_item
+                            txt_data = get_formant_export_text_for_item(item, global_idx, self.app_state_params['pts'])
+                        else:
+                            txt_data = get_export_text_for_item(item, global_idx, self.app_state_params['pts'], pitch_floor=self.app_state_params.get('pitch_floor', 75.0), pitch_ceiling=self.app_state_params.get('pitch_ceiling', 600.0), voicing_threshold=self.app_state_params.get('voicing_threshold', 0.25))
                         f.write(txt_data)
                         global_idx += 1
 
@@ -3358,7 +3402,7 @@ class ProjectTreePanel:
         from .acoustic_exporter import AcousticChartExportDialog
         AcousticChartExportDialog(self.parent, app=self.app, project_tree=self, mode=mode, all_speakers=all_speakers)
 
-    def _export_formant_table(self, out_file, all_speakers=None):
+    def _export_formant_table(self, out_file, all_speakers=None, include_chart=False, show_popup=True):
         try:
             import xlsxwriter
         except ImportError:
@@ -3485,5 +3529,118 @@ class ProjectTreePanel:
 
                     global_idx += 1
 
+        tmp_path = None
+        if include_chart:
+            try:
+                from .acoustic_exporter import AcousticChartExporter
+                import tempfile
+                import time
+                import matplotlib.pyplot as plt
+                
+                exporter = AcousticChartExporter(self, self.app, all_speakers)
+                exporter.params = {
+                    'chart_type': 'formant_space',
+                    'groupby': self.app_state_params.get('groupby', 'group'),
+                    'formant_label_mode': self.app_state_params.get('formant_label_mode', '显示分组标签'),
+                    'formant_ellipse': self.app_state_params.get('formant_ellipse', '1-sigma 置信椭圆'),
+                    'formant_show_raw': self.app_state_params.get('formant_show_raw', True),
+                    'formant_time_gradient': self.app_state_params.get('formant_time_gradient', False),
+                    'formant_density_overlay': self.app_state_params.get('formant_density_overlay', False),
+                    'formant_normalization': self.app_state_params.get('formant_normalization', '原始频率 (Hz)'),
+                    'formant_axis_lock': self.app_state_params.get('formant_axis_lock', False)
+                }
+                
+                data_entries = exporter._extract_active_data(all_speakers)
+                if data_entries:
+                    fig = exporter.generate_plot(data_entries, is_preview=False)
+                    if fig:
+                        tmp_dir = os.path.join(os.path.expanduser("~"), ".phon_tracer", "tmp")
+                        os.makedirs(tmp_dir, exist_ok=True)
+                        tmp_path = os.path.join(tmp_dir, f"formant_vowel_space_{int(time.time() * 1000)}.png")
+                        fig.savefig(tmp_path, dpi=120, bbox_inches='tight')
+                        plt.close(fig)
+                        
+                        ws_sum.insert_image('M2', tmp_path)
+            except Exception as chart_err:
+                import logging
+                logging.getLogger(__name__).error(f"Error inserting formant chart: {chart_err}", exc_info=True)
+
         workbook.close()
-        messagebox.showinfo("成功", f"数据已成功导出至：\n{out_file}")
+        
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+
+        if show_popup:
+            messagebox.showinfo("成功", f"数据已成功导出至：\n{out_file}")
+
+    def _export_formant_table_txt(self, out_file, all_speakers=None):
+        if all_speakers is None:
+            all_speakers = [self.app.speaker_manager.get_active_speaker()]
+
+        with open(out_file, "w", encoding="utf-8-sig") as f:
+            raw_headers = ["发音人", "组别", "编号", "词语", "音节序号", "单字", "时间点序号", "时间(s)", "F1(Hz)", "F2(Hz)"]
+            f.write("\t".join(raw_headers) + "\n")
+
+            for spk in all_speakers:
+                is_continuous = (self.num_rule_var.get() == "continuous")
+                pts = int(self.app_state_params.get('pts', 11))
+                strategy = self.app_state_params.get('formant_sample_strategy', '整段11点')
+
+                groups = {}
+                for item_id, item in spk.items.items():
+                    g = item.get('group', '导入内容')
+                    if g not in groups:
+                        groups[g] = []
+                    groups[g].append(item)
+
+                from .data_utils import clean_str, get_item_syllable_bounds, sample_formant_points_by_bounds, split_into_syllables
+                sorted_groups = sorted(groups.keys(), key=clean_str)
+
+                global_idx = 1
+                for grp_name in sorted_groups:
+                    if not is_continuous:
+                        global_idx = 1
+                    items_in_grp = groups[grp_name]
+                    items_in_grp = sorted(items_in_grp, key=lambda x: clean_str(x.get('label', '')))
+
+                    for item in items_in_grp:
+                        self._ensure_item_loaded(item)
+                        if not item.get('snd') or not item.get('formant_data'):
+                            continue
+
+                        bounds = get_item_syllable_bounds(item)
+                        syls = split_into_syllables(item.get('label', ''))
+                        preview_times, f1_vals, f2_vals = sample_formant_points_by_bounds(item, bounds, pts, strategy)
+
+                        for idx_syl, (c_s, c_e) in enumerate(bounds):
+                            char = syls[idx_syl] if idx_syl < len(syls) else f"字{idx_syl+1}"
+                            flat_start = idx_syl * pts
+                            flat_end = flat_start + pts
+
+                            f1_slice = f1_vals[flat_start:flat_end]
+                            f2_slice = f2_vals[flat_start:flat_end]
+
+                            for idx_pt in range(pts):
+                                f1_v = f1_slice[idx_pt]
+                                f2_v = f2_slice[idx_pt]
+
+                                f1_str = "--" if np.isnan(f1_v) else f"{f1_v:.1f}"
+                                f2_str = "--" if np.isnan(f2_v) else f"{f2_v:.1f}"
+
+                                line_parts = [
+                                    spk.name,
+                                    grp_name,
+                                    str(global_idx),
+                                    item.get('label', ''),
+                                    str(idx_syl + 1),
+                                    char,
+                                    str(idx_pt + 1),
+                                    f"{preview_times[flat_start + idx_pt]:.6f}",
+                                    f1_str,
+                                    f2_str
+                                ]
+                                f.write("\t".join(line_parts) + "\n")
+                        global_idx += 1

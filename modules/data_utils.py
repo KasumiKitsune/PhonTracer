@@ -39,24 +39,25 @@ def split_into_syllables(word: str) -> List[str]:
     cleaned = word.strip()
     return [cleaned] if cleaned else []
 
+def clean_str(s, is_cjk_mode=None):
+    if not s: return ""
+    import unicodedata
+    s = s.replace('\ufeff', '')
+    s = unicodedata.normalize('NFC', s)
+    if is_cjk_mode is None:
+        is_cjk_mode = has_cjk(s)
+    if is_cjk_mode:
+        # 只保留 CJK 字符
+        s = "".join(re.findall(r'[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]', s))
+    else:
+        # 只保留字母(包括带声调的拉丁字母)，无视数字、斜杠、下划线及其他特殊字符
+        s = "".join(re.findall(r'[^\W\d_]', s))
+    return s.lower().strip()
+
 def fuzzy_match_word_to_path(word: str, available_paths: List[str], used_indices: Optional[List[int]] = None) -> Optional[int]:
     is_cjk_mode = has_cjk(word)
-    
-    def clean_str(s):
-        if not s: return ""
-        import unicodedata
-        s = s.replace('\ufeff', '')
-        s = unicodedata.normalize('NFC', s)
-        if is_cjk_mode:
-            # 只保留 CJK 字符
-            s = "".join(re.findall(r'[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]', s))
-        else:
-            # 只保留字母(包括带声调的拉丁字母)，无视数字、斜杠、下划线及其他特殊字符
-            s = "".join(re.findall(r'[^\W\d_]', s))
-        return s.lower().strip()
-        
     if used_indices is None: used_indices = []
-    word_clean = clean_str(word)
+    word_clean = clean_str(word, is_cjk_mode)
     if not word_clean: return None
         
     exact_matches = []
@@ -64,7 +65,7 @@ def fuzzy_match_word_to_path(word: str, available_paths: List[str], used_indices
     
     for i, p in enumerate(available_paths):
         fname_raw = os.path.splitext(os.path.basename(p))[0]
-        fname_clean = clean_str(fname_raw)
+        fname_clean = clean_str(fname_raw, is_cjk_mode)
         
         if fname_clean == word_clean:
             exact_matches.append(i)

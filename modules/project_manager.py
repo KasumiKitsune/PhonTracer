@@ -227,6 +227,12 @@ class ProjectManager:
 
     def save_to_workspace(self):
         with self._save_lock:
+            if self.app and getattr(self.app, 'active_speaker', None) and getattr(self.app, 'tabview', None):
+                try:
+                    self.app.active_speaker.tab_mode = self.app.tabview.get()
+                except Exception:
+                    pass
+
             state = {
                 "version": "1.0",
                 "active_speaker_id": self.app.speaker_manager.active_speaker_id,
@@ -451,6 +457,15 @@ class ProjectManager:
                 spk.long_audio_path = self._resolve_project_path(long_audio_rel)
                 if os.path.exists(spk.long_audio_path):
                     spk.pending_long_snd = parselmouth.Sound(spk.long_audio_path)
+
+            if spk.pending_long_snd:
+                has_independent_paths = False
+                for item_data in spk_data.get("items", {}).values():
+                    if item_data.get('path'):
+                        has_independent_paths = True
+                        break
+                if not has_independent_paths:
+                    spk.tab_mode = "单条长音频"
 
             spk.pending_batch_paths = [
                 self._resolve_project_path(p)

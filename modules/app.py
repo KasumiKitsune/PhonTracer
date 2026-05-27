@@ -1416,6 +1416,40 @@ class PhoneticsApp:
         entry.bind("<FocusOut>", on_focus_out)
         entry.bind("<Return>", lambda e: self.root.focus_set())
 
+    def _build_worker_params(self):
+        return {
+            'db': self.last_params['db'],
+            'skip_front': self.last_params['skip_front'],
+            'pitch_floor': self.last_params['pitch_floor'],
+            'pitch_ceiling': self.last_params['pitch_ceiling'],
+            'voicing_threshold': self.last_params.get('voicing_threshold', 0.25),
+            'f0_engine': self.last_params.get('f0_engine', 'praat'),
+            'analysis_mode': self.last_params.get('analysis_mode', 'f0'),
+            'formant_max_hz': self.last_params.get('formant_max_hz', 5500.0),
+            'formant_count': self.last_params.get('formant_count', 5),
+            'formant_window_length': self.last_params.get('formant_window_length', 0.025),
+            'formant_pre_emphasis': self.last_params.get('formant_pre_emphasis', 50.0),
+            'formant_sample_strategy': self.last_params.get('formant_sample_strategy', '整段11点'),
+            'pts': self.last_params.get('pts', 11),
+        }
+
+    def _stamp_formant_params_on_item(self, item, params=None):
+        params = params or self._build_worker_params()
+        item['analysis_mode'] = params.get('analysis_mode', self.last_params.get('analysis_mode', 'f0'))
+        item['formant_max_hz'] = params.get('formant_max_hz', self.last_params.get('formant_max_hz', 5500.0))
+        item['formant_count'] = params.get('formant_count', self.last_params.get('formant_count', 5))
+        item['formant_window_length'] = params.get('formant_window_length', self.last_params.get('formant_window_length', 0.025))
+        item['formant_pre_emphasis'] = params.get('formant_pre_emphasis', self.last_params.get('formant_pre_emphasis', 50.0))
+        item['formant_sample_strategy'] = params.get('formant_sample_strategy', self.last_params.get('formant_sample_strategy', '整段11点'))
+
+    def _maybe_refresh_formants_after_import(self):
+        if self.last_params.get('analysis_mode', 'f0') != 'formant':
+            return
+        for item in self.items.values():
+            if item.get('snd') and item.get('start') is not None and item.get('end') is not None and not item.get('formant_data'):
+                self.root.after(50, self.recalculate_all_formants)
+                return
+
     def on_param_change(self, event=None, recalculate_current=True):
         try:
             new_db = float(self.var_drop_db.get())
@@ -1617,7 +1651,7 @@ class PhoneticsApp:
         if hasattr(self, 'spectrogram_panel') and self.spectrogram_panel:
             self.spectrogram_panel.update_eraser_button_text()
         if mode == 'formant':
-            self.recalculate_current_item(recompute_formant_only=True)
+            self.recalculate_all_formants()
         else:
             if self.spectrogram_panel and self.spectrogram_panel.current_item:
                 self.spectrogram_panel.plot_item_spectrogram()
@@ -2338,7 +2372,7 @@ class PhoneticsApp:
             results = []
 
             # 准备参数
-            params = {'db': self.last_params['db'], 'skip_front': self.last_params['skip_front'], 'pitch_floor': self.last_params['pitch_floor'], 'pitch_ceiling': self.last_params['pitch_ceiling'], 'voicing_threshold': self.last_params.get('voicing_threshold', 0.25)}
+            params = self._build_worker_params()
             trim = self.switch_trim_silence.get()
             pitch_xs = global_pitch_data['xs']
             pitch_freqs = global_pitch_data['freqs']
@@ -2404,6 +2438,8 @@ class PhoneticsApp:
                         tasks[idx]['has_empty_data'] = res['has_empty_data']
                         tasks[idx]['split_warnings'] = res.get('split_warnings', [])
                         tasks[idx]['split_confidence'] = res.get('split_confidence', 1.0)
+                        tasks[idx]['formant_data'] = res.get('formant_data')
+                        tasks[idx]['preview_formants'] = res.get('preview_formants')
                     else:
                         tasks[idx]['missing'] = True # fallback
 
@@ -2430,6 +2466,14 @@ class PhoneticsApp:
                             'pitch_floor': params['pitch_floor'],
                             'pitch_ceiling': params['pitch_ceiling'],
                             'voicing_threshold': params['voicing_threshold'],
+                            'analysis_mode': params.get('analysis_mode', 'f0'),
+                            'formant_data': res.get('formant_data'),
+                            'preview_formants': res.get('preview_formants'),
+                            'formant_max_hz': params.get('formant_max_hz'),
+                            'formant_count': params.get('formant_count'),
+                            'formant_window_length': params.get('formant_window_length'),
+                            'formant_pre_emphasis': params.get('formant_pre_emphasis'),
+                            'formant_sample_strategy': params.get('formant_sample_strategy'),
                             'is_user_specified_structure': '/' in res['word'],
                             'split_warnings': res.get('split_warnings', []),
                             'split_confidence': res.get('split_confidence', 1.0),
@@ -2444,6 +2488,7 @@ class PhoneticsApp:
                 self.stop_loading("长音频切分完成")
                 self.tree_panel.select_first_item()
                 if hasattr(self, 'manual_segments'): self.manual_segments = None
+                self._maybe_refresh_formants_after_import()
 
             self.root.after(0, finalize)
         threading.Thread(target=run, daemon=True).start()
@@ -2464,7 +2509,7 @@ class PhoneticsApp:
 
     def start_background_batch_processing(self, paths):
         def run():
-            params = {'db': self.last_params['db'], 'skip_front': self.last_params['skip_front'], 'pitch_floor': self.last_params['pitch_floor'], 'pitch_ceiling': self.last_params['pitch_ceiling'], 'voicing_threshold': self.last_params.get('voicing_threshold', 0.25)}
+            params = self._build_worker_params()
             trim = self.switch_trim_silence.get()
             paths_to_process = [p for p in paths if p not in self.audio_cache]
             if not paths_to_process:
@@ -2496,7 +2541,7 @@ class PhoneticsApp:
             self.root.after(0, self.tree_panel.clear_all)
 
             total = len(self.pending_batch_paths)
-            params = {'db': self.last_params['db'], 'skip_front': self.last_params['skip_front'], 'pitch_floor': self.last_params['pitch_floor'], 'pitch_ceiling': self.last_params['pitch_ceiling'], 'voicing_threshold': self.last_params.get('voicing_threshold', 0.25)}
+            params = self._build_worker_params()
             trim = self.switch_trim_silence.get()
 
             results = []
@@ -2533,6 +2578,7 @@ class PhoneticsApp:
                         res['pitch_floor'] = params['pitch_floor']
                         res['pitch_ceiling'] = params['pitch_ceiling']
                         res['voicing_threshold'] = params['voicing_threshold']
+                        self._stamp_formant_params_on_item(res, params)
                         iid = f"batch_{res['label']}_{id(res)}"
                         self.items[iid] = res
                         has_empty = res.get('has_empty_data', False)
@@ -2543,6 +2589,7 @@ class PhoneticsApp:
                 self.set_status(f"批量并行提取完成 ({len(results)}/{total})")
                 self.stop_loading()
                 self.tree_panel.select_first_item()
+                self._maybe_refresh_formants_after_import()
 
             self.root.after(0, finalize)
         threading.Thread(target=run, daemon=True).start()
@@ -2590,7 +2637,7 @@ class PhoneticsApp:
                             tasks.append({'word': word, 'group': group_name, 'missing': True})
 
             results = [None] * len(tasks)
-            params = {'db': self.last_params['db'], 'skip_front': self.last_params['skip_front'], 'pitch_floor': self.last_params['pitch_floor'], 'pitch_ceiling': self.last_params['pitch_ceiling'], 'voicing_threshold': self.last_params.get('voicing_threshold', 0.25)}
+            params = self._build_worker_params()
             trim = self.switch_trim_silence.get()
 
             futures = {}
@@ -2668,6 +2715,7 @@ class PhoneticsApp:
                             res['pitch_floor'] = params['pitch_floor']
                             res['pitch_ceiling'] = params['pitch_ceiling']
                             res['voicing_threshold'] = params['voicing_threshold']
+                        self._stamp_formant_params_on_item(res, params)
                         display = f"{res['label']} ← {os.path.basename(res['path'])}" if match_mode == 'fuzzy' else res['label']
                         iid = f"batch_wl_{res['label']}_{id(res)}"
 
@@ -2687,6 +2735,7 @@ class PhoneticsApp:
 
                 self.stop_loading(f"并行处理完成: {matched_count}/{total}")
                 self.tree_panel.select_first_item()
+                self._maybe_refresh_formants_after_import()
 
             self.root.after(0, finalize)
         threading.Thread(target=run, daemon=True).start()
@@ -3085,7 +3134,7 @@ class PhoneticsApp:
             total = len(sorted_audios)
             results = [None] * total
 
-            params = {'db': self.last_params['db'], 'skip_front': self.last_params['skip_front'], 'pitch_floor': self.last_params['pitch_floor'], 'pitch_ceiling': self.last_params['pitch_ceiling'], 'voicing_threshold': self.last_params.get('voicing_threshold', 0.25)}
+            params = self._build_worker_params()
             trim = self.switch_trim_silence.get()
 
             futures = {}
@@ -3143,6 +3192,7 @@ class PhoneticsApp:
                             res['pitch_floor'] = params['pitch_floor']
                             res['pitch_ceiling'] = params['pitch_ceiling']
                             res['voicing_threshold'] = params['voicing_threshold']
+                        self._stamp_formant_params_on_item(res, params)
 
                         tp = matched_audio_to_tg.get(res['path'])
                         if tp:
@@ -3164,6 +3214,7 @@ class PhoneticsApp:
 
                 self.stop_loading(f"TextGrid 导入并匹配完成: {matched_count}/{total}")
                 self.tree_panel.select_first_item()
+                self._maybe_refresh_formants_after_import()
 
             self.root.after(0, finalize)
 
@@ -3183,7 +3234,7 @@ class PhoneticsApp:
             total = len(tg_intervals)
             results = []
 
-            params = {'db': self.last_params['db'], 'skip_front': self.last_params['skip_front'], 'pitch_floor': self.last_params['pitch_floor'], 'pitch_ceiling': self.last_params['pitch_ceiling'], 'voicing_threshold': self.last_params.get('voicing_threshold', 0.25)}
+            params = self._build_worker_params()
             trim = self.switch_trim_silence.get()
             pitch_xs = global_pitch.xs()
             pitch_freqs = global_pitch.selected_array['frequency']
@@ -3281,6 +3332,7 @@ class PhoneticsApp:
                         res['pitch_floor'] = params['pitch_floor']
                         res['pitch_ceiling'] = params['pitch_ceiling']
                         res['voicing_threshold'] = params['voicing_threshold']
+                        self._stamp_formant_params_on_item(res, params)
 
                         self.tree_panel.tree.insert(gid, tk.END, iid=iid, text=res['label'], tags=('item',))
                         self.items[iid] = res
@@ -3293,6 +3345,7 @@ class PhoneticsApp:
 
                 self.stop_loading(f"TextGrid 导入完成: {matched_count}/{total}")
                 self.tree_panel.select_first_item()
+                self._maybe_refresh_formants_after_import()
 
             self.root.after(0, finalize)
 
@@ -3697,14 +3750,12 @@ class PhoneticsApp:
             messagebox.showwarning("提示", "请先导入音频文件以进行检测。")
             return
 
-        self.start_loading("正在估算发音人 F0 分布以推荐共振峰参数...")
+        self.start_loading("正在分析共振峰最佳参数...")
 
-        # 在主线程中捕获 UI 和 Tkinter 状态，保证线程安全
         tab_mode = self.tabview.get()
         pending_long_snd = self.pending_long_snd
         long_audio_path = self.long_audio_path
-        
-        # 快照常规属性
+
         items_snapshot = []
         for item in self.items.values():
             items_snapshot.append({
@@ -3712,98 +3763,343 @@ class PhoneticsApp:
                 'macro_end': item.get('macro_end'),
                 'snd': item.get('snd'),
                 'path': item.get('path'),
-                'label': item.get('label')
+                'label': item.get('label'),
+                'start': item.get('start'),
+                'end': item.get('end')
             })
-
-        params_temp = {
-            'f0_engine': self.last_params.get('f0_engine', 'praat'),
-            'pitch_floor': 50,
-            'pitch_ceiling': 700,
-            'voicing_threshold': self.last_params.get('voicing_threshold', 0.25)
-        }
 
         def run_detection():
             try:
                 import parselmouth
                 import os
                 import numpy as np
-                from modules.audio_core import extract_f0
 
-                all_stable_f0 = []
-
+                # 1. Collect snippets
+                snippets = []
                 if tab_mode == "单条长音频":
                     snd = pending_long_snd
                     if snd is None and long_audio_path and os.path.exists(long_audio_path):
                         snd = parselmouth.Sound(long_audio_path)
-                    if snd is None:
-                        self.root.after(0, self.stop_loading)
-                        self.root.after(0, lambda: messagebox.showwarning("提示", "未找到已加载的长音频。"))
-                        return
-
-                    # 提取整段长音频的 F0
-                    pitch_data = extract_f0(snd, params_temp)
-                    times = pitch_data['xs']
-                    freqs = pitch_data['freqs']
-
+                    if snd:
+                        for item in items_snapshot:
+                            m_s = item.get('macro_start')
+                            m_e = item.get('macro_end')
+                            if m_s is not None and m_e is not None and m_e > m_s + 0.06:
+                                try:
+                                    part = snd.extract_part(from_time=m_s + 0.025, to_time=m_e - 0.025)
+                                    snippets.append(part)
+                                except Exception:
+                                    pass
+                else: # "多条独立音频"
                     for item in items_snapshot:
-                        macro_start = item.get('macro_start')
-                        macro_end = item.get('macro_end')
-                        if macro_start is None or macro_end is None:
-                            continue
-
-                        mask = (times >= macro_start) & (times <= macro_end)
-                        item_times = times[mask]
-                        item_freqs = freqs[mask]
-                        stable_f0 = self.extract_stable_f0_values(item_times, item_freqs)
-                        all_stable_f0.extend(stable_f0)
-
-                elif tab_mode == "多条独立音频":
-                    valid_items = [it for it in items_snapshot if it.get('snd') or (it.get('path') and os.path.exists(it['path']))]
-                    if not valid_items:
-                        self.root.after(0, self.stop_loading)
-                        self.root.after(0, lambda: messagebox.showwarning("提示", "没有有效的独立音频文件。"))
-                        return
-
-                    total_items = len(valid_items)
-                    for i, item in enumerate(valid_items):
-                        self.root.after(0, lambda v=((i + 1) / total_items): self.set_progress(v))
-                        self.root.after(0, lambda name=item['label'], idx=i+1: self.set_status(f"正在分析 F0 ({idx}/{total_items}): {name}...", "#3B82F6", "status_loading"))
-
                         item_snd = item.get('snd')
-                        if item_snd is None:
+                        if item_snd is None and item.get('path') and os.path.exists(item['path']):
                             try:
                                 item_snd = parselmouth.Sound(item['path'])
                             except Exception:
-                                continue
+                                pass
+                        if item_snd:
+                            t_s = item.get('start', 0.0)
+                            t_e = item.get('end', item_snd.get_total_duration())
+                            if t_e > t_s + 0.06:
+                                try:
+                                    part = item_snd.extract_part(from_time=t_s + 0.025, to_time=t_e - 0.025)
+                                    snippets.append(part)
+                                except Exception:
+                                    pass
+                            else:
+                                try:
+                                    snippets.append(item_snd)
+                                except Exception:
+                                    pass
 
+                if not snippets:
+                    self.root.after(0, self.stop_loading)
+                    self.root.after(0, lambda: messagebox.showwarning("提示", "没有有效发音片段可进行分析。"))
+                    return
+
+                # Sample at most 20 snippets to guarantee performance
+                if len(snippets) > 20:
+                    indices = np.linspace(0, len(snippets) - 1, 20, dtype=int)
+                    snippets = [snippets[idx] for idx in indices]
+
+                # 2. Scoring Helper
+                def score_config(formant_max_hz, window_length, pre_emphasis):
+                    total_frames = 0
+                    valid_frames = 0
+
+                    continuity_scores = []
+                    gap_scores = []
+                    range_scores = []
+                    fragmentation_scores = []
+                    edge_scores = []
+
+                    all_valid_f1 = []
+                    all_valid_f2 = []
+
+                    def clipped_score(value, low, high):
+                        if high <= low:
+                            return 0.0
+                        return float(np.clip((value - low) / (high - low), 0.0, 1.0))
+
+                    def adjacent_jump_rate(xs_arr, vals, threshold):
+                        vals = np.asarray(vals, dtype=float)
+                        xs_arr = np.asarray(xs_arr, dtype=float)
+                        valid = np.isfinite(vals)
+                        if np.sum(valid) < 3:
+                            return 1.0
+                        idx = np.where(valid)[0]
+                        jump_count = 0
+                        pair_count = 0
+                        for left, right in zip(idx[:-1], idx[1:]):
+                            if xs_arr[right] - xs_arr[left] > 0.055:
+                                continue
+                            pair_count += 1
+                            if abs(vals[right] - vals[left]) > threshold:
+                                jump_count += 1
+                        if pair_count == 0:
+                            return 1.0
+                        return jump_count / pair_count
+
+                    def fragmentation_penalty(valid_mask):
+                        if len(valid_mask) == 0:
+                            return 1.0
+                        runs = []
+                        run_len = 0
+                        for flag in valid_mask:
+                            if flag:
+                                run_len += 1
+                            elif run_len:
+                                runs.append(run_len)
+                                run_len = 0
+                        if run_len:
+                            runs.append(run_len)
+                        if not runs:
+                            return 1.0
+                        short = sum(r for r in runs if r < 4)
+                        return short / max(1, sum(runs))
+
+                    for snd_part in snippets:
                         try:
-                            pitch_data = extract_f0(item_snd, params_temp)
-                            stable_f0 = self.extract_stable_f0_values(pitch_data['xs'], pitch_data['freqs'])
-                            all_stable_f0.extend(stable_f0)
+                            formant = snd_part.to_formant_burg(
+                                time_step=None,
+                                max_number_of_formants=5,
+                                maximum_formant=formant_max_hz,
+                                window_length=window_length,
+                                pre_emphasis_from=pre_emphasis
+                            )
                         except Exception:
                             continue
 
-                # 判断有效有声帧是否足够
-                if len(all_stable_f0) < 50:
+                        xs = formant.xs()
+                        if len(xs) == 0:
+                            continue
+
+                        f1_vals = []
+                        f2_vals = []
+                        f3_vals = []
+                        for t in xs:
+                            f1_vals.append(formant.get_value_at_time(1, t))
+                            f2_vals.append(formant.get_value_at_time(2, t))
+                            f3_vals.append(formant.get_value_at_time(3, t))
+
+                        f1 = np.array(f1_vals)
+                        f2 = np.array(f2_vals)
+                        f3 = np.array(f3_vals)
+
+                        gap = f2 - f1
+                        valid_mask = (
+                            np.isfinite(f1) & np.isfinite(f2) &
+                            (f1 >= 90.0) & (f1 <= 1300.0) &
+                            (f2 >= 350.0) & (f2 <= min(float(formant_max_hz) * 0.96, 4200.0)) &
+                            (gap >= 120.0)
+                        )
+                        total_frames += len(xs)
+                        valid_frames += np.sum(valid_mask)
+
+                        if np.sum(valid_mask) < 4:
+                            continue
+
+                        vf1 = f1[valid_mask]
+                        vf2 = f2[valid_mask]
+                        vf3 = f3[valid_mask]
+
+                        all_valid_f1.extend(vf1.tolist())
+                        all_valid_f2.extend(vf2.tolist())
+
+                        valid_f1_series = np.where(valid_mask, f1, np.nan)
+                        valid_f2_series = np.where(valid_mask, f2, np.nan)
+                        f1_jump_threshold = max(150.0, 0.28 * np.nanmedian(vf1))
+                        f2_jump_threshold = max(260.0, 0.20 * np.nanmedian(vf2))
+                        f1_jump_rate = adjacent_jump_rate(xs, valid_f1_series, f1_jump_threshold)
+                        f2_jump_rate = adjacent_jump_rate(xs, valid_f2_series, f2_jump_threshold)
+                        continuity_scores.append(1.0 - min(1.0, 3.0 * (0.45 * f1_jump_rate + 0.55 * f2_jump_rate)))
+
+                        diff = vf2 - vf1
+                        diff_p10 = np.percentile(diff, 10)
+                        diff_cv = np.std(diff) / np.mean(diff) if np.mean(diff) > 0 else 1.0
+                        gap_score = 0.65 * clipped_score(diff_p10, 140.0, 450.0) + 0.35 * (1.0 - min(1.0, diff_cv / 0.85))
+                        gap_scores.append(gap_score)
+
+                        f1_p95 = np.percentile(vf1, 95)
+                        f2_p99 = np.percentile(vf2, 99)
+                        f1_range_penalty = clipped_score(f1_p95, 1050.0, 1450.0)
+                        f2_range_penalty = clipped_score(f2_p99, 3300.0, 4300.0)
+                        range_scores.append(1.0 - min(1.0, 0.55 * f1_range_penalty + 0.45 * f2_range_penalty))
+
+                        fragmentation_scores.append(1.0 - fragmentation_penalty(valid_mask))
+
+                        near_edge_f2 = np.sum(vf2 > 0.93 * formant_max_hz) / len(vf2)
+                        vf3_clean = vf3[np.isfinite(vf3)]
+                        near_edge_f3 = np.sum(vf3_clean > 0.93 * formant_max_hz) / len(vf3_clean) if len(vf3_clean) > 0 else 0.0
+                        edge_scores.append(1.0 - min(1.0, 0.7 * near_edge_f2 + 0.3 * near_edge_f3))
+
+                    if total_frames == 0:
+                        return 0.0, 0.0, np.nan, np.nan
+
+                    valid_rate = valid_frames / total_frames
+                    coverage_score = min(1.0, valid_rate / 0.82)
+                    continuity_score = np.mean(continuity_scores) if continuity_scores else 0.0
+                    gap_score = np.mean(gap_scores) if gap_scores else 0.0
+                    range_score = np.mean(range_scores) if range_scores else 0.0
+                    fragmentation_score = np.mean(fragmentation_scores) if fragmentation_scores else 0.0
+                    edge_score = np.mean(edge_scores) if edge_scores else 0.0
+
+                    quality_score = (
+                        0.22 * coverage_score +
+                        0.30 * continuity_score +
+                        0.22 * gap_score +
+                        0.12 * range_score +
+                        0.08 * fragmentation_score +
+                        0.06 * edge_score
+                    )
+
+                    if valid_rate < 0.25:
+                        quality_score *= 0.55
+
+                    # Prefer a lower ceiling when the observed F1/F2 quality is effectively tied.
+                    quality_score *= (1.0 - max(0.0, formant_max_hz - 5000.0) / 30000.0)
+
+                    median_f1 = np.median(all_valid_f1) if all_valid_f1 else np.nan
+                    median_f2 = np.median(all_valid_f2) if all_valid_f2 else np.nan
+
+                    return quality_score, valid_rate, median_f1, median_f2
+
+                # 3. Coarse search
+                coarse_candidates = [3500, 4000, 4500, 5000, 5500, 6000, 6500]
+                coarse_results = {}
+                for h in coarse_candidates:
+                    score, vr, m_f1, m_f2 = score_config(h, 0.025, 50)
+                    coarse_results[h] = {
+                        'score': score,
+                        'valid_rate': vr,
+                        'med_f1': m_f1,
+                        'med_f2': m_f2
+                    }
+
+                # Apply consistency drift penalty
+                final_coarse_scores = {}
+                for i, h in enumerate(coarse_candidates):
+                    res = coarse_results[h]
+                    score = res['score']
+                    med_f1 = res['med_f1']
+                    med_f2 = res['med_f2']
+                    drift_penalty = 1.0
+
+                    if i > 0:
+                        left_res = coarse_results[coarse_candidates[i-1]]
+                        if np.isfinite(med_f1) and np.isfinite(left_res['med_f1']) and abs(med_f1 - left_res['med_f1']) > 100:
+                            drift_penalty *= 0.85
+                        if np.isfinite(med_f2) and np.isfinite(left_res['med_f2']) and abs(med_f2 - left_res['med_f2']) > 200:
+                            drift_penalty *= 0.85
+
+                    if i < len(coarse_candidates) - 1:
+                        right_res = coarse_results[coarse_candidates[i+1]]
+                        if np.isfinite(med_f1) and np.isfinite(right_res['med_f1']) and abs(med_f1 - right_res['med_f1']) > 100:
+                            drift_penalty *= 0.85
+                        if np.isfinite(med_f2) and np.isfinite(right_res['med_f2']) and abs(med_f2 - right_res['med_f2']) > 200:
+                            drift_penalty *= 0.85
+
+                    final_coarse_scores[h] = score * drift_penalty
+
+                best_coarse_h = max(coarse_candidates, key=lambda h: final_coarse_scores[h])
+
+                # 4. Fine search
+                fine_h_candidates = [
+                    best_coarse_h - 500,
+                    best_coarse_h - 250,
+                    best_coarse_h,
+                    best_coarse_h + 250,
+                    best_coarse_h + 500
+                ]
+                fine_h_candidates = [h for h in fine_h_candidates if 3000 <= h <= 7000]
+
+                win_candidates = [0.020, 0.025, 0.030, 0.035]
+                pre_candidates = [50, 80, 100]
+
+                best_score = -1.0
+                best_config = None
+                all_fine_results = []
+
+                total_steps = len(fine_h_candidates) * len(win_candidates) * len(pre_candidates)
+                step_idx = 0
+
+                for h in fine_h_candidates:
+                    for win in win_candidates:
+                        for pre in pre_candidates:
+                            score, vr, _, _ = score_config(h, win, pre)
+                            all_fine_results.append((h, win, pre, score))
+                            if score > best_score:
+                                best_score = score
+                                best_config = (h, 5, win, pre, score)
+                            step_idx += 1
+                            if step_idx % 5 == 0 or step_idx == total_steps:
+                                self.root.after(0, lambda v=step_idx/total_steps: self.set_progress(v))
+
+                if best_config is None:
                     self.root.after(0, self.stop_loading)
-                    self.root.after(0, lambda: messagebox.showwarning("无法可靠建议", "有效有声数据太少，无法进行可靠建议。请先导入更多音频，或确保当前音频包含足够稳定发音段。"))
+                    self.root.after(0, lambda: messagebox.showwarning("提示", "未找到有效的最佳配置。"))
                     return
 
-                # 计算百分位数与稳定时长
-                p5 = float(np.percentile(all_stable_f0, 5))
-                p10 = float(np.percentile(all_stable_f0, 10))
-                p50 = float(np.percentile(all_stable_f0, 50))
-                p90 = float(np.percentile(all_stable_f0, 90))
-                p95 = float(np.percentile(all_stable_f0, 95))
-                voiced_duration = len(all_stable_f0) * 0.01
+                # Determine insufficient data
+                voiced_duration = 0.0
+                for s in snippets:
+                    try:
+                        voiced_duration += float(s.get_total_duration())
+                    except Exception:
+                        pass
+                insufficient_data = voiced_duration < 0.5
 
-                # 基于基频声腔生理特征推荐共振峰预设 (精细/推荐/保守，越低越准确，越高越保守)
-                if p50 < 160.0:
-                    rec_preset = "精细范围"
-                elif p50 <= 250.0:
-                    rec_preset = "推荐范围"
+                # Generate gears
+                # 1. Recommended
+                reco_params = best_config
+
+                # 2. Anti-misalignment (lower max_hz, longer window)
+                anti_candidates = [
+                    cfg for cfg in all_fine_results 
+                    if cfg[1] >= 0.030 and cfg[0] <= reco_params[0] - 250 and cfg[3] >= best_score - 0.18
+                ]
+                if not anti_candidates:
+                    anti_candidates = [
+                        cfg for cfg in all_fine_results
+                        if cfg[1] >= 0.025 and cfg[0] <= reco_params[0] and cfg[3] >= best_score - 0.25
+                    ]
+                if anti_candidates:
+                    best_anti = max(anti_candidates, key=lambda c: (c[3], -c[0], c[1]))
+                    anti_params = (best_anti[0], 5, best_anti[1], best_anti[2], best_anti[3])
                 else:
-                    rec_preset = "保守范围"
+                    anti_params = (reco_params[0], 5, max(0.025, reco_params[2]), reco_params[3], reco_params[4] * 0.9)
+
+                # 3. High-resolution (shorter window, score within 0.05 of best)
+                fine_candidates = [
+                    cfg for cfg in all_fine_results
+                    if cfg[1] <= 0.025 and cfg[3] >= best_score - 0.08
+                ]
+                if fine_candidates:
+                    best_fine = sorted(fine_candidates, key=lambda c: (c[1], -c[3]))[0]
+                    fine_params = (best_fine[0], 5, best_fine[1], best_fine[2], best_fine[3])
+                else:
+                    fine_params = (reco_params[0], 5, min(0.025, reco_params[2]), reco_params[3], reco_params[4] * 0.9)
 
                 def show_result_dialog():
                     self.stop_loading()
@@ -3811,14 +4107,11 @@ class PhoneticsApp:
                     FormantDetectionDialog(
                         parent=self.root,
                         app=self,
-                        p5=p5,
-                        p10=p10,
-                        p50=p50,
-                        p90=p90,
-                        p95=p95,
-                        stable_count=len(all_stable_f0),
-                        stable_duration=voiced_duration,
-                        recommended_preset=rec_preset
+                        voiced_duration=voiced_duration,
+                        insufficient_data=insufficient_data,
+                        reco_params=reco_params,
+                        anti_params=anti_params,
+                        fine_params=fine_params
                     )
 
                 self.root.after(0, show_result_dialog)
@@ -3830,22 +4123,144 @@ class PhoneticsApp:
         import threading
         threading.Thread(target=run_detection, daemon=True).start()
 
-    def apply_formant_bounds(self, max_hz, win_len, pre_emphasis):
-        self.entry_formant_max_hz.delete(0, tk.END)
-        self.entry_formant_max_hz.insert(0, str(float(max_hz)))
-        if hasattr(self.entry_formant_max_hz, '_last_val'):
-            self.entry_formant_max_hz._last_val = str(float(max_hz))
+    def apply_formant_params(self, max_hz, count, window_length, pre_emphasis):
+        # Update entry fields UI
+        if hasattr(self, 'entry_formant_max_hz') and self.entry_formant_max_hz:
+            self.entry_formant_max_hz.delete(0, tk.END)
+            self.entry_formant_max_hz.insert(0, str(float(max_hz)))
+            if hasattr(self.entry_formant_max_hz, '_last_val'):
+                self.entry_formant_max_hz._last_val = str(float(max_hz))
+                
+        if hasattr(self, 'entry_formant_count') and self.entry_formant_count:
+            self.entry_formant_count.delete(0, tk.END)
+            self.entry_formant_count.insert(0, str(int(count)))
+            if hasattr(self.entry_formant_count, '_last_val'):
+                self.entry_formant_count._last_val = str(int(count))
 
-        self.entry_formant_window_length.delete(0, tk.END)
-        self.entry_formant_window_length.insert(0, f"{win_len:.3f}")
-        if hasattr(self.entry_formant_window_length, '_last_val'):
-            self.entry_formant_window_length._last_val = f"{win_len:.3f}"
+        if hasattr(self, 'entry_formant_window_length') and self.entry_formant_window_length:
+            self.entry_formant_window_length.delete(0, tk.END)
+            self.entry_formant_window_length.insert(0, f"{float(window_length):.3f}")
+            if hasattr(self.entry_formant_window_length, '_last_val'):
+                self.entry_formant_window_length._last_val = f"{float(window_length):.3f}"
 
-        self.entry_formant_pre_emphasis.delete(0, tk.END)
-        self.entry_formant_pre_emphasis.insert(0, str(float(pre_emphasis)))
-        if hasattr(self.entry_formant_pre_emphasis, '_last_val'):
-            self.entry_formant_pre_emphasis._last_val = str(float(pre_emphasis))
+        if hasattr(self, 'entry_formant_pre_emphasis') and self.entry_formant_pre_emphasis:
+            self.entry_formant_pre_emphasis.delete(0, tk.END)
+            self.entry_formant_pre_emphasis.insert(0, str(float(pre_emphasis)))
+            if hasattr(self.entry_formant_pre_emphasis, '_last_val'):
+                self.entry_formant_pre_emphasis._last_val = str(float(pre_emphasis))
 
-        self.on_param_change(recalculate_current=False)
-        self.recalculate_all_audio(recompute_pitch=False, only_pitch_changed=True)
+        # Sync to self.last_params
+        self.last_params['formant_max_hz'] = float(max_hz)
+        self.last_params['formant_count'] = int(count)
+        self.last_params['formant_window_length'] = float(window_length)
+        self.last_params['formant_pre_emphasis'] = float(pre_emphasis)
+
+        self.recalculate_all_formants()
+
+    def recalculate_all_formants(self):
+        if not self.items: return
+
+        # Ensure last params is synced
+        try:
+            self.on_param_change(recalculate_current=False)
+        except Exception:
+            pass
+
+        items_snapshot = list(self.items.items())
+        total = len(items_snapshot)
+
+        def run():
+            self.root.after(0, lambda: self.start_loading("正在重新计算共振峰..."))
+            
+            import parselmouth
+            import os
+            from modules.audio_core import _sample_formants_helper
+            
+            params = {
+                'formant_max_hz': self.last_params.get('formant_max_hz', 5500.0),
+                'formant_count': self.last_params.get('formant_count', 5),
+                'formant_window_length': self.last_params.get('formant_window_length', 0.025),
+                'formant_pre_emphasis': self.last_params.get('formant_pre_emphasis', 50.0),
+                'formant_sample_strategy': self.last_params.get('formant_sample_strategy', '整段11点'),
+                'pts': self.last_params.get('pts', 11),
+                'analysis_mode': 'formant'
+            }
+
+            for i, (iid, item) in enumerate(items_snapshot):
+                snd = item.get('snd')
+                if not snd and item.get('path') and os.path.exists(item['path']):
+                    try:
+                        snd = parselmouth.Sound(item['path'])
+                        item['snd'] = snd
+                    except Exception:
+                        pass
+                
+                if snd and item.get('start') is not None and item.get('end') is not None:
+                    try:
+                        mic_s = item['start']
+                        mic_e = item['end']
+                        
+                        is_long = ('macro_start' in item and 'macro_end' in item and snd.get_total_duration() > 15.0)
+                        
+                        if is_long:
+                            ms = item['macro_start']
+                            me = item['macro_end']
+                            valid_ms = max(0, ms)
+                            valid_me = min(snd.get_total_duration(), me)
+                            
+                            padding = 1.0
+                            seg_start = max(0.0, valid_ms - padding)
+                            seg_end = min(snd.get_total_duration(), valid_me + padding)
+                            part_snd = snd.extract_part(from_time=seg_start, to_time=seg_end)
+                            
+                            rel_s = mic_s - seg_start
+                            rel_e = mic_e - seg_start
+                            
+                            formant_data, preview_formants = _sample_formants_helper(part_snd, rel_s, rel_e, params)
+                            formant_data['xs'] = formant_data['xs'] + seg_start
+                        else:
+                            formant_data, preview_formants = _sample_formants_helper(snd, mic_s, mic_e, params)
+                            
+                        item['formant_data'] = formant_data
+                        item['preview_formants'] = preview_formants
+                        
+                        item['formant_max_hz'] = params['formant_max_hz']
+                        item['formant_count'] = params['formant_count']
+                        item['formant_window_length'] = params['formant_window_length']
+                        item['formant_pre_emphasis'] = params['formant_pre_emphasis']
+                        item['formant_sample_strategy'] = params['formant_sample_strategy']
+                        
+                        if item.get('path'):
+                            if item['path'] in self.audio_cache:
+                                cache_item = self.audio_cache[item['path']]
+                                cache_item['formant_data'] = formant_data
+                                cache_item['preview_formants'] = preview_formants
+                                cache_item['formant_max_hz'] = params['formant_max_hz']
+                                cache_item['formant_count'] = params['formant_count']
+                                cache_item['formant_window_length'] = params['formant_window_length']
+                                cache_item['formant_pre_emphasis'] = params['formant_pre_emphasis']
+                                cache_item['formant_sample_strategy'] = params['formant_sample_strategy']
+                    except Exception as e:
+                        import logging
+                        logging.getLogger(__name__).error(f"Error recalculating formant: {e}")
+                
+                if i % 5 == 0 or i == total - 1:
+                    self.root.after(0, lambda v=(i + 1) / total: self.set_progress(v))
+
+            def finalize():
+                if self.spectrogram_panel.current_item:
+                    self.spectrogram_panel.plot_item_spectrogram()
+                    self.spectrogram_panel.update_ui_times()
+
+                for iid in list(self.items.keys()):
+                    self.tree_panel.update_item_icon(iid)
+
+                self.tree_panel.update_preview()
+                self.mark_modified()
+                self.stop_loading("共振峰参数已应用，重算完成")
+
+            self.root.after(0, finalize)
+
+        import threading
+        threading.Thread(target=run, daemon=True).start()
 

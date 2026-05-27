@@ -1812,7 +1812,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
         out_file = args[1]
 
         # Scientific/Advanced Visualization Toolbox integration
-        scientific_charts = {'contour', 'distribution', 'density', 'quality', 'overview_heatmap'}
+        scientific_charts = {'contour', 'distribution', 'density', 'quality', 'overview_heatmap', 'formant_space', 'formant_trajectory', 'formant_density'}
         if fmt in scientific_charts:
             # Parse parameters:
             # Positional arguments: target
@@ -1890,7 +1890,12 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                 print('{"success": False, "error": "No items to export"}')
                 return
 
+            old_mode = self.params.get('analysis_mode')
             try:
+                if fmt.startswith('formant_'):
+                    self.params['analysis_mode'] = 'formant'
+                    params['analysis_mode'] = 'formant'
+
                 if scope == 'separate':
                     os.makedirs(out_file, exist_ok=True)
                     for speaker in all_speakers:
@@ -1903,12 +1908,17 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                     # active or integrated
                     data = exporter._get_current_data_entries()
                     if not data:
-                        print('{"success": False, "error": "No valid pitch data found for export"}')
+                        print('{"success": False, "error": "No valid data found for export"}')
                         return
                     exporter._export_dataset(data, out_file, ext)
                     print(json.dumps({"success": True, "message": f"Exported {fmt} ({scope}) to {out_file}"}))
             except Exception as e:
                 print(json.dumps({"success": False, "error": str(e)}))
+            finally:
+                if old_mode is not None:
+                    self.params['analysis_mode'] = old_mode
+                elif 'analysis_mode' in self.params:
+                    del self.params['analysis_mode']
             return
 
         rule = args[2] if len(args) > 2 else 'continuous'

@@ -8,6 +8,9 @@ import matplotlib
 
 matplotlib.use("Agg", force=True)
 
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, message=".*Tight layout not applied.*")
+
 from scipy.stats import gaussian_kde
 from .data_utils import split_into_syllables, get_export_text_for_item, get_item_syllable_bounds, sample_formant_points_by_bounds
 
@@ -194,6 +197,8 @@ class AcousticChartExporter:
             'formant_label_mode': lambda: getattr(self, 'combo_formant_label_mode').get() if hasattr(self, 'combo_formant_label_mode') else None,
             'formant_show_raw': lambda: getattr(self, 'var_formant_show_raw').get() if hasattr(self, 'var_formant_show_raw') else None,
             'formant_time_gradient': lambda: getattr(self, 'var_formant_time_gradient').get() if hasattr(self, 'var_formant_time_gradient') else None,
+            'formant_normalization': lambda: getattr(self, 'combo_formant_normalization').get() if hasattr(self, 'combo_formant_normalization') else None,
+            'formant_axis_lock': lambda: getattr(self, 'var_formant_axis_lock').get() if hasattr(self, 'var_formant_axis_lock') else None,
 
             # formant density specific
             'formant_density_overlay': lambda: getattr(self, 'var_formant_density_overlay').get() if hasattr(self, 'var_formant_density_overlay') else None,
@@ -1799,7 +1804,7 @@ class AcousticChartExporter:
                 all_tau.extend(s_tau.tolist())
         return np.asarray(all_f1, dtype=float), np.asarray(all_f2, dtype=float), np.asarray(all_tau, dtype=float)
 
-    def _draw_formant_density_layer(self, ax, data_entries, show_raw=False, show_contours=True, bw_method=None, alpha_max=0.58, zorder=1):
+    def _draw_formant_density_layer(self, ax, data_entries, show_raw=False, show_contours=True, bw_method=None, alpha_max=0.58, zorder=1, transform_fn=None):
         self._report_export_progress(0.24, "正在收集共振峰时空密度数据...")
         all_f1, all_f2, all_tau = self._get_formant_density_points(data_entries)
         if len(all_f1) < 4:
@@ -1810,12 +1815,20 @@ class AcousticChartExporter:
         if len(all_f1) < 4:
             return None, [], []
 
+        if transform_fn is not None:
+            all_f1, all_f2 = transform_fn(all_f1, all_f2)
+
         f1_p1, f1_p99 = np.percentile(all_f1, 1.0), np.percentile(all_f1, 99.0)
         f2_p1, f2_p99 = np.percentile(all_f2, 1.0), np.percentile(all_f2, 99.0)
-        f1_pad = (f1_p99 - f1_p1) * 0.16 if f1_p99 > f1_p1 else 100.0
-        f2_pad = (f2_p99 - f2_p1) * 0.16 if f2_p99 > f2_p1 else 150.0
-        f1_grid_min, f1_grid_max = max(50.0, f1_p1 - f1_pad), f1_p99 + f1_pad
-        f2_grid_min, f2_grid_max = max(500.0, f2_p1 - f2_pad), f2_p99 + f2_pad
+        
+        norm_mode = self.get_param('formant_normalization', '原始频率 (Hz)')
+        is_hz = "Hz" in norm_mode
+        
+        f1_pad = (f1_p99 - f1_p1) * 0.16 if f1_p99 > f1_p1 else (100.0 if is_hz else 0.5)
+        f2_pad = (f2_p99 - f2_p1) * 0.16 if f2_p99 > f2_p1 else (150.0 if is_hz else 0.8)
+        
+        f1_grid_min, f1_grid_max = (max(50.0, f1_p1 - f1_pad) if is_hz else (f1_p1 - f1_pad)), f1_p99 + f1_pad
+        f2_grid_min, f2_grid_max = (max(500.0, f2_p1 - f2_pad) if is_hz else (f2_p1 - f2_pad)), f2_p99 + f2_pad
 
         grid_n = 190
         grid_f2, grid_f1 = np.meshgrid(
@@ -1897,7 +1910,7 @@ class AcousticChartExporter:
         sm.set_array([])
         return sm, all_f1.tolist(), all_f2.tolist()
 
-    def _draw_formant_space_panel(self, ax, data_entries, groupby_val, label_mode, ellipse_mode, show_raw, time_gradient, density_overlay, density_sm_holder=None):
+    def _draw_formant_space_panel(self, ax, data_entries, groupby_val, label_mode, ellipse_mode, show_raw, time_gradient, density_overlay, density_sm_holder=None, transform_fn=None, fixed_limits=None):
         ax.set_facecolor("#F8FAFC")
         ax.grid(True, linestyle="--", alpha=0.25, linewidth=0.8)
 
@@ -1909,7 +1922,8 @@ class AcousticChartExporter:
                 show_contours=self.get_param('formant_density_show_contours', True),
                 bw_method=self.get_param('formant_density_bw', 0.14),
                 alpha_max=0.52,
-                zorder=1
+                zorder=1,
+                transform_fn=transform_fn
             )
             if sm is not None and density_sm_holder is not None and density_sm_holder.get('sm') is None:
                 density_sm_holder['sm'] = sm
@@ -1935,6 +1949,9 @@ class AcousticChartExporter:
                 if len(s_f1) == 0:
                     continue
                 
+                if transform_fn is not None:
+                    s_f1, s_f2 = transform_fn(s_f1, s_f2)
+                
                 cat = self._get_syl_category(entry, syl, groupby_val)
                 if cat not in category_data:
                     category_data[cat] = {
@@ -1951,6 +1968,8 @@ class AcousticChartExporter:
                 traj_f1 = np.asarray(syl.get('f1', []), dtype=float)
                 traj_f2 = np.asarray(syl.get('f2', []), dtype=float)
                 if len(traj_f1) > 0 and len(traj_f2) > 0:
+                    if transform_fn is not None:
+                        traj_f1, traj_f2 = transform_fn(traj_f1, traj_f2)
                     category_data[cat]['trajs_f1'].append(traj_f1)
                     category_data[cat]['trajs_f2'].append(traj_f2)
 
@@ -2049,20 +2068,39 @@ class AcousticChartExporter:
         ax.invert_xaxis()
         ax.invert_yaxis()
 
-        if all_f1_plotted and all_f2_plotted:
+        if fixed_limits is not None:
+            ymin, ymax, xmin, xmax = fixed_limits
+            ax.set_ylim(ymin, ymax)
+            ax.set_xlim(xmin, xmax)
+        elif all_f1_plotted and all_f2_plotted:
             limit_f1 = all_f1_plotted + density_f1
             limit_f2 = all_f2_plotted + density_f2
             f1_p1, f1_p99 = np.percentile(limit_f1, 1.0), np.percentile(limit_f1, 99.0)
             f2_p1, f2_p99 = np.percentile(limit_f2, 1.0), np.percentile(limit_f2, 99.0)
             
-            f1_pad = (f1_p99 - f1_p1) * 0.15 if f1_p99 > f1_p1 else 100.0
-            f2_pad = (f2_p99 - f2_p1) * 0.15 if f2_p99 > f2_p1 else 150.0
+            norm_mode = self.get_param('formant_normalization', '原始频率 (Hz)')
+            is_hz = "Hz" in norm_mode
             
-            ax.set_ylim(f1_p99 + f1_pad, max(50.0, f1_p1 - f1_pad))
-            ax.set_xlim(f2_p99 + f2_pad, max(500.0, f2_p1 - f2_pad))
+            f1_pad = (f1_p99 - f1_p1) * 0.15 if f1_p99 > f1_p1 else (100.0 if is_hz else 0.5)
+            f2_pad = (f2_p99 - f2_p1) * 0.15 if f2_p99 > f2_p1 else (150.0 if is_hz else 0.8)
+            
+            ax.set_ylim(f1_p99 + f1_pad, max(50.0, f1_p1 - f1_pad) if is_hz else (f1_p1 - f1_pad))
+            ax.set_xlim(f2_p99 + f2_pad, max(500.0, f2_p1 - f2_pad) if is_hz else (f2_p1 - f2_pad))
 
-        ax.set_xlabel("F2 (Hz)", fontsize=12, fontweight='bold', labelpad=10)
-        ax.set_ylabel("F1 (Hz)", fontsize=12, fontweight='bold', labelpad=10)
+        norm_mode = self.get_param('formant_normalization', '原始频率 (Hz)')
+        if "Bark" in norm_mode or "巴克" in norm_mode:
+            ax.set_xlabel("F2 (Bark)", fontsize=12, fontweight='bold', labelpad=10)
+            ax.set_ylabel("F1 (Bark)", fontsize=12, fontweight='bold', labelpad=10)
+        elif "Mel" in norm_mode or "美尔" in norm_mode:
+            ax.set_xlabel("F2 (Mel)", fontsize=12, fontweight='bold', labelpad=10)
+            ax.set_ylabel("F1 (Mel)", fontsize=12, fontweight='bold', labelpad=10)
+        elif "Lobanov" in norm_mode or "归一化" in norm_mode or "L-归一化" in norm_mode:
+            ax.set_xlabel("F2 (Z-score)", fontsize=12, fontweight='bold', labelpad=10)
+            ax.set_ylabel("F1 (Z-score)", fontsize=12, fontweight='bold', labelpad=10)
+        else:
+            ax.set_xlabel("F2 (Hz)", fontsize=12, fontweight='bold', labelpad=10)
+            ax.set_ylabel("F1 (Hz)", fontsize=12, fontweight='bold', labelpad=10)
+            
         return all_f1_plotted, all_f2_plotted
 
     def _add_formant_density_colorbar(self, fig, axes, sm):
@@ -2090,6 +2128,61 @@ class AcousticChartExporter:
         setattr(fig, "_phontracer_skip_tight_layout", True)
         return cb
 
+    def _build_formant_normalizer(self, ref_entries, mode):
+        if not ref_entries:
+            return lambda f1, f2: (f1, f2)
+        
+        if "Bark" in mode or "巴克" in mode:
+            def to_bark(f1, f2):
+                f1 = np.asarray(f1, dtype=float)
+                f2 = np.asarray(f2, dtype=float)
+                b1 = 26.81 * f1 / (1960.0 + f1) - 0.53
+                b2 = 26.81 * f2 / (1960.0 + f2) - 0.53
+                return b1, b2
+            return to_bark
+            
+        elif "Mel" in mode or "美尔" in mode:
+            def to_mel(f1, f2):
+                f1 = np.asarray(f1, dtype=float)
+                f2 = np.asarray(f2, dtype=float)
+                m1 = 2595.0 * np.log10(1.0 + f1 / 700.0)
+                m2 = 2595.0 * np.log10(1.0 + f2 / 700.0)
+                return m1, m2
+            return to_mel
+            
+        elif "Lobanov" in mode or "归一化" in mode or "L-归一化" in mode:
+            all_f1, all_f2 = [], []
+            for entry in ref_entries:
+                f1_arr = np.asarray(entry.get('raw_f1', []), dtype=float)
+                f2_arr = np.asarray(entry.get('raw_f2', []), dtype=float)
+                valid = np.isfinite(f1_arr) & np.isfinite(f2_arr) & (f2_arr > f1_arr)
+                all_f1.extend(f1_arr[valid].tolist())
+                all_f2.extend(f2_arr[valid].tolist())
+                for syl in entry.get('syl_formants', []):
+                    f1_pts = np.asarray(syl.get('f1', []), dtype=float)
+                    f2_pts = np.asarray(syl.get('f2', []), dtype=float)
+                    valid_syl = np.isfinite(f1_pts) & np.isfinite(f2_pts)
+                    all_f1.extend(f1_pts[valid_syl].tolist())
+                    all_f2.extend(f2_pts[valid_syl].tolist())
+                        
+            mean_f1 = np.mean(all_f1) if all_f1 else 500.0
+            std_f1 = np.std(all_f1) if all_f1 else 100.0
+            if std_f1 < 1e-3: std_f1 = 1.0
+            
+            mean_f2 = np.mean(all_f2) if all_f2 else 1500.0
+            std_f2 = np.std(all_f2) if all_f2 else 250.0
+            if std_f2 < 1e-3: std_f2 = 1.0
+            
+            def to_lobanov(f1, f2):
+                f1 = np.asarray(f1, dtype=float)
+                f2 = np.asarray(f2, dtype=float)
+                return (f1 - mean_f1) / std_f1, (f2 - mean_f2) / std_f2
+                
+            return to_lobanov
+            
+        else:
+            return lambda f1, f2: (f1, f2)
+
     def _plot_formant_vowel_space(self, data_entries, group_key, scale):
         groupby_val = self.get_param('groupby', 'group')
         label_mode = self.get_param('formant_label_mode', '显示分组标签')
@@ -2098,6 +2191,48 @@ class AcousticChartExporter:
         time_gradient = self.get_param('formant_time_gradient', False)
         density_overlay = bool(self.get_param('formant_density_overlay', False))
         facet_val = self.get_param('formant_density_facet', '单图展示 (不分面)')
+
+        normalization_mode = self.get_param('formant_normalization', '原始频率 (Hz)')
+        lock_axes = bool(self.get_param('formant_axis_lock', False))
+        axis_ref_entries = self.get_param('formant_axis_ref_entries', data_entries)
+        
+        transform_fn = self._build_formant_normalizer(axis_ref_entries, normalization_mode)
+        
+        fixed_limits = None
+        if lock_axes:
+            ref_f1, ref_f2 = [], []
+            for entry in axis_ref_entries:
+                xs = np.asarray(entry.get('raw_xs', []), dtype=float)
+                f1_arr = np.asarray(entry.get('raw_f1', []), dtype=float)
+                f2_arr = np.asarray(entry.get('raw_f2', []), dtype=float)
+                mask = np.isfinite(f1_arr) & np.isfinite(f2_arr) & (f2_arr > f1_arr)
+                if np.any(mask):
+                    ref_f1.extend(f1_arr[mask].tolist())
+                    ref_f2.extend(f2_arr[mask].tolist())
+                for syl in entry.get('syl_formants', []):
+                    f1_pts = np.asarray(syl.get('f1', []), dtype=float)
+                    f2_pts = np.asarray(syl.get('f2', []), dtype=float)
+                    valid_syl = np.isfinite(f1_pts) & np.isfinite(f2_pts)
+                    ref_f1.extend(f1_pts[valid_syl].tolist())
+                    ref_f2.extend(f2_pts[valid_syl].tolist())
+            
+            if ref_f1 and ref_f2:
+                ref_f1, ref_f2 = transform_fn(np.array(ref_f1), np.array(ref_f2))
+                f1_p1, f1_p99 = np.percentile(ref_f1, 1.0), np.percentile(ref_f1, 99.0)
+                f2_p1, f2_p99 = np.percentile(ref_f2, 1.0), np.percentile(ref_f2, 99.0)
+                
+                is_hz = "Hz" in normalization_mode
+                f1_pad = (f1_p99 - f1_p1) * 0.15 if f1_p99 > f1_p1 else (100.0 if is_hz else 0.5)
+                f2_pad = (f2_p99 - f2_p1) * 0.15 if f2_p99 > f2_p1 else (150.0 if is_hz else 0.8)
+                
+                if is_hz:
+                    ymin, ymax = f1_p99 + f1_pad, max(50.0, f1_p1 - f1_pad)
+                    xmin, xmax = f2_p99 + f2_pad, max(500.0, f2_p1 - f2_pad)
+                else:
+                    ymin, ymax = f1_p99 + f1_pad, f1_p1 - f1_pad
+                    xmin, xmax = f2_p99 + f2_pad, f2_p1 - f2_pad
+                
+                fixed_limits = (ymin, ymax, xmin, xmax)
 
         facet_specs = [("Default", data_entries)]
         if facet_val in ("按字表组分面", "group"):
@@ -2129,7 +2264,8 @@ class AcousticChartExporter:
             ax = axes_flat[idx]
             self._draw_formant_space_panel(
                 ax, facet_entries, groupby_val, label_mode, ellipse_mode,
-                show_raw, time_gradient, density_overlay, density_sm_holder
+                show_raw, time_gradient, density_overlay, density_sm_holder,
+                transform_fn=transform_fn, fixed_limits=fixed_limits
             )
             title_text = "元音共振峰空间分布图" if facet_name == "Default" else str(facet_name)
             if len(title_text) > 28:
@@ -2168,6 +2304,10 @@ class AcousticChartExporter:
 
         show_raw = self.get_param('formant_density_show_raw', False)
         show_contours = self.get_param('formant_density_show_contours', True)
+        
+        normalization_mode = self.get_param('formant_normalization', '原始频率 (Hz)')
+        transform_fn = self._build_formant_normalizer(data_entries, normalization_mode)
+        
         sm, all_f1, all_f2 = self._draw_formant_density_layer(
             ax,
             data_entries,
@@ -2175,7 +2315,8 @@ class AcousticChartExporter:
             show_contours=show_contours,
             bw_method=self.get_param('formant_density_bw', 0.14),
             alpha_max=0.78,
-            zorder=2
+            zorder=2,
+            transform_fn=transform_fn
         )
 
         if sm is None:
@@ -2188,13 +2329,26 @@ class AcousticChartExporter:
         if all_f1 and all_f2:
             f1_p1, f1_p99 = np.percentile(all_f1, 1.0), np.percentile(all_f1, 99.0)
             f2_p1, f2_p99 = np.percentile(all_f2, 1.0), np.percentile(all_f2, 99.0)
-            f1_pad = (f1_p99 - f1_p1) * 0.16 if f1_p99 > f1_p1 else 100.0
-            f2_pad = (f2_p99 - f2_p1) * 0.16 if f2_p99 > f2_p1 else 150.0
-            ax.set_ylim(f1_p99 + f1_pad, max(50.0, f1_p1 - f1_pad))
-            ax.set_xlim(f2_p99 + f2_pad, max(500.0, f2_p1 - f2_pad))
+            
+            is_hz = "Hz" in normalization_mode
+            f1_pad = (f1_p99 - f1_p1) * 0.16 if f1_p99 > f1_p1 else (100.0 if is_hz else 0.5)
+            f2_pad = (f2_p99 - f2_p1) * 0.16 if f2_p99 > f2_p1 else (150.0 if is_hz else 0.8)
+            
+            ax.set_ylim(f1_p99 + f1_pad, max(50.0, f1_p1 - f1_pad) if is_hz else (f1_p1 - f1_pad))
+            ax.set_xlim(f2_p99 + f2_pad, max(500.0, f2_p1 - f2_pad) if is_hz else (f2_p1 - f2_pad))
 
-        ax.set_xlabel("F2 (Hz)", fontsize=12, fontweight='bold', labelpad=10)
-        ax.set_ylabel("F1 (Hz)", fontsize=12, fontweight='bold', labelpad=10)
+        if "Bark" in normalization_mode or "巴克" in normalization_mode:
+            ax.set_xlabel("F2 (Bark)", fontsize=12, fontweight='bold', labelpad=10)
+            ax.set_ylabel("F1 (Bark)", fontsize=12, fontweight='bold', labelpad=10)
+        elif "Mel" in normalization_mode or "美尔" in normalization_mode:
+            ax.set_xlabel("F2 (Mel)", fontsize=12, fontweight='bold', labelpad=10)
+            ax.set_ylabel("F1 (Mel)", fontsize=12, fontweight='bold', labelpad=10)
+        elif "Lobanov" in normalization_mode or "归一化" in normalization_mode or "L-归一化" in normalization_mode:
+            ax.set_xlabel("F2 (Z-score)", fontsize=12, fontweight='bold', labelpad=10)
+            ax.set_ylabel("F1 (Z-score)", fontsize=12, fontweight='bold', labelpad=10)
+        else:
+            ax.set_xlabel("F2 (Hz)", fontsize=12, fontweight='bold', labelpad=10)
+            ax.set_ylabel("F1 (Hz)", fontsize=12, fontweight='bold', labelpad=10)
 
         self._add_formant_density_colorbar(fig, [ax], sm)
 
@@ -2215,6 +2369,9 @@ class AcousticChartExporter:
         traj_style = self.get_param('formant_traj_style', '平均曲线 + 置信区间阴影')
         num_points = self.project_tree.app_state_params.get('pts', 11)
 
+        normalization_mode = self.get_param('formant_normalization', '原始频率 (Hz)')
+        transform_fn = self._build_formant_normalizer(data_entries, normalization_mode)
+
         category_trajs = {}
 
         for entry in data_entries:
@@ -2227,6 +2384,8 @@ class AcousticChartExporter:
                 f2_pts = np.array(syl['f2'], dtype=float)
                 
                 if len(f1_pts) == num_points and len(f2_pts) == num_points:
+                    if transform_fn is not None:
+                        f1_pts, f2_pts = transform_fn(f1_pts, f2_pts)
                     category_trajs[cat]['f1'].append(f1_pts)
                     category_trajs[cat]['f2'].append(f2_pts)
 
@@ -2266,7 +2425,15 @@ class AcousticChartExporter:
             ax.plot(x_pts, mean_f2, linestyle='-', marker='o', markersize=4.5, color=color, linewidth=2.3, label=f"{cat} F2")
 
         ax.set_xlabel("音节物理时长百分比 (%)", fontsize=12, fontweight='bold', labelpad=10)
-        ax.set_ylabel("频率 (Hz)", fontsize=12, fontweight='bold', labelpad=10)
+        
+        if "Bark" in normalization_mode or "巴克" in normalization_mode:
+            ax.set_ylabel("频率 (Bark)", fontsize=12, fontweight='bold', labelpad=10)
+        elif "Mel" in normalization_mode or "美尔" in normalization_mode:
+            ax.set_ylabel("频率 (Mel)", fontsize=12, fontweight='bold', labelpad=10)
+        elif "Lobanov" in normalization_mode or "归一化" in normalization_mode or "L-归一化" in normalization_mode:
+            ax.set_ylabel("频率 (Z-score)", fontsize=12, fontweight='bold', labelpad=10)
+        else:
+            ax.set_ylabel("频率 (Hz)", fontsize=12, fontweight='bold', labelpad=10)
         ax.margins(x=0.02)
         
         legend_kwargs = self._get_legend_kwargs()
@@ -2305,6 +2472,31 @@ class AcousticChartExporter:
         self.combo_formant_label_mode.set("显示分组标签")
         self.combo_formant_label_mode.pack(fill=tk.X, pady=2)
         self._apply_custom_arrow(self.combo_formant_label_mode)
+
+        ctk.CTkLabel(self.dynamic_content_frame, text="共振峰归一化:", font=self.font_small).pack(anchor="w", pady=(6, 2))
+        self.combo_formant_normalization = ctk.CTkOptionMenu(
+            self.dynamic_content_frame,
+            values=["原始频率 (Hz)", "Lobanov z-score (学术标准)"],
+            command=lambda _: self.trigger_preview_update(),
+            **self.dropdown_kwargs
+        )
+        self.combo_formant_normalization.set(self.var_formant_normalization.get())
+        self.combo_formant_normalization.pack(fill=tk.X, pady=(2, 6))
+        self._apply_custom_arrow(self.combo_formant_normalization)
+
+        self.cb_formant_axis_lock = ctk.CTkCheckBox(
+            self.dynamic_content_frame,
+            text="固定横纵坐标范围 (跨组/跨页一致)",
+            variable=self.var_formant_axis_lock,
+            font=self.font_small,
+            checkbox_width=18,
+            checkbox_height=18,
+            fg_color=("#3B82F6", "#2563EB"),
+            hover_color=("#4B5563", "#9CA3AF"),
+            border_color=("#9CA3AF", "#4B5563"),
+            command=self.update_preview
+        )
+        self.cb_formant_axis_lock.pack(anchor="w", pady=(2, 8))
 
         # Show raw scatter points
         self.cb_formant_show_raw = ctk.CTkCheckBox(
@@ -2646,6 +2838,8 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         self.var_formant_label_mode = ctk.StringVar(value="显示分组标签")
         self.var_formant_show_raw = ctk.BooleanVar(value=True)
         self.var_formant_time_gradient = ctk.BooleanVar(value=False)
+        self.var_formant_normalization = ctk.StringVar(value=self.project_tree.app_state_params.get('formant_normalization', "原始频率 (Hz)"))
+        self.var_formant_axis_lock = ctk.BooleanVar(value=bool(self.project_tree.app_state_params.get('formant_axis_lock', False)))
 
         # Dynamic Options - Formant Trajectory
         self.var_formant_traj_style = ctk.StringVar(value="平均曲线 + 置信区间阴影")
@@ -3613,6 +3807,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             'density_m_min', 'density_m_max', 'density_max_points',
             'formant_density_overlay', 'formant_density_bw', 'formant_density_facet',
             'formant_density_show_raw', 'formant_density_show_contours',
+            'formant_normalization', 'formant_axis_lock',
             'qc_view', 'overview_metric',
             'legend_loc', 'legend_outside', 'intention',
             'image_ratio_mode', 'image_ratio_custom', 'image_pixel_mode', 'image_pixel_custom',

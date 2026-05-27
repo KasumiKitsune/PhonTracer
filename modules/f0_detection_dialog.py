@@ -21,7 +21,7 @@ class F0DetectionDialog(ctk.CTkToplevel):
         self.resizable(False, False)
 
         # 居中显示
-        width, height = 560, 600
+        width, height = 600, 600
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         x = (screen_width - width) // 2
@@ -127,9 +127,14 @@ class F0DetectionDialog(ctk.CTkToplevel):
             opt_frame = ctk.CTkFrame(card, fg_color="white", corner_radius=10, border_width=1, border_color="#E5E7EB")
             opt_frame.pack(fill="x", padx=15, pady=5)
 
-            # 左侧：信息
+            # 配置网格列权重，确保右侧应用按钮有固定宽度不被挤压，左侧信息区自适应
+            opt_frame.grid_columnconfigure(0, weight=1)
+            opt_frame.grid_columnconfigure(1, weight=0)
+            opt_frame.grid_rowconfigure(0, weight=1)
+
+            # 左侧：信息，在网格第0列，占用剩下的自适应空间
             info_frame = ctk.CTkFrame(opt_frame, fg_color="transparent")
-            info_frame.pack(side="left", fill="both", expand=True, padx=12, pady=10)
+            info_frame.grid(row=0, column=0, sticky="nsew", padx=12, pady=10)
 
             title_text = opt["name"]
             if opt["is_primary"]:
@@ -159,7 +164,7 @@ class F0DetectionDialog(ctk.CTkToplevel):
             )
             lbl_opt_desc.pack(anchor="w")
 
-            # 右侧：应用按钮
+            # 右侧：应用按钮，在网格第1列
             if opt["is_primary"]:
                 btn_color = "#3B82F6"
                 hover_color = "#2563EB"
@@ -183,7 +188,7 @@ class F0DetectionDialog(ctk.CTkToplevel):
                 text_color=text_color,
                 command=lambda f=floor, c=ceiling: self.apply_and_close(f, c)
             )
-            btn_apply.pack(side="right", padx=15, pady=15)
+            btn_apply.grid(row=0, column=1, sticky="e", padx=15, pady=15)
 
         # 底部取消按钮
         btn_cancel = ctk.CTkButton(

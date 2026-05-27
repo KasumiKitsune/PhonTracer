@@ -765,5 +765,57 @@ class TestAcousticExporterFeatures(unittest.TestCase):
         self.assertEqual(state['total_groups'], 10)
         self.assertEqual(state['total_pages'], 2)
 
+    def test_formant_space_axis_lock_shares_limits_across_facets(self):
+        project_tree = MagicMock()
+        project_tree.app_state_params = {'pts': 11}
+        exporter = AcousticChartExporter(project_tree=project_tree)
+
+        def make_entry(group_name, base_f1, base_f2):
+            xs = np.linspace(0.0, 1.0, 30)
+            raw_f1 = np.linspace(base_f1, base_f1 + 120.0, 30)
+            raw_f2 = np.linspace(base_f2, base_f2 - 200.0, 30)
+            return {
+                'speaker_name': 'Speaker 1',
+                'group': group_name,
+                'label': f'{group_name}_label',
+                'syl_formants': [{
+                    'char': group_name,
+                    'bounds': (0.1, 0.9),
+                    'f1': np.linspace(base_f1 + 5.0, base_f1 + 95.0, 11).tolist(),
+                    'f2': np.linspace(base_f2 - 5.0, base_f2 - 155.0, 11).tolist(),
+                }],
+                'raw_xs': xs.tolist(),
+                'raw_f1': raw_f1.tolist(),
+                'raw_f2': raw_f2.tolist(),
+            }
+
+        dummy_data = [
+            make_entry('A', 400.0, 2000.0),
+            make_entry('B', 900.0, 1400.0),
+        ]
+
+        exporter.params = {
+            'groupby': 'group',
+            'formant_label_mode': '显示分组标签',
+            'formant_ellipse': '1-sigma 置信椭圆',
+            'formant_show_raw': True,
+            'formant_time_gradient': False,
+            'formant_density_overlay': False,
+            'formant_density_facet': '按字表组分面',
+            'formant_normalization': '原始频率 (Hz)',
+            'formant_axis_lock': True,
+            'legend_loc': '右上',
+            'legend_outside': False,
+            'formant_axis_ref_entries': dummy_data,
+        }
+
+        fig = exporter._plot_formant_vowel_space(dummy_data, 'group', 'Hz')
+        self.assertIsNotNone(fig)
+        self.assertGreaterEqual(len(fig.axes), 2)
+
+        ax1, ax2 = fig.axes[0], fig.axes[1]
+        self.assertEqual(ax1.get_xlim(), ax2.get_xlim())
+        self.assertEqual(ax1.get_ylim(), ax2.get_ylim())
+
 if __name__ == '__main__':
     unittest.main()
