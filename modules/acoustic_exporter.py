@@ -2796,8 +2796,8 @@ class AcousticChartExporter:
             checkbox_width=18,
             checkbox_height=18,
             fg_color=("#3B82F6", "#2563EB"),
-            hover_color=("#4B5563", "#9CA3AF"),
-            border_color=("#9CA3AF", "#4B5563"),
+            hover_color=("#9CA3AF", "#4B5563"),
+            border_color=("#4B5563", "#9CA3AF"),
             command=self.update_preview
         )
         self.cb_formant_axis_lock.pack(anchor="w", pady=(2, 8))
@@ -2811,8 +2811,8 @@ class AcousticChartExporter:
             checkbox_width=18, 
             checkbox_height=18,
             fg_color=("#3B82F6", "#2563EB"), 
-            hover_color=("#4B5563", "#9CA3AF"), 
-            border_color=("#9CA3AF", "#4B5563"),
+            hover_color=("#9CA3AF", "#4B5563"), 
+            border_color=("#4B5563", "#9CA3AF"),
             command=self.update_preview
         )
         self.cb_formant_show_raw.pack(anchor="w", pady=(10, 5))
@@ -2826,8 +2826,8 @@ class AcousticChartExporter:
             checkbox_width=18, 
             checkbox_height=18,
             fg_color=("#3B82F6", "#2563EB"), 
-            hover_color=("#4B5563", "#9CA3AF"), 
-            border_color=("#9CA3AF", "#4B5563"),
+            hover_color=("#9CA3AF", "#4B5563"), 
+            border_color=("#4B5563", "#9CA3AF"),
             command=self.update_preview
         )
         self.cb_formant_time_gradient.pack(anchor="w", pady=(5, 5))
@@ -2840,8 +2840,8 @@ class AcousticChartExporter:
             checkbox_width=18,
             checkbox_height=18,
             fg_color=("#3B82F6", "#2563EB"),
-            hover_color=("#4B5563", "#9CA3AF"),
-            border_color=("#9CA3AF", "#4B5563"),
+            hover_color=("#9CA3AF", "#4B5563"),
+            border_color=("#4B5563", "#9CA3AF"),
             command=self.update_preview
         )
         self.cb_formant_density_overlay.pack(anchor="w", pady=(10, 5))
@@ -2869,8 +2869,8 @@ class AcousticChartExporter:
             checkbox_width=18,
             checkbox_height=18,
             fg_color=("#3B82F6", "#2563EB"),
-            hover_color=("#4B5563", "#9CA3AF"),
-            border_color=("#9CA3AF", "#4B5563"),
+            hover_color=("#9CA3AF", "#4B5563"),
+            border_color=("#4B5563", "#9CA3AF"),
             command=self.update_preview
         )
         self.cb_formant_density_show_contours.pack(anchor="w", pady=(2, 5))
@@ -2903,8 +2903,8 @@ class AcousticChartExporter:
             checkbox_width=18, 
             checkbox_height=18,
             fg_color=("#3B82F6", "#2563EB"), 
-            hover_color=("#4B5563", "#9CA3AF"), 
-            border_color=("#9CA3AF", "#4B5563"),
+            hover_color=("#9CA3AF", "#4B5563"), 
+            border_color=("#4B5563", "#9CA3AF"),
             command=self.update_preview
         )
         self.cb_formant_density_show_raw.pack(anchor="w", pady=(10, 5))
@@ -2918,8 +2918,8 @@ class AcousticChartExporter:
             checkbox_width=18, 
             checkbox_height=18,
             fg_color=("#3B82F6", "#2563EB"), 
-            hover_color=("#4B5563", "#9CA3AF"), 
-            border_color=("#9CA3AF", "#4B5563"),
+            hover_color=("#9CA3AF", "#4B5563"), 
+            border_color=("#4B5563", "#9CA3AF"),
             command=self.update_preview
         )
         self.cb_formant_density_show_contours.pack(anchor="w", pady=(5, 5))
@@ -3451,7 +3451,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         self.cb_legend_outside = ctk.CTkCheckBox(
             card2, text="显示在图表主体的外侧", variable=self.var_legend_outside,
             font=self.font_small, checkbox_width=18, checkbox_height=18,
-            fg_color=("#3B82F6", "#2563EB"), hover_color=("#4B5563", "#9CA3AF"), border_color=("#9CA3AF", "#4B5563"),
+            fg_color=("#3B82F6", "#2563EB"), hover_color=("#9CA3AF", "#4B5563"), border_color=("#4B5563", "#9CA3AF"),
             command=self.update_preview
         )
         self.cb_legend_outside.grid(row=5, column=0, columnspan=2, sticky="w", padx=15, pady=(0, 15))
@@ -3607,17 +3607,17 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             return "break"
 
         if getattr(event, "num", None) == 4:
-            steps = -5  # 5 units = 75 pixels
+            steps = -3  # 3 units = 45 pixels
         elif getattr(event, "num", None) == 5:
-            steps = 5   # 5 units = 75 pixels
+            steps = 3   # 3 units = 45 pixels
         else:
             delta = getattr(event, "delta", 0)
             if delta == 0:
                 return "break"
             if abs(delta) >= 120:
-                steps = -int(delta / 120) * 5
+                steps = -int(delta / 120) * 3
             else:
-                steps = -delta * 5
+                steps = -delta * 3
 
         if canvas.yview() != (0.0, 1.0):
             canvas.yview_scroll(steps, "units")
@@ -3909,7 +3909,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             cb = ctk.CTkCheckBox(
                 self.filter_scroll, text=f"{g} ({count}项)", variable=var,
                 font=self.font_small, checkbox_width=18, checkbox_height=18,
-                fg_color=("#3B82F6", "#2563EB"), hover_color=("#4B5563", "#9CA3AF"), border_color=("#9CA3AF", "#4B5563"),
+                fg_color=("#3B82F6", "#2563EB"), hover_color=("#9CA3AF", "#4B5563"), border_color=("#4B5563", "#9CA3AF"),
                 command=self._on_group_filter_changed
             )
             cb.pack(anchor="w", padx=10, pady=3)
