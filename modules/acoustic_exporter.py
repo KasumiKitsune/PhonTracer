@@ -3607,17 +3607,17 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             return "break"
 
         if getattr(event, "num", None) == 4:
-            steps = -3  # 3 units = 45 pixels
+            steps = -5  # 5 units = 75 pixels
         elif getattr(event, "num", None) == 5:
-            steps = 3   # 3 units = 45 pixels
+            steps = 5   # 5 units = 75 pixels
         else:
             delta = getattr(event, "delta", 0)
             if delta == 0:
                 return "break"
             if abs(delta) >= 120:
-                steps = -int(delta / 120) * 3
+                steps = -int(delta / 120) * 5
             else:
-                steps = -delta * 3
+                steps = -delta * 5
 
         if canvas.yview() != (0.0, 1.0):
             canvas.yview_scroll(steps, "units")
@@ -3645,17 +3645,17 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             return "break"
 
         if getattr(event, "num", None) == 4:
-            steps = -40  # scroll up
+            steps = -60  # scroll up
         elif getattr(event, "num", None) == 5:
-            steps = 40   # scroll down
+            steps = 60   # scroll down
         else:
             delta = getattr(event, "delta", 0)
             if delta == 0:
                 return "break"
             if abs(delta) >= 120:
-                steps = -int(delta / 120) * 40
+                steps = -int(delta / 120) * 60
             else:
-                steps = -delta * 40
+                steps = -delta * 60
 
         try:
             canvas.configure(yscrollincrement=1)
