@@ -46,12 +46,21 @@ def test_logging_on_exception(caplog):
         panel.tree.get_children.return_value = ['item1']
         panel.num_rule_var.get.return_value = 'continuous'
 
-        # Mock parselmouth.Sound to raise an exception
-        with patch('modules.project_tree.parselmouth.Sound', side_effect=Exception("Mocked Error")):
-            with caplog.at_level(logging.ERROR):
-                # Trigger _export_xlsx (one of the methods with the fix)
-                panel._export_xlsx('test.xlsx')
+        try:
+            # Mock parselmouth.Sound to raise an exception
+            with patch('modules.project_tree.parselmouth.Sound', side_effect=Exception("Mocked Error")):
+                with caplog.at_level(logging.ERROR):
+                    # Trigger _export_xlsx (one of the methods with the fix)
+                    panel._export_xlsx('test.xlsx')
 
-                # Verify that the error was logged
-                assert "Error lazy loading sound/pitch for invalid_path.wav: Mocked Error" in caplog.text
-                assert any(record.levelname == 'ERROR' for record in caplog.records)
+                    # Verify that the error was logged
+                    assert "Error lazy loading sound/pitch for invalid_path.wav: Mocked Error" in caplog.text
+                    assert any(record.levelname == 'ERROR' for record in caplog.records)
+        finally:
+            import os
+            if os.path.exists('test.xlsx'):
+                try:
+                    os.remove('test.xlsx')
+                except Exception:
+                    pass
+

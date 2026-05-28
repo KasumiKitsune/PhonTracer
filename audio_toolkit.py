@@ -10,7 +10,33 @@ import shutil
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import customtkinter as ctk
+import encodings.cp437
+import gc
+import queue
+
+# Keep-alive list to prevent temporary CTkFont objects from being garbage collected on background threads
+_keep_alive_fonts = []
+_original_ctkfont = ctk.CTkFont
+
+class SafeCTkFont(_original_ctkfont):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        _keep_alive_fonts.append(self)
+
+ctk.CTkFont = SafeCTkFont
+
+def start_safe_thread(target):
+    gc.collect()
+    gc.disable()
+    def wrapped():
+        try:
+            target()
+        finally:
+            gc.enable()
+    threading.Thread(target=wrapped, daemon=True).start()
+
 import numpy as np
+
 import parselmouth
 from PIL import Image, ImageTk
 from modules.data_utils import fuzzy_match_word_to_path
@@ -621,26 +647,67 @@ class VisualSplitter(ctk.CTkToplevel):
 
 class AudioToolkitApp(ctk.CTk):
     def __init__(self):
+        self._ui_thread_id = threading.get_ident()
+        self.gui_queue = queue.Queue()
         super().__init__()
+        self.process_gui_queue()
+        ctk.set_appearance_mode("Light")
+        try:
+            ctk.set_default_color_theme("blue")
+        except Exception:
+            pass
+
         self.title("PhonTracer - 独立音频处理套件")
-        self.geometry("900x650")
-        self.configure(fg_color="#F3F4F6")
-        
-        self.font_title = ctk.CTkFont(family="Microsoft YaHei", size=15, weight="bold")
-        self.font_main = ctk.CTkFont(family="Microsoft YaHei", size=13)
-        
+        self.geometry("1000x660")
+        self.minsize(900, 600)
+
+        self.colors = {
+            "bg": "#EEF2F6",
+            "surface": "#FFFFFF",
+            "surface_soft": "#F8FAFC",
+            "surface_warm": "#FAFAF8",
+            "border": "#E2E8F0",
+            "border_strong": "#CBD5E1",
+            "text": "#17202A",
+            "text_soft": "#334155",
+            "muted": "#64748B",
+            "muted_soft": "#94A3B8",
+            "primary": "#2563EB",
+            "primary_hover": "#1D4ED8",
+            "primary_soft": "#DBEAFE",
+            "success": "#10B981",
+            "success_hover": "#059669",
+            "success_soft": "#D1FAE5",
+            "warning": "#F59E0B",
+            "warning_hover": "#D97706",
+            "warning_soft": "#FEF3C7",
+            "danger": "#EF4444",
+            "danger_hover": "#DC2626",
+            "danger_soft": "#FEE2E2",
+            "purple": "#6366F1",
+            "purple_hover": "#4F46E5",
+        }
+        self.configure(fg_color=self.colors["bg"])
+
+        self.font_family = "Microsoft YaHei"
+        self.font_title = ctk.CTkFont(family=self.font_family, size=16, weight="bold")
+        self.font_main = ctk.CTkFont(family=self.font_family, size=13)
+        self.font_small = ctk.CTkFont(family=self.font_family, size=12)
+        self.font_caption = ctk.CTkFont(family=self.font_family, size=11)
+        self.font_heading = ctk.CTkFont(family=self.font_family, size=24, weight="bold")
+
         self.merge_files = []
         self.split_source = None
         self.wordlist = []
         self.custom_segments = None  # 存储用户微调后的分段数据
-        
+
         self.setup_icons()
         self.setup_ui()
-        
+
         # 设置窗口图标
         ico_path = os.path.join(os.path.dirname(__file__), "assets", "tool_icon.ico")
         png_path = os.path.join(os.path.dirname(__file__), "assets", "tool_icon.png")
-        
+
         if os.path.exists(ico_path) and sys.platform == "win32":
             try:
                 self.iconbitmap(ico_path)
@@ -650,19 +717,36 @@ class AudioToolkitApp(ctk.CTk):
             try:
                 img = Image.open(png_path)
                 self.icon_photo = ImageTk.PhotoImage(img)
-                self.iconphoto(True, self.icon_photo) # True 会应用到子窗口
+                self.iconphoto(True, self.icon_photo)  # True 会应用到子窗口
             except Exception:
                 pass
-        
+
         # 创建拖拽指示线 (在 setup_ui 之后，确保 self.tree_merge 已创建)
-        self._drop_indicator = tk.Frame(self.tree_merge, bg="#3B82F6", height=2)
+        self._drop_indicator = tk.Frame(self.tree_merge, bg=self.colors["primary"], height=2)
         self._drop_indicator.place_forget()
-        
+
+        # 关闭窗口级文件拖拽导入（windnd），规避 Windows + Tk 下偶发的 GIL 崩溃。
+        self.window_drop_enabled = False
+
+    def after(self, ms, func=None, *args):
+        if func is not None and getattr(self, "_ui_thread_id", None) is not None and threading.get_ident() != self._ui_thread_id:
+            self.gui_queue.put(lambda: func(*args))
+            return None
+        return super().after(ms, func, *args)
+
+    def process_gui_queue(self):
         try:
-            import windnd
-            windnd.hook_dropfiles(self, func=self.on_files_dropped)
-        except ImportError:
+            while True:
+                task = self.gui_queue.get_nowait()
+                try:
+                    task()
+                except Exception as e:
+                    print(f"Error in GUI thread execution: {e}")
+                finally:
+                    self.gui_queue.task_done()
+        except queue.Empty:
             pass
+        super().after(10, self.process_gui_queue)
 
     def setup_icons(self):
         icon_path = os.path.join("assets", "icons")
@@ -703,171 +787,477 @@ class AudioToolkitApp(ctk.CTk):
             img = Image.open(logo_path)
             self.icons["logo"] = ctk.CTkImage(light_image=img, dark_image=img, size=(32, 32))
 
-    def setup_ui(self):
-        self.btn_kwargs = {"text_color": "white", "corner_radius": 20, "height": 38, "font": self.font_main}
-        
-        # 配置 Treeview 样式 (增大字体和行高)
-        style = ttk.Style()
-        style.theme_use("default") # 确保样式生效
-        style.configure("Treeview", 
-                        font=("Microsoft YaHei", 12), 
-                        rowheight=35,
-                        background="#FFFFFF",
-                        fieldbackground="#FFFFFF",
-                        foreground="#1F2937",
-                        borderwidth=0,
-                        relief="flat")
-        style.configure("Treeview.Heading", 
-                        font=("Microsoft YaHei", 12, "bold"),
-                        background="#F3F4F6",
-                        foreground="#374151")
-        style.map("Treeview", background=[('selected', '#3B82F6')], foreground=[('selected', '#FFFFFF')])
-        
-        header_frame = ctk.CTkFrame(self, fg_color="white", corner_radius=0, height=60)
-        header_frame.pack(fill=tk.X, side=tk.TOP)
-        
-        if self.icons.get("logo"):
-            ctk.CTkLabel(header_frame, text="", image=self.icons.get("logo")).pack(side=tk.LEFT, padx=(20, 0), pady=10)
-            
-        ctk.CTkLabel(header_frame, text="PhonTracer 配套音频工具", font=ctk.CTkFont(family="Microsoft YaHei", size=20, weight="bold"), text_color="#1F2937").pack(side=tk.LEFT, padx=15, pady=15)
-        
-        self.lbl_status = ctk.CTkLabel(header_frame, text="就绪", text_color="#10B981", font=self.font_main)
-        self.lbl_status.pack(side=tk.RIGHT, padx=20)
+    # ==========================
+    # 主界面视觉系统
+    # ==========================
 
-        self.tabview = ctk.CTkTabview(self, corner_radius=12, fg_color="white", segmented_button_selected_color="#60A5FA", segmented_button_fg_color="white")
-        self.tabview.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+    def _button_colors(self, tone="primary"):
+        palette = {
+            "primary": (self.colors["primary"], self.colors["primary_hover"], "white"),
+            "success": (self.colors["success"], self.colors["success_hover"], "white"),
+            "warning": (self.colors["warning"], self.colors["warning_hover"], "white"),
+            "danger": (self.colors["danger"], self.colors["danger_hover"], "white"),
+            "purple": (self.colors["purple"], self.colors["purple_hover"], "white"),
+            "secondary": ("#E2E8F0", "#CBD5E1", self.colors["text_soft"]),
+            "ghost": (self.colors["surface"], "#F1F5F9", self.colors["text_soft"]),
+        }
+        return palette.get(tone, palette["primary"])
+
+    def _make_button(self, parent, text, command, tone="primary", image=None, width=None, height=42, **kwargs):
+        fg, hover, text_color = self._button_colors(tone)
+        options = {
+            "text": text,
+            "command": command,
+            "fg_color": fg,
+            "hover_color": hover,
+            "text_color": text_color,
+            "corner_radius": 999,
+            "height": height,
+            "font": ctk.CTkFont(family=self.font_family, size=13, weight="bold"),
+        }
+        if width is not None:
+            options["width"] = width
+        if image is not None:
+            options["image"] = image
+            options["compound"] = "left"
+        options.update(kwargs)
+        return CTkReleaseButton(parent, **options)
+
+    def _make_card(self, parent, fg_color=None, width=None, height=None, corner_radius=18):
+        kwargs = {
+            "fg_color": fg_color or self.colors["surface"],
+            "corner_radius": corner_radius,
+            "border_width": 1,
+            "border_color": self.colors["border"],
+        }
+        if width is not None:
+            kwargs["width"] = width
+        if height is not None:
+            kwargs["height"] = height
+        return ctk.CTkFrame(parent, **kwargs)
+
+    def _section_header(self, parent, title, subtitle=None, icon_text=None):
+        frame = ctk.CTkFrame(parent, fg_color="transparent")
+        frame.pack(fill=tk.X, padx=20, pady=(18, 12))
+
+        title_row = ctk.CTkFrame(frame, fg_color="transparent")
+        title_row.pack(fill=tk.X)
+        if icon_text:
+            ctk.CTkLabel(
+                title_row,
+                text=icon_text,
+                font=ctk.CTkFont(family=self.font_family, size=18, weight="bold"),
+                text_color=self.colors["primary"],
+            ).pack(side=tk.LEFT, padx=(0, 8))
+        ctk.CTkLabel(title_row, text=title, font=self.font_title, text_color=self.colors["text"]).pack(side=tk.LEFT)
+
+        if subtitle:
+            ctk.CTkLabel(
+                frame,
+                text=subtitle,
+                font=self.font_small,
+                text_color=self.colors["muted"],
+                justify="left",
+                wraplength=620,
+            ).pack(fill=tk.X, anchor="w", pady=(4, 0))
+        return frame
+
+    def _make_labeled_entry(self, parent, label, variable, width=120, suffix=None):
+        wrap = ctk.CTkFrame(parent, fg_color="transparent")
+        wrap.pack(fill=tk.X, pady=(4, 14))
+        ctk.CTkLabel(wrap, text=label, font=self.font_small, text_color=self.colors["text_soft"]).pack(anchor="w")
+        row = ctk.CTkFrame(wrap, fg_color="transparent")
+        row.pack(fill=tk.X, pady=(6, 0))
+        entry = ctk.CTkEntry(
+            row,
+            textvariable=variable,
+            width=width,
+            height=38,
+            corner_radius=19,
+            border_color=self.colors["border_strong"],
+            fg_color=self.colors["surface"],
+            text_color=self.colors["text"],
+            font=self.font_main,
+        )
+        entry.pack(side=tk.LEFT)
+        if suffix:
+            ctk.CTkLabel(row, text=suffix, font=self.font_small, text_color=self.colors["muted"]).pack(side=tk.LEFT, padx=8)
+        return entry
+
+    def _short_path(self, path, max_parts=2):
+        if not path:
+            return "未选择"
+        normalized = path.replace("\\", "/")
+        parts = [p for p in normalized.split("/") if p]
+        if len(parts) <= max_parts:
+            return normalized
+        return "/".join(parts[-max_parts:])
+
+    def _bind_adaptive_wrap(self, label, container, reserved_width=0, min_wrap=220):
+        def update_wrap(_event=None):
+            width = container.winfo_width()
+            if width <= 1:
+                return
+            wrap = max(min_wrap, width - reserved_width)
+            label.configure(wraplength=wrap)
+
+        container.bind("<Configure>", update_wrap, add="+")
+        self.after(0, update_wrap)
+
+    @staticmethod
+    def _decode_drop_path(raw_path):
+        if isinstance(raw_path, bytes):
+            for enc in ("gbk", "utf-8"):
+                try:
+                    return raw_path.decode(enc)
+                except UnicodeDecodeError:
+                    continue
+            return raw_path.decode(errors="ignore")
+        return str(raw_path)
+
+    def _insert_merge_file(self, path):
+        display_p = self._short_path(path, max_parts=2)
+        self.tree_merge.insert("", tk.END, values=(path, display_p))
+        self._refresh_merge_ui()
+
+    def _refresh_merge_ui(self):
+        count = len(self.merge_files)
+        if hasattr(self, "lbl_merge_count"):
+            self.lbl_merge_count.configure(text=f"{count} 个文件")
+        if hasattr(self, "merge_empty_state"):
+            if count == 0:
+                self.merge_empty_state.place(relx=0.5, rely=0.5, anchor="center")
+            else:
+                self.merge_empty_state.place_forget()
+
+    def setup_ui(self):
+        self.btn_kwargs = {
+            "text_color": "white",
+            "corner_radius": 999,
+            "height": 42,
+            "font": ctk.CTkFont(family=self.font_family, size=13, weight="bold"),
+        }
+
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+
+        style = ttk.Style()
+        style.theme_use("default")
+        try:
+            style.layout("Treeview", [("Treeview.treearea", {"sticky": "nswe"})])
+        except Exception:
+            pass
+        style.configure(
+            "Treeview",
+            font=(self.font_family, 12),
+            rowheight=38,
+            background=self.colors["surface"],
+            fieldbackground=self.colors["surface"],
+            foreground=self.colors["text"],
+            borderwidth=0,
+            relief="flat",
+        )
+        style.configure(
+            "Treeview.Heading",
+            font=(self.font_family, 12, "bold"),
+            background=self.colors["surface_soft"],
+            foreground=self.colors["text_soft"],
+            padding=(12, 10),
+            borderwidth=0,
+            relief="flat",
+        )
+        style.map(
+            "Treeview",
+            background=[("selected", self.colors["primary"])],
+            foreground=[("selected", "#FFFFFF")],
+        )
+
+        header_frame = ctk.CTkFrame(self, fg_color=self.colors["surface"], corner_radius=0, height=88)
+        header_frame.grid(row=0, column=0, sticky="ew")
+        header_frame.grid_propagate(False)
+        header_frame.grid_columnconfigure(1, weight=1)
+
+        brand = ctk.CTkFrame(header_frame, fg_color="transparent")
+        brand.grid(row=0, column=0, sticky="w", padx=28, pady=16)
+        if self.icons.get("logo"):
+            ctk.CTkLabel(brand, text="", image=self.icons.get("logo")).pack(side=tk.LEFT, padx=(0, 14))
+        title_block = ctk.CTkFrame(brand, fg_color="transparent")
+        title_block.pack(side=tk.LEFT)
+        ctk.CTkLabel(
+            title_block,
+            text="PhonTracer 音频处理套件",
+            font=self.font_heading,
+            text_color=self.colors["text"],
+        ).pack(anchor="w")
+        ctk.CTkLabel(
+            title_block,
+            text="合并长音频、按字表拆分、预览工程文件",
+            font=self.font_small,
+            text_color=self.colors["muted"],
+        ).pack(anchor="w", pady=(2, 0))
+
+        status_frame = ctk.CTkFrame(header_frame, fg_color=self.colors["success_soft"], corner_radius=999)
+        status_frame.grid(row=0, column=2, sticky="e", padx=28)
+        ctk.CTkLabel(status_frame, text="●", font=self.font_small, text_color=self.colors["success"]).pack(side=tk.LEFT, padx=(8, 4), pady=3)
+        self.lbl_status = ctk.CTkLabel(status_frame, text="就绪", text_color="#047857", font=self.font_small)
+        self.lbl_status.pack(side=tk.LEFT, padx=(0, 8), pady=3)
+
+        self.main_shell = ctk.CTkFrame(self, fg_color="transparent")
+        self.main_shell.grid(row=1, column=0, sticky="nsew", padx=24, pady=20)
+        self.main_shell.grid_columnconfigure(0, weight=1)
+        self.main_shell.grid_rowconfigure(0, weight=1)
+
+        self.tab_merge_name = "合并长音频"
+        self.tab_split_name = "按字表拆分"
+        self.tab_project_name = "工程预览 / 压缩"
+
+        self.tabview = ctk.CTkTabview(
+            self.main_shell,
+            corner_radius=20,
+            fg_color=self.colors["surface"],
+            border_width=1,
+            border_color=self.colors["border"],
+            segmented_button_fg_color="#E2E8F0",
+            segmented_button_selected_color=self.colors["primary"],
+            segmented_button_selected_hover_color=self.colors["primary_hover"],
+            segmented_button_unselected_color="#E2E8F0",
+            segmented_button_unselected_hover_color="#CBD5E1",
+            text_color="#000000",
+            text_color_disabled=self.colors["muted_soft"],
+        )
+        self.tabview.grid(row=0, column=0, sticky="nsew")
+
+        self.tab_merge = self.tabview.add(self.tab_merge_name)
+        self.tab_split = self.tabview.add(self.tab_split_name)
+        self.tab_project = self.tabview.add(self.tab_project_name)
+
+        for tab in (self.tab_merge, self.tab_split, self.tab_project):
+            tab.configure(fg_color=self.colors["surface"])
+
+        # Patch segmented button to allow different text colors for selected (white) vs unselected (black) tabs
+        sb = self.tabview._segmented_button
+        orig_sel = sb._select_button_by_value
+        orig_unsel = sb._unselect_button_by_value
+        sb._select_button_by_value = lambda v: (orig_sel(v), sb._buttons_dict[v].configure(text_color="#FFFFFF") if v in sb._buttons_dict else None)
+        sb._unselect_button_by_value = lambda v: (orig_unsel(v), sb._buttons_dict[v].configure(text_color="#000000") if v in sb._buttons_dict else None)
         
-        self.tab_merge = self.tabview.add("多音频合并 (拼长音)")
-        self.tab_split = self.tabview.add("长音频拆分 (按字表)")
-        self.tab_project = self.tabview.add("工程预览与压缩 (.teproj)")
-        
+        # Ensure initial tab text is white
+        curr_val = sb.get()
+        if curr_val in sb._buttons_dict:
+            sb._buttons_dict[curr_val].configure(text_color="#FFFFFF")
+
         self.build_merge_tab()
         self.build_split_tab()
         self.build_project_tab()
-        
-        self.progress = ctk.CTkProgressBar(self, height=6, progress_color="#3B82F6", fg_color="#E5E7EB")
+
+        self.progress = ctk.CTkProgressBar(self, height=5, progress_color=self.colors["primary"], fg_color="#D8E0EA")
         self.progress.set(0)
-        
+        self.progress.grid(row=2, column=0, sticky="ew")
+        self.progress.grid_remove()
+
     def build_merge_tab(self):
-        left_panel = ctk.CTkFrame(self.tab_merge, fg_color="transparent")
-        left_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(10, 5), pady=10)
-        
-        CTkReleaseButton(left_panel, text=" 添加音频文件", image=self.icons.get("plus"), compound="left", command=self.add_merge_files, **self.btn_kwargs).pack(fill=tk.X, pady=(0, 10))
-        
-        tree_container = ctk.CTkFrame(left_panel, fg_color="white", corner_radius=8, border_width=1, border_color="#D1D5DB")
-        tree_container.pack(fill=tk.BOTH, expand=True)
-        
+        content = ctk.CTkFrame(self.tab_merge, fg_color="transparent")
+        content.pack(fill=tk.BOTH, expand=True, padx=20, pady=18)
+        content.grid_columnconfigure(0, weight=1)
+        content.grid_columnconfigure(1, weight=0)
+        content.grid_rowconfigure(0, weight=1)
+
+        left_panel = self._make_card(content)
+        left_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 16))
+        left_panel.grid_rowconfigure(1, weight=1)
+        left_panel.grid_columnconfigure(0, weight=1)
+
+        header = ctk.CTkFrame(left_panel, fg_color="transparent")
+        header.grid(row=0, column=0, sticky="ew", padx=20, pady=(18, 12))
+        header.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(header, text="待合并文件", font=self.font_title, text_color=self.colors["text"]).grid(row=0, column=0, sticky="w")
+        ctk.CTkLabel(
+            header,
+            text="拖入 wav/mp3，或手动添加；列表内拖拽可调整拼接顺序。",
+            font=self.font_small,
+            text_color=self.colors["muted"],
+        ).grid(row=1, column=0, sticky="w", pady=(4, 0))
+        self.lbl_merge_count = ctk.CTkLabel(header, text="0 个文件", font=self.font_small, text_color=self.colors["muted"])
+        self.lbl_merge_count.grid(row=0, column=1, sticky="e", padx=(8, 0))
+        self._make_button(header, "添加音频", self.add_merge_files, image=self.icons.get("plus"), width=132).grid(row=1, column=1, sticky="e", pady=(4, 0))
+
+        tree_container = ctk.CTkFrame(left_panel, fg_color=self.colors["surface"], corner_radius=14, border_width=1, border_color=self.colors["border"])
+        tree_container.grid(row=1, column=0, sticky="nsew", padx=20, pady=(0, 12))
+        tree_container.grid_columnconfigure(0, weight=1)
+        tree_container.grid_rowconfigure(0, weight=1)
+
         self.tree_merge = ttk.Treeview(tree_container, columns=("FullPath", "DisplayPath"), show="headings", height=15)
-        self.tree_merge.heading("DisplayPath", text="待合并的音频文件路径 (可鼠标拖拽调整顺序)")
-        self.tree_merge.column("FullPath", width=0, stretch=tk.NO) # 隐藏全路径列
-        self.tree_merge.configure(displaycolumns=("DisplayPath",))
-        self.tree_merge.configure(style="Treeview", takefocus=False)
-        
-        self.merge_scroll = ctk.CTkScrollbar(tree_container, orientation="vertical", command=self.tree_merge.yview)
+        self.tree_merge.heading("DisplayPath", text="文件路径")
+        self.tree_merge.column("FullPath", width=0, stretch=tk.NO)
+        self.tree_merge.column("DisplayPath", width=520, anchor="w")
+        self.tree_merge.configure(displaycolumns=("DisplayPath",), style="Treeview", takefocus=False)
+
+        self.merge_scroll = ctk.CTkScrollbar(tree_container, orientation="vertical", command=self.tree_merge.yview, width=12)
         self.tree_merge.configure(yscrollcommand=self.merge_scroll.set)
-        
-        self.merge_scroll.pack(side=tk.RIGHT, fill=tk.Y, padx=1, pady=1)
-        self.tree_merge.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(1, 0), pady=1)
+        self.tree_merge.grid(row=0, column=0, sticky="nsew", padx=(1, 0), pady=1)
+        self.merge_scroll.grid(row=0, column=1, sticky="ns", padx=(0, 1), pady=1)
         self.tree_merge.bind('<BackSpace>', self.remove_merge_file)
         self.tree_merge.bind('<Delete>', self.remove_merge_file)
-        
-        # 绑定拖拽事件
         self.tree_merge.bind("<Button-1>", self.on_tree_drag_start)
         self.tree_merge.bind("<B1-Motion>", self.on_tree_drag_motion)
         self.tree_merge.bind("<ButtonRelease-1>", self.on_tree_drag_drop)
-        
-        ctk.CTkLabel(left_panel, text="提示: 选中按 Delete 移除。直接拖拽条目可调整合并顺序。", font=ctk.CTkFont(family="Microsoft YaHei", size=11), text_color="#6B7280").pack(anchor="w", pady=5)
 
-        right_panel = ctk.CTkFrame(self.tab_merge, fg_color="#F9FAFB", corner_radius=10, width=280)
-        right_panel.pack(side=tk.RIGHT, fill=tk.Y, padx=(5, 10), pady=10)
-        right_panel.pack_propagate(False)
-        
-        ctk.CTkLabel(right_panel, text="合并参数", font=self.font_title, text_color="#111827").pack(pady=15, padx=15, anchor="w")
-        ctk.CTkLabel(right_panel, text="音频间隔 (插入静音秒数):", font=self.font_main).pack(padx=15, anchor="w")
+        self.merge_empty_state = ctk.CTkFrame(tree_container, fg_color="transparent")
+        ctk.CTkLabel(self.merge_empty_state, text="将音频文件拖到这里", font=ctk.CTkFont(family=self.font_family, size=18, weight="bold"), text_color=self.colors["text_soft"]).pack(pady=(0, 6))
+        ctk.CTkLabel(self.merge_empty_state, text="支持 .wav / .mp3；按 Delete 可移除选中项", font=self.font_small, text_color=self.colors["muted"]).pack()
+        self.merge_empty_state.place(relx=0.5, rely=0.5, anchor="center")
+
+        ctk.CTkLabel(
+            left_panel,
+            text="提示：导入字表自动排序会用字表条目去模糊匹配文件名，未匹配到的文件会保留在末尾。",
+            font=self.font_caption,
+            text_color=self.colors["muted"],
+        ).grid(row=2, column=0, sticky="w", padx=22, pady=(0, 16))
+
+        right_panel = self._make_card(content, fg_color=self.colors["surface_soft"], width=310)
+        right_panel.grid(row=0, column=1, sticky="ns")
+        right_panel.grid_propagate(False)
+        self._section_header(right_panel, "合并参数", "设置静音间隔后导出一个连续 wav 文件。", icon_text="01")
+
+        settings = ctk.CTkFrame(right_panel, fg_color="transparent")
+        settings.pack(fill=tk.X, padx=20, pady=(4, 10))
         self.var_gap = ctk.StringVar(value="0.5")
-        ctk.CTkEntry(right_panel, textvariable=self.var_gap, width=100).pack(padx=15, pady=5, anchor="w")
-        
-        CTkReleaseButton(right_panel, text=" 合并并导出音频", image=self.icons.get("save"), compound="left", fg_color="#10B981", hover_color="#059669", command=self.process_merge, **self.btn_kwargs).pack(side=tk.BOTTOM, fill=tk.X, padx=15, pady=15)
-        CTkReleaseButton(right_panel, text=" 导入字表自动排序", image=self.icons.get("list"), compound="left", fg_color="#6366F1", hover_color="#4F46E5", command=self.import_wordlist_for_sort, **self.btn_kwargs).pack(side=tk.BOTTOM, fill=tk.X, padx=15, pady=(0, 5))
-        CTkReleaseButton(right_panel, text=" 清空列表", fg_color="#EF4444", hover_color="#DC2626", command=self.clear_merge_list, **self.btn_kwargs).pack(side=tk.BOTTOM, fill=tk.X, padx=15, pady=(0, 5))
+        self._make_labeled_entry(settings, "音频间隔", self.var_gap, width=110, suffix="秒静音")
+
+        actions = ctk.CTkFrame(right_panel, fg_color="transparent")
+        actions.pack(side=tk.BOTTOM, fill=tk.X, padx=20, pady=20)
+        self._make_button(actions, "合并并导出音频", self.process_merge, tone="success", image=self.icons.get("save")).pack(fill=tk.X, pady=(0, 10))
+        self._make_button(actions, "导入字表自动排序", self.import_wordlist_for_sort, tone="primary", image=self.icons.get("list")).pack(fill=tk.X, pady=(0, 10))
+        self._make_button(actions, "清空列表", self.clear_merge_list, tone="danger").pack(fill=tk.X)
+
+        self._refresh_merge_ui()
 
     def build_split_tab(self):
-        top_panel = ctk.CTkFrame(self.tab_split, fg_color="transparent")
-        top_panel.pack(side=tk.TOP, fill=tk.X, padx=10, pady=(10, 0))
-        
-        self.btn_sel_source = ctk.CTkButton(top_panel, text=" 选择长音频源", image=self.icons.get("audio"), compound="left", width=160, command=self.select_split_source, **self.btn_kwargs)
-        self.btn_sel_source.pack(side=tk.LEFT, padx=(0, 10))
-        
-        self.btn_edit_segments = CTkReleaseButton(top_panel, text=" 段落编辑器", image=self.icons.get("eye"), compound="left", width=160, fg_color="#F59E0B", hover_color="#D97706", command=self.open_visual_splitter, **self.btn_kwargs)
-        self.btn_edit_segments.pack(side=tk.LEFT, padx=(0, 10))
-        
-        self.lbl_split_source = ctk.CTkLabel(top_panel, text="未选择", text_color="#6B7280", font=self.font_main)
-        self.lbl_split_source.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        content = ctk.CTkFrame(self.tab_split, fg_color="transparent")
+        content.pack(fill=tk.BOTH, expand=True, padx=20, pady=18)
+        content.grid_columnconfigure(0, weight=1)
+        content.grid_columnconfigure(1, weight=0)
+        content.grid_rowconfigure(1, weight=1)
 
-        main_area = ctk.CTkFrame(self.tab_split, fg_color="transparent")
-        main_area.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        left_panel = ctk.CTkFrame(main_area, fg_color="transparent")
-        left_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
-        
-        lbl_frame = ctk.CTkFrame(left_panel, fg_color="transparent")
-        lbl_frame.pack(fill=tk.X, pady=(0, 5))
-        ctk.CTkLabel(lbl_frame, text="粘贴字表文本 或", font=self.font_title, text_color="#111827").pack(side=tk.LEFT)
-        CTkReleaseButton(lbl_frame, text=" 导入字表文件", image=self.icons.get("import_white"), compound="left", fg_color="#6366F1", hover_color="#4F46E5", command=self.import_wordlist, **self.btn_kwargs).pack(side=tk.LEFT, padx=10)
-        
-        self.txt_wordlist = ctk.CTkTextbox(left_panel, corner_radius=8, border_width=1, border_color="#D1D5DB")
-        self.txt_wordlist.pack(fill=tk.BOTH, expand=True)
+        source_card = self._make_card(content, fg_color=self.colors["surface_soft"])
+        source_card.grid(row=0, column=0, sticky="ew", padx=(0, 16), pady=(0, 16))
+        source_card.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(source_card, text="音频源", font=self.font_title, text_color=self.colors["text"]).grid(row=0, column=0, padx=20, pady=(16, 6), sticky="w")
+        source_hint = ctk.CTkLabel(source_card, text="先选择长音频，再输入字表并匹配切分。", font=self.font_small, text_color=self.colors["muted"], justify="left")
+        source_hint.grid(row=1, column=0, columnspan=2, padx=20, pady=(0, 14), sticky="ew")
+        self._bind_adaptive_wrap(source_hint, source_card, reserved_width=380, min_wrap=220)
+
+        button_row = ctk.CTkFrame(source_card, fg_color="transparent")
+        button_row.grid(row=0, column=2, rowspan=2, padx=20, pady=16, sticky="e")
+        self.btn_sel_source = self._make_button(button_row, "选择长音频", self.select_split_source, image=self.icons.get("audio"), width=142)
+        self.btn_sel_source.pack(side=tk.LEFT, padx=(0, 10))
+        self.btn_edit_segments = self._make_button(button_row, "段落编辑器", self.open_visual_splitter, tone="warning", image=self.icons.get("eye"), width=142)
+        self.btn_edit_segments.pack(side=tk.LEFT)
+
+        path_pill = ctk.CTkFrame(source_card, fg_color=self.colors["surface"], corner_radius=999, border_width=1, border_color=self.colors["border"])
+        path_pill.grid(row=2, column=0, columnspan=3, sticky="ew", padx=20, pady=(0, 16))
+        self.lbl_split_source = ctk.CTkLabel(path_pill, text="未选择音频文件", text_color=self.colors["muted"], font=self.font_small, anchor="w")
+        self.lbl_split_source.pack(fill=tk.X, padx=14, pady=8)
+
+        word_card = self._make_card(content)
+        word_card.grid(row=1, column=0, sticky="nsew", padx=(0, 16))
+        word_card.grid_rowconfigure(1, weight=1)
+        word_card.grid_columnconfigure(0, weight=1)
+
+        word_header = ctk.CTkFrame(word_card, fg_color="transparent")
+        word_header.grid(row=0, column=0, sticky="ew", padx=20, pady=(18, 12))
+        word_header.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(word_header, text="字表文本", font=self.font_title, text_color=self.colors["text"]).grid(row=0, column=0, sticky="w")
+        word_hint = ctk.CTkLabel(word_header, text="支持空格、逗号、顿号、换行分隔；【组别】和 # 开头行会被跳过。", font=self.font_small, text_color=self.colors["muted"], justify="left")
+        word_hint.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        self._bind_adaptive_wrap(word_hint, word_header, reserved_width=180, min_wrap=220)
+        self._make_button(word_header, "导入字表", self.import_wordlist, tone="primary", image=self.icons.get("import_white"), width=126).grid(row=0, column=1, rowspan=2, sticky="e")
+
+        self.txt_wordlist = ctk.CTkTextbox(
+            word_card,
+            corner_radius=14,
+            border_width=1,
+            border_color=self.colors["border"],
+            fg_color=self.colors["surface"],
+            text_color=self.colors["text"],
+            font=ctk.CTkFont(family=self.font_family, size=14),
+        )
+        self.txt_wordlist.grid(row=1, column=0, sticky="nsew", padx=20, pady=(0, 10))
         self.txt_wordlist.bind("<KeyRelease>", self.validate_wordlist)
         self.txt_wordlist.bind("<<Paste>>", lambda e: self.after(10, self.validate_wordlist))
-        
-        self.lbl_wordlist_status = ctk.CTkLabel(left_panel, text="字表为空", font=ctk.CTkFont(family="Microsoft YaHei", size=12), text_color="#6B7280")
-        self.lbl_wordlist_status.pack(anchor="w", pady=5)
-        
-        right_panel = ctk.CTkFrame(main_area, fg_color="#F9FAFB", corner_radius=10, width=280)
-        right_panel.pack(side=tk.RIGHT, fill=tk.Y, padx=(5, 0))
-        right_panel.pack_propagate(False)
-        
-        ctk.CTkLabel(right_panel, text="拆分设置", font=self.font_title, text_color="#111827").pack(pady=15, padx=15, anchor="w")
-        
-        self.var_trim = ctk.BooleanVar(value=True)
-        ctk.CTkSwitch(right_panel, text="智能剔除边缘空白杂音", variable=self.var_trim, font=self.font_main, progress_color="#10B981").pack(padx=15, pady=10, anchor="w")
-        
-        ctk.CTkLabel(right_panel, text="保存区段首尾缓冲 (秒):", font=self.font_main).pack(padx=15, pady=(10, 0), anchor="w")
-        self.var_buffer = ctk.StringVar(value="0.1")
-        ctk.CTkEntry(right_panel, textvariable=self.var_buffer, width=100).pack(padx=15, pady=5, anchor="w")
 
-        CTkReleaseButton(right_panel, text=" 一键匹配 (字表与音频)", image=self.icons.get("check"), compound="left", fg_color="#F59E0B", hover_color="#D97706", command=self.match_segments_to_wordlist, **self.btn_kwargs).pack(side=tk.TOP, fill=tk.X, padx=15, pady=(10, 15))
-        
-        CTkReleaseButton(right_panel, text=" 仅拆分保存到目录", image=self.icons.get("save"), compound="left", fg_color="#10B981", hover_color="#059669", command=lambda: self.process_split(send_to_main=False), **self.btn_kwargs).pack(side=tk.BOTTOM, fill=tk.X, padx=15, pady=15)
+        self.lbl_wordlist_status = ctk.CTkLabel(word_card, text="字表为空", font=self.font_small, text_color=self.colors["muted"])
+        self.lbl_wordlist_status.grid(row=2, column=0, sticky="w", padx=22, pady=(0, 16))
+
+        right_panel = self._make_card(content, fg_color=self.colors["surface_soft"], width=310)
+        right_panel.grid(row=0, column=1, rowspan=2, sticky="ns")
+        right_panel.grid_propagate(False)
+        self._section_header(right_panel, "拆分设置", "自动检测有效发音段，也可以在段落编辑器里人工微调。", icon_text="02")
+
+        settings = ctk.CTkFrame(right_panel, fg_color="transparent")
+        settings.pack(fill=tk.X, padx=20, pady=(4, 8))
+
+        switch_box = ctk.CTkFrame(settings, fg_color=self.colors["surface"], corner_radius=14, border_width=1, border_color=self.colors["border"])
+        switch_box.pack(fill=tk.X, pady=(0, 14))
+        self.var_trim = ctk.BooleanVar(value=True)
+        switch_trim = ctk.CTkSwitch(
+            switch_box,
+            text="智能剔除边缘空白杂音",
+            variable=self.var_trim,
+            font=self.font_main,
+            progress_color=self.colors["success"],
+            button_color="#475569",
+            button_hover_color="#334155",
+        )
+        switch_trim.pack(anchor="w", padx=14, pady=12)
+
+        self.var_buffer = ctk.StringVar(value="0.1")
+        self._make_labeled_entry(settings, "保存区段首尾缓冲", self.var_buffer, width=110, suffix="秒")
+
+
+
+        actions = ctk.CTkFrame(right_panel, fg_color="transparent")
+        actions.pack(side=tk.BOTTOM, fill=tk.X, padx=20, pady=20)
+        self._make_button(actions, "匹配字表", self.match_segments_to_wordlist, tone="warning", image=self.icons.get("check")).pack(fill=tk.X, pady=(0, 10))
+        self._make_button(actions, "保存到目录", lambda: self.process_split(send_to_main=False), tone="success", image=self.icons.get("save")).pack(fill=tk.X)
 
     # ==========================
     # 交互回调与工具函数
     # ==========================
     
     def on_files_dropped(self, files):
-        paths = [f.decode('gbk') if isinstance(f, bytes) else str(f) for f in files]
-        
+        paths = [self._decode_drop_path(f) for f in files]
+        self.after(0, lambda p=paths: self._handle_dropped_files(p))
+
+    def _handle_dropped_files(self, paths):
+        if not paths:
+            return
+
         # Check if there is any .teproj file dropped
-        teproj_files = [p for p in paths if p.lower().endswith('.teproj')]
+        teproj_files = [p for p in paths if p.lower().endswith(('.teproj', '.zip'))]
         if teproj_files:
-            self.tabview.set("工程预览与压缩 (.teproj)")
+            self.tabview.set(self.tab_project_name)
             self.load_project_file(teproj_files[0])
             return
-            
+
         audio_paths = [p for p in paths if p.lower().endswith(('.wav', '.mp3'))]
-        if not audio_paths: return
-        
+        if not audio_paths:
+            return
+
         current_tab = self.tabview.get()
-        if current_tab == "多音频合并 (拼长音)":
+        if current_tab == self.tab_merge_name:
+            added = False
             for p in audio_paths:
                 if p not in self.merge_files:
                     self.merge_files.append(p)
-                    # 计算显示路径：上级目录 + 文件名
-                    display_p = "/".join(p.replace("\\", "/").split("/")[-2:])
-                    self.tree_merge.insert("", tk.END, values=(p, display_p))
+                    self._insert_merge_file(p)
+                    added = True
+            if added:
+                self.sync_merge_files_from_tree()
         else:
             self.split_source = audio_paths[0]
-            self.lbl_split_source.configure(text=os.path.basename(audio_paths[0]))
+            self.lbl_split_source.configure(text=self._short_path(audio_paths[0], max_parts=3), text_color=self.colors["text_soft"])
             self.custom_segments = None  # 更换文件时重置编辑数据
 
     def add_merge_files(self):
@@ -875,19 +1265,25 @@ class AudioToolkitApp(ctk.CTk):
         for f in files:
             if f not in self.merge_files:
                 self.merge_files.append(f)
-                display_f = "/".join(f.replace("\\", "/").split("/")[-2:])
-                self.tree_merge.insert("", tk.END, values=(f, display_f))
+                self._insert_merge_file(f)
+        self.sync_merge_files_from_tree()
 
     def remove_merge_file(self, event=None):
         selected = self.tree_merge.selection()
         for item in selected:
-            full_path = self.tree_merge.item(item, 'values')[0]
-            if full_path in self.merge_files: self.merge_files.remove(full_path)
+            values = self.tree_merge.item(item, 'values')
+            if values:
+                full_path = values[0]
+                if full_path in self.merge_files:
+                    self.merge_files.remove(full_path)
             self.tree_merge.delete(item)
+        self.sync_merge_files_from_tree()
+        self._refresh_merge_ui()
 
     def clear_merge_list(self):
         self.merge_files.clear()
         self.tree_merge.delete(*self.tree_merge.get_children())
+        self._refresh_merge_ui()
 
     def on_tree_drag_start(self, event):
         item = self.tree_merge.identify_row(event.y)
@@ -939,49 +1335,56 @@ class AudioToolkitApp(ctk.CTk):
     def import_wordlist_for_sort(self):
         if not self.merge_files:
             return messagebox.showwarning("提示", "合并列表为空，请先添加音频文件")
-            
+
         path = filedialog.askopenfilename(filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")])
-        if not path: return
-        
+        if not path:
+            return
+
         try:
-            with open(path, 'r', encoding='utf-8') as f: text = f.read()
-        except:
+            with open(path, 'r', encoding='utf-8') as f:
+                text = f.read()
+        except UnicodeDecodeError:
             try:
-                with open(path, 'r', encoding='gbk') as f: text = f.read()
-            except: return messagebox.showerror("错误", "读取文件失败")
-            
+                with open(path, 'r', encoding='gbk') as f:
+                    text = f.read()
+            except Exception:
+                return messagebox.showerror("错误", "读取文件失败")
+        except Exception:
+            return messagebox.showerror("错误", "读取文件失败")
+
         flat_words = parse_wordlist(text)
-        if not flat_words: return messagebox.showwarning("提示", "字表解析结果为空")
-        
+        if not flat_words:
+            return messagebox.showwarning("提示", "字表解析结果为空")
+
         # 模糊匹配排序
         sorted_paths = []
         available_paths = list(self.merge_files)
         used_indices = set()
-        
+
         for word in flat_words:
             idx = fuzzy_match_word_to_path(word, available_paths, used_indices=list(used_indices))
             if idx is not None:
                 sorted_paths.append(available_paths[idx])
                 used_indices.add(idx)
-        
+
         # 将未匹配到的文件追加到末尾
         for i, p in enumerate(available_paths):
             if i not in used_indices:
                 sorted_paths.append(p)
-                
+
         # 更新 UI
         self.merge_files = sorted_paths
         self.tree_merge.delete(*self.tree_merge.get_children())
         for p in self.merge_files:
-            self.tree_merge.insert("", tk.END, values=(p,))
-            
+            self._insert_merge_file(p)
+
         messagebox.showinfo("排序完成", f"已根据字表重新排序 {len(used_indices)} 个文件。")
 
     def select_split_source(self):
         f = filedialog.askopenfilename(filetypes=[("Audio Files", "*.wav *.mp3")])
         if f:
             self.split_source = f
-            self.lbl_split_source.configure(text=os.path.basename(f))
+            self.lbl_split_source.configure(text=self._short_path(f, max_parts=3), text_color=self.colors["text_soft"])
             self.custom_segments = None
 
     def import_wordlist(self):
@@ -1034,17 +1437,22 @@ class AudioToolkitApp(ctk.CTk):
             finally:
                 self.after(0, lambda: self.set_loading(False))
         
-        threading.Thread(target=run, daemon=True).start()
+        start_safe_thread(run)
 
     def set_loading(self, state, msg=""):
+        if getattr(self, "_ui_thread_id", None) is not None and threading.get_ident() != self._ui_thread_id:
+            self.after(0, lambda: self.set_loading(state, msg))
+            return
+
         if state:
-            self.lbl_status.configure(text=msg, text_color="#3B82F6")
-            self.progress.pack(fill=tk.X, side=tk.BOTTOM, padx=0, pady=0)
-            self.progress.set(0)
+            self.lbl_status.configure(text=msg or "处理中...", text_color="#1D4ED8")
+            self.progress.grid()
+            self.progress.set(0.06)
             self.update_idletasks()
         else:
-            self.lbl_status.configure(text="就绪" if not msg else msg, text_color="#10B981")
-            self.progress.pack_forget()
+            self.lbl_status.configure(text="就绪" if not msg else msg, text_color="#047857")
+            self.progress.set(0)
+            self.progress.grid_remove()
 
     def update_progress(self, val):
         self.after(0, lambda: self.progress.set(val))
@@ -1085,7 +1493,7 @@ class AudioToolkitApp(ctk.CTk):
             finally:
                 self.after(0, lambda: self.set_loading(False))
                 
-        threading.Thread(target=run, daemon=True).start()
+        start_safe_thread(run)
 
     def on_visual_split_confirm(self, segments, is_update=False, deleted_count=0):
         parsed_segs = []
@@ -1137,7 +1545,7 @@ class AudioToolkitApp(ctk.CTk):
             finally:
                 self.after(0, lambda: self.set_loading(False))
                 
-        threading.Thread(target=run, daemon=True).start()
+        start_safe_thread(run)
 
     # ==========================
     # 核心任务：拆分
@@ -1215,43 +1623,68 @@ class AudioToolkitApp(ctk.CTk):
             finally:
                 self.after(0, lambda: self.set_loading(False))
                 
-        threading.Thread(target=run, daemon=True).start()
+        start_safe_thread(run)
 
     def build_project_tab(self):
-        # Left Panel for Actions and Info
-        left_panel = ctk.CTkFrame(self.tab_project, fg_color="#F9FAFB", corner_radius=10, width=280)
-        left_panel.pack(side=tk.LEFT, fill=tk.Y, padx=(10, 5), pady=10)
-        left_panel.pack_propagate(False)
-        
-        ctk.CTkLabel(left_panel, text="工程操作", font=self.font_title, text_color="#111827").pack(pady=15, padx=15, anchor="w")
-        
-        self.btn_open_project = CTkReleaseButton(
-            left_panel, text=" 选择工程文件 (.teproj)", image=self.icons.get("import_white"), compound="left",
-            command=self.select_project_file, **self.btn_kwargs
+        content = ctk.CTkFrame(self.tab_project, fg_color="transparent")
+        content.pack(fill=tk.BOTH, expand=True, padx=20, pady=18)
+        content.grid_columnconfigure(0, weight=0)
+        content.grid_columnconfigure(1, weight=1)
+        content.grid_rowconfigure(0, weight=1)
+
+        left_panel = self._make_card(content, fg_color=self.colors["surface_soft"], width=310)
+        left_panel.grid(row=0, column=0, sticky="ns", padx=(0, 16))
+        left_panel.grid_propagate(False)
+        self._section_header(left_panel, "工程操作", "打开 .teproj 后可预览结构，也可另存为 zip。", icon_text="03")
+
+        actions = ctk.CTkFrame(left_panel, fg_color="transparent")
+        actions.pack(fill=tk.X, padx=20, pady=(4, 18))
+        self.btn_open_project = self._make_button(
+            actions,
+            "选择工程文件",
+            self.select_project_file,
+            tone="primary",
+            image=self.icons.get("import_white"),
         )
-        self.btn_open_project.pack(fill=tk.X, padx=15, pady=(5, 10))
-        
-        self.btn_convert_zip = CTkReleaseButton(
-            left_panel, text=" 转换为 ZIP 压缩包", image=self.icons.get("tab_batch"), compound="left",
-            fg_color="#6366F1", hover_color="#4F46E5", command=self.convert_project_to_zip, **self.btn_kwargs
+        self.btn_open_project.pack(fill=tk.X, pady=(0, 10))
+
+        self.btn_convert_zip = self._make_button(
+            actions,
+            "转换为 ZIP 压缩包",
+            self.convert_project_to_zip,
+            tone="purple",
+            image=self.icons.get("tab_batch"),
         )
-        self.btn_convert_zip.pack(fill=tk.X, padx=15, pady=(5, 15))
-        self.btn_convert_zip.configure(state="disabled") # Disabled until a project is loaded
-        
-        # Info Card
-        ctk.CTkLabel(left_panel, text="文件信息", font=self.font_title, text_color="#111827").pack(pady=(15, 5), padx=15, anchor="w")
-        
-        self.lbl_proj_file = ctk.CTkLabel(left_panel, text="未加载任何工程文件", font=self.font_main, text_color="#6B7280", wraplength=250, justify="left")
-        self.lbl_proj_file.pack(padx=15, pady=5, anchor="w")
-        
-        # Right Panel for Preview
-        right_panel = ctk.CTkFrame(self.tab_project, fg_color="transparent")
-        right_panel.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(5, 10), pady=10)
-        
-        ctk.CTkLabel(right_panel, text="📝 工程内容预览", font=self.font_title, text_color="#111827").pack(anchor="w", pady=(0, 10))
-        
+        self.btn_convert_zip.pack(fill=tk.X)
+        self.btn_convert_zip.configure(state="disabled")  # Disabled until a project is loaded
+
+        info_box = ctk.CTkFrame(left_panel, fg_color=self.colors["surface"], corner_radius=14, border_width=1, border_color=self.colors["border"])
+        info_box.pack(fill=tk.X, padx=20, pady=(0, 18))
+        ctk.CTkLabel(info_box, text="文件信息", font=ctk.CTkFont(family=self.font_family, size=13, weight="bold"), text_color=self.colors["text"]).pack(anchor="w", padx=14, pady=(12, 4))
+        self.lbl_proj_file = ctk.CTkLabel(
+            info_box,
+            text="未加载任何工程文件",
+            font=self.font_small,
+            text_color=self.colors["muted"],
+            wraplength=248,
+            justify="left",
+        )
+        self.lbl_proj_file.pack(fill=tk.X, padx=14, pady=(0, 14), anchor="w")
+
+
+
+        right_panel = self._make_card(content)
+        right_panel.grid(row=0, column=1, sticky="nsew")
+        right_panel.grid_rowconfigure(1, weight=1)
+        right_panel.grid_columnconfigure(0, weight=1)
+
+        header = ctk.CTkFrame(right_panel, fg_color="transparent")
+        header.grid(row=0, column=0, sticky="ew", padx=20, pady=(18, 12))
+        ctk.CTkLabel(header, text="工程内容预览", font=self.font_title, text_color=self.colors["text"]).pack(anchor="w")
+        ctk.CTkLabel(header, text="读取 project.json、发音人、条目、音频资源和缓存数据。", font=self.font_small, text_color=self.colors["muted"]).pack(anchor="w", pady=(4, 0))
+
         self.preview_container = ctk.CTkFrame(right_panel, fg_color="transparent")
-        self.preview_container.pack(fill=tk.BOTH, expand=True)
+        self.preview_container.grid(row=1, column=0, sticky="nsew", padx=20, pady=(0, 20))
         self.show_placeholder()
 
     def select_project_file(self):
@@ -1265,47 +1698,47 @@ class AudioToolkitApp(ctk.CTk):
 
     def show_placeholder(self):
         self.clear_preview_container()
-        card = ctk.CTkFrame(self.preview_container, fg_color="#FFFFFF", corner_radius=12, border_width=1, border_color="#E5E7EB")
+        card = ctk.CTkFrame(self.preview_container, fg_color=self.colors["surface_soft"], corner_radius=16, border_width=1, border_color=self.colors["border"])
         card.pack(fill=tk.BOTH, expand=True)
-        
+
         inner = ctk.CTkFrame(card, fg_color="transparent")
         inner.place(relx=0.5, rely=0.5, anchor="center")
-        
-        ctk.CTkLabel(inner, text="📁", font=("Microsoft YaHei", 64)).pack(pady=(0, 15))
-        ctk.CTkLabel(inner, text="暂无工程文件数据", font=ctk.CTkFont(family="Microsoft YaHei", size=18, weight="bold"), text_color="#1F2937").pack(pady=5)
-        ctk.CTkLabel(inner, text="请在左侧选择并打开一个 .teproj 工程文件来预览其内部的数据结构。", font=ctk.CTkFont(family="Microsoft YaHei", size=13), text_color="#6B7280", justify="center").pack(pady=5)
+
+        ctk.CTkLabel(inner, text="▣", font=ctk.CTkFont(family=self.font_family, size=54, weight="bold"), text_color=self.colors["muted_soft"]).pack(pady=(0, 12))
+        ctk.CTkLabel(inner, text="暂无工程文件数据", font=ctk.CTkFont(family=self.font_family, size=20, weight="bold"), text_color=self.colors["text"]).pack(pady=4)
+        ctk.CTkLabel(inner, text="请在左侧点击“选择工程文件”并打开 .teproj。", font=self.font_small, text_color=self.colors["muted"], justify="center").pack(pady=4)
 
     def show_loading_placeholder(self):
         self.clear_preview_container()
-        card = ctk.CTkFrame(self.preview_container, fg_color="#FFFFFF", corner_radius=12, border_width=1, border_color="#E5E7EB")
+        card = ctk.CTkFrame(self.preview_container, fg_color=self.colors["surface_soft"], corner_radius=16, border_width=1, border_color=self.colors["border"])
         card.pack(fill=tk.BOTH, expand=True)
-        
+
         inner = ctk.CTkFrame(card, fg_color="transparent")
         inner.place(relx=0.5, rely=0.5, anchor="center")
-        
-        ctk.CTkLabel(inner, text="⏳", font=("Microsoft YaHei", 48)).pack(pady=(0, 15))
-        ctk.CTkLabel(inner, text="正在读取工程数据，请稍候...", font=self.font_main, text_color="#374151").pack()
+
+        ctk.CTkLabel(inner, text="正在读取工程数据...", font=ctk.CTkFont(family=self.font_family, size=18, weight="bold"), text_color=self.colors["text_soft"]).pack(pady=(0, 8))
+        ctk.CTkLabel(inner, text="如果工程包含大量音频资源，预览生成可能需要几秒。", font=self.font_small, text_color=self.colors["muted"]).pack()
 
     def show_error_placeholder(self, error_msg):
         self.clear_preview_container()
-        card = ctk.CTkFrame(self.preview_container, fg_color="#FFFFFF", corner_radius=12, border_width=1, border_color="#EF4444")
+        card = ctk.CTkFrame(self.preview_container, fg_color="#FFF7F7", corner_radius=16, border_width=1, border_color="#FCA5A5")
         card.pack(fill=tk.BOTH, expand=True)
-        
+
         inner = ctk.CTkFrame(card, fg_color="transparent")
         inner.place(relx=0.5, rely=0.5, anchor="center")
-        
-        ctk.CTkLabel(inner, text="❌", font=("Microsoft YaHei", 48)).pack(pady=(0, 15))
-        ctk.CTkLabel(inner, text="无法解析工程文件", font=ctk.CTkFont(family="Microsoft YaHei", size=18, weight="bold"), text_color="#EF4444").pack(pady=5)
-        
-        err_box = ctk.CTkTextbox(inner, width=450, height=120, corner_radius=8, border_width=1, border_color="#FCA5A5", fg_color="#FEF2F2", text_color="#991B1B")
-        err_box.pack(pady=10)
+
+        ctk.CTkLabel(inner, text="无法解析工程文件", font=ctk.CTkFont(family=self.font_family, size=20, weight="bold"), text_color=self.colors["danger"]).pack(pady=(0, 8))
+        ctk.CTkLabel(inner, text="请确认它是有效的 PhonTracer .teproj 文件。", font=self.font_small, text_color="#991B1B").pack(pady=(0, 10))
+
+        err_box = ctk.CTkTextbox(inner, width=460, height=120, corner_radius=12, border_width=1, border_color="#FCA5A5", fg_color="#FEF2F2", text_color="#991B1B")
+        err_box.pack(pady=8)
         err_box.insert("1.0", error_msg)
         err_box.configure(state="disabled")
 
     def create_detail_row(self, parent, row, label_text, val_text):
-        lbl = ctk.CTkLabel(parent, text=label_text, font=ctk.CTkFont(family="Microsoft YaHei", size=12, weight="bold"), text_color="#4B5563")
+        lbl = ctk.CTkLabel(parent, text=label_text, font=ctk.CTkFont(family=self.font_family, size=12, weight="bold"), text_color=self.colors["muted"])
         lbl.grid(row=row, column=0, sticky="w", padx=10, pady=3)
-        val = ctk.CTkLabel(parent, text=val_text, font=ctk.CTkFont(family="Consolas", size=12), text_color="#1F2937")
+        val = ctk.CTkLabel(parent, text=val_text, font=ctk.CTkFont(family="Consolas", size=12), text_color=self.colors["text"])
         val.grid(row=row, column=1, sticky="w", padx=5, pady=3)
 
     def display_project_preview(self, project_data, namelist):
@@ -1515,42 +1948,33 @@ class AudioToolkitApp(ctk.CTk):
         self.loaded_teproj_path = path
         self.lbl_proj_file.configure(
             text=f"已加载工程:\n{os.path.basename(path)}\n\n大小: {os.path.getsize(path) / (1024 * 1024):.2f} MB",
-            text_color="#10B981"
+            text_color=self.colors["success"]
         )
         
         self.show_loading_placeholder()
-        
-        def run():
-            try:
-                if not zipfile.is_zipfile(path):
-                    raise ValueError("所选文件不是有效的 ZIP 格式压缩包")
-                    
-                with zipfile.ZipFile(path, 'r') as zf:
-                    namelist = zf.namelist()
-                    if "project.json" not in namelist:
-                        raise ValueError("未在压缩包中找到 project.json，这可能不是一个合法的 PhonTracer 工程文件")
-                    
-                    with zf.open("project.json") as f:
-                        project_data = json.loads(f.read().decode('utf-8'))
-                
-                def update_ui():
-                    self.display_project_preview(project_data, namelist)
-                    self.btn_convert_zip.configure(state="normal")
-                    
-                self.after(0, update_ui)
-                
-            except Exception as e:
-                import traceback
-                traceback.print_exc()
-                err_msg = f"❌ 无法解析工程文件: {str(e)}"
-                def show_err():
-                    self.show_error_placeholder(err_msg)
-                    self.btn_convert_zip.configure(state="disabled")
-                    self.lbl_proj_file.configure(text="解析失败", text_color="#EF4444")
-                    messagebox.showerror("错误", f"解析 .teproj 文件失败:\n{str(e)}")
-                self.after(0, show_err)
-                
-        threading.Thread(target=run, daemon=True).start()
+        try:
+            if not zipfile.is_zipfile(path):
+                raise ValueError("所选文件不是有效的 ZIP 格式压缩包")
+
+            with zipfile.ZipFile(path, 'r') as zf:
+                namelist = zf.namelist()
+                if "project.json" not in namelist:
+                    raise ValueError("未在压缩包中找到 project.json，这可能不是一个合法的 PhonTracer 工程文件")
+
+                with zf.open("project.json") as f:
+                    project_data = json.loads(f.read().decode('utf-8'))
+
+            self.display_project_preview(project_data, namelist)
+            self.btn_convert_zip.configure(state="normal")
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            err_msg = f"❌ 无法解析工程文件: {str(e)}"
+            self.show_error_placeholder(err_msg)
+            self.btn_convert_zip.configure(state="disabled")
+            self.lbl_proj_file.configure(text="解析失败", text_color=self.colors["danger"])
+            messagebox.showerror("错误", f"解析 .teproj 文件失败:\n{str(e)}")
 
     def format_project_preview(self, project_data, namelist):
         def pad_chinese(text, width):
