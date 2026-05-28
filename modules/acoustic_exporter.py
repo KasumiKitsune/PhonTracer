@@ -219,6 +219,7 @@ class AcousticChartExporter:
             'image_ratio_custom': lambda: getattr(self, 'var_image_ratio_custom').get() if hasattr(self, 'var_image_ratio_custom') else None,
             'image_pixel_mode': lambda: getattr(self, 'combo_pixel_mode').get() if hasattr(self, 'combo_pixel_mode') else None,
             'image_pixel_custom': lambda: int(self.entry_pixel_custom.get().strip()) if (hasattr(self, 'entry_pixel_custom') and self.entry_pixel_custom.get().strip().isdigit()) else 1080,
+            'high_precision': lambda: getattr(self, 'var_high_precision').get() if hasattr(self, 'var_high_precision') else None,
         }
 
         if name in gui_mappings:
@@ -536,7 +537,7 @@ class AcousticChartExporter:
         elif chart_type == "distribution":
             fig = self._plot_tone_distribution(data_entries, group_key, scale)
         elif chart_type == "density":
-            fig = self._plot_temporal_density(data_entries, group_key)
+            fig = self._plot_temporal_density(data_entries, group_key, is_preview=is_preview)
         elif chart_type == "quality":
             fig = self._plot_quality_check(data_entries)
         elif chart_type == "overview_heatmap":
@@ -544,7 +545,7 @@ class AcousticChartExporter:
         elif chart_type == "formant_overview_heatmap":
             fig = self._plot_formant_overview_heatmap(data_entries, group_key, scale)
         elif chart_type == "formant_space":
-            fig = self._plot_formant_vowel_space(data_entries, group_key, scale)
+            fig = self._plot_formant_vowel_space(data_entries, group_key, scale, is_preview=is_preview)
         elif chart_type == "formant_trajectory":
             fig = self._plot_formant_trajectories(data_entries, group_key, scale)
         elif chart_type == "formant_density":
@@ -708,8 +709,10 @@ class AcousticChartExporter:
                     std_y = np.nanstd(interpolated_ys, axis=0)
 
                     if "个体浅色" in content:
-                        for cy in interpolated_ys:
-                            ax.plot(grid_x, cy, color=color, linewidth=0.6, alpha=0.18)
+                        from matplotlib.collections import LineCollection
+                        segments = [np.column_stack((grid_x, cy)) for cy in interpolated_ys]
+                        lc = LineCollection(segments, colors=color, linewidths=0.6, alpha=0.18)
+                        ax.add_collection(lc)
                     elif "置信区间" in content:
                         ax.fill_between(grid_x, mean_y - std_y, mean_y + std_y, color=color, alpha=0.15)
 
@@ -1379,7 +1382,7 @@ class AcousticChartExporter:
         fig, ax = plt.subplots()
         return fig
 
-    def _plot_temporal_density(self, data_entries, group_key):
+    def _plot_temporal_density(self, data_entries, group_key, is_preview=True):
         bw_method = float(self.get_param('density_bw', 0.15))
         f0_mode_val = self.get_param('density_f0_mode', 'percentile')
         facet_val = self.get_param('density_facet', 'group')
@@ -1555,7 +1558,12 @@ class AcousticChartExporter:
             if len(x_arr) == 0:
                 ax.text(0.5, 0.5, "没有足够的有效数据点", ha='center', va='center')
                 continue
-            max_kde_points = int(self.get_param('density_max_points', 12000))
+            high_prec = (not is_preview) or bool(self.get_param('high_precision', False))
+            if high_prec:
+                max_kde_points = int(self.get_param('density_max_points', 12000))
+            else:
+                max_kde_points = 3000
+
             if len(x_arr) > max_kde_points and max_kde_points > 0:
                 sample_idx = np.linspace(0, len(x_arr) - 1, max_kde_points, dtype=int)
                 x_arr = x_arr[sample_idx]
@@ -1565,8 +1573,12 @@ class AcousticChartExporter:
             try:
                 self._check_export_cancelled()
                 kernel = gaussian_kde(positions, bw_method=bw_method)
-                grid_x = max(120, min(240, int(80 * max_syls)))
-                grid_y = 90
+                if high_prec:
+                    grid_x = max(120, min(240, int(80 * max_syls)))
+                    grid_y = 90
+                else:
+                    grid_x = max(60, min(120, int(40 * max_syls)))
+                    grid_y = 50
                 xi, yi = np.mgrid[xmin:xmax:complex(0, grid_x), ymin:ymax:complex(0, grid_y)]
                 zi = kernel(np.vstack([xi.flatten(), yi.flatten()]))
                 zi = zi.reshape(xi.shape)
@@ -1640,8 +1652,8 @@ class AcousticChartExporter:
             max_syls = max(len(e['syl_data']) for e in data_entries)
             num_points = self.project_tree.app_state_params.get('pts', 11)
 
-            normal_drawn = False
-            outlier_drawn = False
+            normal_lines = []
+            outlier_lines = []
 
             for entry in data_entries:
                 y_series = entry['normalized_syl_data'] if is_t_value else entry['syl_data']
@@ -1658,14 +1670,21 @@ class AcousticChartExporter:
 
                 has_warning = any(w.startswith("[警告]") or w.startswith("[致命]") for w in entry.get('warnings', []))
 
+                seg = np.column_stack((x_flat, y_flat))
                 if has_warning:
-                    ax.plot(x_flat, y_flat, color="#EF4444", linewidth=1.2, alpha=0.75, linestyle="--",
-                            label="存在质量异常的发音" if not outlier_drawn else "")
-                    outlier_drawn = True
+                    outlier_lines.append(seg)
                 else:
-                    ax.plot(x_flat, y_flat, color="#3B82F6", linewidth=0.75, alpha=0.3,
-                            label="质量良好的常规发音" if not normal_drawn else "")
-                    normal_drawn = True
+                    normal_lines.append(seg)
+
+            from matplotlib.collections import LineCollection
+            if normal_lines:
+                lc_norm = LineCollection(normal_lines, colors="#3B82F6", linewidths=0.75, alpha=0.3)
+                ax.add_collection(lc_norm)
+                ax.plot([], [], color="#3B82F6", linewidth=0.75, alpha=0.3, label="质量良好的常规发音")
+            if outlier_lines:
+                lc_out = LineCollection(outlier_lines, colors="#EF4444", linewidths=1.2, alpha=0.75, linestyles="--")
+                ax.add_collection(lc_out)
+                ax.plot([], [], color="#EF4444", linewidth=1.2, alpha=0.75, linestyle="--", label="存在质量异常的发音")
 
             if max_syls > 1:
                 for k in range(1, max_syls):
@@ -2057,7 +2076,7 @@ class AcousticChartExporter:
                 all_tau.extend(s_tau.tolist())
         return np.asarray(all_f1, dtype=float), np.asarray(all_f2, dtype=float), np.asarray(all_tau, dtype=float)
 
-    def _draw_formant_density_layer(self, ax, data_entries, show_raw=False, show_contours=True, bw_method=None, alpha_max=0.58, zorder=1, transform_fn=None):
+    def _draw_formant_density_layer(self, ax, data_entries, show_raw=False, show_contours=True, bw_method=None, alpha_max=0.58, zorder=1, transform_fn=None, is_preview=True):
         self._report_export_progress(0.24, "正在收集共振峰时空密度数据...")
         all_f1, all_f2, all_tau = self._get_formant_density_points(data_entries)
         if len(all_f1) < 4:
@@ -2083,7 +2102,14 @@ class AcousticChartExporter:
         f1_grid_min, f1_grid_max = (max(50.0, f1_p1 - f1_pad) if is_hz else (f1_p1 - f1_pad)), f1_p99 + f1_pad
         f2_grid_min, f2_grid_max = (max(500.0, f2_p1 - f2_pad) if is_hz else (f2_p1 - f2_pad)), f2_p99 + f2_pad
 
-        grid_n = 190
+        high_prec = (not is_preview) or bool(self.get_param('high_precision', False))
+        if not high_prec and len(all_f1) > 4000:
+            step = len(all_f1) // 4000
+            all_f1 = all_f1[::step]
+            all_f2 = all_f2[::step]
+            all_tau = all_tau[::step]
+
+        grid_n = 190 if high_prec else 70
         grid_f2, grid_f1 = np.meshgrid(
             np.linspace(f2_grid_min, f2_grid_max, grid_n),
             np.linspace(f1_grid_min, f1_grid_max, grid_n)
@@ -2096,7 +2122,7 @@ class AcousticChartExporter:
             bw = 0.14
         bw = float(np.clip(bw, 0.06, 0.32))
 
-        tau_layers = np.linspace(0.0, 1.0, 9)
+        tau_layers = np.linspace(0.0, 1.0, 9 if high_prec else 5)
         kde_layers = []
         sigma_tau = 0.11
         for layer_idx, tau_k in enumerate(tau_layers):
@@ -2163,7 +2189,7 @@ class AcousticChartExporter:
         sm.set_array([])
         return sm, all_f1.tolist(), all_f2.tolist()
 
-    def _draw_formant_space_panel(self, ax, data_entries, groupby_val, label_mode, ellipse_mode, show_raw, time_gradient, density_overlay, density_sm_holder=None, transform_fn=None, fixed_limits=None):
+    def _draw_formant_space_panel(self, ax, data_entries, groupby_val, label_mode, ellipse_mode, show_raw, time_gradient, density_overlay, density_sm_holder=None, transform_fn=None, fixed_limits=None, is_preview=True):
         ax.set_facecolor("#F8FAFC")
         ax.grid(True, linestyle="--", alpha=0.25, linewidth=0.8)
 
@@ -2176,7 +2202,8 @@ class AcousticChartExporter:
                 bw_method=self.get_param('formant_density_bw', 0.14),
                 alpha_max=0.52,
                 zorder=1,
-                transform_fn=transform_fn
+                transform_fn=transform_fn,
+                is_preview=is_preview
             )
             if sm is not None and density_sm_holder is not None and density_sm_holder.get('sm') is None:
                 density_sm_holder['sm'] = sm
@@ -2436,7 +2463,7 @@ class AcousticChartExporter:
         else:
             return lambda f1, f2: (f1, f2)
 
-    def _plot_formant_vowel_space(self, data_entries, group_key, scale):
+    def _plot_formant_vowel_space(self, data_entries, group_key, scale, is_preview=True):
         groupby_val = self.get_param('groupby', 'group')
         label_mode = self.get_param('formant_label_mode', '显示分组标签')
         ellipse_mode = self.get_param('formant_ellipse', '1-sigma 置信椭圆')
@@ -2518,7 +2545,7 @@ class AcousticChartExporter:
             self._draw_formant_space_panel(
                 ax, facet_entries, groupby_val, label_mode, ellipse_mode,
                 show_raw, time_gradient, density_overlay, density_sm_holder,
-                transform_fn=transform_fn, fixed_limits=fixed_limits
+                transform_fn=transform_fn, fixed_limits=fixed_limits, is_preview=is_preview
             )
             title_text = "元音共振峰空间分布图" if facet_name == "Default" else str(facet_name)
             if len(title_text) > 28:
@@ -2667,9 +2694,13 @@ class AcousticChartExporter:
                 std_f2 = np.nanstd(f2_arr, axis=0)
 
             if "个体浅色细线" in traj_style:
-                for single_f1, single_f2 in zip(f1_arr, f2_arr):
-                    ax.plot(x_pts, single_f1, color=color, alpha=0.1, linewidth=0.8)
-                    ax.plot(x_pts, single_f2, color=color, alpha=0.1, linewidth=0.8)
+                from matplotlib.collections import LineCollection
+                segments_f1 = [np.column_stack((x_pts, single_f1)) for single_f1 in f1_arr]
+                segments_f2 = [np.column_stack((x_pts, single_f2)) for single_f2 in f2_arr]
+                lc_f1 = LineCollection(segments_f1, colors=color, alpha=0.1, linewidths=0.8)
+                lc_f2 = LineCollection(segments_f2, colors=color, alpha=0.1, linewidths=0.8)
+                ax.add_collection(lc_f1)
+                ax.add_collection(lc_f2)
             elif "置信区间阴影" in traj_style:
                 ax.fill_between(x_pts, mean_f1 - std_f1, mean_f1 + std_f1, color=color, alpha=0.1)
                 ax.fill_between(x_pts, mean_f2 - std_f2, mean_f2 + std_f2, color=color, alpha=0.1)
@@ -3081,6 +3112,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
 
         # Live refresh switch
         self.var_live_refresh = ctk.BooleanVar(value=True)
+        self.var_high_precision = ctk.BooleanVar(value=False)
         self._debounce_timer_id = None
 
         # Legend configuration
@@ -3212,10 +3244,14 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         )
         self.switch_live_refresh.pack(side=tk.LEFT, padx=10)
 
+        self.switch_high_precision = ctk.CTkSwitch(
+            self.bottom_frame, text="高渲染精细度", variable=self.var_high_precision,
+            font=self.font_main, command=self.update_preview
+        )
+        self.switch_high_precision.pack(side=tk.LEFT, padx=10)
+
         self.btn_export = ctk.CTkButton(self.bottom_frame, text="💾 导出", width=120, height=38, corner_radius=19, font=self.font_title, command=self.on_confirm)
         self.btn_export.pack(side=tk.RIGHT, padx=5)
-
-        ctk.CTkButton(self.bottom_frame, text="取消", width=100, height=38, corner_radius=19, fg_color="#F3F4F6", text_color="#4B5563", hover_color="#E5E7EB", font=self.font_main, command=self._on_close_request).pack(side=tk.RIGHT, padx=5)
 
     def _prev_page(self):
         if not self.all_speakers:
@@ -4102,6 +4138,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             'qc_view', 'overview_metric',
             'legend_loc', 'legend_outside', 'intention',
             'image_ratio_mode', 'image_ratio_custom', 'image_pixel_mode', 'image_pixel_custom',
+            'high_precision',
         ]
         snapshot = {}
         for key in keys:

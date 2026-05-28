@@ -22,8 +22,8 @@ logger = logging.getLogger(__name__)
 
 
 class CanvasButton(tk.Canvas):
-    def __init__(self, parent, size=32, image=None, bg_color="white", active_bg="#3B82F6", hover_bg="#F3F4F6", active_hover="#2563EB", border_color="#E5E7EB", is_active=False, command=None):
-        super().__init__(parent, width=size, height=size, bg=bg_color, highlightthickness=0, cursor="hand2")
+    def __init__(self, parent, size=36, image=None, bg_color="white", active_bg="#3B82F6", hover_bg="#F3F4F6", active_hover="#2563EB", border_color="#E5E7EB", is_active=False, command=None):
+        super().__init__(parent, width=size, height=size, bg=bg_color, highlightthickness=0, borderwidth=0, cursor="hand2")
         self.size = size
         self.image = image
         self.bg_color = bg_color
@@ -215,21 +215,21 @@ class ProjectTreePanel:
         self.filter_var = ctk.StringVar(value="全部")
 
         self.btn_filter_all = CanvasButton(
-            search_filter_frame, size=32,
+            search_filter_frame, size=36,
             image=self.tk_icons.get("filter_all_black"),
             command=lambda: self._on_filter_btn_click("全部")
         )
         self.btn_filter_all.pack(side=tk.LEFT, padx=(0, 4))
 
         self.btn_filter_warning = CanvasButton(
-            search_filter_frame, size=32,
+            search_filter_frame, size=36,
             image=self.tk_icons.get("filter_warning_black"),
             command=lambda: self._on_filter_btn_click("需检查")
         )
         self.btn_filter_warning.pack(side=tk.LEFT, padx=(0, 4))
 
         self.btn_filter_check = CanvasButton(
-            search_filter_frame, size=32,
+            search_filter_frame, size=36,
             image=self.tk_icons.get("filter_check_black"),
             command=lambda: self._on_filter_btn_click("已修改")
         )

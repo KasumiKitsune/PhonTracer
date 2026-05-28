@@ -16,7 +16,7 @@ class FormantDetectionDialog(ctk.CTkToplevel):
         self.resizable(False, False)
 
         # 居中显示
-        width, height = 620, 620
+        width, height = 620, 580
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         x = (screen_width - width) // 2
@@ -178,20 +178,7 @@ class FormantDetectionDialog(ctk.CTkToplevel):
             )
             btn_apply.grid(row=0, column=1, sticky="e", padx=15, pady=15)
 
-        # 底部取消按钮
-        btn_cancel = ctk.CTkButton(
-            card,
-            text="取消",
-            font=self.font_main,
-            width=90,
-            height=32,
-            corner_radius=16,
-            fg_color="#F3F4F6",
-            text_color="#4B5563",
-            hover_color="#E5E7EB",
-            command=self.destroy
-        )
-        btn_cancel.pack(pady=(12, 10))
+
 
     def apply_and_close(self, max_hz, count, window_length, pre_emphasis):
         self.destroy()

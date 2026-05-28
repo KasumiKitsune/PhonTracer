@@ -521,7 +521,7 @@ def extract_f0(snd: parselmouth.Sound, params: Dict[str, Any]) -> Dict[str, Any]
             pitch_floor=pitch_floor,
             pitch_ceiling=pitch_ceiling,
             voicing_threshold=voicing_threshold,
-            very_accurate=True,
+            very_accurate=bool(params.get('very_accurate', True)),
             octave_jump_cost=0.9
         )
         xs = pitch.xs()

@@ -576,7 +576,9 @@ class PhoneticsApp:
                     except Exception:
                         pass
 
-                if key == "blue_dot":
+                if "filter_" in key:
+                    img_tk = img.resize((18, 18), Image.Resampling.LANCZOS)
+                elif key == "blue_dot":
                     try:
                         # Resize the blue dot to 8x8
                         img_small = img.resize((8, 8), Image.Resampling.LANCZOS)
@@ -591,7 +593,7 @@ class PhoneticsApp:
                     img_tk = img.resize((16, 16), Image.Resampling.LANCZOS)
 
                 if "filter_" in key:
-                    self.icons[key] = ctk.CTkImage(light_image=img, dark_image=img, size=(16, 16))
+                    self.icons[key] = ctk.CTkImage(light_image=img, dark_image=img, size=(18, 18))
                 else:
                     self.icons[key] = ctk.CTkImage(light_image=img, dark_image=img, size=(20, 20))
                 self.tk_icons[key] = ImageTk.PhotoImage(img_tk)
@@ -3522,17 +3524,25 @@ class PhoneticsApp:
                 'label': item.get('label')
             })
 
+        # 抽样至多 15 个样本进行代表性估算，兼顾精度与计算开销
+        import numpy as np
+        if len(items_snapshot) > 15:
+            indices = np.linspace(0, len(items_snapshot) - 1, 15, dtype=int)
+            items_snapshot = [items_snapshot[idx] for idx in indices]
+
         params_temp = {
             'f0_engine': self.last_params.get('f0_engine', 'praat'),
             'pitch_floor': 50,
             'pitch_ceiling': 700,
-            'voicing_threshold': self.last_params.get('voicing_threshold', 0.25)
+            'voicing_threshold': self.last_params.get('voicing_threshold', 0.25),
+            'very_accurate': False  # 快速估算模式
         }
 
         def run_detection():
             try:
                 import parselmouth
                 from modules.audio_core import extract_f0
+                import concurrent.futures
 
                 all_stable_f0 = []
 
@@ -3545,51 +3555,65 @@ class PhoneticsApp:
                         self.root.after(0, lambda: messagebox.showwarning("提示", "未找到已加载的长音频。"))
                         return
 
-                    # 提取整段长音频的 F0
-                    pitch_data = extract_f0(snd, params_temp)
-                    times = pitch_data['xs']
-                    freqs = pitch_data['freqs']
+                    # 提取抽样有声片段的 F0（并发），而非全量提取整段长音频
+                    valid_items = [it for it in items_snapshot if it.get('macro_start') is not None and it.get('macro_end') is not None]
+                    if not valid_items:
+                        self.root.after(0, self.stop_loading)
+                        self.root.after(0, lambda: messagebox.showwarning("提示", "未找到有效发音段。"))
+                        return
 
-                    for item in items_snapshot:
-                        macro_start = item.get('macro_start')
-                        macro_end = item.get('macro_end')
-                        # [P2 优化]：如果没有真实的 macro_start 和 macro_end，说明是占位项/缺失项，在长音频模式下应当跳过
-                        if macro_start is None or macro_end is None:
-                            continue
+                    def process_long_item(item):
+                        m_s = item['macro_start']
+                        m_e = item['macro_end']
+                        padding = 0.1
+                        from_t = max(0.0, m_s - padding)
+                        to_t = min(snd.get_total_duration(), m_e + padding)
+                        try:
+                            part = snd.extract_part(from_time=from_t, to_time=to_t)
+                            pitch_data = extract_f0(part, params_temp)
+                            pitch_times = pitch_data['xs'] + from_t
+                            pitch_freqs = pitch_data['freqs']
+                            mask = (pitch_times >= m_s) & (pitch_times <= m_e)
+                            item_times = pitch_times[mask]
+                            item_freqs = pitch_freqs[mask]
+                            return self.extract_stable_f0_values(item_times, item_freqs)
+                        except Exception:
+                            return []
 
-                        mask = (times >= macro_start) & (times <= macro_end)
-                        item_times = times[mask]
-                        item_freqs = freqs[mask]
-                        stable_f0 = self.extract_stable_f0_values(item_times, item_freqs)
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(valid_items), 8)) as executor:
+                        results = list(executor.map(process_long_item, valid_items))
+                    for stable_f0 in results:
                         all_stable_f0.extend(stable_f0)
 
                 elif tab_mode == "多条独立音频":
-                    # [P2 优化]：在快照中提取有效的独立音频项
                     valid_items = [it for it in items_snapshot if it.get('snd') or (it.get('path') and os.path.exists(it['path']))]
                     if not valid_items:
                         self.root.after(0, self.stop_loading)
                         self.root.after(0, lambda: messagebox.showwarning("提示", "没有有效的独立音频文件。"))
                         return
 
-                    total_items = len(valid_items)
-                    for i, item in enumerate(valid_items):
-                        self.root.after(0, lambda v=((i + 1) / total_items): self.set_progress(v))
-                        # [P3 优化]：精确捕获 idx = i + 1 并在 lambda 默认参数中暂存，以防延迟回调展示错误索引
-                        self.root.after(0, lambda name=item['label'], idx=i+1: self.set_status(f"正在分析 F0 ({idx}/{total_items}): {name}...", "#3B82F6", "status_loading"))
+                    def process_independent_item(idx_item):
+                        idx, item = idx_item
+                        self.root.after(0, lambda v=((idx + 1) / len(valid_items)): self.set_progress(v))
+                        self.root.after(0, lambda name=item['label'], cur_idx=idx+1, tot=len(valid_items): self.set_status(f"正在分析 F0 ({cur_idx}/{tot}): {name}...", "#3B82F6", "status_loading"))
 
                         item_snd = item.get('snd')
                         if item_snd is None:
                             try:
                                 item_snd = parselmouth.Sound(item['path'])
                             except Exception:
-                                continue
+                                return []
 
                         try:
                             pitch_data = extract_f0(item_snd, params_temp)
-                            stable_f0 = self.extract_stable_f0_values(pitch_data['xs'], pitch_data['freqs'])
-                            all_stable_f0.extend(stable_f0)
+                            return self.extract_stable_f0_values(pitch_data['xs'], pitch_data['freqs'])
                         except Exception:
-                            continue
+                            return []
+
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(valid_items), 8)) as executor:
+                        results = list(executor.map(process_independent_item, enumerate(valid_items)))
+                    for stable_f0 in results:
+                        all_stable_f0.extend(stable_f0)
 
                 # 判断有效有声帧是否足够（例如，每帧 10ms，至少需 50 帧，即 0.5 秒）
                 if len(all_stable_f0) < 50:
@@ -3818,10 +3842,24 @@ class PhoneticsApp:
                     self.root.after(0, lambda: messagebox.showwarning("提示", "没有有效发音片段可进行分析。"))
                     return
 
-                # Sample at most 20 snippets to guarantee performance
-                if len(snippets) > 20:
-                    indices = np.linspace(0, len(snippets) - 1, 20, dtype=int)
+                # 限制分析片段数量至多 10 个以保障性能，统计上这已足够代表发音人特征
+                if len(snippets) > 10:
+                    indices = np.linspace(0, len(snippets) - 1, 10, dtype=int)
                     snippets = [snippets[idx] for idx in indices]
+
+                # 对每个音频片段进行裁剪，仅保留中间 150ms 稳定的元音核段，极大地减少 Burg LPC 算法的数据量与计算耗时
+                cropped_snippets = []
+                for s in snippets:
+                    try:
+                        dur = s.get_total_duration()
+                        if dur > 0.150:
+                            mid = dur / 2.0
+                            cropped_snippets.append(s.extract_part(from_time=mid - 0.075, to_time=mid + 0.075))
+                        else:
+                            cropped_snippets.append(s)
+                    except Exception:
+                        cropped_snippets.append(s)
+                snippets = cropped_snippets
 
                 # 2. Scoring Helper
                 def score_config(formant_max_hz, window_length, pre_emphasis):
@@ -3985,11 +4023,33 @@ class PhoneticsApp:
 
                     return quality_score, valid_rate, median_f1, median_f2
 
-                # 3. Coarse search
+                import concurrent.futures
+
+                # 并行评估参数配置的辅助函数
+                def evaluate_configs(configs):
+                    results_dict = {}
+                    def eval_single(cfg):
+                        h, win, pre = cfg
+                        try:
+                            score, vr, m_f1, m_f2 = score_config(h, win, pre)
+                            return cfg, (score, vr, m_f1, m_f2)
+                        except Exception:
+                            return cfg, (0.0, 0.0, np.nan, np.nan)
+
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(configs), 8)) as executor:
+                        mapped_results = list(executor.map(eval_single, configs))
+                    for cfg, res in mapped_results:
+                        results_dict[cfg] = res
+                    return results_dict
+
+                # 3. Coarse search (并行计算)
                 coarse_candidates = [3500, 4000, 4500, 5000, 5500, 6000, 6500]
+                coarse_configs = [(h, 0.025, 50) for h in coarse_candidates]
+                coarse_eval_results = evaluate_configs(coarse_configs)
+
                 coarse_results = {}
                 for h in coarse_candidates:
-                    score, vr, m_f1, m_f2 = score_config(h, 0.025, 50)
+                    score, vr, m_f1, m_f2 = coarse_eval_results[(h, 0.025, 50)]
                     coarse_results[h] = {
                         'score': score,
                         'valid_rate': vr,
@@ -4024,7 +4084,7 @@ class PhoneticsApp:
 
                 best_coarse_h = max(coarse_candidates, key=lambda h: final_coarse_scores[h])
 
-                # 4. Fine search
+                # 4. Fine search (并行计算所有候选参数)
                 fine_h_candidates = [
                     best_coarse_h - 500,
                     best_coarse_h - 250,
@@ -4037,24 +4097,29 @@ class PhoneticsApp:
                 win_candidates = [0.020, 0.025, 0.030, 0.035]
                 pre_candidates = [50, 80, 100]
 
+                fine_configs = []
+                for h in fine_h_candidates:
+                    for win in win_candidates:
+                        for pre in pre_candidates:
+                            fine_configs.append((h, win, pre))
+
+                fine_eval_results = evaluate_configs(fine_configs)
+
                 best_score = -1.0
                 best_config = None
                 all_fine_results = []
 
-                total_steps = len(fine_h_candidates) * len(win_candidates) * len(pre_candidates)
-                step_idx = 0
-
-                for h in fine_h_candidates:
-                    for win in win_candidates:
-                        for pre in pre_candidates:
-                            score, vr, _, _ = score_config(h, win, pre)
-                            all_fine_results.append((h, win, pre, score))
-                            if score > best_score:
-                                best_score = score
-                                best_config = (h, 5, win, pre, score)
-                            step_idx += 1
-                            if step_idx % 5 == 0 or step_idx == total_steps:
-                                self.root.after(0, lambda v=step_idx/total_steps: self.set_progress(v))
+                total_steps = len(fine_configs)
+                for step_idx, cfg in enumerate(fine_configs):
+                    h, win, pre = cfg
+                    score, vr, _, _ = fine_eval_results[cfg]
+                    all_fine_results.append((h, win, pre, score))
+                    if score > best_score:
+                        best_score = score
+                        best_config = (h, 5, win, pre, score)
+                    
+                    if (step_idx + 1) % 5 == 0 or (step_idx + 1) == total_steps:
+                        self.root.after(0, lambda v=(step_idx + 1)/total_steps: self.set_progress(v))
 
                 if best_config is None:
                     self.root.after(0, self.stop_loading)
