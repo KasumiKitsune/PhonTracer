@@ -122,6 +122,109 @@ class CanvasButton(tk.Canvas):
             self.command()
 
 
+class AnomalyWarningDialog(ctk.CTkToplevel):
+    def __init__(self, parent, anomalous_labels, title="⚠️ 检测到可能影响分析的异常数据", description=None, font_title=None, font_main=None):
+        super().__init__(parent)
+        self.parent = parent
+        self.anomalous_labels = anomalous_labels
+        self.result = False  # True if user ignores and continues, False if they return to edit
+        
+        self.title("异常数据警告")
+        self.geometry("540x480")
+        self.resizable(True, True)
+        self.transient(parent)
+        self.grab_set()
+        
+        # Center the window
+        self.update_idletasks()
+        main_win = parent.winfo_toplevel()
+        x = main_win.winfo_rootx() + (main_win.winfo_width() - 540) // 2
+        y = main_win.winfo_rooty() + (main_win.winfo_height() - 480) // 2
+        self.geometry(f"+{x}+{y}")
+        
+        # Fonts
+        self.font_title = font_title or ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold")
+        self.font_main = font_main or ctk.CTkFont(family="Microsoft YaHei", size=12)
+        font_small = ctk.CTkFont(family="Microsoft YaHei", size=11)
+        
+        # Header banner
+        header_frame = ctk.CTkFrame(self, fg_color="transparent")
+        header_frame.pack(fill=tk.X, padx=30, pady=(20, 10))
+        
+        # Warning title in soft warning red/orange
+        ctk.CTkLabel(
+            header_frame, text=title,
+            font=self.font_title, text_color=("#E11D48", "#FB7185")
+        ).pack(anchor="w")
+        
+        if description is None:
+            description = (
+                "以下项目检测到潜在异常（如 F0 缺失、边界无效、声母段过短、或跳变疑似噪声等）。"
+                "建议您返回主界面检查并重新切分/修正这些项目，以保证导出图表的科学性与准确性："
+            )
+        ctk.CTkLabel(
+            header_frame, text=description, font=font_small, text_color=("#4B5563", "#9CA3AF"),
+            wraplength=480, justify="left"
+        ).pack(anchor="w", pady=(6, 0))
+        
+        # Scrollable Warning List Frame with subtle warning border
+        scroll_frame = ctk.CTkScrollableFrame(
+            self, corner_radius=8, border_width=1,
+            border_color=("#FCA5A5", "#7F1D1D"), fg_color=("#FEF2F2", "#181111")
+        )
+        scroll_frame.pack(fill=tk.BOTH, expand=True, padx=30, pady=5)
+        
+        for warning in self.anomalous_labels:
+            row_frame = ctk.CTkFrame(scroll_frame, fg_color="transparent")
+            row_frame.pack(fill=tk.X, padx=5, pady=3)
+            
+            # Warning bullet
+            ctk.CTkLabel(
+                row_frame, text="•", font=ctk.CTkFont(family="Microsoft YaHei", size=14, weight="bold"),
+                text_color=("#EF4444", "#F87171")
+            ).pack(side=tk.LEFT, padx=(5, 5), anchor="n")
+            
+            ctk.CTkLabel(
+                row_frame, text=warning, font=font_small, text_color=("#991B1B", "#FCA5A5"),
+                wraplength=420, justify="left"
+            ).pack(side=tk.LEFT, fill=tk.X, expand=True, anchor="w")
+            
+        # Count warning bar
+        count_bar = ctk.CTkFrame(self, fg_color="transparent")
+        count_bar.pack(fill=tk.X, padx=30, pady=(6, 0))
+        ctk.CTkLabel(
+            count_bar, text=f"共检测到 {len(self.anomalous_labels)} 处数据异常。",
+            font=font_small, text_color=("#DC2626", "#F87171")
+        ).pack(side=tk.LEFT)
+        
+        # Action Buttons Card
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.pack(fill=tk.X, padx=30, pady=(15, 20))
+        
+        def on_ignore():
+            self.result = True
+            self.destroy()
+            
+        def on_cancel():
+            self.result = False
+            self.destroy()
+            
+        # Left button: Return to main window to fix anomalies
+        ctk.CTkButton(
+            btn_frame, text="返回修改", width=120, height=36, corner_radius=18,
+            fg_color=("#3B82F6", "#2563EB"), text_color="#FFFFFF", hover_color=("#2563EB", "#1D4ED8"),
+            font=self.font_main, command=on_cancel
+        ).pack(side=tk.LEFT)
+        
+        # Right button: Ignore warnings and continue export
+        ctk.CTkButton(
+            btn_frame, text="忽略警告并导出", width=140, height=36, corner_radius=18,
+            fg_color=("#F3F4F6", "#374151"), text_color=("#DC2626", "#F87171"), hover_color=("#E5E7EB", "#4B5563"),
+            border_width=1.5, border_color=("#EF4444", "#7F1D1D"),
+            font=self.font_main, command=on_ignore
+        ).pack(side=tk.RIGHT)
+
+
 class ProjectTreePanel:
     def __init__(self, parent, icons, items_dict, app_state_params, on_item_selected_callback, on_clear_canvas_callback, tk_icons=None, app=None):
         self.parent = parent
@@ -1470,20 +1573,26 @@ class ProjectTreePanel:
     def _show_multi_speaker_export_dialog(self, sm):
         dlg = ctk.CTkToplevel(self.parent)
         dlg.title("导出范围选择")
-        dlg.geometry("400x440")
+        dlg.geometry("420x460")
         dlg.resizable(False, False)
         dlg.transient(self.parent)
         dlg.grab_set()
         dlg.update_idletasks()
         main_win = self.parent.winfo_toplevel()
-        x = main_win.winfo_rootx() + (main_win.winfo_width() - 400) // 2
-        y = main_win.winfo_rooty() + (main_win.winfo_height() - 440) // 2
+        x = main_win.winfo_rootx() + (main_win.winfo_width() - 420) // 2
+        y = main_win.winfo_rooty() + (main_win.winfo_height() - 460) // 2
         dlg.geometry(f"+{x}+{y}")
 
         font_small = ctk.CTkFont(family="Microsoft YaHei", size=11)
-        ctk.CTkLabel(dlg, text="请选择需要导出的发音人：", font=self.font_title, text_color=("#111827", "#F9FAFB")).pack(pady=(15, 5))
 
-        scroll_frame = ctk.CTkScrollableFrame(dlg, height=180, border_width=1, border_color=("#E5E7EB", "#475569"), fg_color=("#FFFFFF", "#1E293B"))
+        # Header banner
+        header_frame = ctk.CTkFrame(dlg, fg_color="transparent")
+        header_frame.pack(fill=tk.X, padx=30, pady=(20, 10))
+        ctk.CTkLabel(header_frame, text="👥 选择数据源", font=self.font_title, text_color=("#111827", "#F9FAFB")).pack(anchor="w")
+        ctk.CTkLabel(header_frame, text="请勾选本次要导出的发音人数据：", font=font_small, text_color=("#6B7280", "#9CA3AF")).pack(anchor="w", pady=(2, 0))
+
+        # Scrollable container
+        scroll_frame = ctk.CTkScrollableFrame(dlg, height=160, corner_radius=8, border_width=1, border_color=("#E5E7EB", "#475569"), fg_color=("#F9FAFB", "#111827"))
         scroll_frame.pack(fill=tk.BOTH, padx=30, pady=5)
 
         all_speakers = sm.get_all_speakers()
@@ -1493,10 +1602,12 @@ class ProjectTreePanel:
         for spk in all_speakers:
             is_active = (spk.id == active_speaker.id)
             val = ctk.BooleanVar(value=is_active)
-            cb = ctk.CTkCheckBox(scroll_frame, text=f"{spk.name} ({len(spk.items)}项)", variable=val, font=self.font_main,
+            row = ctk.CTkFrame(scroll_frame, fg_color="transparent")
+            row.pack(fill=tk.X, padx=5, pady=3)
+            cb = ctk.CTkCheckBox(row, text=f"{spk.name} ({len(spk.items)}项)", variable=val, font=self.font_main,
                                  corner_radius=1000,
                                  fg_color=("#3B82F6", "#2563EB"), hover_color=("#9CA3AF", "#4B5563"), border_color=("#4B5563", "#9CA3AF"))
-            cb.pack(anchor="w", padx=15, pady=6)
+            cb.pack(side=tk.LEFT, padx=10, pady=2)
             checkboxes[spk] = val
 
         util_frame = ctk.CTkFrame(dlg, fg_color="transparent")
@@ -1510,19 +1621,26 @@ class ProjectTreePanel:
                 val.set(False)
 
         ctk.CTkButton(util_frame, text="全选", width=75, height=26, corner_radius=13, font=font_small,
-                      fg_color=("#F3F4F6", "#374151"), text_color=("#2563EB", "#60A5FA"), hover_color=("#E5E7EB", "#4B5563"),
-                      border_width=1, border_color=("#D1D5DB", "#475569"), command=select_all).pack(side=tk.LEFT, padx=5)
+                      fg_color=("#E5E7EB", "#374151"), text_color=("#2563EB", "#60A5FA"), hover_color=("#D1D5DB", "#4B5563"),
+                      border_width=1, border_color=("#D1D5DB", "#475569"), command=select_all).pack(side=tk.LEFT, padx=(0, 5))
         ctk.CTkButton(util_frame, text="全不选", width=75, height=26, corner_radius=13, font=font_small,
-                      fg_color=("#F3F4F6", "#374151"), text_color=("#4B5563", "#D1D5DB"), hover_color=("#E5E7EB", "#4B5563"),
+                      fg_color=("#E5E7EB", "#374151"), text_color=("#4B5563", "#D1D5DB"), hover_color=("#D1D5DB", "#4B5563"),
                       border_width=1, border_color=("#D1D5DB", "#475569"), command=select_none).pack(side=tk.LEFT, padx=5)
 
-        ctk.CTkFrame(dlg, height=1, fg_color=("#E5E7EB", "#475569")).pack(fill=tk.X, padx=30, pady=8)
+        ctk.CTkFrame(dlg, height=1, fg_color=("#E5E7EB", "#374151")).pack(fill=tk.X, padx=30, pady=12)
+
+        # Integration option card
+        opt_card = ctk.CTkFrame(dlg, corner_radius=8, border_width=1, border_color=("#E5E7EB", "#374151"), fg_color=("#F3F4F6", "#1E293B"))
+        opt_card.pack(fill=tk.X, padx=30, pady=5)
 
         integrate_var = ctk.BooleanVar(value=False)
-        cb_integrate = ctk.CTkCheckBox(dlg, text="整合选中发音人的结果 (采用 T值归一化)", variable=integrate_var, font=self.font_main,
+        cb_integrate = ctk.CTkCheckBox(opt_card, text="整合选中发音人的结果", variable=integrate_var, font=self.font_main,
                                        corner_radius=1000,
                                        fg_color=("#3B82F6", "#2563EB"), hover_color=("#9CA3AF", "#4B5563"), border_color=("#4B5563", "#9CA3AF"))
-        cb_integrate.pack(anchor="w", padx=40, pady=5)
+        cb_integrate.pack(anchor="w", padx=15, pady=(10, 2))
+
+        ctk.CTkLabel(opt_card, text="※ 将采用 T值归一化整合不同发音人数据进行对比分析", font=ctk.CTkFont(family="Microsoft YaHei", size=10),
+                     text_color=("#6B7280", "#9CA3AF")).pack(anchor="w", padx=15, pady=(0, 10))
 
         def on_confirm():
             selected_speakers = [spk for spk, var in checkboxes.items() if var.get()]
@@ -1534,13 +1652,13 @@ class ProjectTreePanel:
             self._do_custom_export_preparation(selected_speakers, do_integrate)
 
         btn_frame = ctk.CTkFrame(dlg, fg_color="transparent")
-        btn_frame.pack(pady=(15, 10))
+        btn_frame.pack(fill=tk.X, padx=30, pady=(20, 10))
 
-        ctk.CTkButton(btn_frame, text="取消", width=90, height=36, corner_radius=18,
+        ctk.CTkButton(btn_frame, text="取消", width=95, height=36, corner_radius=18,
                       fg_color=("#F3F4F6", "#374151"), text_color=("#4B5563", "#D1D5DB"), hover_color=("#E5E7EB", "#4B5563"),
-                      border_width=1, border_color=("#D1D5DB", "#475569"), font=self.font_main, command=dlg.destroy).pack(side=tk.LEFT, padx=10)
-        ctk.CTkButton(btn_frame, text="下一步", width=90, height=36, corner_radius=18,
-                      fg_color=("#3B82F6", "#2563EB"), text_color="#FFFFFF", hover_color=("#2563EB", "#1D4ED8"), font=self.font_main, command=on_confirm).pack(side=tk.LEFT, padx=10)
+                      border_width=1, border_color=("#D1D5DB", "#475569"), font=self.font_main, command=dlg.destroy).pack(side=tk.LEFT)
+        ctk.CTkButton(btn_frame, text="下一步 ➔", width=95, height=36, corner_radius=18,
+                      fg_color=("#3B82F6", "#2563EB"), text_color="#FFFFFF", hover_color=("#2563EB", "#1D4ED8"), font=self.font_main, command=on_confirm).pack(side=tk.RIGHT)
 
     def _do_custom_export_preparation(self, selected_speakers, do_integrate):
         anomalous_labels = []
@@ -1565,11 +1683,9 @@ class ProjectTreePanel:
                         anomalous_labels.append(f"[{s.name}] {item['label']} ({anomaly_desc})")
 
         if anomalous_labels:
-            msg = "以下项目检测到可能影响声调分析的异常（如 F0 缺失、边界无效、声母段过短、疑似噪声等）：\n\n" + "\n".join(anomalous_labels[:10])
-            if len(anomalous_labels) > 10:
-                msg += f"\n... 等共 {len(anomalous_labels)} 项"
-            msg += "\n\n是否继续强制导出？"
-            if not messagebox.askyesno("异常数据警告", msg):
+            dialog = AnomalyWarningDialog(self.parent, anomalous_labels, font_title=self.font_title, font_main=self.font_main)
+            self.parent.wait_window(dialog)
+            if not dialog.result:
                 return
 
         if len(selected_speakers) == 1 and not do_integrate:
@@ -1605,10 +1721,11 @@ class ProjectTreePanel:
                 if item and self._check_item_has_empty_data(item):
                     empty_labels.append(f"[{grp_name}] {item['label']}")
         if empty_labels:
-            msg = "以下项目的基频数据包含 0 值（可能无法提取有效声调）：\n\n" + "\n".join(empty_labels[:10])
-            if len(empty_labels) > 10: msg += f"\n... 等共 {len(empty_labels)} 项"
-            msg += "\n\n是否继续导出？"
-            if not messagebox.askyesno("空数据警告", msg): return
+            desc = "以下项目检测到潜在异常，其基频（F0）包含大量 0 值（可能无发音、数据丢失或未成功提取有效声调）："
+            dialog = AnomalyWarningDialog(self.parent, empty_labels, title="⚠️ 部分数据可能包含无效基频(空值)", description=desc, font_title=self.font_title, font_main=self.font_main)
+            self.parent.wait_window(dialog)
+            if not dialog.result:
+                return
         self._show_export_menu(tree_structure=tree_structure, mode=mode, all_speakers=all_speakers)
 
     def _show_export_menu(self, tree_structure=None, mode='single', all_speakers=None):
