@@ -2795,6 +2795,7 @@ class AcousticChartExporter:
             font=self.font_small,
             checkbox_width=18,
             checkbox_height=18,
+            corner_radius=1000,
             fg_color=("#3B82F6", "#2563EB"),
             hover_color=("#9CA3AF", "#4B5563"),
             border_color=("#4B5563", "#9CA3AF"),
@@ -2810,6 +2811,7 @@ class AcousticChartExporter:
             font=self.font_small, 
             checkbox_width=18, 
             checkbox_height=18,
+            corner_radius=1000,
             fg_color=("#3B82F6", "#2563EB"), 
             hover_color=("#9CA3AF", "#4B5563"), 
             border_color=("#4B5563", "#9CA3AF"),
@@ -2825,6 +2827,7 @@ class AcousticChartExporter:
             font=self.font_small, 
             checkbox_width=18, 
             checkbox_height=18,
+            corner_radius=1000,
             fg_color=("#3B82F6", "#2563EB"), 
             hover_color=("#9CA3AF", "#4B5563"), 
             border_color=("#4B5563", "#9CA3AF"),
@@ -2839,6 +2842,7 @@ class AcousticChartExporter:
             font=self.font_small,
             checkbox_width=18,
             checkbox_height=18,
+            corner_radius=1000,
             fg_color=("#3B82F6", "#2563EB"),
             hover_color=("#9CA3AF", "#4B5563"),
             border_color=("#4B5563", "#9CA3AF"),
@@ -2868,6 +2872,7 @@ class AcousticChartExporter:
             font=self.font_small,
             checkbox_width=18,
             checkbox_height=18,
+            corner_radius=1000,
             fg_color=("#3B82F6", "#2563EB"),
             hover_color=("#9CA3AF", "#4B5563"),
             border_color=("#4B5563", "#9CA3AF"),
@@ -2902,6 +2907,7 @@ class AcousticChartExporter:
             font=self.font_small, 
             checkbox_width=18, 
             checkbox_height=18,
+            corner_radius=1000,
             fg_color=("#3B82F6", "#2563EB"), 
             hover_color=("#9CA3AF", "#4B5563"), 
             border_color=("#4B5563", "#9CA3AF"),
@@ -2917,6 +2923,7 @@ class AcousticChartExporter:
             font=self.font_small, 
             checkbox_width=18, 
             checkbox_height=18,
+            corner_radius=1000,
             fg_color=("#3B82F6", "#2563EB"), 
             hover_color=("#9CA3AF", "#4B5563"), 
             border_color=("#4B5563", "#9CA3AF"),
@@ -3451,6 +3458,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         self.cb_legend_outside = ctk.CTkCheckBox(
             card2, text="显示在图表主体的外侧", variable=self.var_legend_outside,
             font=self.font_small, checkbox_width=18, checkbox_height=18,
+            corner_radius=1000,
             fg_color=("#3B82F6", "#2563EB"), hover_color=("#9CA3AF", "#4B5563"), border_color=("#4B5563", "#9CA3AF"),
             command=self.update_preview
         )
@@ -3909,6 +3917,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             cb = ctk.CTkCheckBox(
                 self.filter_scroll, text=f"{g} ({count}项)", variable=var,
                 font=self.font_small, checkbox_width=18, checkbox_height=18,
+                corner_radius=1000,
                 fg_color=("#3B82F6", "#2563EB"), hover_color=("#9CA3AF", "#4B5563"), border_color=("#4B5563", "#9CA3AF"),
                 command=self._on_group_filter_changed
             )

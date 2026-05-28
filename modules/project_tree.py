@@ -1494,6 +1494,7 @@ class ProjectTreePanel:
             is_active = (spk.id == active_speaker.id)
             val = ctk.BooleanVar(value=is_active)
             cb = ctk.CTkCheckBox(scroll_frame, text=f"{spk.name} ({len(spk.items)}项)", variable=val, font=self.font_main,
+                                 corner_radius=1000,
                                  fg_color=("#3B82F6", "#2563EB"), hover_color=("#9CA3AF", "#4B5563"), border_color=("#4B5563", "#9CA3AF"))
             cb.pack(anchor="w", padx=15, pady=6)
             checkboxes[spk] = val
@@ -1519,6 +1520,7 @@ class ProjectTreePanel:
 
         integrate_var = ctk.BooleanVar(value=False)
         cb_integrate = ctk.CTkCheckBox(dlg, text="整合选中发音人的结果 (采用 T值归一化)", variable=integrate_var, font=self.font_main,
+                                       corner_radius=1000,
                                        fg_color=("#3B82F6", "#2563EB"), hover_color=("#9CA3AF", "#4B5563"), border_color=("#4B5563", "#9CA3AF"))
         cb_integrate.pack(anchor="w", padx=40, pady=5)
 
