@@ -324,37 +324,33 @@ class AcousticChartExporter:
             else:
                 s_min, s_max = 75.0, 600.0
 
+            if s_max > s_min and s_min > 0:
+                log_s_min = math.log10(s_min)
+                log_s_max_min = math.log10(s_max) - log_s_min
+            else:
+                log_s_min = 0.0
+                log_s_max_min = 1.0
+
+            def _normalize_freqs(f_arr):
+                f_arr = np.asarray(f_arr, dtype=float)
+                norm_arr = np.full_like(f_arr, np.nan)
+                valid = f_arr > 0
+                if np.any(valid):
+                    if s_max > s_min and s_min > 0:
+                        norm_arr[valid] = np.clip(5 * (np.log10(f_arr[valid]) - log_s_min) / log_s_max_min, 0.0, 5.0)
+                    else:
+                        norm_arr[valid] = 3.0
+                return norm_arr
+
             speaker_data_entries = []
             for entry in speaker_items_temp:
                 normalized_syl_data = []
                 for s_dur, freqs in entry['syl_data']:
-                    norm_freqs = []
-                    for f in freqs:
-                        if f > 0:
-                            if s_max > s_min:
-                                norm_t = 5 * (math.log10(f) - math.log10(s_min)) / (math.log10(s_max) - math.log10(s_min))
-                                norm_t = np.clip(norm_t, 0.0, 5.0)
-                            else:
-                                norm_t = 3.0
-                            norm_freqs.append(norm_t)
-                        else:
-                            norm_freqs.append(np.nan)
+                    norm_freqs = _normalize_freqs(freqs).tolist()
                     normalized_syl_data.append((s_dur, norm_freqs))
 
-                norm_raw_freqs = []
-                for f in entry['raw_freqs']:
-                    if f > 0:
-                        if s_max > s_min:
-                            norm_t = 5 * (math.log10(f) - math.log10(s_min)) / (math.log10(s_max) - math.log10(s_min))
-                            norm_t = np.clip(norm_t, 0.0, 5.0)
-                        else:
-                            norm_t = 3.0
-                        norm_raw_freqs.append(norm_t)
-                    else:
-                        norm_raw_freqs.append(np.nan)
-
                 entry['normalized_syl_data'] = normalized_syl_data
-                entry['normalized_raw_freqs'] = np.array(norm_raw_freqs)
+                entry['normalized_raw_freqs'] = _normalize_freqs(entry['raw_freqs'])
                 speaker_data_entries.append(entry)
 
             self.project_tree.items = orig_items
@@ -1465,12 +1461,15 @@ class AcousticChartExporter:
             return dense_y
 
         if normalization == "global":
-            all_raw_f0 = []
+            all_raw_f0_list = []
             for entry in data_entries:
-                all_raw_f0.extend([f for f in entry['raw_freqs'] if f > 0])
+                valid_f = entry['raw_freqs'][entry['raw_freqs'] > 0]
+                if valid_f.size > 0:
+                    all_raw_f0_list.append(valid_f)
 
-            if not all_raw_f0:
+            if not all_raw_f0_list:
                 return empty_density_fig("没有有效基频点可进行 KDE 计算")
+            all_raw_f0 = np.concatenate(all_raw_f0_list)
 
             p_low_val = self.get_param('density_p_low', 5.0)
             p_high_val = self.get_param('density_p_high', 95.0)
@@ -1493,13 +1492,14 @@ class AcousticChartExporter:
                 min_f0 = np.percentile(all_raw_f0, p_low)
                 max_f0 = np.percentile(all_raw_f0, p_high)
             elif f0_mode == 'minmax':
-                min_f0 = min(all_raw_f0)
-                max_f0 = max(all_raw_f0)
+                min_f0 = np.min(all_raw_f0)
+                max_f0 = np.max(all_raw_f0)
 
-            def hz_to_t(hz):
-                if max_f0 == min_f0: return 3.0
-                hz_val = np.clip(hz, min_f0, max_f0)
-                if min_f0 <= 0 or max_f0 <= min_f0: return 3.0
+            def hz_to_t(hz_array):
+                hz_array = np.asarray(hz_array, dtype=float)
+                if max_f0 == min_f0 or min_f0 <= 0 or max_f0 <= min_f0:
+                    return np.full_like(hz_array, 3.0)
+                hz_val = np.clip(hz_array, min_f0, max_f0)
                 return 5 * (np.log(hz_val) - np.log(min_f0)) / (np.log(max_f0) - np.log(min_f0))
         elif not any(np.any(np.isfinite(entry.get('normalized_raw_freqs', []))) for entry in data_entries):
             return empty_density_fig("没有有效归一化基频点可进行 KDE 计算")
@@ -1529,7 +1529,7 @@ class AcousticChartExporter:
             elif facet == "按词语分面":
                 facet_entries = [e for e in data_entries if e['label'] == f_key]
 
-            X_all, Y_all = [], []
+            X_all_list, Y_all_list = [], []
             for e_idx, entry in enumerate(facet_entries):
                 if (e_idx % 8) == 0:
                     self._check_export_cancelled()
@@ -1539,22 +1539,22 @@ class AcousticChartExporter:
                         y_t_dense = extract_normalized_contour(entry, c_s, c_e)
                     else:
                         y_dense = self.project_tree._extract_kde_contour(entry['raw_xs'], entry['raw_freqs'], c_s, c_e, N_DENSE)
-                        y_t_dense = np.array([hz_to_t(h) for h in y_dense]) if y_dense is not None else None
+                        y_t_dense = hz_to_t(y_dense) if y_dense is not None else None
                     if y_t_dense is not None:
                         x_dense = np.linspace(s_idx * 100, (s_idx + 1) * 100, N_DENSE)
                         valid = np.isfinite(y_t_dense)
-                        X_all.extend(x_dense[valid].tolist())
-                        Y_all.extend(y_t_dense[valid].tolist())
+                        X_all_list.append(x_dense[valid])
+                        Y_all_list.append(y_t_dense[valid])
 
-            if not X_all:
+            if not X_all_list:
                 ax.text(0.5, 0.5, "没有足够的有效数据点", ha='center', va='center')
                 continue
 
             xmin, xmax = 0, max_syls * 100
             ymin, ymax = -0.5, 5.5
 
-            x_arr = np.asarray(X_all, dtype=float)
-            y_arr = np.asarray(Y_all, dtype=float)
+            x_arr = np.concatenate(X_all_list)
+            y_arr = np.concatenate(Y_all_list)
             if len(x_arr) == 0:
                 ax.text(0.5, 0.5, "没有足够的有效数据点", ha='center', va='center')
                 continue
@@ -2056,7 +2056,7 @@ class AcousticChartExporter:
         return sliced
 
     def _get_formant_density_points(self, data_entries):
-        all_f1, all_f2, all_tau = [], [], []
+        all_f1_list, all_f2_list, all_tau_list = [], [], []
         for entry in data_entries:
             xs = np.asarray(entry.get('raw_xs', []), dtype=float)
             f1_arr = np.asarray(entry.get('raw_f1', []), dtype=float)
@@ -2071,10 +2071,14 @@ class AcousticChartExporter:
                 if not np.any(mask):
                     continue
                 s_tau = np.clip((xs[mask] - c_s) / (c_e - c_s), 0.0, 1.0)
-                all_f1.extend(f1_arr[mask].tolist())
-                all_f2.extend(f2_arr[mask].tolist())
-                all_tau.extend(s_tau.tolist())
-        return np.asarray(all_f1, dtype=float), np.asarray(all_f2, dtype=float), np.asarray(all_tau, dtype=float)
+                all_f1_list.append(f1_arr[mask])
+                all_f2_list.append(f2_arr[mask])
+                all_tau_list.append(s_tau)
+
+        if not all_f1_list:
+            return np.array([]), np.array([]), np.array([])
+
+        return np.concatenate(all_f1_list), np.concatenate(all_f2_list), np.concatenate(all_tau_list)
 
     def _draw_formant_density_layer(self, ax, data_entries, show_raw=False, show_contours=True, bw_method=None, alpha_max=0.58, zorder=1, transform_fn=None, is_preview=True):
         self._report_export_progress(0.24, "正在收集共振峰时空密度数据...")
@@ -2239,8 +2243,8 @@ class AcousticChartExporter:
                         'trajs_f1': [], 'trajs_f2': []
                     }
                 
-                category_data[cat]['f1'].extend(s_f1.tolist())
-                category_data[cat]['f2'].extend(s_f2.tolist())
+                category_data[cat]['f1'].append(s_f1)
+                category_data[cat]['f2'].append(s_f2)
                 category_data[cat]['entries_labels'].append(entry['label'])
                 category_data[cat]['syl_chars'].append(syl['char'])
                 
@@ -2261,30 +2265,34 @@ class AcousticChartExporter:
         cmap = plt.get_cmap('tab10')
         cat_colors = {cat: cmap(i % 10) for i, cat in enumerate(categories)}
 
-        all_f1_plotted = []
-        all_f2_plotted = []
+        all_f1_plotted_list = []
+        all_f2_plotted_list = []
 
         for cat in categories:
             color = cat_colors[cat]
-            f1_list = np.array(category_data[cat]['f1'])
-            f2_list = np.array(category_data[cat]['f2'])
+            if not category_data[cat]['f1']:
+                continue
+
+            f1_list = np.concatenate(category_data[cat]['f1'])
+            f2_list = np.concatenate(category_data[cat]['f2'])
+            category_data[cat]['f1_concat'] = f1_list
+            category_data[cat]['f2_concat'] = f2_list
             
             if len(f1_list) == 0:
                 continue
                 
-            all_f1_plotted.extend(f1_list)
-            all_f2_plotted.extend(f2_list)
+            all_f1_plotted_list.append(f1_list)
+            all_f2_plotted_list.append(f2_list)
             
             if show_raw:
                 ax.scatter(f2_list, f1_list, color=color, s=14, alpha=0.20 if density_overlay else 0.12, edgecolors='none', zorder=3)
 
         for cat in categories:
             color = cat_colors[cat]
-            f1_list = np.array(category_data[cat]['f1'])
-            f2_list = np.array(category_data[cat]['f2'])
-            
-            if len(f1_list) == 0:
+            if 'f1_concat' not in category_data[cat]:
                 continue
+            f1_list = category_data[cat]['f1_concat']
+            f2_list = category_data[cat]['f2_concat']
                 
             trajs_f1 = np.array(category_data[cat]['trajs_f1'])
             trajs_f2 = np.array(category_data[cat]['trajs_f2'])
@@ -2352,9 +2360,19 @@ class AcousticChartExporter:
             ymin, ymax, xmin, xmax = fixed_limits
             ax.set_ylim(ymin, ymax)
             ax.set_xlim(xmin, xmax)
-        elif all_f1_plotted and all_f2_plotted:
-            limit_f1 = all_f1_plotted + density_f1
-            limit_f2 = all_f2_plotted + density_f2
+        elif all_f1_plotted_list and all_f2_plotted_list:
+            if density_f1 and isinstance(density_f1, list):
+                all_f1_plotted_list.append(np.array(density_f1))
+            elif density_f1 is not None and len(density_f1) > 0:
+                all_f1_plotted_list.append(density_f1)
+
+            if density_f2 and isinstance(density_f2, list):
+                all_f2_plotted_list.append(np.array(density_f2))
+            elif density_f2 is not None and len(density_f2) > 0:
+                all_f2_plotted_list.append(density_f2)
+
+            limit_f1 = np.concatenate(all_f1_plotted_list)
+            limit_f2 = np.concatenate(all_f2_plotted_list)
             f1_p1, f1_p99 = np.percentile(limit_f1, 1.0), np.percentile(limit_f1, 99.0)
             f2_p1, f2_p99 = np.percentile(limit_f2, 1.0), np.percentile(limit_f2, 99.0)
             
@@ -2381,7 +2399,9 @@ class AcousticChartExporter:
             ax.set_xlabel("F2 (Hz)", fontsize=12, fontweight='bold', labelpad=10)
             ax.set_ylabel("F1 (Hz)", fontsize=12, fontweight='bold', labelpad=10)
             
-        return all_f1_plotted, all_f2_plotted
+        all_f1_res = np.concatenate(all_f1_plotted_list) if all_f1_plotted_list else np.array([])
+        all_f2_res = np.concatenate(all_f2_plotted_list) if all_f2_plotted_list else np.array([])
+        return all_f1_res, all_f2_res
 
     def _add_formant_density_colorbar(self, fig, axes, sm):
         axes_list = [ax for ax in axes if getattr(ax, "get_visible", lambda: True)()]
@@ -2606,7 +2626,7 @@ class AcousticChartExporter:
         ax.invert_xaxis()
         ax.invert_yaxis()
 
-        if all_f1 and all_f2:
+        if all_f1 is not None and all_f2 is not None and len(all_f1) > 0 and len(all_f2) > 0:
             f1_p1, f1_p99 = np.percentile(all_f1, 1.0), np.percentile(all_f1, 99.0)
             f2_p1, f2_p99 = np.percentile(all_f2, 1.0), np.percentile(all_f2, 99.0)
             
