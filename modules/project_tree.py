@@ -173,7 +173,7 @@ class AnomalyWarningDialog(ctk.CTkToplevel):
             self, height=160, corner_radius=8, border_width=1,
             border_color=("#FCA5A5", "#7F1D1D"), fg_color=("#FFF5F5", "#1E1515")
         )
-        scroll_frame._scrollbar.configure(height=30)
+        scroll_frame._scrollbar.grid_configure(padx=(0, 9))
         scroll_frame.pack(fill=tk.BOTH, expand=True, padx=30, pady=5)
         
         for warning in self.anomalous_labels:
@@ -188,7 +188,7 @@ class AnomalyWarningDialog(ctk.CTkToplevel):
             
             ctk.CTkLabel(
                 row_frame, text=warning, font=font_small, text_color=("#991B1B", "#FCA5A5"),
-                wraplength=420, justify="left"
+                wraplength=420, justify="left", anchor="w"
             ).pack(side=tk.LEFT, fill=tk.X, expand=True, anchor="w")
             
         # Count warning bar
@@ -1594,7 +1594,7 @@ class ProjectTreePanel:
         opt_card = ctk.CTkFrame(dlg, corner_radius=8, border_width=1, border_color=("#E5E7EB", "#374151"), fg_color=("#F9FAFB", "#161A22"))
         util_frame = ctk.CTkFrame(dlg, fg_color="transparent")
         scroll_frame = ctk.CTkScrollableFrame(dlg, height=100, corner_radius=8, border_width=1, border_color=("#E5E7EB", "#374151"), fg_color=("#F9FAFB", "#161A22"))
-        scroll_frame._scrollbar.configure(height=30)
+        scroll_frame._scrollbar.grid_configure(padx=(0, 9))
 
         # 2. Pack the frames in vertical layout order (Top & Bottom first, then Middle expand)
         header_frame.pack(side=tk.TOP, fill=tk.X, padx=25, pady=(12, 4))

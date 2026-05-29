@@ -4,6 +4,17 @@ import time
 import tkinter as tk
 import customtkinter as ctk
 import logging
+
+# 全局打补丁：使所有 CTkCheckBox 在未勾选时为圆角矩形(6)，勾选后为圆形(1000)
+_orig_checkbox_draw = ctk.CTkCheckBox._draw
+def _patched_checkbox_draw(self, no_color_updates=False):
+    if self._check_state:
+        self._corner_radius = 1000
+    else:
+        self._corner_radius = 6
+    _orig_checkbox_draw(self, no_color_updates)
+ctk.CTkCheckBox._draw = _patched_checkbox_draw
+
 from modules.version import APP_NAME, __version__
 
 # 配置日志
