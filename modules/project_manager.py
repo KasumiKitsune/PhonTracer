@@ -109,7 +109,10 @@ class ProjectManager:
         dest_name = f"{self._safe_token(token)}_{base}"
         dest = os.path.join(target_dir, dest_name)
         if os.path.abspath(src_path) != os.path.abspath(dest):
-            shutil.copy2(src_path, dest)
+            if (not os.path.exists(dest) or 
+                os.path.getsize(src_path) != os.path.getsize(dest) or 
+                abs(os.path.getmtime(src_path) - os.path.getmtime(dest)) > 1e-4):
+                shutil.copy2(src_path, dest)
         rel_path = os.path.join(subdir, dest_name).replace(os.sep, "/")
         if copy_cache is not None and cache_key is not None:
             copy_cache[cache_key] = rel_path
@@ -279,7 +282,7 @@ class ProjectManager:
                             npz_name = f"{self._safe_token(spk_id)}_{self._safe_token(item_id)}.npz"
                             npz_path = os.path.join(data_dir, npz_name)
                             if isinstance(v, dict) and 'xs' in v and 'freqs' in v:
-                                np.savez_compressed(npz_path, xs=v['xs'], freqs=v['freqs'])
+                                np.savez(npz_path, xs=v['xs'], freqs=v['freqs'])
                                 item_dict['pitch_data_file'] = os.path.join("data", npz_name).replace(os.sep, "/")
                             else:
                                 item_dict[k] = v
@@ -290,7 +293,7 @@ class ProjectManager:
                                 save_kwargs = {'xs': v['xs'], 'f1': v['f1'], 'f2': v['f2']}
                                 if 'f3' in v:
                                     save_kwargs['f3'] = v['f3']
-                                np.savez_compressed(npz_path, **save_kwargs)
+                                np.savez(npz_path, **save_kwargs)
                                 item_dict['formant_data_file'] = os.path.join("data", npz_name).replace(os.sep, "/")
                             else:
                                 item_dict[k] = v
@@ -308,10 +311,21 @@ class ProjectManager:
             with open(tmp_json, "w", encoding="utf-8") as f:
                 json.dump(serializable_state, f, ensure_ascii=False, indent=2)
             os.replace(tmp_json, project_json)
+
+            # Write recovery metadata to autosave_meta.json
+            meta_path = os.path.join(self.workspace_dir, "autosave_meta.json")
+            meta_data = {
+                "current_project_path": getattr(self.app, 'current_project_path', None)
+            }
+            try:
+                meta_tmp = meta_path + ".tmp"
+                with open(meta_tmp, "w", encoding="utf-8") as f:
+                    json.dump(meta_data, f, ensure_ascii=False, indent=2)
+                os.replace(meta_tmp, meta_path)
+            except Exception as e:
+                print(f"Failed to write autosave meta: {e}")
+
             self._prune_unused_workspace_files(self._collect_project_file_refs(serializable_state))
-                
-            if self.auto_save_enabled:
-                self._create_backup()
             return True
 
     def _create_backup(self):
@@ -397,6 +411,31 @@ class ProjectManager:
         finally:
             if temp_workspace and os.path.exists(temp_workspace):
                 shutil.rmtree(temp_workspace, ignore_errors=True)
+
+    def load_from_workspace(self):
+        try:
+            project_json = os.path.join(self.workspace_dir, "project.json")
+            if not os.path.exists(project_json):
+                raise ValueError("未找到 project.json")
+            with open(project_json, "r", encoding="utf-8") as f:
+                state = json.load(f)
+            with self._save_lock:
+                self._restore_state(state, overlay=False)
+                # Restore the project path if autosave_meta.json exists
+                meta_path = os.path.join(self.workspace_dir, "autosave_meta.json")
+                if os.path.exists(meta_path):
+                    try:
+                        with open(meta_path, "r", encoding="utf-8") as f:
+                            meta_data = json.load(f)
+                        if hasattr(self.app, 'current_project_path'):
+                            self.app.current_project_path = meta_data.get("current_project_path")
+                    except Exception as e:
+                        print(f"Failed to read autosave meta: {e}")
+            return True
+        except Exception as e:
+            traceback.print_exc()
+            self._show_error("恢复自动保存失败", str(e))
+            return False
 
     def _safe_extract(self, zip_file, target_dir):
         target_dir_abs = os.path.abspath(target_dir)

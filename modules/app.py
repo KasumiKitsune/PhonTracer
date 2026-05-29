@@ -117,6 +117,19 @@ class PhoneticsApp:
                     pass
                 self._window_guard_job = None
 
+            # Clean up workspace on normal exit
+            try:
+                if hasattr(self, 'project_manager'):
+                    self.project_manager.cancel_auto_save()
+                    ws_dir = getattr(self.project_manager, 'workspace_dir', None)
+                    if ws_dir and isinstance(ws_dir, str):
+                        with getattr(self.project_manager, '_save_lock'):
+                            if os.path.exists(ws_dir):
+                                import shutil
+                                shutil.rmtree(ws_dir)
+            except Exception as e:
+                print(f"Failed to clean up workspace on exit: {e}")
+
             # 主动关闭并销毁 ProcessPoolExecutor 的子进程，避免程序关闭后滞留在后台
             import multiprocessing
             try:
@@ -150,9 +163,10 @@ class PhoneticsApp:
         except Exception:
             pass
 
-        # 处理初始传入的文件（例如“打开方式”或拖动到图标）
-        if initial_files:
-            self.root.after(1500, lambda: self.on_files_dropped(initial_files))
+        self._initial_files_list = initial_files
+
+        # Check for autosave recovery after window is initialized
+        self.root.after(200, self._check_autosave_recovery)
 
         # 启动时后台静默检查更新 (已取消自动获取最新版本机制，改为手动检测更新)
         # self.root.after(3000, lambda: self.check_update(is_manual=False))
@@ -3346,6 +3360,77 @@ class PhoneticsApp:
                 return False
         return True
 
+    def _check_autosave_recovery(self):
+        # Skip checking autosave recovery when running unit tests to prevent GUI dialog block/crash
+        import sys
+        if any(k in sys.modules for k in ('unittest', 'pytest')):
+            return
+
+        project_json = os.path.join(self.project_manager.workspace_dir, "project.json")
+        has_autosave = os.path.exists(project_json)
+        
+        initial_files = getattr(self, '_initial_files_list', None)
+        has_teproj = False
+        if initial_files:
+            for f in initial_files:
+                if str(f).lower().endswith(('.teproj', '.zip')):
+                    has_teproj = True
+                    break
+
+        if has_autosave:
+            if has_teproj:
+                # If we are loading a project file, clean up the autosaved files automatically
+                try:
+                    import shutil
+                    shutil.rmtree(self.project_manager.workspace_dir)
+                    os.makedirs(self.project_manager.workspace_dir)
+                except Exception as e:
+                    print(f"Failed to clean up autosave workspace: {e}")
+                # Load the project from initial_files directly
+                if initial_files:
+                    self.on_files_dropped(initial_files)
+                return
+
+            # Ask user
+            ans = messagebox.askyesno("恢复工程", "检测到上次未正常关闭的自动保存数据，是否恢复？", parent=self.root)
+            if ans:
+                self.start_loading("正在恢复自动保存数据...")
+                def run():
+                    success = self.project_manager.load_from_workspace()
+                    self.root.after(0, self.stop_loading)
+                    if success:
+                        def finalize_recovery():
+                            self._sync_ui_after_project_load(is_recovery=True)
+                            
+                            # Ask if they want to import the initial files too
+                            if initial_files:
+                                import_ans = messagebox.askyesno(
+                                    "导入启动文件", 
+                                    "工程已成功恢复。是否继续导入启动时选择的音频文件？", 
+                                    parent=self.root
+                                )
+                                if import_ans:
+                                    self.on_files_dropped(initial_files)
+                        self.root.after(0, finalize_recovery)
+                import threading
+                threading.Thread(target=run, daemon=True).start()
+            else:
+                # User chose not to restore, clean up the workspace
+                try:
+                    import shutil
+                    shutil.rmtree(self.project_manager.workspace_dir)
+                    os.makedirs(self.project_manager.workspace_dir)
+                except Exception as e:
+                    print(f"Failed to clean up autosave workspace: {e}")
+                
+                # Now load initial files in a clean workspace
+                if initial_files:
+                    self.on_files_dropped(initial_files)
+        else:
+            # No autosave exists, import initial files normally
+            if initial_files:
+                self.on_files_dropped(initial_files)
+
     def on_import_project(self):
         if self._has_active_chart_dialog():
             messagebox.showwarning("提示", "图表编辑器已打开，修改图表期间禁止导入新工程。")
@@ -3369,7 +3454,7 @@ class PhoneticsApp:
         import threading
         threading.Thread(target=run, daemon=True).start()
 
-    def _sync_ui_after_project_load(self):
+    def _sync_ui_after_project_load(self, is_recovery=False):
         self._update_speaker_dropdown()
         spk = self.active_speaker
         self.speaker_option_var.set(spk.name)
@@ -3390,13 +3475,16 @@ class PhoneticsApp:
         self.spectrogram_panel.clear_canvas()
         self._refresh_ui_for_speaker()
         
-        is_overlay = getattr(self, '_last_import_was_overlay', False)
-        if is_overlay:
-            self.current_project_path = None
+        if is_recovery:
             self.has_changes = True
         else:
-            self.current_project_path = getattr(self, '_last_imported_path', None)
-            self.has_changes = False
+            is_overlay = getattr(self, '_last_import_was_overlay', False)
+            if is_overlay:
+                self.current_project_path = None
+                self.has_changes = True
+            else:
+                self.current_project_path = getattr(self, '_last_imported_path', None)
+                self.has_changes = False
 
     def on_export_project(self):
         import datetime
