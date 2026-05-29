@@ -410,30 +410,8 @@ class PhoneticsApp:
         teproj_files = [p for p in decoded_paths if p.lower().endswith(('.teproj', '.zip'))]
         if teproj_files:
             path = teproj_files[0]
-            
-            overlay = False
-            if not self.is_project_empty():
-                ans = messagebox.askyesnocancel(
-                    "导入项目",
-                    "当前已打开一个项目，是否以【叠加】方式导入新项目？\n\n"
-                    "- 点击【是】：叠加导入，将新项目的数据合并到当前项目中\n"
-                    "- 点击【否】：覆盖导入，清除当前项目并完全载入新项目\n"
-                    "- 点击【取消】：取消本次导入"
-                )
-                if ans is None:
-                    return
-                overlay = ans
-
-            self._last_imported_path = path
-            self._last_import_was_overlay = overlay
-            self.start_loading("正在导入工程...")
-            def run():
-                success = self.project_manager.load_project(path, overlay=overlay)
-                self.root.after(0, self.stop_loading)
-                if success:
-                    self.root.after(0, self._sync_ui_after_project_load)
-            import threading
-            threading.Thread(target=run, daemon=True).start()
+            from modules.project_import_dialog import ProjectImportPreviewDialog
+            ProjectImportPreviewDialog(self.root, self, path)
             return
 
         # Check for wordlist files (.txt, .csv, .textgrid)
@@ -3362,8 +3340,6 @@ class PhoneticsApp:
             return False
         if len(speakers) == 1:
             spk = speakers[0]
-            if spk.name not in ("发音人 1", "发音人1"):
-                return False
             if spk.items:
                 return False
             if getattr(spk, 'long_audio_path', None) or getattr(spk, 'pending_batch_paths', None):
@@ -3377,19 +3353,10 @@ class PhoneticsApp:
         path = filedialog.askopenfilename(filetypes=[("PhonTracer Project", "*.teproj *.zip")])
         if not path: return
         
-        overlay = False
-        if not self.is_project_empty():
-            ans = messagebox.askyesnocancel(
-                "导入项目",
-                "当前已打开一个项目，是否以【叠加】方式导入新项目？\n\n"
-                "- 点击【是】：叠加导入，将新项目的数据合并到当前项目中\n"
-                "- 点击【否】：覆盖导入，清除当前项目并完全载入新项目\n"
-                "- 点击【取消】：取消本次导入"
-            )
-            if ans is None:
-                return
-            overlay = ans
+        from modules.project_import_dialog import ProjectImportPreviewDialog
+        ProjectImportPreviewDialog(self.root, self, path)
 
+    def execute_project_import(self, path, overlay):
         self._last_imported_path = path
         self._last_import_was_overlay = overlay
         self.start_loading("正在导入工程...")

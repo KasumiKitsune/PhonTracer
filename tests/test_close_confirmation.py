@@ -92,6 +92,7 @@ class TestCloseConfirmation(unittest.TestCase):
 
         with patch('tkinter.filedialog.askopenfilename', return_value=test_path), \
              patch('threading.Thread', side_effect=SynchronousThread), \
+             patch('modules.project_import_dialog.ProjectImportPreviewDialog', side_effect=lambda parent, app, path: app.execute_project_import(path, False)), \
              patch('tkinter.messagebox.showinfo') as mock_info:
 
             self.app.project_manager.load_project.return_value = True
