@@ -12,17 +12,9 @@ class ProjectImportPreviewDialog(ctk.CTkToplevel):
         self.zip_path = zip_path
         
         self.title("导入工程")
-        self.resizable(False, False)
+        self.resizable(True, True)
         
-        # Center display
-        width, height = 580, 660
-        screen_width = self.winfo_screenwidth()
-        screen_height = self.winfo_screenheight()
-        x = (screen_width - width) // 2
-        y = (screen_height - height) // 2
-        self.geometry(f"{width}x{height}+{x}+{y}")
-        
-        self.configure(fg_color=("#FFFFFF", "#1A1D24"))  # Light mode pure white, Dark mode deep blue-black
+        self.configure(fg_color=("#FFFFFF", "#1A1D24"))
         
         # Modal setup
         self.transient(parent)
@@ -41,6 +33,7 @@ class ProjectImportPreviewDialog(ctk.CTkToplevel):
         
         try:
             self.metadata = self.read_metadata(zip_path)
+            self.is_empty = self.app.is_project_empty()
             self.setup_ui()
         except Exception as e:
             from tkinter import messagebox
@@ -59,7 +52,7 @@ class ProjectImportPreviewDialog(ctk.CTkToplevel):
     def setup_ui(self):
         # Main container
         main_frame = ctk.CTkFrame(self, fg_color="transparent")
-        main_frame.pack(fill="x", padx=24, pady=(10, 10))
+        main_frame.pack(fill="both", expand=True, padx=24, pady=(10, 16))
         
         # Title
         lbl_title = ctk.CTkLabel(
@@ -152,16 +145,15 @@ class ProjectImportPreviewDialog(ctk.CTkToplevel):
             
             row_idx += 1
             
-        # Check current project emptiness
-        is_empty = self.app.is_project_empty()
+        self.import_mode_var = ctk.StringVar(value="overwrite")
         
-        self.import_mode_var = ctk.StringVar(value="overwrite" if is_empty else "overlay")
-        
-        # Mode selector panel
-        mode_panel = ctk.CTkFrame(main_frame, fg_color="transparent")
-        mode_panel.pack(fill="x", padx=5, pady=(8, 4))
-        
-        if not is_empty:
+        if not self.is_empty:
+            # Mode selector panel - only shown when current project has data
+            mode_panel = ctk.CTkFrame(main_frame, fg_color="transparent")
+            mode_panel.pack(fill="x", padx=5, pady=(8, 4))
+            
+            self.import_mode_var.set("overlay")
+            
             lbl_mode_title = ctk.CTkLabel(mode_panel, text="选择导入冲突解决方式:", font=self.font_subtitle, text_color=("#1F2937", "#E5E7EB"))
             lbl_mode_title.pack(anchor="w", pady=(0, 4))
             
@@ -171,7 +163,7 @@ class ProjectImportPreviewDialog(ctk.CTkToplevel):
                 variable=self.import_mode_var, 
                 value="overwrite",
                 font=self.font_main,
-                command=self.update_warning
+                command=self._on_mode_changed
             )
             radio_overwrite.pack(anchor="w", padx=10, pady=3)
             
@@ -181,48 +173,43 @@ class ProjectImportPreviewDialog(ctk.CTkToplevel):
                 variable=self.import_mode_var, 
                 value="overlay",
                 font=self.font_main,
-                command=self.update_warning
+                command=self._on_mode_changed
             )
             radio_overlay.pack(anchor="w", padx=10, pady=3)
-        else:
-            self.import_mode_var.set("overwrite")
-            lbl_mode_info = ctk.CTkLabel(mode_panel, text="导入模式：全新导入并覆盖 (当前工程为空)", font=self.font_subtitle, text_color=("#059669", "#34D399"))
-            lbl_mode_info.pack(anchor="w")
             
-        # Warning Card
-        self.warning_card = ctk.CTkFrame(main_frame, fg_color=("#FFFBEB", "#451A03"), corner_radius=8, border_width=1, border_color=("#FDE68A", "#D97706"))
-        self.warning_card.pack(fill="x", padx=5, pady=(6, 8))
-        
-        self.lbl_warning = ctk.CTkLabel(
-            self.warning_card,
-            text="",
-            font=self.font_main,
-            text_color=("#B45309", "#FBBF24"),
-            justify="left",
-            wraplength=500
-        )
-        self.lbl_warning.pack(padx=15, pady=8, fill="x")
-        
-        self.update_warning()
+            # Warning Card - only for non-empty projects
+            self.warning_card = ctk.CTkFrame(main_frame, fg_color=("#EFF6FF", "#1E293B"), corner_radius=8, border_width=1, border_color=("#DBEAFE", "#2563EB"))
+            self.warning_card.pack(fill="x", padx=5, pady=(6, 4))
+            
+            self.lbl_warning = ctk.CTkLabel(
+                self.warning_card,
+                text="",
+                font=self.font_main,
+                text_color=("#1E40AF", "#60A5FA"),
+                justify="left",
+                wraplength=500
+            )
+            self.lbl_warning.pack(padx=15, pady=8, fill="x")
+            
+            self._update_warning_text()
+        else:
+            # Empty project: show a simple friendly info banner
+            info_banner = ctk.CTkFrame(main_frame, fg_color=("#ECFDF5", "#022C22"), corner_radius=8, border_width=1, border_color=("#A7F3D0", "#059669"))
+            info_banner.pack(fill="x", padx=5, pady=(8, 4))
+            
+            lbl_info = ctk.CTkLabel(
+                info_banner,
+                text="✅ 当前工程为空，将直接导入新工程数据。",
+                font=self.font_main,
+                text_color=("#059669", "#34D399"),
+                justify="left"
+            )
+            lbl_info.pack(padx=15, pady=8, fill="x")
         
         # Footer Action Buttons
         btn_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
-        btn_frame.pack(fill="x", padx=5, pady=(12, 0))
+        btn_frame.pack(side="bottom", fill="x", padx=5, pady=(10, 0))
         
-        btn_confirm = ctk.CTkButton(
-            btn_frame,
-            text="确认导入",
-            font=self.font_subtitle,
-            width=120,
-            height=34,
-            corner_radius=17,
-            fg_color="#3B82F6",
-            hover_color="#2563EB",
-            text_color="white",
-            command=self.confirm_import
-        )
-        btn_confirm.pack(side="right", padx=(8, 0))
-
         btn_cancel = ctk.CTkButton(
             btn_frame,
             text="取消",
@@ -235,9 +222,29 @@ class ProjectImportPreviewDialog(ctk.CTkToplevel):
             hover_color=("#E5E7EB", "#4B5563"),
             command=self.destroy
         )
-        btn_cancel.pack(side="right")
+        btn_cancel.pack(side="right", padx=(8, 0))
 
-    def update_warning(self):
+        btn_confirm = ctk.CTkButton(
+            btn_frame,
+            text="确认导入",
+            font=self.font_subtitle,
+            width=120,
+            height=34,
+            corner_radius=17,
+            fg_color="#3B82F6",
+            hover_color="#2563EB",
+            text_color="white",
+            command=self.confirm_import
+        )
+        btn_confirm.pack(side="right")
+        
+        # Calculate and apply final window size after all widgets are laid out
+        self.after(10, self._fit_window_size)
+
+    def _on_mode_changed(self):
+        self._update_warning_text()
+
+    def _update_warning_text(self):
         mode = self.import_mode_var.get()
         if mode == "overwrite":
             self.warning_card.configure(fg_color=("#FEF2F2", "#450A0A"), border_color=("#FCA5A5", "#EF4444"))
@@ -248,16 +255,24 @@ class ProjectImportPreviewDialog(ctk.CTkToplevel):
         else:
             self.warning_card.configure(fg_color=("#EFF6FF", "#1E293B"), border_color=("#DBEAFE", "#2563EB"))
             self.lbl_warning.configure(
-                text="ℹ️ 提示：叠加导入将把导入工程中的所有发音人合并至当前已加载的工程中。当前工程中的所有数据均会被妥善保留。\n如果有同名发音人，导入后将自动重命名（例如：“发音人1_2”）以避免覆盖冲突。",
+                text='ℹ️ 提示：叠加导入将把导入工程中的所有发音人合并至当前已加载的工程中。当前工程中的所有数据均会被妥善保留。\n如果有同名发音人，导入后将自动重命名（例如："发音人1_2"）以避免覆盖冲突。',
                 text_color=("#1E40AF", "#60A5FA")
             )
-            
-        # Dynamically calculate required window height
-        self.update_idletasks()
-        req_height = self.winfo_reqheight()
+        # Re-fit after warning text changes
+        self.after(10, self._fit_window_size)
+
+    def _fit_window_size(self):
+        """Apply window size and allow resizing."""
         width = 580
-        # Add 12px padding to req_height to ensure everything is comfortably displayed
-        height = req_height + 12
+        if self.is_empty:
+            height = 560
+        else:
+            mode = self.import_mode_var.get()
+            if mode == "overwrite":
+                height = 680
+            else:
+                height = 700
+        
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         x = (screen_width - width) // 2

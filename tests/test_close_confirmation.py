@@ -92,8 +92,7 @@ class TestCloseConfirmation(unittest.TestCase):
 
         with patch('tkinter.filedialog.askopenfilename', return_value=test_path), \
              patch('threading.Thread', side_effect=SynchronousThread), \
-             patch('modules.project_import_dialog.ProjectImportPreviewDialog', side_effect=lambda parent, app, path: app.execute_project_import(path, False)), \
-             patch('tkinter.messagebox.showinfo') as mock_info:
+             patch('modules.project_import_dialog.ProjectImportPreviewDialog', side_effect=lambda parent, app, path: app.execute_project_import(path, False)):
 
             self.app.project_manager.load_project.return_value = True
 
@@ -104,7 +103,6 @@ class TestCloseConfirmation(unittest.TestCase):
             self.assertEqual(self.app._last_imported_path, test_path)
             self.assertFalse(self.app.has_changes)
             self.assertEqual(self.app.current_project_path, test_path)
-            mock_info.assert_called_once()
 
     def test_project_export_resets_flag_and_sets_path(self):
         """Verify that exporting a project successfully resets dirty flag and stores path"""

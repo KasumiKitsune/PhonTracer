@@ -3397,8 +3397,6 @@ class PhoneticsApp:
         else:
             self.current_project_path = getattr(self, '_last_imported_path', None)
             self.has_changes = False
-            
-        messagebox.showinfo("成功", "工程导入成功！")
 
     def on_export_project(self):
         import datetime
