@@ -130,7 +130,8 @@ class AnomalyWarningDialog(ctk.CTkToplevel):
         self.result = False  # True if user ignores and continues, False if they return to edit
         
         self.title("异常数据警告")
-        self.geometry("540x480")
+        self.configure(fg_color=("#FFFFFF", "#1A1D24"))
+        self.geometry("540x440")
         self.resizable(True, True)
         self.transient(parent)
         self.grab_set()
@@ -139,7 +140,7 @@ class AnomalyWarningDialog(ctk.CTkToplevel):
         self.update_idletasks()
         main_win = parent.winfo_toplevel()
         x = main_win.winfo_rootx() + (main_win.winfo_width() - 540) // 2
-        y = main_win.winfo_rooty() + (main_win.winfo_height() - 480) // 2
+        y = main_win.winfo_rooty() + (main_win.winfo_height() - 440) // 2
         self.geometry(f"+{x}+{y}")
         
         # Fonts
@@ -149,7 +150,7 @@ class AnomalyWarningDialog(ctk.CTkToplevel):
         
         # Header banner
         header_frame = ctk.CTkFrame(self, fg_color="transparent")
-        header_frame.pack(fill=tk.X, padx=30, pady=(20, 10))
+        header_frame.pack(fill=tk.X, padx=30, pady=(15, 5))
         
         # Warning title in soft warning red/orange
         ctk.CTkLabel(
@@ -165,12 +166,12 @@ class AnomalyWarningDialog(ctk.CTkToplevel):
         ctk.CTkLabel(
             header_frame, text=description, font=font_small, text_color=("#4B5563", "#9CA3AF"),
             wraplength=480, justify="left"
-        ).pack(anchor="w", pady=(6, 0))
+        ).pack(anchor="w", pady=(4, 0))
         
         # Scrollable Warning List Frame with subtle warning border
         scroll_frame = ctk.CTkScrollableFrame(
-            self, corner_radius=8, border_width=1,
-            border_color=("#FCA5A5", "#7F1D1D"), fg_color=("#FEF2F2", "#181111")
+            self, height=160, corner_radius=8, border_width=1,
+            border_color=("#FCA5A5", "#7F1D1D"), fg_color=("#FFF5F5", "#1E1515")
         )
         scroll_frame.pack(fill=tk.BOTH, expand=True, padx=30, pady=5)
         
@@ -199,7 +200,7 @@ class AnomalyWarningDialog(ctk.CTkToplevel):
         
         # Action Buttons Card
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
-        btn_frame.pack(fill=tk.X, padx=30, pady=(15, 20))
+        btn_frame.pack(fill=tk.X, padx=30, pady=(10, 15))
         
         def on_ignore():
             self.result = True
@@ -1573,27 +1574,28 @@ class ProjectTreePanel:
     def _show_multi_speaker_export_dialog(self, sm):
         dlg = ctk.CTkToplevel(self.parent)
         dlg.title("导出范围选择")
-        dlg.geometry("420x460")
+        dlg.configure(fg_color=("#FFFFFF", "#1A1D24"))
+        dlg.geometry("420x410")
         dlg.resizable(False, False)
         dlg.transient(self.parent)
         dlg.grab_set()
         dlg.update_idletasks()
         main_win = self.parent.winfo_toplevel()
         x = main_win.winfo_rootx() + (main_win.winfo_width() - 420) // 2
-        y = main_win.winfo_rooty() + (main_win.winfo_height() - 460) // 2
+        y = main_win.winfo_rooty() + (main_win.winfo_height() - 410) // 2
         dlg.geometry(f"+{x}+{y}")
 
         font_small = ctk.CTkFont(family="Microsoft YaHei", size=11)
 
         # Header banner
         header_frame = ctk.CTkFrame(dlg, fg_color="transparent")
-        header_frame.pack(fill=tk.X, padx=30, pady=(20, 10))
+        header_frame.pack(fill=tk.X, padx=25, pady=(12, 4))
         ctk.CTkLabel(header_frame, text="👥 选择数据源", font=self.font_title, text_color=("#111827", "#F9FAFB")).pack(anchor="w")
-        ctk.CTkLabel(header_frame, text="请勾选本次要导出的发音人数据：", font=font_small, text_color=("#6B7280", "#9CA3AF")).pack(anchor="w", pady=(2, 0))
+        ctk.CTkLabel(header_frame, text="请勾选本次要导出的发音人数据：", font=font_small, text_color=("#6B7280", "#9CA3AF")).pack(anchor="w", pady=(1, 0))
 
-        # Scrollable container
-        scroll_frame = ctk.CTkScrollableFrame(dlg, height=160, corner_radius=8, border_width=1, border_color=("#E5E7EB", "#475569"), fg_color=("#F9FAFB", "#111827"))
-        scroll_frame.pack(fill=tk.BOTH, padx=30, pady=5)
+        # Scrollable container (more compact)
+        scroll_frame = ctk.CTkScrollableFrame(dlg, height=100, corner_radius=8, border_width=1, border_color=("#E5E7EB", "#374151"), fg_color=("#F9FAFB", "#161A22"))
+        scroll_frame.pack(fill=tk.BOTH, padx=25, pady=4)
 
         all_speakers = sm.get_all_speakers()
         active_speaker = sm.get_active_speaker()
@@ -1603,15 +1605,15 @@ class ProjectTreePanel:
             is_active = (spk.id == active_speaker.id)
             val = ctk.BooleanVar(value=is_active)
             row = ctk.CTkFrame(scroll_frame, fg_color="transparent")
-            row.pack(fill=tk.X, padx=5, pady=3)
+            row.pack(fill=tk.X, padx=5, pady=2)
             cb = ctk.CTkCheckBox(row, text=f"{spk.name} ({len(spk.items)}项)", variable=val, font=self.font_main,
                                  corner_radius=1000,
                                  fg_color=("#3B82F6", "#2563EB"), hover_color=("#9CA3AF", "#4B5563"), border_color=("#4B5563", "#9CA3AF"))
-            cb.pack(side=tk.LEFT, padx=10, pady=2)
+            cb.pack(side=tk.LEFT, padx=10, pady=1)
             checkboxes[spk] = val
 
         util_frame = ctk.CTkFrame(dlg, fg_color="transparent")
-        util_frame.pack(fill=tk.X, padx=30, pady=5)
+        util_frame.pack(fill=tk.X, padx=25, pady=(2, 4))
 
         def select_all():
             for val in checkboxes.values():
@@ -1627,20 +1629,18 @@ class ProjectTreePanel:
                       fg_color=("#E5E7EB", "#374151"), text_color=("#4B5563", "#D1D5DB"), hover_color=("#D1D5DB", "#4B5563"),
                       border_width=1, border_color=("#D1D5DB", "#475569"), command=select_none).pack(side=tk.LEFT, padx=5)
 
-        ctk.CTkFrame(dlg, height=1, fg_color=("#E5E7EB", "#374151")).pack(fill=tk.X, padx=30, pady=12)
-
-        # Integration option card
-        opt_card = ctk.CTkFrame(dlg, corner_radius=8, border_width=1, border_color=("#E5E7EB", "#374151"), fg_color=("#F3F4F6", "#1E293B"))
-        opt_card.pack(fill=tk.X, padx=30, pady=5)
+        # Integration option card (cleaner, lighter background)
+        opt_card = ctk.CTkFrame(dlg, corner_radius=8, border_width=1, border_color=("#E5E7EB", "#374151"), fg_color=("#F9FAFB", "#161A22"))
+        opt_card.pack(fill=tk.X, padx=25, pady=4)
 
         integrate_var = ctk.BooleanVar(value=False)
         cb_integrate = ctk.CTkCheckBox(opt_card, text="整合选中发音人的结果", variable=integrate_var, font=self.font_main,
                                        corner_radius=1000,
                                        fg_color=("#3B82F6", "#2563EB"), hover_color=("#9CA3AF", "#4B5563"), border_color=("#4B5563", "#9CA3AF"))
-        cb_integrate.pack(anchor="w", padx=15, pady=(10, 2))
+        cb_integrate.pack(anchor="w", padx=15, pady=(8, 2))
 
         ctk.CTkLabel(opt_card, text="※ 将采用 T值归一化整合不同发音人数据进行对比分析", font=ctk.CTkFont(family="Microsoft YaHei", size=10),
-                     text_color=("#6B7280", "#9CA3AF")).pack(anchor="w", padx=15, pady=(0, 10))
+                     text_color=("#6B7280", "#9CA3AF")).pack(anchor="w", padx=15, pady=(0, 8))
 
         def on_confirm():
             selected_speakers = [spk for spk, var in checkboxes.items() if var.get()]
@@ -1652,7 +1652,7 @@ class ProjectTreePanel:
             self._do_custom_export_preparation(selected_speakers, do_integrate)
 
         btn_frame = ctk.CTkFrame(dlg, fg_color="transparent")
-        btn_frame.pack(fill=tk.X, padx=30, pady=(20, 10))
+        btn_frame.pack(fill=tk.X, padx=25, pady=(12, 10))
 
         ctk.CTkButton(btn_frame, text="取消", width=95, height=36, corner_radius=18,
                       fg_color=("#F3F4F6", "#374151"), text_color=("#4B5563", "#D1D5DB"), hover_color=("#E5E7EB", "#4B5563"),
