@@ -1735,6 +1735,7 @@ class ProjectTreePanel:
     def _show_export_menu(self, tree_structure=None, mode='single', all_speakers=None):
         dlg = ctk.CTkToplevel(self.parent)
         dlg.title("选择导出格式")
+        dlg.configure(fg_color=("#FFFFFF", "#1A1D24"))
         dlg.geometry("320x330")
         dlg.resizable(False, False)
         dlg.transient(self.parent)
@@ -1745,7 +1746,7 @@ class ProjectTreePanel:
         y = main_win.winfo_rooty() + (main_win.winfo_height() - 330) // 2
         dlg.geometry(f"+{x}+{y}")
         ctk.CTkLabel(dlg, text="请选择导出格式", font=self.font_title, text_color=("#111827", "#F9FAFB")).pack(pady=(20, 15))
-        btn_kwargs = {"corner_radius": 22, "height": 44, "font": self.font_main, "anchor": "w", "compound": "left", "border_width": 1.5}
+        btn_kwargs = {"corner_radius": 8, "height": 44, "font": self.font_main, "anchor": "w", "compound": "left", "border_width": 1.5}
 
         def do_export(format_mode):
             if format_mode == 'line_chart':
