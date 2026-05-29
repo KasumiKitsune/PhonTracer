@@ -1284,8 +1284,9 @@ class PhoneticsApp:
         self.mark_modified()
 
     def on_rename_speaker(self):
-        dialog = ctk.CTkInputDialog(text="请输入新的名称:", title="重命名发音人")
-        new_name = dialog.get_input()
+        current_name = self.speaker_option_var.get()
+        dialog = RenameSpeakerDialog(self.root, current_name=current_name)
+        new_name = dialog.result
         if new_name and new_name.strip():
             self.speaker_manager.rename_speaker(self.speaker_manager.active_speaker_id, new_name.strip())
             self._update_speaker_dropdown()
@@ -2760,7 +2761,7 @@ class PhoneticsApp:
         x = (sw - w) // 2
         y = (sh - h) // 2
         dlg.geometry(f"{w}x{h}+{x}+{y}")
-        dlg.configure(fg_color="#f3f4f6")
+        dlg.configure(fg_color=("#FFFFFF", "#1A1D24"))
 
         dlg.transient(self.root)
         dlg.focus_set()
@@ -2901,7 +2902,7 @@ class PhoneticsApp:
         text_frame = ctk.CTkFrame(dlg, fg_color="transparent")
         text_frame.pack(padx=20, pady=(10, 5), fill=tk.BOTH, expand=True)
 
-        text_box = ctk.CTkTextbox(text_frame, width=380, height=180, corner_radius=8, border_width=1, border_color="#D1D5DB")
+        text_box = ctk.CTkTextbox(text_frame, width=380, height=180, corner_radius=8, border_width=1, border_color=("#D1D5DB", "#374151"), fg_color=("#FFFFFF", "#1E1E1E"))
         text_box.pack(fill=tk.BOTH, expand=True)
 
         placeholder_text = "请在此处粘贴字表文本，或点击下方按钮导入文件。\n\n格式规范：\n1. 组别名称：使用 【】、[] 或 # 开头（如：【一组】）。\n2. 字/词项：组别下方的行即为字词，支持空格、逗号、分号或 Tab 分隔。\n3. 音节切分：可使用斜杠“/”手动分割音节，如 bro/ther 或 北/京。\n\n示例格式：\n【一组】\n妈 麻 马 骂\n#双音节\n北/京  bro/ther\n[三字项]\n录音笔；笔记本"
@@ -2915,11 +2916,11 @@ class PhoneticsApp:
         placeholder_label.bind("<Button-1>", lambda e: text_box.focus_set())
 
         # 3. 实时统计栏
-        lbl_stats = ctk.CTkLabel(dlg, text="实时统计：已识别 0 个组别 | 0 个项", text_color="#6B7280", font=("Microsoft YaHei", 12))
+        lbl_stats = ctk.CTkLabel(dlg, text="实时统计：已识别 0 个组别 | 0 个项", text_color=("#6B7280", "#9CA3AF"), font=("Microsoft YaHei", 12))
         lbl_stats.pack(pady=(0, 5), padx=20, anchor="w")
 
         # 3.5 规则说明 (折叠面板)
-        rule_frame = ctk.CTkFrame(dlg, fg_color="#EFF6FF", corner_radius=8, border_width=1, border_color="#BFDBFE", cursor="hand2")
+        rule_frame = ctk.CTkFrame(dlg, fg_color=("#EFF6FF", "#172554"), corner_radius=8, border_width=1, border_color=("#BFDBFE", "#1E3A8A"), cursor="hand2")
         rule_frame.pack(padx=20, pady=(5, 5), fill=tk.X)
         rule_title = ctk.CTkLabel(rule_frame, text="▶ 💡 匹配与音节拆分规则说明", text_color="#1E40AF", font=("Microsoft YaHei", 12, "bold"), cursor="hand2")
         rule_title.pack(anchor=tk.W, padx=10, pady=5)
@@ -2929,7 +2930,7 @@ class PhoneticsApp:
             "3. 多音节拆分：默认汉字逐字拆分，非汉字整体为一个音节。若字词中包含斜杠“/”\n"
             "   (如 bro/ther 或 北/京)，则强制按斜杠分割音节，不再按字拆分。"
         )
-        rule_lbl = ctk.CTkLabel(rule_frame, text=rule_text, text_color="#1E40AF", font=("Microsoft YaHei", 11), justify=tk.LEFT)
+        rule_lbl = ctk.CTkLabel(rule_frame, text=rule_text, text_color=("#1E40AF", "#93C5FD"), font=("Microsoft YaHei", 11), justify=tk.LEFT)
         
         is_expanded = [False]
         def toggle_rules(event=None):
@@ -3022,9 +3023,9 @@ class PhoneticsApp:
         # 4. 匹配参数区
         match_mode_var = ctk.StringVar(value="fuzzy")
         if mode == 'batch':
-            frame_match = ctk.CTkFrame(dlg, fg_color="#F3F4F6", corner_radius=8)
+            frame_match = ctk.CTkFrame(dlg, fg_color=("#F3F4F6", "#1E293B"), corner_radius=8)
             frame_match.pack(padx=20, pady=10, fill=tk.X)
-            ctk.CTkLabel(frame_match, text="匹配方式", text_color="#4B5563").pack(anchor=tk.W, padx=10, pady=(5, 0))
+            ctk.CTkLabel(frame_match, text="匹配方式", text_color=("#4B5563", "#9CA3AF")).pack(anchor=tk.W, padx=10, pady=(5, 0))
             ctk.CTkRadioButton(frame_match, text="模糊匹配 (按文件名自动识别)", variable=match_mode_var, value="fuzzy").pack(anchor=tk.W, padx=15, pady=5)
             ctk.CTkRadioButton(frame_match, text="顺序匹配 (按字表顺序依次对应)", variable=match_mode_var, value="order").pack(anchor=tk.W, padx=15, pady=(0, 10))
 
@@ -4328,4 +4329,116 @@ class PhoneticsApp:
 
         import threading
         threading.Thread(target=run, daemon=True).start()
+
+
+class RenameSpeakerDialog(ctk.CTkToplevel):
+    def __init__(self, parent, current_name=None):
+        super().__init__(parent)
+        self.parent = parent
+        self.result = None
+        self.current_name = current_name or ""
+        
+        self.title("重命名发音人")
+        self.resizable(False, False)
+        self.configure(fg_color=("#FFFFFF", "#1A1D24"))
+        
+        # Geometry and centering (extremely compact vertical size)
+        width, height = 360, 110
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        x = (screen_width - width) // 2
+        y = (screen_height - height) // 2
+        self.geometry(f"{width}x{height}+{x}+{y}")
+        
+        self.transient(parent)
+        self.grab_set()
+        
+        # Top stripe
+        accent_strip = ctk.CTkFrame(self, height=4, fg_color="#3B82F6", corner_radius=0)
+        accent_strip.pack(fill="x", side="top")
+        
+        # Content frame
+        content_frame = ctk.CTkFrame(self, fg_color="transparent")
+        content_frame.pack(fill="both", expand=True, padx=20, pady=(15, 15))
+        
+        # Label
+        lbl = ctk.CTkLabel(
+            content_frame, 
+            text="请输入新的名称：", 
+            font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"),
+            text_color=("#111827", "#F9FAFB")
+        )
+        lbl.pack(anchor="w", pady=(0, 8))
+        
+        # Row frame (Entry + Buttons on the same line)
+        row_frame = ctk.CTkFrame(content_frame, fg_color="transparent")
+        row_frame.pack(fill="x")
+        
+        # Pill-shaped Entry (height 36, corner_radius 18)
+        self.entry = ctk.CTkEntry(
+            row_frame,
+            height=36,
+            corner_radius=18,
+            font=ctk.CTkFont(family="Microsoft YaHei", size=13),
+            fg_color=("#F9FAFB", "#262930"),
+            border_color=("#D1D5DB", "#374151"),
+            text_color=("#111827", "#F9FAFB")
+        )
+        self.entry.insert(0, self.current_name)
+        self.entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        self.entry.focus_set()
+        
+        # Select all text in entry
+        self.entry.select_range(0, tk.END)
+        self.entry.icursor(tk.END)
+        
+        # Circular Cancel button (✕, height 36, corner_radius 18)
+        btn_cancel = ctk.CTkButton(
+            row_frame,
+            text="✕",
+            width=36,
+            height=36,
+            corner_radius=18,
+            border_spacing=0,
+            fg_color=("#F3F4F6", "#374151"),
+            text_color=("#EF4444", "#F87171"),
+            hover_color=("#E5E7EB", "#4B5563"),
+            font=ctk.CTkFont(family="Microsoft YaHei", size=14, weight="bold"),
+            command=self.on_cancel
+        )
+        btn_cancel.pack(side="left", padx=(0, 6))
+        
+        # Circular OK button (✓, height 36, corner_radius 18)
+        btn_ok = ctk.CTkButton(
+            row_frame,
+            text="✓",
+            width=36,
+            height=36,
+            corner_radius=18,
+            border_spacing=0,
+            fg_color=("#10B981", "#059669"),
+            text_color="white",
+            hover_color=("#059669", "#047857"),
+            font=ctk.CTkFont(family="Microsoft YaHei", size=14, weight="bold"),
+            command=self.on_ok
+        )
+        btn_ok.pack(side="left")
+        
+        # Bind Enter and Escape
+        self.bind("<Return>", lambda e: self.on_ok())
+        self.bind("<Escape>", lambda e: self.on_cancel())
+        
+        self.parent.wait_window(self)
+        
+    def on_ok(self):
+        val = self.entry.get().strip()
+        if val:
+            self.result = val
+            self.destroy()
+        else:
+            messagebox.showwarning("提示", "名称不能为空！", parent=self)
+            
+    def on_cancel(self):
+        self.result = None
+        self.destroy()
 

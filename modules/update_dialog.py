@@ -25,7 +25,7 @@ class UpdateDialog(ctk.CTkToplevel):
         y = (screen_height - height) // 2
         self.geometry(f"{width}x{height}+{x}+{y}")
         
-        self.configure(fg_color="#F3F4F6")  # 与主程序一致的浅灰底色
+        self.configure(fg_color=("#FFFFFF", "#1A1D24"))  # 浅色模式纯白，暗色模式深海蓝
         
         # 设为临时窗口并聚焦
         self.transient(parent)
@@ -47,7 +47,7 @@ class UpdateDialog(ctk.CTkToplevel):
             title_frame, 
             text="发现新版本！", 
             font=ctk.CTkFont(family="Microsoft YaHei", size=18, weight="bold"),
-            text_color="#111827",
+            text_color=("#111827", "#F9FAFB"),
             anchor="w"
         )
         lbl_title.pack(fill="x")
@@ -62,20 +62,20 @@ class UpdateDialog(ctk.CTkToplevel):
             title_frame,
             text=version_text,
             font=ctk.CTkFont(family="Microsoft YaHei", size=12),
-            text_color="#4B5563",
+            text_color=("#4B5563", "#9CA3AF"),
             anchor="w"
         )
         lbl_version.pack(fill="x", pady=(5, 0))
 
         # 2. 更新日志显示区
-        log_frame = ctk.CTkFrame(self, fg_color="white", corner_radius=8, border_width=1, border_color="#E5E7EB")
+        log_frame = ctk.CTkFrame(self, fg_color=("#FFFFFF", "#262930"), corner_radius=8, border_width=1, border_color=("#E5E7EB", "#374151"))
         log_frame.pack(fill="both", expand=True, padx=25, pady=10)
         
         lbl_log_title = ctk.CTkLabel(
             log_frame,
             text=" 更新日志：",
             font=ctk.CTkFont(family="Microsoft YaHei", size=12, weight="bold"),
-            text_color="#374151",
+            text_color=("#374151", "#E5E7EB"),
             anchor="w"
         )
         lbl_log_title.pack(fill="x", padx=15, pady=(10, 5))
@@ -84,7 +84,7 @@ class UpdateDialog(ctk.CTkToplevel):
             log_frame,
             font=ctk.CTkFont(family="Microsoft YaHei", size=12),
             fg_color="transparent",
-            text_color="#4B5563",
+            text_color=("#4B5563", "#D1D5DB"),
             wrap="word",
             activate_scrollbars=True
         )
@@ -97,7 +97,7 @@ class UpdateDialog(ctk.CTkToplevel):
 
         # 3. 底部按钮区域
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
-        btn_frame.pack(fill="x", padx=25, pady=(15, 20))
+        btn_frame.pack(fill="x", padx=25, pady=(15, 25))
         
         # 忽略此版本按钮 (只有在非手动触发时才显示“忽略”选项才有意义，或者手动也可以提供)
         btn_ignore = ctk.CTkButton(
@@ -106,9 +106,9 @@ class UpdateDialog(ctk.CTkToplevel):
             width=100,
             height=36,
             corner_radius=18,
-            fg_color="#E5E7EB",
-            text_color="#4B5563",
-            hover_color="#D1D5DB",
+            fg_color=("#E5E7EB", "#374151"),
+            text_color=("#4B5563", "#D1D5DB"),
+            hover_color=("#D1D5DB", "#4B5563"),
             font=ctk.CTkFont(family="Microsoft YaHei", size=13),
             command=self.ignore_version
         )
@@ -121,9 +121,9 @@ class UpdateDialog(ctk.CTkToplevel):
             width=100,
             height=36,
             corner_radius=18,
-            fg_color="#E5E7EB",
-            text_color="#4B5563",
-            hover_color="#D1D5DB",
+            fg_color=("#E5E7EB", "#374151"),
+            text_color=("#4B5563", "#D1D5DB"),
+            hover_color=("#D1D5DB", "#4B5563"),
             font=ctk.CTkFont(family="Microsoft YaHei", size=13),
             command=self.destroy
         )
@@ -136,9 +136,9 @@ class UpdateDialog(ctk.CTkToplevel):
             width=150,
             height=36,
             corner_radius=18,
-            fg_color="#3B82F6",
+            fg_color=("#3B82F6", "#2563EB"),
             text_color="white",
-            hover_color="#2563EB",
+            hover_color=("#2563EB", "#1D4ED8"),
             font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"),
             command=self.open_download_url
         )

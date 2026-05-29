@@ -23,7 +23,7 @@ class AboutDialog(ctk.CTkToplevel):
         y = (screen_height - height) // 2
         self.geometry(f"{width}x{height}+{x}+{y}")
         
-        self.configure(fg_color="#F3F4F6")  # 浅灰底色
+        self.configure(fg_color=("#FFFFFF", "#1A1D24"))  # 浅色模式纯白，暗色模式深海蓝
         
         # 模态对话框
         self.transient(parent)
@@ -38,8 +38,8 @@ class AboutDialog(ctk.CTkToplevel):
 
     def setup_ui(self):
         # 1. 主卡片容器
-        card = ctk.CTkFrame(self, fg_color="white", corner_radius=12, border_width=1, border_color="#E5E7EB")
-        card.pack(fill="both", expand=True, padx=20, pady=(15, 10))
+        card = ctk.CTkFrame(self, fg_color=("#FFFFFF", "#262930"), corner_radius=12, border_width=1, border_color=("#E5E7EB", "#374151"))
+        card.pack(fill="both", expand=True, padx=20, pady=(15, 20))
         
         # 2. Logo 显示
         logo_w, logo_h = 75, 75
@@ -77,7 +77,7 @@ class AboutDialog(ctk.CTkToplevel):
             card, 
             text=APP_NAME, 
             font=ctk.CTkFont(family="Arial", size=24, weight="bold"),
-            text_color="#111827"
+            text_color=("#111827", "#F9FAFB")
         )
         lbl_name.pack()
         
@@ -85,18 +85,18 @@ class AboutDialog(ctk.CTkToplevel):
             card, 
             text="声调提取与分析工具 | Pitch Extraction & Analysis Tool", 
             font=ctk.CTkFont(family="Microsoft YaHei", size=12),
-            text_color="#6B7280"
+            text_color=("#6B7280", "#9CA3AF")
         )
         lbl_desc.pack(pady=(2, 5))
         
         # 版本号气泡
-        ver_frame = ctk.CTkFrame(card, fg_color="#EFF6FF", corner_radius=12, height=24)
+        ver_frame = ctk.CTkFrame(card, fg_color=("#EFF6FF", "#1E293B"), corner_radius=12, height=24)
         ver_frame.pack(pady=(0, 10))
         lbl_ver = ctk.CTkLabel(
             ver_frame, 
             text=f"Version {__version__}", 
             font=ctk.CTkFont(family="Consolas", size=11, weight="bold"),
-            text_color="#2563EB",
+            text_color=("#2563EB", "#60A5FA"),
             padx=10,
             pady=2
         )
@@ -107,13 +107,13 @@ class AboutDialog(ctk.CTkToplevel):
             card,
             text="PhonTracer 是一款专为语言学研究和方言调查设计的声调分析软件。\n支持多音轨提取、基频参数等分点运算及声谱图交互式调整。",
             font=ctk.CTkFont(family="Microsoft YaHei", size=12),
-            text_color="#4B5563",
+            text_color=("#4B5563", "#D1D5DB"),
             justify="center"
         )
         lbl_intro.pack(padx=20, pady=(0, 10))
 
         # 分割线
-        sep = ctk.CTkFrame(card, height=1, fg_color="#E5E7EB")
+        sep = ctk.CTkFrame(card, height=1, fg_color=("#E5E7EB", "#374151"))
         sep.pack(fill="x", padx=30, pady=5)
 
         # 4. 底部动作区
@@ -127,9 +127,9 @@ class AboutDialog(ctk.CTkToplevel):
             width=110,
             height=32,
             corner_radius=16,
-            fg_color="#F3F4F6",
-            text_color="#1F2937",
-            hover_color="#E5E7EB",
+            fg_color=("#F3F4F6", "#374151"),
+            text_color=("#1F2937", "#E5E7EB"),
+            hover_color=("#E5E7EB", "#4B5563"),
             font=ctk.CTkFont(family="Microsoft YaHei", size=12),
             command=self.open_manual
         )
@@ -142,9 +142,9 @@ class AboutDialog(ctk.CTkToplevel):
             width=110,
             height=32,
             corner_radius=16,
-            fg_color="#F3F4F6",
-            text_color="#1F2937",
-            hover_color="#E5E7EB",
+            fg_color=("#F3F4F6", "#374151"),
+            text_color=("#1F2937", "#E5E7EB"),
+            hover_color=("#E5E7EB", "#4B5563"),
             font=ctk.CTkFont(family="Microsoft YaHei", size=12),
             command=self.open_github
         )
@@ -157,9 +157,9 @@ class AboutDialog(ctk.CTkToplevel):
             width=110,
             height=32,
             corner_radius=16,
-            fg_color="#3B82F6",
+            fg_color=("#3B82F6", "#2563EB"),
             text_color="white",
-            hover_color="#2563EB",
+            hover_color=("#2563EB", "#1D4ED8"),
             font=ctk.CTkFont(family="Microsoft YaHei", size=12, weight="bold"),
             command=self.check_update
         )

@@ -28,7 +28,7 @@ class F0DetectionDialog(ctk.CTkToplevel):
         y = (screen_height - height) // 2
         self.geometry(f"{width}x{height}+{x}+{y}")
 
-        self.configure(fg_color="#F3F4F6")  # 浅灰底色
+        self.configure(fg_color=("#FFFFFF", "#1A1D24"))  # 浅色模式纯白，暗色模式深海蓝
 
         # 模态对话框
         self.transient(parent)
@@ -48,7 +48,7 @@ class F0DetectionDialog(ctk.CTkToplevel):
 
     def setup_ui(self):
         # 主卡片容器
-        card = ctk.CTkFrame(self, fg_color="white", corner_radius=12, border_width=1, border_color="#E5E7EB")
+        card = ctk.CTkFrame(self, fg_color="transparent")
         card.pack(fill="both", expand=True, padx=20, pady=(15, 15))
 
         # 头部标题
@@ -56,35 +56,35 @@ class F0DetectionDialog(ctk.CTkToplevel):
             card,
             text="基于当前音频估计 F0 分布",
             font=self.font_title,
-            text_color="#111827"
+            text_color=("#111827", "#F9FAFB")
         )
         lbl_title.pack(pady=(12, 10))
 
         # F0 主要特征网格
-        features_frame = ctk.CTkFrame(card, fg_color="#F9FAFB", corner_radius=8, border_width=1, border_color="#F3F4F6")
+        features_frame = ctk.CTkFrame(card, fg_color=("#F9FAFB", "#262930"), corner_radius=8, border_width=1, border_color=("#E5E7EB", "#374151"))
         features_frame.pack(fill="x", padx=15, pady=(0, 10))
 
         # 用两列排布基本统计数据
         # 左侧
-        lbl_dur_title = ctk.CTkLabel(features_frame, text="有声数据总量: ", font=self.font_small, text_color="#6B7280")
+        lbl_dur_title = ctk.CTkLabel(features_frame, text="有声数据总量: ", font=self.font_small, text_color=("#6B7280", "#9CA3AF"))
         lbl_dur_title.grid(row=0, column=0, padx=(15, 5), pady=8, sticky="w")
-        lbl_dur_val = ctk.CTkLabel(features_frame, text=f"{self.stable_duration:.2f} 秒 ({self.stable_count} 帧)", font=self.font_small, text_color="#374151")
+        lbl_dur_val = ctk.CTkLabel(features_frame, text=f"{self.stable_duration:.2f} 秒 ({self.stable_count} 帧)", font=self.font_small, text_color=("#374151", "#E5E7EB"))
         lbl_dur_val.grid(row=0, column=1, padx=5, pady=8, sticky="w")
 
         # 右侧
-        lbl_median_title = ctk.CTkLabel(features_frame, text="中位数 F0 (P50): ", font=self.font_small, text_color="#6B7280")
+        lbl_median_title = ctk.CTkLabel(features_frame, text="中位数 F0 (P50): ", font=self.font_small, text_color=("#6B7280", "#9CA3AF"))
         lbl_median_title.grid(row=0, column=2, padx=(30, 5), pady=8, sticky="w")
-        lbl_median_val = ctk.CTkLabel(features_frame, text=f"{self.p50:.1f} Hz", font=self.font_small, text_color="#374151")
+        lbl_median_val = ctk.CTkLabel(features_frame, text=f"{self.p50:.1f} Hz", font=self.font_small, text_color=("#374151", "#E5E7EB"))
         lbl_median_val.grid(row=0, column=3, padx=5, pady=8, sticky="w")
 
         # 主要分布区间 (P5 ~ P95)
-        lbl_range_title = ctk.CTkLabel(features_frame, text="主要稳定区间: ", font=self.font_small, text_color="#6B7280")
+        lbl_range_title = ctk.CTkLabel(features_frame, text="主要稳定区间: ", font=self.font_small, text_color=("#6B7280", "#9CA3AF"))
         lbl_range_title.grid(row=1, column=0, padx=(15, 5), pady=(0, 8), sticky="w")
-        lbl_range_val = ctk.CTkLabel(features_frame, text=f"{self.p5:.1f} ~ {self.p95:.1f} Hz (P5 ~ P95)", font=self.font_small, text_color="#374151")
+        lbl_range_val = ctk.CTkLabel(features_frame, text=f"{self.p5:.1f} ~ {self.p95:.1f} Hz (P5 ~ P95)", font=self.font_small, text_color=("#374151", "#E5E7EB"))
         lbl_range_val.grid(row=1, column=1, columnspan=3, padx=5, pady=(0, 8), sticky="w")
 
         # 建议与简短理由横条
-        reason_frame = ctk.CTkFrame(card, fg_color="#EFF6FF", corner_radius=8, border_width=1, border_color="#DBEAFE")
+        reason_frame = ctk.CTkFrame(card, fg_color=("#EFF6FF", "#1E293B"), corner_radius=8, border_width=1, border_color=("#DBEAFE", "#2563EB"))
         reason_frame.pack(fill="x", padx=15, pady=(0, 15))
         
         reason_text = (
@@ -95,7 +95,7 @@ class F0DetectionDialog(ctk.CTkToplevel):
             reason_frame,
             text=reason_text,
             font=self.font_main,
-            text_color="#1E40AF",
+            text_color=("#1E40AF", "#93C5FD"),
             justify="left"
         )
         lbl_reason.pack(padx=15, pady=8, fill="x")
@@ -124,7 +124,7 @@ class F0DetectionDialog(ctk.CTkToplevel):
 
         for opt in options:
             floor, ceiling = opt["range"]
-            opt_frame = ctk.CTkFrame(card, fg_color="white", corner_radius=10, border_width=1, border_color="#E5E7EB")
+            opt_frame = ctk.CTkFrame(card, fg_color=("#FFFFFF", "#262930"), corner_radius=10, border_width=1, border_color=("#E5E7EB", "#374151"))
             opt_frame.pack(fill="x", padx=15, pady=5)
 
             # 配置网格列权重，确保右侧应用按钮有固定宽度不被挤压，左侧信息区自适应
@@ -144,7 +144,7 @@ class F0DetectionDialog(ctk.CTkToplevel):
                 info_frame,
                 text=title_text,
                 font=self.font_subtitle,
-                text_color="#1F2937" if not opt["is_primary"] else "#2563EB"
+                text_color=("#1F2937", "#E5E7EB") if not opt["is_primary"] else ("#2563EB", "#60A5FA")
             )
             lbl_opt_title.pack(anchor="w")
 
@@ -152,7 +152,7 @@ class F0DetectionDialog(ctk.CTkToplevel):
                 info_frame,
                 text=f"{floor} ~ {ceiling} Hz",
                 font=ctk.CTkFont(family="Consolas", size=14, weight="bold"),
-                text_color="#111827"
+                text_color=("#111827", "#F9FAFB")
             )
             lbl_opt_val.pack(anchor="w", pady=(2, 2))
 
@@ -160,7 +160,7 @@ class F0DetectionDialog(ctk.CTkToplevel):
                 info_frame,
                 text=opt["desc"],
                 font=self.font_small,
-                text_color="#6B7280"
+                text_color=("#6B7280", "#9CA3AF")
             )
             lbl_opt_desc.pack(anchor="w")
 
@@ -171,9 +171,9 @@ class F0DetectionDialog(ctk.CTkToplevel):
                 text_color = "white"
                 btn_text = "应用此范围"
             else:
-                btn_color = "#F3F4F6"
-                hover_color = "#E5E7EB"
-                text_color = "#1F2937"
+                btn_color = ("#F3F4F6", "#374151")
+                hover_color = ("#E5E7EB", "#4B5563")
+                text_color = ("#1F2937", "#E5E7EB")
                 btn_text = "应用"
 
             btn_apply = ctk.CTkButton(
@@ -198,9 +198,9 @@ class F0DetectionDialog(ctk.CTkToplevel):
             width=90,
             height=32,
             corner_radius=16,
-            fg_color="#F3F4F6",
-            text_color="#4B5563",
-            hover_color="#E5E7EB",
+            fg_color=("#F3F4F6", "#374151"),
+            text_color=("#4B5563", "#D1D5DB"),
+            hover_color=("#E5E7EB", "#4B5563"),
             command=self.destroy
         )
         btn_cancel.pack(pady=(12, 10))

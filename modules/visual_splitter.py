@@ -99,10 +99,10 @@ class VisualSplitter(ctk.CTkToplevel):
             self.lbl_zoom.configure(text=f"缩放: {int(self.px_per_sec)}")
 
     def setup_ui(self):
-        self.configure(fg_color="#F9FAFB")
+        self.configure(fg_color=("#FFFFFF", "#1A1D24"))
         
         # 顶部说明栏
-        info_frame = ctk.CTkFrame(self, height=45, fg_color="#F3F4F6", corner_radius=0)
+        info_frame = ctk.CTkFrame(self, height=45, fg_color=("#F9FAFB", "#161A22"), corner_radius=0)
         info_frame.pack(side=tk.TOP, fill=tk.X)
         
         if self.mode == 'cut':
@@ -112,45 +112,47 @@ class VisualSplitter(ctk.CTkToplevel):
         else:
             msg = "【右键】删除错误段。词语模式下可拖动【蓝线】微调单字边界。完成后点击右下角确认。"
             
-        ctk.CTkLabel(info_frame, text=msg, font=("Microsoft YaHei", 13), text_color="#1F2937").pack(side=tk.LEFT, padx=20, pady=10)
+        ctk.CTkLabel(info_frame, text=msg, font=("Microsoft YaHei", 13), text_color=("#1F2937", "#E5E7EB")).pack(side=tk.LEFT, padx=20, pady=10)
         
         # 底部控制栏
-        bottom_frame = ctk.CTkFrame(self, height=70, fg_color="white", corner_radius=0)
+        bottom_frame = ctk.CTkFrame(self, height=70, fg_color=("#FFFFFF", "#1A1D24"), corner_radius=0)
         bottom_frame.pack(side=tk.BOTTOM, fill=tk.X)
         
         if self.mode == 'cut':
             CTkReleaseButton(bottom_frame, text="清空所有点", image=self.icons.get("cut"), compound="left",
-                         fg_color="#FEE2E2", hover_color="#FECACA", text_color="#DC2626", corner_radius=20, height=36,
+                         fg_color=("#FEE2E2", "#7F1D1D"), hover_color=("#FECACA", "#991B1B"), text_color=("#DC2626", "#FCA5A5"),
+                         corner_radius=8, height=36,
                          command=self.clear_cuts).pack(side=tk.LEFT, padx=20, pady=15)
                          
-            self.lbl_count = ctk.CTkLabel(bottom_frame, text="当前切分点：0", font=("Microsoft YaHei", 13, "bold"), text_color="#4B5563")
+            self.lbl_count = ctk.CTkLabel(bottom_frame, text="当前切分点：0", font=("Microsoft YaHei", 13, "bold"), text_color=("#4B5563", "#9CA3AF"))
             self.lbl_count.pack(side=tk.RIGHT, padx=20)
         
         if self.mode in ('review', 'edit'):
             # 统计标签
-            self.lbl_count = ctk.CTkLabel(bottom_frame, text="", font=("Microsoft YaHei", 13, "bold"), text_color="#4B5563")
+            self.lbl_count = ctk.CTkLabel(bottom_frame, text="", font=("Microsoft YaHei", 13, "bold"), text_color=("#4B5563", "#9CA3AF"))
             self.lbl_count.pack(side=tk.RIGHT, padx=20)
             self.update_review_count()
         
         CTkReleaseButton(bottom_frame, text="确认并应用",
-                     fg_color="#10B981", hover_color="#059669", corner_radius=20, height=36,
+                     fg_color=("#10B981", "#059669"), hover_color=("#059669", "#047857"), corner_radius=8, height=36,
                      command=self.confirm).pack(side=tk.RIGHT, padx=20, pady=15)
         
         # 缩放控制
         zoom_frame = ctk.CTkFrame(bottom_frame, fg_color="transparent")
         zoom_frame.pack(side=tk.LEFT, padx=30, pady=15)
-        self.lbl_zoom = ctk.CTkLabel(zoom_frame, text=f"缩放: {int(self.px_per_sec)}", font=("Microsoft YaHei", 13), text_color="#4B5563")
+        self.lbl_zoom = ctk.CTkLabel(zoom_frame, text=f"缩放: {int(self.px_per_sec)}", font=("Microsoft YaHei", 13), text_color=("#4B5563", "#9CA3AF"))
         self.lbl_zoom.pack(side=tk.LEFT, padx=5)
         # 档位制：from 25 to 2000
-        self.zoom_slider = ctk.CTkSlider(zoom_frame, from_=25, to=2000, number_of_steps=79, command=self.on_zoom_change, button_color="#3B82F6", progress_color="#93C5FD")
+        self.zoom_slider = ctk.CTkSlider(zoom_frame, from_=25, to=2000, number_of_steps=79, command=self.on_zoom_change, button_color=("#3B82F6", "#2563EB"), progress_color=("#93C5FD", "#1D4ED8"))
         self.zoom_slider.set(self.px_per_sec)
         self.zoom_slider.pack(side=tk.LEFT)
-
+ 
         # 中间滚动区域
-        self.main_frame = ctk.CTkFrame(self, fg_color="white", corner_radius=12, border_width=1, border_color="#E5E7EB")
+        self.main_frame = ctk.CTkFrame(self, fg_color=("#FFFFFF", "#1A1D24"), corner_radius=12, border_width=1, border_color=("#E5E7EB", "#374151"))
         self.main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=(20, 10))
         
-        self.canvas = tk.Canvas(self.main_frame, bg="white", highlightthickness=0)
+        is_dark = (ctk.get_appearance_mode() == "Dark")
+        self.canvas = tk.Canvas(self.main_frame, bg="#1A1D24" if is_dark else "#FFFFFF", highlightthickness=0)
         self.scrollbar = ctk.CTkScrollbar(self.main_frame, orientation="horizontal", command=self.canvas.xview)
         self.canvas.configure(xscrollcommand=self.scrollbar.set)
         
@@ -265,17 +267,21 @@ class VisualSplitter(ctk.CTkToplevel):
         self.canvas.delete("all")
         self.canvas.config(scrollregion=(0, 0, self.canvas_width, self.canvas_height))
         
+        is_dark = (ctk.get_appearance_mode() == "Dark")
+        canvas_bg = "#1A1D24" if is_dark else "#FFFFFF"
+        self.canvas.configure(bg=canvas_bg)
+
         # 1. 绘制片段背景
         if self.mode in ('edit', 'review'):
             for i, seg in enumerate(self.segments):
                 x1 = seg['start'] * self.px_per_sec
                 x2 = seg['end'] * self.px_per_sec
-                bg_color = "#FEE2E2" if i in self.deleted_indices else "#EFF6FF"
+                bg_color = ("#FEE2E2", "#450A0A")[is_dark] if i in self.deleted_indices else ("#EFF6FF", "#172554")[is_dark]
                 self.canvas.create_rectangle(x1, 0, x2, self.canvas_height, fill=bg_color, outline="")
 
         # 2. 绘制波形中心线
         mid_y = self.canvas_height / 2 + 20
-        self.canvas.create_line(0, mid_y, self.canvas_width, mid_y, fill="#E5E7EB")
+        self.canvas.create_line(0, mid_y, self.canvas_width, mid_y, fill="#374151" if is_dark else "#E5E7EB")
         
         # 3. 绘制波形 (切分以优化性能)
         draw_step = max(1, len(self.envelope_data) // self.canvas_width)
@@ -291,15 +297,15 @@ class VisualSplitter(ctk.CTkToplevel):
             for i in range(0, len(points), chunk_size):
                 chunk = points[i:i+chunk_size+2]
                 if len(chunk) >= 4:
-                    self.canvas.create_line(chunk, fill="#9CA3AF", width=1, tags="waveform")
+                    self.canvas.create_line(chunk, fill="#4B5563" if is_dark else "#9CA3AF", width=1, tags="waveform")
         
         # 4. 绘制时间轴刻度
         step_sec = 1 if self.px_per_sec > 50 else 5
         if self.px_per_sec > 200: step_sec = 0.5
         for t in np.arange(0, self.duration, step_sec):
             x = t * self.px_per_sec
-            self.canvas.create_line(x, self.canvas_height-15, x, self.canvas_height, fill="#D1D5DB")
-            self.canvas.create_text(x+2, self.canvas_height-8, text=f"{t}s", anchor=tk.W, font=("Arial", 9), fill="#6B7280")
+            self.canvas.create_line(x, self.canvas_height-15, x, self.canvas_height, fill="#4B5563" if is_dark else "#D1D5DB")
+            self.canvas.create_text(x+2, self.canvas_height-8, text=f"{t}s", anchor=tk.W, font=("Arial", 9), fill="#9CA3AF" if is_dark else "#6B7280")
 
         # 5. 绘制边界线与标签
         if self.mode == 'cut':

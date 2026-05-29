@@ -201,7 +201,7 @@ class AnomalyWarningDialog(ctk.CTkToplevel):
         
         # Action Buttons Card
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
-        btn_frame.pack(fill=tk.X, padx=30, pady=(10, 15))
+        btn_frame.pack(fill=tk.X, padx=30, pady=(10, 30))
         
         def on_ignore():
             self.result = True
@@ -1598,7 +1598,7 @@ class ProjectTreePanel:
 
         # 2. Pack the frames in vertical layout order (Top & Bottom first, then Middle expand)
         header_frame.pack(side=tk.TOP, fill=tk.X, padx=25, pady=(12, 4))
-        btn_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=25, pady=(12, 10))
+        btn_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=25, pady=(12, 25))
         opt_card.pack(side=tk.BOTTOM, fill=tk.X, padx=25, pady=4)
         util_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=25, pady=(2, 4))
         scroll_frame.pack(fill=tk.BOTH, expand=True, padx=25, pady=4)
@@ -1736,14 +1736,14 @@ class ProjectTreePanel:
         dlg = ctk.CTkToplevel(self.parent)
         dlg.title("选择导出格式")
         dlg.configure(fg_color=("#FFFFFF", "#1A1D24"))
-        dlg.geometry("320x280")
+        dlg.geometry("320x315")
         dlg.resizable(False, False)
         dlg.transient(self.parent)
         dlg.grab_set()
         dlg.update_idletasks()
         main_win = self.parent.winfo_toplevel()
         x = main_win.winfo_rootx() + (main_win.winfo_width() - 320) // 2
-        y = main_win.winfo_rooty() + (main_win.winfo_height() - 280) // 2
+        y = main_win.winfo_rooty() + (main_win.winfo_height() - 315) // 2
         dlg.geometry(f"+{x}+{y}")
         ctk.CTkLabel(dlg, text="请选择导出格式", font=self.font_title, text_color=("#111827", "#F9FAFB")).pack(pady=(20, 15))
         btn_kwargs = {"corner_radius": 8, "height": 44, "font": self.font_main, "anchor": "w", "compound": "left", "border_width": 1.5}
@@ -1893,7 +1893,7 @@ class ProjectTreePanel:
         ctk.CTkButton(dlg, text="  📊  Excel 表格 (.xlsx)", command=lambda: do_export('xlsx'),
                       fg_color=("#ECFDF5", "#022C22"), text_color=("#047857", "#D1FAE5"), hover_color=("#D1FAE5", "#065F46"), border_color=("#34D399", "#10B981"), **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
         ctk.CTkButton(dlg, text="  📈  声学图表可视化导出", command=lambda: do_export('line_chart'),
-                      fg_color=("#EFF6FF", "#172554"), text_color=("#1E40AF", "#DBEAFE"), hover_color=("#DBEAFE", "#1E40AF"), border_color=("#60A5FA", "#3B82F6"), **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
+                      fg_color=("#EFF6FF", "#172554"), text_color=("#1E40AF", "#DBEAFE"), hover_color=("#DBEAFE", "#1E40AF"), border_color=("#60A5FA", "#3B82F6"), **btn_kwargs).pack(fill=tk.X, padx=25, pady=(4, 25))
         # 时序密度热力图已整合至声学图表导出中
 
     def _ensure_item_loaded(self, item):
@@ -2688,6 +2688,7 @@ class ProjectTreePanel:
         param_dlg.resizable(False, False)
         param_dlg.transient(self.parent)
         param_dlg.grab_set()
+        param_dlg.configure(fg_color=("#FFFFFF", "#1A1D24"))
 
         param_dlg.update_idletasks()
         main_win = self.parent.winfo_toplevel()
@@ -2695,14 +2696,14 @@ class ProjectTreePanel:
         y = main_win.winfo_rooty() + (main_win.winfo_height() - 380) // 2
         param_dlg.geometry(f"+{x}+{y}")
 
-        ctk.CTkLabel(param_dlg, text="词语时序密度热力图参数设置", font=self.font_title).pack(pady=(15, 10))
+        ctk.CTkLabel(param_dlg, text="词语时序密度热力图参数设置", font=self.font_title, text_color=("#111827", "#F9FAFB")).pack(pady=(15, 10))
 
         bw_frame = ctk.CTkFrame(param_dlg, fg_color="transparent")
         bw_frame.pack(fill=tk.X, padx=30, pady=5)
 
-        ctk.CTkLabel(bw_frame, text="核密度带宽 (Bandwidth):", font=self.font_main).pack(side=tk.LEFT)
+        ctk.CTkLabel(bw_frame, text="核密度带宽 (Bandwidth):", font=self.font_main, text_color=("#374151", "#E5E7EB")).pack(side=tk.LEFT)
 
-        bw_val_lbl = ctk.CTkLabel(bw_frame, text="0.15", font=self.font_main, width=40)
+        bw_val_lbl = ctk.CTkLabel(bw_frame, text="0.15", font=self.font_main, width=40, text_color=("#374151", "#E5E7EB"))
 
         def on_slider_change(val):
             bw_val_lbl.configure(text=f"{float(val):.2f}")
@@ -2715,7 +2716,7 @@ class ProjectTreePanel:
         f0_frame = ctk.CTkFrame(param_dlg, fg_color="transparent")
         f0_frame.pack(fill=tk.X, padx=30, pady=10)
 
-        ctk.CTkLabel(f0_frame, text="基频 T值归一化范围:", font=self.font_main).pack(anchor="w", pady=(0, 5))
+        ctk.CTkLabel(f0_frame, text="基频 T值归一化范围:", font=self.font_main, text_color=("#374151", "#E5E7EB")).pack(anchor="w", pady=(0, 5))
 
         f0_mode_var = ctk.StringVar(value="percentile")
 
@@ -2734,29 +2735,29 @@ class ProjectTreePanel:
                 pct_frame.pack_forget()
                 manual_frame.pack_forget()
 
-        r_pct = ctk.CTkRadioButton(f0_frame, text="分位数自动截断 (推荐, 消除极端值压缩)", variable=f0_mode_var, value="percentile", font=self.font_main, command=update_f0_mode_ui)
+        r_pct = ctk.CTkRadioButton(f0_frame, text="分位数自动截断 (推荐, 消除极端值压缩)", variable=f0_mode_var, value="percentile", font=self.font_main, text_color=("#374151", "#E5E7EB"), command=update_f0_mode_ui)
         r_pct.pack(anchor="w", pady=2)
 
-        r_minmax = ctk.CTkRadioButton(f0_frame, text="极值自动范围 (Min ~ Max)", variable=f0_mode_var, value="minmax", font=self.font_main, command=update_f0_mode_ui)
+        r_minmax = ctk.CTkRadioButton(f0_frame, text="极值自动范围 (Min ~ Max)", variable=f0_mode_var, value="minmax", font=self.font_main, text_color=("#374151", "#E5E7EB"), command=update_f0_mode_ui)
         r_minmax.pack(anchor="w", pady=2)
 
-        r_manual = ctk.CTkRadioButton(f0_frame, text="手动指定范围 (Hz)", variable=f0_mode_var, value="manual", font=self.font_main, command=update_f0_mode_ui)
+        r_manual = ctk.CTkRadioButton(f0_frame, text="手动指定范围 (Hz)", variable=f0_mode_var, value="manual", font=self.font_main, text_color=("#374151", "#E5E7EB"), command=update_f0_mode_ui)
         r_manual.pack(anchor="w", pady=2)
 
-        ctk.CTkLabel(pct_frame, text="分位区间 (Low % ~ High %):", font=self.font_main).pack(side=tk.LEFT)
+        ctk.CTkLabel(pct_frame, text="分位区间 (Low % ~ High %):", font=self.font_main, text_color=("#374151", "#E5E7EB")).pack(side=tk.LEFT)
         pct_low_ent = ctk.CTkEntry(pct_frame, width=50, font=self.font_main)
         pct_low_ent.insert(0, "5")
         pct_low_ent.pack(side=tk.LEFT, padx=5)
-        ctk.CTkLabel(pct_frame, text="~", font=self.font_main).pack(side=tk.LEFT)
+        ctk.CTkLabel(pct_frame, text="~", font=self.font_main, text_color=("#374151", "#E5E7EB")).pack(side=tk.LEFT)
         pct_high_ent = ctk.CTkEntry(pct_frame, width=50, font=self.font_main)
         pct_high_ent.insert(0, "95")
         pct_high_ent.pack(side=tk.LEFT, padx=5)
 
-        ctk.CTkLabel(manual_frame, text="基频范围 (Min Hz ~ Max Hz):", font=self.font_main).pack(side=tk.LEFT)
+        ctk.CTkLabel(manual_frame, text="基频范围 (Min Hz ~ Max Hz):", font=self.font_main, text_color=("#374151", "#E5E7EB")).pack(side=tk.LEFT)
         min_hz_ent = ctk.CTkEntry(manual_frame, width=60, font=self.font_main)
         min_hz_ent.insert(0, "75")
         min_hz_ent.pack(side=tk.LEFT, padx=5)
-        ctk.CTkLabel(manual_frame, text="~", font=self.font_main).pack(side=tk.LEFT)
+        ctk.CTkLabel(manual_frame, text="~", font=self.font_main, text_color=("#374151", "#E5E7EB")).pack(side=tk.LEFT)
         max_hz_ent = ctk.CTkEntry(manual_frame, width=60, font=self.font_main)
         max_hz_ent.insert(0, "600")
         max_hz_ent.pack(side=tk.LEFT, padx=5)
@@ -2831,10 +2832,10 @@ class ProjectTreePanel:
                 logging.getLogger(__name__).error(f"KDE Heatmap Export error: {e}", exc_info=True)
 
         btn_frame = ctk.CTkFrame(param_dlg, fg_color="transparent")
-        btn_frame.pack(side=tk.BOTTOM, pady=15)
+        btn_frame.pack(side=tk.BOTTOM, pady=(15, 25))
 
-        ctk.CTkButton(btn_frame, text="取消", width=90, fg_color="#E5E7EB", text_color="#374151", hover_color="#D1D5DB", command=param_dlg.destroy).pack(side=tk.LEFT, padx=10)
-        ctk.CTkButton(btn_frame, text="确定并选择路径", width=120, command=on_confirm).pack(side=tk.LEFT, padx=10)
+        ctk.CTkButton(btn_frame, text="取消", width=90, corner_radius=14, fg_color=("#E5E7EB", "#374151"), text_color=("#374151", "#D1D5DB"), hover_color=("#D1D5DB", "#4B5563"), command=param_dlg.destroy).pack(side=tk.LEFT, padx=10)
+        ctk.CTkButton(btn_frame, text="确定并选择路径", width=120, corner_radius=14, command=on_confirm).pack(side=tk.LEFT, padx=10)
 
     def _draw_kde_heatmap(self, group_norm_points, max_syls, out_file, prog_dlg, pbar, lbl_status, bw_method=0.15, cancel_event=None):
         import math
@@ -2929,20 +2930,21 @@ class ProjectTreePanel:
 
         prog_dlg = ctk.CTkToplevel(self.parent)
         prog_dlg.title("正在导出热力图")
-        prog_dlg.geometry("300x120")
+        prog_dlg.configure(fg_color=("#FFFFFF", "#1A1D24"))
+        prog_dlg.geometry("300x130")
         prog_dlg.attributes('-topmost', True)
         prog_dlg.resizable(False, False)
         prog_dlg.update_idletasks()
         main_win = self.parent.winfo_toplevel()
-        prog_dlg.geometry(f"+{main_win.winfo_rootx() + (main_win.winfo_width() - 300) // 2}+{main_win.winfo_rooty() + (main_win.winfo_height() - 120) // 2}")
+        prog_dlg.geometry(f"+{main_win.winfo_rootx() + (main_win.winfo_width() - 300) // 2}+{main_win.winfo_rooty() + (main_win.winfo_height() - 130) // 2}")
 
-        lbl_status = ctk.CTkLabel(prog_dlg, text="正在处理数据，请稍候...", font=self.font_main)
+        lbl_status = ctk.CTkLabel(prog_dlg, text="正在处理数据，请稍候...", font=self.font_main, text_color=("#374151", "#E5E7EB"))
         lbl_status.pack(pady=(20, 5))
         pbar = ctk.CTkProgressBar(prog_dlg, width=250)
         pbar.pack()
         pbar.set(0)
         cancel_event = threading.Event()
-        ctk.CTkButton(prog_dlg, text="取消", width=80, command=cancel_event.set).pack(pady=(8, 0))
+        ctk.CTkButton(prog_dlg, text="取消", width=80, corner_radius=14, fg_color=("#E5E7EB", "#374151"), text_color=("#374151", "#D1D5DB"), hover_color=("#D1D5DB", "#4B5563"), command=cancel_event.set).pack(pady=(8, 25))
         prog_dlg.update()
 
         pbar.set(0.2)
@@ -3055,20 +3057,21 @@ class ProjectTreePanel:
 
         prog_dlg = ctk.CTkToplevel(self.parent)
         prog_dlg.title("正在导出整合热力图")
-        prog_dlg.geometry("300x120")
+        prog_dlg.configure(fg_color=("#FFFFFF", "#1A1D24"))
+        prog_dlg.geometry("300x130")
         prog_dlg.attributes('-topmost', True)
         prog_dlg.resizable(False, False)
         prog_dlg.update_idletasks()
         main_win = self.parent.winfo_toplevel()
-        prog_dlg.geometry(f"+{main_win.winfo_rootx() + (main_win.winfo_width() - 300) // 2}+{main_win.winfo_rooty() + (main_win.winfo_height() - 120) // 2}")
+        prog_dlg.geometry(f"+{main_win.winfo_rootx() + (main_win.winfo_width() - 300) // 2}+{main_win.winfo_rooty() + (main_win.winfo_height() - 130) // 2}")
 
-        lbl_status = ctk.CTkLabel(prog_dlg, text="正在处理数据，请稍候...", font=self.font_main)
+        lbl_status = ctk.CTkLabel(prog_dlg, text="正在处理数据，请稍候...", font=self.font_main, text_color=("#374151", "#E5E7EB"))
         lbl_status.pack(pady=(20, 5))
         pbar = ctk.CTkProgressBar(prog_dlg, width=250)
         pbar.pack()
         pbar.set(0)
         cancel_event = threading.Event()
-        ctk.CTkButton(prog_dlg, text="取消", width=80, command=cancel_event.set).pack(pady=(8, 0))
+        ctk.CTkButton(prog_dlg, text="取消", width=80, corner_radius=14, fg_color=("#E5E7EB", "#374151"), text_color=("#374151", "#D1D5DB"), hover_color=("#D1D5DB", "#4B5563"), command=cancel_event.set).pack(pady=(8, 25))
         prog_dlg.update()
 
         total_speakers = len(all_speakers)
@@ -3447,6 +3450,7 @@ class ProjectTreePanel:
     def _show_formant_export_menu(self, mode='single', all_speakers=None):
         dlg = ctk.CTkToplevel(self.parent)
         dlg.title("选择共振峰导出内容")
+        dlg.configure(fg_color=("#FFFFFF", "#1A1D24"))
         dlg.geometry("320x300")
         dlg.resizable(False, False)
         dlg.transient(self.parent)
@@ -3458,7 +3462,7 @@ class ProjectTreePanel:
         dlg.geometry(f"+{x}+{y}")
         
         ctk.CTkLabel(dlg, text="请选择共振峰导出内容", font=self.font_title, text_color=("#111827", "#F9FAFB")).pack(pady=(20, 15))
-        btn_kwargs = {"corner_radius": 22, "height": 44, "font": self.font_main, "anchor": "w", "compound": "left", "border_width": 1.5}
+        btn_kwargs = {"corner_radius": 8, "height": 44, "font": self.font_main, "anchor": "w", "compound": "left", "border_width": 1.5}
         
         btn_table = CTkReleaseButton(
             dlg,
@@ -3499,7 +3503,7 @@ class ProjectTreePanel:
             font=self.font_main,
             command=dlg.destroy
         )
-        btn_cancel.pack(fill=tk.X, padx=30, pady=(15, 10))
+        btn_cancel.pack(fill=tk.X, padx=30, pady=(15, 30))
 
     def _export_formant_table_dialog(self, all_speakers):
         path = filedialog.asksaveasfilename(
