@@ -2949,6 +2949,150 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                     seen.append(group)
             speaker.cli_groups = seen
 
+    def do_import_batch_and_export(self, arg):
+        """
+        Import a folder containing subfolders of speaker WAV + TextGrid files and export as a .teproj project.
+        Usage: import_batch_and_export <folder_path> <output.teproj>
+        """
+        args = shlex.split(arg)
+        if len(args) != 2:
+            self._emit(False, error="Usage: import_batch_and_export <folder_path> <output.teproj>")
+            return
+
+        dir_path, teproj_path = args[0], args[1]
+        if not os.path.isdir(dir_path):
+            self._emit(False, error=f"Not a directory: {dir_path}")
+            return
+
+        from modules.audio_core import batch_process_worker_with_textgrid, batch_process_worker
+        import re
+
+        def natural_sort_key(s):
+            return [int(text) if text.isdigit() else text.lower()
+                    for text in re.split('([0-9]+)', s)]
+
+        subdirs = [os.path.join(dir_path, d) for d in os.listdir(dir_path) if os.path.isdir(os.path.join(dir_path, d))]
+        if not subdirs:
+            subdirs = [dir_path]
+
+        imported_speakers = []
+        for subdir in sorted(subdirs, key=natural_sort_key):
+            spk_name = os.path.basename(subdir)
+            if spk_name in (".", "..") or not spk_name.strip():
+                continue
+
+            spk = None
+            for s in self.speaker_manager.get_all_speakers():
+                if s.name == spk_name:
+                    spk = s
+                    break
+            if not spk:
+                spk = self.speaker_manager.add_speaker(spk_name)
+
+            self.speaker_manager.set_active_speaker(spk.id)
+            spk = self.current_speaker
+            spk.tab_mode = "多条独立音频"
+            spk.items.clear()
+
+            wavs = [os.path.join(subdir, f) for f in os.listdir(subdir) if f.lower().endswith('.wav')]
+            textgrids = [os.path.join(subdir, f) for f in os.listdir(subdir) if f.lower().endswith('.textgrid')]
+
+            sorted_audios = sorted(wavs, key=natural_sort_key)
+            sorted_tgs = sorted(textgrids, key=natural_sort_key)
+
+            matched_audio_to_tg = {}
+            matched_tg_to_audio = {}
+
+            tg_base_map = {os.path.splitext(os.path.basename(tp))[0].lower(): tp for tp in sorted_tgs}
+            for ap in sorted_audios:
+                abase = os.path.splitext(os.path.basename(ap))[0].lower()
+                if abase in tg_base_map:
+                    tp = tg_base_map[abase]
+                    matched_audio_to_tg[ap] = tp
+                    matched_tg_to_audio[tp] = ap
+
+            for ap in sorted_audios:
+                if ap in matched_audio_to_tg: continue
+                abase = os.path.splitext(os.path.basename(ap))[0].lower()
+                for tp in sorted_tgs:
+                    if tp in matched_tg_to_audio: continue
+                    tbase = os.path.splitext(os.path.basename(tp))[0].lower()
+                    if abase in tbase or tbase in abase:
+                        matched_audio_to_tg[ap] = tp
+                        matched_tg_to_audio[tp] = ap
+                        break
+
+            remaining_audios = [ap for ap in sorted_audios if ap not in matched_audio_to_tg]
+            remaining_tgs = [tp for tp in sorted_tgs if tp not in matched_tg_to_audio]
+            for ap, tp in zip(remaining_audios, remaining_tgs):
+                matched_audio_to_tg[ap] = tp
+                matched_tg_to_audio[tp] = ap
+
+            spk.pending_batch_paths = sorted_audios
+            params = self.params
+            trim = params.get('trim_silence', True)
+
+            futures = {}
+            for i, ap in enumerate(sorted_audios):
+                tp = matched_audio_to_tg.get(ap)
+                if tp:
+                    futures[self.executor.submit(batch_process_worker_with_textgrid, ap, tp, params, trim)] = i
+                else:
+                    word_lbl = os.path.splitext(os.path.basename(ap))[0]
+                    futures[self.executor.submit(batch_process_worker, ap, params, trim, word_lbl)] = i
+
+            results = [None] * len(sorted_audios)
+            for future in concurrent.futures.as_completed(futures):
+                orig_idx = futures[future]
+                try:
+                    res = future.result()
+                    results[orig_idx] = res
+                except Exception as e:
+                    ap = sorted_audios[orig_idx]
+                    lbl = os.path.splitext(os.path.basename(ap))[0]
+                    results[orig_idx] = {'label': lbl, 'group': '导入内容', 'success': False, 'error': str(e), 'path': ap}
+
+            for res in results:
+                if not res: continue
+                grp_name = res.get('group', '导入内容')
+                if res.get('success'):
+                    res['group'] = grp_name
+                    if 'pitch_floor' not in res:
+                        res['pitch_floor'] = params['pitch_floor']
+                        res['pitch_ceiling'] = params['pitch_ceiling']
+                        res['voicing_threshold'] = params['voicing_threshold']
+
+                    try:
+                        snd = parselmouth.Sound(res['path'])
+                        res['snd'] = snd
+                        if 'pitch_data' not in res or not res['pitch_data']:
+                            res['pitch_data'] = extract_f0(snd, params)
+                    except Exception:
+                        pass
+
+                    iid = f"batch_tg_{res['label']}_{id(res)}"
+                    spk.items[iid] = res
+                else:
+                    iid = f"missing_{res['label']}_{id(res)}"
+                    spk.items[iid] = {'label': res['label'], 'group': grp_name, 'snd': None, 'start': None, 'end': None, 'inner_splits': []}
+
+            imported_speakers.append(spk_name)
+
+        for s_id in list(self.speaker_manager.speakers.keys()):
+            s = self.speaker_manager.speakers[s_id]
+            if s.name == "发音人 1" and not s.items:
+                self.speaker_manager.remove_speaker(s_id)
+
+        all_spks = self.speaker_manager.get_all_speakers()
+        if all_spks:
+            self.speaker_manager.active_speaker_id = all_spks[0].id
+
+        ok = self.project_manager.export_project(teproj_path)
+        if ok:
+            self._emit(True, f"Imported speakers {imported_speakers} and exported project successfully.", path=teproj_path)
+        else:
+            self._emit(False, error="Project export failed after importing batch folder")
+
     def do_project_export(self, arg):
         """
         Export the full CLI project as a .teproj archive.
