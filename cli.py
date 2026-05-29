@@ -453,9 +453,11 @@ PhonTracer 是一款高精度的声学声调格局分析工具。
      `recalculate`
 4. 数据导出：
    - `export <格式> <输出路径> [规则] [目标范围] [高级参数=值 ...]`
-     * 支持的导出格式：txt, xlsx, line_chart, kde, wav, merged_wav, textgrid, contour (声调轮廓图), distribution (声调分布图), density (时序密度图), quality (数据质量检查), overview_heatmap (声调组别概览图), formant_overview_heatmap (共振峰组别概览图)
+     * 支持的导出格式：txt, xlsx, line_chart, kde, wav, merged_wav, textgrid, contour (声调轮廓图), distribution (声调分布图), density (时序密度图), quality (数据质量检查), overview_heatmap (声调组别概览图)
+     * 共振峰专有导出格式：formant_table (共振峰数据表), formant_space (元音舌位图), formant_trajectory (共振峰时序轨迹图), formant_density (共振峰密度分布图), formant_overview_heatmap (共振峰组别概览图)
 
 --- 声学参数与调优指南 ---
+* analysis_mode: 分析模式，可选 'pitch' (基频模式) 或 'formant' (共振峰模式，默认：'pitch')
 * pts: 等分插值采样点数（默认：11）
 * db: VAD 切分能量落差阈值（默认：60.0）
 * skip_front: 排除声母时长，避免声母辅音浊化干扰（默认：0.0）
@@ -463,6 +465,11 @@ PhonTracer 是一款高精度的声学声调格局分析工具。
 * pitch_ceiling: 音高分析上限（默认：600 Hz） -> 通用甜点区：600
 * voicing_threshold: 浊音阈值（默认：0.25） -> 针对汉语三声等低频“气泡音/嘎裂声”，建议手动调低至 0.15 ~ 0.20
 * trim_silence: 自动切除有效声学边界首尾低于 -50dB 的静音区（默认：True）
+* formant_max_hz: 最大共振峰频率（如 5500 Hz，默认针对不同发音人设置）
+* formant_count: 共振峰数量（默认：5）
+* formant_window_length: 共振峰分析窗长（秒，默认：0.025）
+* formant_pre_emphasis: 共振峰预加重系数（Hz，默认：50.0）
+* formant_sample_strategy: 共振峰提取采样策略（可选 '整段11点', '中段均值'，默认：'整段11点'）
 
 --- 核心命令速查表 ---
 - `status`: 获取项目当前模式、状态指标、警告统计等。
@@ -510,10 +517,12 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
      `recalculate`
 4. Export:
    - `export <format> <output_file> [rule] [target] [key=val ...]`
-     * format: txt, xlsx, line_chart, kde, wav, merged_wav, textgrid, contour, distribution, density, quality, overview_heatmap, formant_overview_heatmap
+     * format: txt, xlsx, line_chart, kde, wav, merged_wav, textgrid, contour, distribution, density, quality, overview_heatmap
+     * formant formats: formant_table (Excel table), formant_space (vowel chart), formant_trajectory (trajectory), formant_density (density), formant_overview_heatmap (group heatmap)
 
 --- CURRENT CONFIG & SCHEMAS ---
 - Global parameters (modifiable via `set_params`):
+  * analysis_mode: Analysis mode, 'pitch' or 'formant' (default: 'pitch')
   * pts: Number of interpolation points (default: 11)
   * db: VAD energy threshold (default: 60.0)
   * skip_front: Avoid segmenting consonant onset duration (default: 0.0)
@@ -521,6 +530,11 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
   * pitch_ceiling: Maximum F0 range (default: 600) -> Sweet spot: 600
   * voicing_threshold: Voicing tolerance (default: 0.25) -> Adjust lower (0.15~0.20) for creaky voice
   * trim_silence: Cut prefix/suffix silence under -50dB (default: True)
+  * formant_max_hz: Max formant frequency threshold in Hz (e.g. 5500)
+  * formant_count: Number of formants to track (default: 5)
+  * formant_window_length: Formant analysis window length in seconds (default: 0.025)
+  * formant_pre_emphasis: Formant pre-emphasis filter value (default: 50.0)
+  * formant_sample_strategy: Strategy to sample formant points (e.g., '整段11点', '中段均值')
 
 --- ALL COMMANDS REFERENCE ---
 - `status`: Show current project state, active parameters, item warnings.
@@ -1771,7 +1785,8 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
         Export data to various formats.
         Usage: export <format> <output_file> [rule] [target] [key=val ...]
         Advanced charts: export <chart_type> <output_file_or_dir> [target] [key=val ...]
-        Formats: txt, xlsx, line_chart, kde, wav, merged_wav, textgrid, contour, distribution, density, quality, overview_heatmap, formant_overview_heatmap
+        Formats: txt, xlsx, line_chart, kde, wav, merged_wav, textgrid, contour, distribution, density, quality, overview_heatmap,
+                 formant_table, formant_space, formant_trajectory, formant_density, formant_overview_heatmap
         Rule: continuous (default) or per_group (For 'wav' and 'merged_wav', rule can also be buffer_sec or gap_sec like 0.5)
         Target (Multi-speaker): active (default), separate (multiple files per speaker), integrated (merged T-value calculation)
         Example: export xlsx output.xlsx continuous integrated
