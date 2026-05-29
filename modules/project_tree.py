@@ -1736,14 +1736,14 @@ class ProjectTreePanel:
         dlg = ctk.CTkToplevel(self.parent)
         dlg.title("选择导出格式")
         dlg.configure(fg_color=("#FFFFFF", "#1A1D24"))
-        dlg.geometry("320x330")
+        dlg.geometry("320x280")
         dlg.resizable(False, False)
         dlg.transient(self.parent)
         dlg.grab_set()
         dlg.update_idletasks()
         main_win = self.parent.winfo_toplevel()
         x = main_win.winfo_rootx() + (main_win.winfo_width() - 320) // 2
-        y = main_win.winfo_rooty() + (main_win.winfo_height() - 330) // 2
+        y = main_win.winfo_rooty() + (main_win.winfo_height() - 280) // 2
         dlg.geometry(f"+{x}+{y}")
         ctk.CTkLabel(dlg, text="请选择导出格式", font=self.font_title, text_color=("#111827", "#F9FAFB")).pack(pady=(20, 15))
         btn_kwargs = {"corner_radius": 8, "height": 44, "font": self.font_main, "anchor": "w", "compound": "left", "border_width": 1.5}
