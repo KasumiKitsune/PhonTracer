@@ -209,6 +209,7 @@ class PhoneticsApp:
         if getattr(self, 'active_chart_dialog', None):
             try:
                 if self.active_chart_dialog.winfo_exists() and self.active_chart_dialog.var_live_refresh.get():
+                    self.active_chart_dialog.invalidate_cache()
                     self.active_chart_dialog.trigger_preview_update()
             except Exception:
                 pass

@@ -4871,3 +4871,11 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
     def _on_arrow_down(self):
         if hasattr(self, 'pagination_frame') and self.pagination_frame.winfo_ismapped():
             self._next_page()
+
+    def invalidate_cache(self):
+        if hasattr(self, '_speaker_data_cache'):
+            self._speaker_data_cache.clear()
+        try:
+            self._update_group_filters()
+        except Exception:
+            pass
