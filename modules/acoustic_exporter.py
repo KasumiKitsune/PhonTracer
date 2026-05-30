@@ -580,17 +580,20 @@ class AcousticChartExporter:
                     pass
 
         if truncated:
-            fig.subplots_adjust(top=0.88)
-            if is_paginated_heatmap:
-                current_page_rows = pagination_state['pages'][P] if P < len(pagination_state['pages']) else []
-                tg_name = current_page_rows[0]['group'] if current_page_rows else ""
-                fig.text(0.5, 0.96, f"[预览提示] 附录图册模式已自动分页。当前第 {P+1}/{total_pages} 页 (组别: {tg_name}，包含 {len(current_page_rows)} 个词语)。",
-                         ha='center', va='center', fontsize=10, color='#991B1B', weight='bold',
-                         bbox=dict(facecolor='#FEF2F2', edgecolor='#FCA5A5', boxstyle='round,pad=0.4'))
+            if getattr(self, 'is_minimized', False):
+                pass
             else:
-                fig.text(0.5, 0.96, f"[预览提示] 当前共 {total_groups} 组，分 {total_pages} 页显示。当前预览第 {P+1} 页（显示第 {start_idx+1}~{end_idx} 组）。导出时将自动分页/完整输出。",
-                         ha='center', va='center', fontsize=10, color='#991B1B', weight='bold',
-                         bbox=dict(facecolor='#FEF2F2', edgecolor='#FCA5A5', boxstyle='round,pad=0.4'))
+                fig.subplots_adjust(top=0.88)
+                if is_paginated_heatmap:
+                    current_page_rows = pagination_state['pages'][P] if P < len(pagination_state['pages']) else []
+                    tg_name = current_page_rows[0]['group'] if current_page_rows else ""
+                    fig.text(0.5, 0.96, f"[预览提示] 附录图册模式已自动分页。当前第 {P+1}/{total_pages} 页 (组别: {tg_name}，包含 {len(current_page_rows)} 个词语)。",
+                             ha='center', va='center', fontsize=10, color='#991B1B', weight='bold',
+                             bbox=dict(facecolor='#FEF2F2', edgecolor='#FCA5A5', boxstyle='round,pad=0.4'))
+                else:
+                    fig.text(0.5, 0.96, f"[预览提示] 当前共 {total_groups} 组，分 {total_pages} 页显示。当前预览第 {P+1} 页（显示第 {start_idx+1}~{end_idx} 组）。导出时将自动分页/完整输出。",
+                             ha='center', va='center', fontsize=10, color='#991B1B', weight='bold',
+                             bbox=dict(facecolor='#FEF2F2', edgecolor='#FCA5A5', boxstyle='round,pad=0.4'))
 
         return fig
 
@@ -3053,6 +3056,12 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         # Update pixel options state based on initial format
         self._update_pixel_options_state()
 
+        # Key bindings for page flipping
+        self.bind("<Left>", lambda e: self._on_arrow_left())
+        self.bind("<Right>", lambda e: self._on_arrow_right())
+        self.bind("<Up>", lambda e: self._on_arrow_up())
+        self.bind("<Down>", lambda e: self._on_arrow_down())
+
         # Render Initial Preview
         self.update_preview()
 
@@ -4298,13 +4307,21 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
 
         scope = self.var_export_scope.get()
         if scope == "separate" and len(self.all_speakers) > 1:
-            self.pagination_frame.grid(row=1, column=0, pady=(0, 10))
+            pady_val = (0, 4) if getattr(self, 'is_minimized', False) else (0, 10)
+            self.pagination_frame.grid(row=1, column=0, pady=pady_val)
             idx = getattr(self, 'current_preview_page', 0)
             if idx < 0 or idx >= len(self.all_speakers):
                 idx = 0
                 self.current_preview_page = 0
             spk_name = self.all_speakers[idx].name
-            self.lbl_page_info.configure(text=f"发音人: {spk_name} ({idx+1}/{len(self.all_speakers)})")
+            if getattr(self, 'is_minimized', False):
+                self.lbl_page_info.configure(text=f"{idx+1}/{len(self.all_speakers)}", font=self.font_small)
+                self.btn_prev_page.configure(text="◀", width=40, height=26, font=self.font_small)
+                self.btn_next_page.configure(text="▶", width=40, height=26, font=self.font_small)
+            else:
+                self.lbl_page_info.configure(text=f"发音人: {spk_name} ({idx+1}/{len(self.all_speakers)})", font=self.font_title)
+                self.btn_prev_page.configure(text="◀ 上一个发音人", width=120, height=30, font=self.font_main)
+                self.btn_next_page.configure(text="下一个发音人 ▶", width=120, height=30, font=self.font_main)
         else:
             self.pagination_frame.grid_forget()
 
@@ -4330,22 +4347,32 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             is_paginated_heatmap = pagination_state['is_paginated_heatmap']
             show_group_pagination = (total_groups > 8 and not self._is_overview_heatmap_chart(chart_type)) or is_paginated_heatmap
             if show_group_pagination:
-                self.group_pagination_frame.grid(row=2, column=0, pady=(0, 10))
+                pady_val = (0, 4) if getattr(self, 'is_minimized', False) else (0, 10)
+                self.group_pagination_frame.grid(row=2, column=0, pady=pady_val)
                 if self.current_group_page < 0:
                     self.current_group_page = 0
                 elif self.current_group_page >= total_pages:
                     self.current_group_page = max(0, total_pages - 1)
 
-                if is_paginated_heatmap:
-                    current_chunk = pagination_state['pages'][self.current_group_page] if self.current_group_page < len(pagination_state['pages']) else []
-                    tg_name = current_chunk[0]['group'] if current_chunk else ""
-                    self.lbl_group_page_info.configure(
-                        text=f"组别页码: {self.current_group_page+1}/{total_pages} (当前显示组别: {tg_name}，共 {len(current_chunk)} 个词语)"
-                    )
+                if getattr(self, 'is_minimized', False):
+                    self.lbl_group_page_info.configure(text=f"{self.current_group_page+1}/{total_pages}", font=self.font_small)
+                    self.btn_prev_group_page.configure(text="◀", width=40, height=26, font=self.font_small)
+                    self.btn_next_group_page.configure(text="▶", width=40, height=26, font=self.font_small)
                 else:
-                    self.lbl_group_page_info.configure(
-                        text=f"组别页码: {self.current_group_page+1}/{total_pages} (当前显示第 {self.current_group_page*8+1}~{min(total_groups, (self.current_group_page+1)*8)} 组，共 {total_groups} 组)"
-                    )
+                    if is_paginated_heatmap:
+                        current_chunk = pagination_state['pages'][self.current_group_page] if self.current_group_page < len(pagination_state['pages']) else []
+                        tg_name = current_chunk[0]['group'] if current_chunk else ""
+                        self.lbl_group_page_info.configure(
+                            text=f"组别页码: {self.current_group_page+1}/{total_pages} (当前显示组别: {tg_name}，共 {len(current_chunk)} 个词语)",
+                            font=self.font_title
+                        )
+                    else:
+                        self.lbl_group_page_info.configure(
+                            text=f"组别页码: {self.current_group_page+1}/{total_pages} (当前显示第 {self.current_group_page*8+1}~{min(total_groups, (self.current_group_page+1)*8)} 组，共 {total_groups} 组)",
+                            font=self.font_title
+                        )
+                    self.btn_prev_group_page.configure(text="◀", width=120, height=30, font=self.font_main)
+                    self.btn_next_group_page.configure(text="▶", width=120, height=30, font=self.font_main)
             else:
                 self.group_pagination_frame.grid_forget()
 
@@ -4755,10 +4782,6 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             if hasattr(self, 'btn_export'):
                 self.btn_export.pack_forget()
             
-            # Hide pagination frames
-            self.pagination_frame.grid_remove()
-            self.group_pagination_frame.grid_remove()
-            
             # 4. Hide the canvas toggle button completely so it doesn't block the chart
             self.btn_toggle_minimize.place_forget()
             
@@ -4775,6 +4798,9 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             # 8. Change geometry to smaller default size
             self.geometry("450x380")
             self.is_minimized = True
+            
+            # 9. Update preview to refresh layout instantly
+            self.update_preview()
         else:
             # Restore:
             # 1. Disable always-on-top
@@ -4825,3 +4851,23 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             
             # 7. Update preview
             self.update_preview()
+
+    def _on_arrow_left(self):
+        if hasattr(self, 'group_pagination_frame') and self.group_pagination_frame.winfo_ismapped():
+            self._prev_group_page()
+        elif hasattr(self, 'pagination_frame') and self.pagination_frame.winfo_ismapped():
+            self._prev_page()
+
+    def _on_arrow_right(self):
+        if hasattr(self, 'group_pagination_frame') and self.group_pagination_frame.winfo_ismapped():
+            self._next_group_page()
+        elif hasattr(self, 'pagination_frame') and self.pagination_frame.winfo_ismapped():
+            self._next_page()
+
+    def _on_arrow_up(self):
+        if hasattr(self, 'pagination_frame') and self.pagination_frame.winfo_ismapped():
+            self._prev_page()
+
+    def _on_arrow_down(self):
+        if hasattr(self, 'pagination_frame') and self.pagination_frame.winfo_ismapped():
+            self._next_page()
