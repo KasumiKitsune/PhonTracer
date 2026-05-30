@@ -104,6 +104,8 @@
                 <a href="#workflows" class="hover:text-brand-600 transition">工作流</a>
                 <a href="#algorithms" class="hover:text-brand-600 transition">算法参数</a>
                 <a href="#export" class="hover:text-brand-600 transition">数据导出</a>
+                <a href="#visualization" class="hover:text-brand-600 transition">可视化</a>
+                <a href="#audiotoolkit" class="hover:text-brand-600 transition">工具箱</a>
                 <a href="#cli" class="hover:text-brand-600 transition">CLI与AI</a>
                 <a href="#faq" class="hover:text-brand-600 transition">疑难解答</a>
             </div>
@@ -213,9 +215,10 @@
                             <li><a href="#workflows" class="flex items-center space-x-2 hover:text-brand-600 transition"><i data-lucide="git-branch" class="w-4 h-4"></i><span>4. 两大核心工作流</span></a></li>
                             <li><a href="#algorithms" class="flex items-center space-x-2 hover:text-brand-600 transition"><i data-lucide="sliders" class="w-4 h-4"></i><span>5. 算法与参数调优</span></a></li>
                             <li><a href="#export" class="flex items-center space-x-2 hover:text-brand-600 transition"><i data-lucide="download" class="w-4 h-4"></i><span>6. 数据导出与项目</span></a></li>
-                            <li><a href="#audiotoolkit" class="flex items-center space-x-2 hover:text-brand-600 transition"><i data-lucide="music" class="w-4 h-4"></i><span>7. AudioToolkit</span></a></li>
-                            <li><a href="#cli" class="flex items-center space-x-2 hover:text-brand-600 transition"><i data-lucide="terminal" class="w-4 h-4"></i><span>8. CLI与AI助手</span></a></li>
-                            <li><a href="#faq" class="flex items-center space-x-2 hover:text-brand-600 transition"><i data-lucide="help-circle" class="w-4 h-4"></i><span>9. 常见排雷指南</span></a></li>
+                            <li><a href="#visualization" class="flex items-center space-x-2 hover:text-brand-600 transition"><i data-lucide="line-chart" class="w-4 h-4"></i><span>7. 可视化工具箱</span></a></li>
+                            <li><a href="#audiotoolkit" class="flex items-center space-x-2 hover:text-brand-600 transition"><i data-lucide="music" class="w-4 h-4"></i><span>8. AudioToolkit</span></a></li>
+                            <li><a href="#cli" class="flex items-center space-x-2 hover:text-brand-600 transition"><i data-lucide="terminal" class="w-4 h-4"></i><span>9. CLI与AI助手</span></a></li>
+                            <li><a href="#faq" class="flex items-center space-x-2 hover:text-brand-600 transition"><i data-lucide="help-circle" class="w-4 h-4"></i><span>10. 常见排雷指南</span></a></li>
                         </ul>
                     </div>
                     <!-- Clever Detail: Mini Live T-Value Calculator inside Sidebar -->
@@ -427,6 +430,32 @@
                                 </div>
                             </div>
                         </div>
+
+                        <!-- Setup and Portal Card -->
+                        <div class="bg-white border border-slate-200/80 rounded-2xl p-6 shadow-sm mt-6">
+                            <h3 class="font-bold text-slate-900 text-sm mb-3 flex items-center">
+                                <i data-lucide="rocket" class="w-5 h-5 mr-1.5 text-brand-600"></i>
+                                <span>2.1 软件启动方式与快捷入口</span>
+                            </h3>
+                            <div class="space-y-4 text-xs text-slate-600 leading-relaxed">
+                                <p>
+                                    如果你下载的是已打包的 <strong>Windows 安装包 (Setup 版本)</strong>，安装包内置 Inno Setup 引导，为系统关联了以下核心功能：
+                                </p>
+                                <ul class="list-disc list-inside space-y-1.5 text-slate-500 pl-2">
+                                    <li><strong class="text-slate-700">全家桶快捷方式：</strong> 开始菜单自动注册生成“PhonTracer 声调提取分析器”、“AudioToolkit 音频工具箱”和“PhonTracerCLI 命令行界面”三个便捷入口，亦可勾选生成桌面图标。</li>
+                                    <li><strong class="text-slate-700">双击秒开工程：</strong> 关联系统 <code>.teproj</code> 文件，后续直接双击实验工程即可瞬间启动并恢复工作区。</li>
+                                    <li><strong class="text-slate-700">启动冲突解决：</strong> 若系统存在异常退出备份，双击外部工程时，主程序将采用高优先级工程加载逻辑，直接导入目标文件并自动清理旧备份，杜绝数据交叉污染。</li>
+                                </ul>
+                                <div class="bg-brand-50 border border-brand-100 rounded-xl p-4 text-brand-900">
+                                    <strong class="font-semibold block mb-1 text-xs">关于窗口“快速穿梭传送门”机制：</strong>
+                                    在主程序菜单栏点击“关于”窗口，即可一键直接无缝启动 AudioToolkit 音频工具箱或 CLI 命令行。
+                                    <ul class="list-disc list-inside space-y-1.5 mt-2 pl-1 text-[11px] text-slate-600">
+                                        <li><strong>在源码开发环境中：</strong> 系统会自动检测 Python 环境。若后台检测到无终端回显的 <code>pythonw.exe</code> 解释器，在唤起 CLI 时会自动强行替换为标准前台 <code>python.exe</code>，确保终端可交互且回显正常。</li>
+                                        <li><strong>在已打包好的可执行文件环境中：</strong> 自动在同级目录下寻取 <code>AudioToolkit.exe</code> 与 <code>PhonTracerCLI.exe</code> 进程，并为 CLI 强行新建独立的 Windows CMD 控制台交互窗口。</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </section>
 
@@ -448,13 +477,13 @@
                                 <div class="bg-brand-50 p-3 rounded-lg text-brand-600 shrink-0">
                                     <i data-lucide="sliders" class="w-6 h-6"></i>
                                 </div>
-                                <div>
+                                <div class="w-full">
                                     <h3 class="font-bold text-slate-900 mb-1">左侧面板：全局指挥中心</h3>
-                                    <p class="text-sm text-slate-600 mb-3">管理项目的运行状态。</p>
-                                    <ul class="space-y-2 text-xs text-slate-500 list-disc list-inside">
-                                        <li><strong class="text-slate-700">发音人管理：</strong> 添加、切换和管理发音人工作区。开启“统一字表”后免去重复导入流程。</li>
-                                        <li><strong class="text-slate-700">模式与引擎切换：</strong> 切换长音频/批量音频处理，选择 Praat 或 REAPER 测音算法。</li>
-                                        <li><strong class="text-slate-700">全局参数调整：</strong> 设定基频上下限、采样点数等核心参数。</li>
+                                    <p class="text-sm text-slate-600 mb-3">管理项目的运行状态、算法引擎参数与核心分析模式。</p>
+                                    <ul class="space-y-2.5 text-xs text-slate-500 list-disc list-inside">
+                                        <li><strong class="text-slate-700">发音人管理：</strong> 支持添加、切换与隔离多发音人工作区。开启“统一字表”后一次导入全局应用，避免多受试者实验的重复劳动。</li>
+                                        <li><strong class="text-slate-700">分析模式切换 (核心功能)：</strong> 新增“声调/F0”与“共振峰/F1-F2”一键分析模式控件。切换模式时，系统会自动在后台独立缓存对应模式下的所有边界状态，确保已修剪的数据绝对不会丢失。</li>
+                                        <li><strong class="text-slate-700">全局参数折叠面板：</strong> 涵盖基频最低/最高限值、清浊阈值、共振峰最大频率及采样策略等算法控制项，一处修改，全局生效。</li>
                                     </ul>
                                 </div>
                             </div>
@@ -464,13 +493,20 @@
                                 <div class="bg-accent-50 p-3 rounded-lg text-accent-500 shrink-0">
                                     <i data-lucide="eye" class="w-6 h-6"></i>
                                 </div>
-                                <div>
+                                <div class="w-full">
                                     <h3 class="font-bold text-slate-900 mb-1">中间面板：可视化精修车间</h3>
-                                    <p class="text-sm text-slate-600 mb-3">显示被选中词项的声谱图与 F0 音高曲线，进行精细修剪。</p>
-                                    <ul class="space-y-2 text-xs text-slate-500 list-disc list-inside">
-                                        <li><strong class="text-slate-700">红线与蓝线：</strong> 红色线条表示词项起点和终点，蓝色虚线表示音节分界线。直接用鼠标拖动即可校正。</li>
-                                        <li><strong class="text-slate-700">橡皮擦工具：</strong> 擦除由于环境噪声产生的异常高频杂点（抹除后 F0 值归零，不参与后续计算）。</li>
-                                        <li><strong class="text-slate-700">试听播放：</strong> 绿色竖线播放游标，随时可以听取当前被框选的音频范围。</li>
+                                    <p class="text-sm text-slate-600 mb-3">显示被选中词项的声谱图、波形图及实时计算线条，提供超高精度的声学修正能力。</p>
+                                    <ul class="space-y-2.5 text-xs text-slate-500 list-disc list-inside">
+                                        <li><strong class="text-slate-700">声谱叠加线：</strong> F0 模式下，声谱图叠加蓝色 F0 曲线；切换为共振峰模式后，纵轴频率自适应最大共振峰限制，并在图上高亮强调橘色 (F1) 和绿色 (F2) 的共振峰轨迹散点，自动隐藏基频纵轴。</li>
+                                        <li><strong class="text-slate-700">起止红线与分节蓝线：</strong> 红色线条表示词项边界，蓝色虚线表示内部音节交界。可通过鼠标左右无障碍拖拽进行物理精细调整。</li>
+                                        <li><strong class="text-slate-700">橡皮擦与高精度剔除点 (滚轮调节)：</strong>
+                                            <ul class="list-decimal list-inside pl-4 mt-1 space-y-1 text-slate-500">
+                                                <li><strong>F0 模式：</strong> “橡皮擦”工具按左键拖动批量刷除局部杂点，抹平倍频跳变。</li>
+                                                <li><strong>共振峰模式：</strong> “剔除点”工具采用点定位算法，每次仅擦除离鼠标最近的单个共振峰点，防止时间帧序列大面积断档。</li>
+                                                <li><strong>智能交互：</strong> 在任意模式下，均可通过<strong>鼠标滚轮</strong>实时无缝缩放十字准星的感应半径。</li>
+                                            </ul>
+                                        </li>
+                                        <li><strong class="text-slate-700">多维播放控制与淡黄色播放选区：</strong> 音频控制条集成了播放、停止、循环、当前字等工作模式。在声谱图空白区按住左键并拖曳，可拉出淡黄色的播放选区，配合循环模式可在微观分割处反复重播，高效听辨元音过渡。</li>
                                     </ul>
                                 </div>
                             </div>
@@ -480,21 +516,26 @@
                                 <div class="bg-emerald-50 p-3 rounded-lg text-emerald-600 shrink-0">
                                     <i data-lucide="folder-tree" class="w-6 h-6"></i>
                                 </div>
-                                <div>
+                                <div class="w-full">
                                     <h3 class="font-bold text-slate-900 mb-1">右侧面板：项目树与成果仓库</h3>
-                                    <p class="text-sm text-slate-600 mb-3">用于管理、组织与一键导出最终数据。</p>
-                                    <ul class="space-y-2 text-xs text-slate-500 list-disc list-inside">
-                                        <li><strong class="text-slate-700">分组与词项管理：</strong> 树状图展现词项结构，支持直接双击重命名和跨分组拖拽。</li>
-                                        <li><strong class="text-slate-700">智能筛查机制：</strong> 可单独过滤“需检查”与“已修改”项。对于缺少音高数据（多点为 0）或存在异常值（NaN）的词项，系统会自动标红警示。</li>
-                                        <li><strong class="text-slate-700">一键导出：</strong> 快速在导出菜单选择合适的输出格式。</li>
+                                    <p class="text-sm text-slate-600 mb-3">用于数据树状归档、声学异常警示以及自定义规则导出。</p>
+                                    <ul class="space-y-2.5 text-xs text-slate-500 list-disc list-inside">
+                                        <li><strong class="text-slate-700">智能筛查与“需检查”视图：</strong>
+                                            <ul class="list-decimal list-inside pl-4 mt-1 space-y-1 text-slate-500">
+                                                <li><strong>F0 模式下：</strong> 自动收集有声帧比率偏低、异常高低八度跳频的词项。</li>
+                                                <li><strong>共振峰模式下：</strong> 收集 F1/F2 错位 (F2 &le; F1) 比例偏高、有效帧数过少的词项。</li>
+                                            </ul>
+                                        </li>
+                                        <li><strong class="text-slate-700">右键忽略警告：</strong> 在项目树上右键点击警告条目，选择“忽略警告”可绕过该词项的异常视图筛查。适用于发音人清音化或特定方言音系造成的缺失现象。</li>
+                                        <li><strong class="text-slate-700">一键导出与 AnomalyWarningDialog 异常拦截：</strong> 导出数据时，若项目中仍存留未处理的异常，系统会弹出滚动拦截弹窗，直观罗列警告详情，双击可快速跳转微调。用户亦可一键“忽略警告并强行导出”。</li>
                                     </ul>
                                 </div>
                             </div>
                         </div>
                     </div>
                 </section>
-
-                <!-- Section 4: Workflows -->
+                
+<!-- Section 4: Workflows -->
                 <section id="workflows" class="scroll-mt-24">
                     <div class="flex items-center space-x-2 text-slate-400 text-sm font-semibold uppercase mb-3">
                         <span>04 / 核心工作流</span>
@@ -661,38 +702,66 @@ sys/tem</pre>
                 <!-- Section 5: Algorithms -->
                 <section id="algorithms" class="scroll-mt-24">
                     <div class="flex items-center space-x-2 text-slate-400 text-sm font-semibold uppercase mb-3">
-                        <span>05 / 算法揭秘</span>
+                        <span>05 / 算法参数</span>
                     </div>
                     <h2 class="text-3xl font-extrabold text-slate-900 tracking-tight font-serif mb-8 border-b pb-3">5. 算法原理与关键参数调优</h2>
                     
                     <div class="space-y-8">
                         <p class="text-slate-600 leading-relaxed">
-                            为了使导出的声调轨迹具有科学性和说服力，必须知晓每一项参数底层的运作机理，以便在各种噪杂环境或极端发音特征下进行弹性干预。
+                            为了使导出的声调和元音轨迹具有学术说服力，必须知晓每一项参数底层的运作机理，以便在各种噪杂环境或极端发音特征下进行弹性干预。
                         </p>
 
-                        <!-- Macro vs Micro -->
+                        <!-- Two Stage Segmentation -->
                         <div class="bg-white border border-slate-100 rounded-xl p-6 shadow-sm">
                             <h3 class="font-bold text-slate-950 text-base mb-4 flex items-center">
                                 <i data-lucide="compass" class="w-5 h-5 text-brand-600 mr-2"></i>
-                                <span>两级切分的算法路径</span>
+                                <span>声学边界定位的两级切分路径</span>
                             </h3>
                             <div class="grid grid-cols-1 md:grid-cols-2 gap-6 text-xs text-slate-600 leading-relaxed">
                                 <div class="bg-stone-50 p-4 rounded-lg">
-                                    <strong class="text-slate-800 text-sm block mb-1">宏观定位（大范围锁定）</strong>
+                                    <strong class="text-slate-800 text-sm block mb-1">宏观定位（选地盘阶段）</strong>
                                     长音频 VAD 阶段。算法通过分析录音的声音强度基底，计算动态噪声门槛，并标记出存在浊音振动的区域，界定“这个时间段对应字表第几行”。
                                 </div>
                                 <div class="bg-stone-50 p-4 rounded-lg">
-                                    <strong class="text-slate-800 text-sm block mb-1">微观定位（核定元音位置）</strong>
+                                    <strong class="text-slate-800 text-sm block mb-1">微观定位（找核心阶段）</strong>
                                     由于阻碍音、爆破音没有基频表现，真正的声调仅依附于元音与响辅音上。微观阶段即综合声强峰值、声能衰减落差去搜寻元音的分布边界，作为最终数据采样的提取区。
                                 </div>
                             </div>
                         </div>
 
-                        <!-- Parameter Dictionary -->
+                        <!-- 5.2 F0 Estimation -->
+                        <div class="bg-white border border-slate-100 rounded-xl p-6 shadow-sm">
+                            <h3 class="font-bold text-slate-950 text-base mb-3 flex items-center">
+                                <i data-lucide="gauge" class="w-5 h-5 text-brand-600 mr-2"></i>
+                                <span>5.2 智能估测：告别盲猜 F0 范围</span>
+                            </h3>
+                            <p class="text-xs text-slate-600 leading-relaxed mb-4">
+                                系统内置了高度精准的基频统计估计模块，点击“估计”按钮可瞬间对已加载的音频样本进行整体扫描，生成发音人的真实物理声带特征库。
+                            </p>
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs text-slate-600 leading-relaxed mb-4">
+                                <div class="bg-stone-50 p-3 rounded-lg border border-slate-100">
+                                    <strong class="text-slate-800 block mb-1">① 有声区间粗筛与剪枝</strong>
+                                    以 50Hz 到 700Hz 极宽频段扫描浊音帧，并自动剪除时长短于 30 毫秒的非稳态气流帧，彻底隔离声门呼吸和辅音残留的干扰。
+                                </div>
+                                <div class="bg-stone-50 p-3 rounded-lg border border-slate-100">
+                                    <strong class="text-slate-800 block mb-1">② 倍频抑制与跳变平滑</strong>
+                                    算法实时计算相邻时序帧的 F0 变动率。一旦发生大于 20% 的急剧跳变（生理声带无法实现），系统会进行片段权重切断，抑制倍频/半频造成的统计偏差。
+                                </div>
+                                <div class="bg-stone-50 p-3 rounded-lg border border-slate-100">
+                                    <strong class="text-slate-800 block mb-1">③ 分位数区间多档推荐</strong>
+                                    基于 F0 浊音纯净频段点集，计算 P5、P10、P50（中位）、P90、P95 等百分位数，生成保守范围 (Conservative P5-P95)、推荐范围 (Recommended P10-P90) 和精细范围 (Fine P15-P85) 三档建议。
+                                </div>
+                            </div>
+                            <span class="bg-brand-50 border border-brand-100 text-[10px] text-brand-800 p-3 rounded-xl block leading-relaxed">
+                                <strong>音节边界保护机制：</strong> 应用这些推荐的基频区间范围时，软件会自动采用“局部音高重算更新”策略，仅刷新声学采样轨迹，<strong>最大程度强行保护用户已经手动精细调校完毕的红蓝起止边界线不受重置影响</strong>。
+                            </span>
+                        </div>
+
+                        <!-- 5.3 Parameter Dictionary -->
                         <div class="space-y-4">
                             <h3 class="font-bold text-slate-950 text-base flex items-center">
                                 <i data-lucide="sliders" class="w-5 h-5 text-brand-600 mr-2"></i>
-                                <span>核心参数详解</span>
+                                <span>5.3 声调 (F0) 核心参数详解</span>
                             </h3>
                             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <!-- Param Card -->
@@ -708,11 +777,11 @@ sys/tem</pre>
                                 <!-- Param Card -->
                                 <div class="bg-stone-50 border border-stone-200/60 rounded-xl p-5 text-xs">
                                     <div class="flex justify-between items-center mb-2">
-                                        <span class="font-mono font-bold text-slate-900 text-sm">db (能量下降阈值)</span>
+                                        <span class="font-mono font-bold text-slate-900 text-sm">db (能量下降值)</span>
                                         <span class="bg-brand-100 text-brand-800 px-2 py-0.5 rounded font-semibold text-[10px]">默认：60</span>
                                     </div>
                                     <p class="text-slate-500 leading-relaxed">
-                                        微观划分元音核心区域的尺子。数值越大对能量衰落越宽容，更容易把一些弱声尾音或送气摩擦声划入范围；数值越小则框线收缩得越紧，边界较窄。
+                                        微观划分元音核心区域的尺子。数值越大对能量表征越宽容，越容易把一些弱声尾音或送气摩擦声划入范围；数值越小则框线收缩得越紧，边界较窄。
                                     </p>
                                 </div>
                                 <!-- Param Card -->
@@ -742,7 +811,7 @@ sys/tem</pre>
                                         <span class="bg-brand-100 text-brand-800 px-2 py-0.5 rounded font-semibold text-[10px]">默认：0.25</span>
                                     </div>
                                     <p class="text-slate-500 leading-relaxed">
-                                        判定发声是否有声带振动的判定。数值设低较易识别一些低沉、气声或嘎吱音 (creaky voice)；数值越高越保守，不满足阈值的倾向于判零值。
+                                        判定发声是否有声带振动的阈值。数值设低较易识别一些低沉、气声或嘎吱音 (creaky voice)；数值越高越保守，不满足阈值的倾向于判零值。
                                     </p>
                                 </div>
                                 <!-- Param Card -->
@@ -752,7 +821,7 @@ sys/tem</pre>
                                         <span class="bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded font-semibold text-[10px]">默认开启</span>
                                     </div>
                                     <p class="text-slate-500 leading-relaxed">
-                                        在词的边缘把低于 -50 dB 的微弱声响区域进行精细过滤。
+                                        在词的边缘把低于 -50 dB 的极度微弱静音区域进行精细过滤。
                                     </p>
                                 </div>
                             </div>
@@ -776,10 +845,56 @@ sys/tem</pre>
                                 <span>在同一个对比实验中，一旦选定其中一个基频引擎后，务必保持一致，切勿在分析过程中混合调换引擎类型，以免结果产生差异。</span>
                             </div>
                         </div>
+
+                        <!-- 5.4 Formant analysis -->
+                        <div class="bg-white border border-slate-100 rounded-xl p-6 shadow-sm">
+                            <h3 class="font-bold text-slate-950 text-base mb-3 flex items-center">
+                                <i data-lucide="waves" class="w-5 h-5 text-brand-600 mr-2"></i>
+                                <span>5.4 共振峰 (F1/F2) 分析模式与声道物理声学大解密</span>
+                            </h3>
+                            <div class="space-y-4 text-xs text-slate-600 leading-relaxed">
+                                <p>
+                                    进入“共振峰/F1-F2”模式，PhonTracer 将开启基于声道形状调谐的元音检测通路。声道声学理论指出，母音特征由前两个共振峰 (Formants) 空间映射表征：
+                                </p>
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-slate-500">
+                                    <div class="bg-stone-50 p-3 rounded-lg border border-slate-100">
+                                        <strong class="text-slate-800 block mb-1">第一共振峰 (F1) —— 与舌位高低 (口腔开闭) 呈负相关</strong>
+                                        舌位越高（如闭元音 /i/, /u/），声道前段越狭窄，F1 频率值越低；舌位越低（如大开元音 /a/），开度最大，F1 频率显著抬高。
+                                    </div>
+                                    <div class="bg-stone-50 p-3 rounded-lg border border-slate-100">
+                                        <strong class="text-slate-800 block mb-1">第二共振峰 (F2) —— 与舌位前后 (前元音/后元音) 呈正相关</strong>
+                                        舌位越靠前（如前元音 /i/），前腔共振容积压缩，F2 频率越高；舌位越靠后（如后元音 /u/, /o/），舌根隆起咽喉共鸣，F2 显著降低。
+                                    </div>
+                                </div>
+                                <p>
+                                    PhonTracer 采用经典的 <strong>Praat Burg 法</strong> (<code>praat_burg</code> 引擎) 进行共振峰时序散点定位。精细分析需配置以下四个底层核心控制参数：
+                                </p>
+                                <ul class="list-disc list-inside space-y-1 text-slate-500 pl-2">
+                                    <li><strong class="text-slate-700">追踪共振峰数量与最大频率 (formant_max_hz)：</strong> 默认追踪 5 个。由于男声道长（约 17cm），共振频率间隔紧凑，上限推荐 <strong>5000 Hz</strong>；女声道短，共振频带宽，上限推荐 <strong>5500 Hz</strong>。设错会导致散点严重跑飞。</li>
+                                    <li><strong class="text-slate-700">分析窗长 (formant_window_length)：</strong> 默认 0.025s (25毫秒)，在时间与频率分辨率间取得折中。</li>
+                                    <li><strong class="text-slate-700">预加重起始频率 (formant_pre_emphasis)：</strong> 默认 50 Hz。对随频程高阻衰减 (每倍频程-6dB) 的高阶共振峰信号进行能量补偿，提升寻峰精度。</li>
+                                    <li><strong class="text-slate-700">共振峰采样策略 (formant_sample_strategy)：</strong>
+                                        <ul class="list-circle list-inside pl-4 mt-0.5 space-y-0.5 text-slate-400">
+                                            <li><span class="text-slate-500"><strong>整段11点：</strong> 均匀取样 11 点，适合双元音滑动过渡或观察辅音协同发音 (coarticulation) 转瞬变异。</span></li>
+                                            <li><span class="text-slate-500"><strong>中段均值：</strong> 仅计算音节中间 1/3 长度段均值，极大程度过滤首尾辅音过渡段的声学非稳态区，为绘制高稳定度的单发音人元音舌位图而设计。</span></li>
+                                        </ul>
+                                    </li>
+                                </ul>
+                                <div class="bg-amber-50 border border-amber-100 rounded-xl p-3 text-amber-900 text-[11px] leading-relaxed">
+                                    <strong class="font-semibold block mb-1">抗 F1/F2 错位 (Swap Error) 与自动推荐机制：</strong>
+                                    紧元音（如 /i/）因舌位高且前，声学能量易堆积混淆，致使 F2 错误下跌跌入 F1。PhonTracer 估计工具提供多档参数方案：
+                                    <ul class="list-decimal list-inside mt-1 pl-1 text-[11px] text-slate-700 space-y-0.5">
+                                        <li><strong>系统推荐档：</strong> 均衡平顺，通用性高。</li>
+                                        <li><strong>抗错位档：</strong> 采用较长的分析窗长与偏低的最大频率限制，拉宽频率间隔阻隔，倾向平滑度，杜绝交叠错位。</li>
+                                        <li><strong>高分辨率档：</strong> 使用极短的采样窗长，原汁原味还原母音内部的频率瞬态起伏。</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </section>
-
-                <!-- Section 6: Data Export -->
+                
+<!-- Section 6: Data Export -->
                 <section id="export" class="scroll-mt-24">
                     <div class="flex items-center space-x-2 text-slate-400 text-sm font-semibold uppercase mb-3">
                         <span>06 / 数据导出</span>
@@ -788,26 +903,35 @@ sys/tem</pre>
                     
                     <div class="space-y-8">
                         <p class="text-slate-600 leading-relaxed">
-                            修剪和采样完毕后，数据需要无缝对接 R 语言、Python 或 SPSS 等统计工具中，PhonTracer 提供了丰富的导出文件类型。
+                            修剪和采样完毕后，数据需要无缝对接 R 语言、Python 或 SPSS 等统计工具中，PhonTracer 提供了高实用性的动态导出格式。
                         </p>
 
                         <!-- Format Grid -->
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-6 text-slate-600 text-xs">
                             <div class="bg-white border border-slate-100 rounded-xl p-5 shadow-sm">
-                                <span class="font-bold text-slate-900 text-sm block mb-1">TXT (基础)</span>
-                                纯文本数据流，适合习惯自编脚本二次提取分析的用户。
+                                <span class="font-bold text-slate-900 text-sm block mb-1">TXT (基础纯文本)</span>
+                                使用标准制表符 (Tab) 对列切分，剔除了警告冗余，方便 Python / R 直接调用脚本加载或批量操作。
                             </div>
                             <div class="bg-white border border-slate-100 rounded-xl p-5 shadow-sm border-l-4 border-l-brand-600">
-                                <span class="font-bold text-slate-900 text-sm block mb-1">XLSX (Excel 表格) [推荐]</span>
-                                不仅包含基础采样数据矩阵，还特别预设了<strong class="text-brand-600 font-semibold">“分析结果”</strong>工作表：直接按对数公式完成了最大值、最小值、均值的计算，并直接计算出了统一的 T 值。
+                                <span class="font-bold text-slate-900 text-sm block mb-1">XLSX (Excel 智能活体公式表) [强推]</span>
+                                <p class="text-[11px] text-slate-500 mb-1.5">包含原始数据表和分析结果表，并对单元格注入活体公式：</p>
+                                <ul class="list-disc list-inside space-y-1 text-slate-500">
+                                    <li><strong>基频 F0 T值活公式：</strong> 表格根据当前发音人的全局最大值 maxHz 和最小值 minHz，在单元格生成公式：<code>=5*(LOG(Hz)-LOG(minHz))/(LOG(maxHz)-LOG(minHz))</code>。当后续在 Excel 中人工剔除/修改了个别基频点，对应的 T 值会立刻自适应重算！</li>
+                                    <li><strong>共振峰数据均值活公式：</strong> 共振峰分析模式下，导出的 XLSX 包含 <code>Formant Analysis</code> 页。软件在 Excel 底层自动注入 <code>AVERAGE</code>、<code>STDEV</code> 均值与离散度等统计学公式，并将其与原始行数据动态绑定。后续任何对元音原始 F1/F2 值的精修更新，Excel 群体指标都将智能同步重算，免去重新建库建模。</li>
+                                </ul>
                             </div>
                             <div class="bg-white border border-slate-100 rounded-xl p-5 shadow-sm">
-                                <span class="font-bold text-slate-900 text-sm block mb-1">TextGrid</span>
-                                支持导出标注，能在 Praat 中复核。长音频导出一个大文件，批量音频导出对应每个音频小文件的文件夹。
+                                <span class="font-bold text-slate-900 text-sm block mb-1">TextGrid 格式标注文件</span>
+                                <p class="text-[11px] text-slate-500 mb-1.5">遵循严格的学术对齐标注规范：</p>
+                                <ul class="list-disc list-inside space-y-1 text-slate-500">
+                                    <li><strong>标准三层 IntervalTier 结构：</strong> 导出包含 <code>groups</code> (实验组别)、<code>words</code> (词项字表边界) 和 <code>chars</code> (仅多音节词时生成的单字切分音节边界) 三层，时间严丝合缝。</li>
+                                    <li><strong>静音区间完整性填充：</strong> 对停顿和前尾留白自动填充空标签 <code>Empty Interval</code>，防止 Praat 解析时因时间轴空腔断裂报错。</li>
+                                    <li><strong>文件名 UUID 过滤优化：</strong> 自动剥离工程管理器为避免重名而加封的 UUID 码及 <code>batch_</code> 序号，使其与初始音频名精准对称。</li>
+                                </ul>
                             </div>
                             <div class="bg-white border border-slate-100 rounded-xl p-5 shadow-sm">
-                                <span class="font-bold text-slate-900 text-sm block mb-1">折线图与 KDE 热力图</span>
-                                导出矢量图/分析图。KDE 运用核密度估算，以时间为横轴，并提供 5%-95% 分位数范围，自动过滤两端偶发极值点，是论文中展现走势分布的高清图表。
+                                <span class="font-bold text-slate-900 text-sm block mb-1">科学图表 (科学可视化工具)</span>
+                                支持导出 PNG、SVG、PDF 等丰富图像格式，包含全新的**科学图表编辑器**大图 preview（详细图表类型请参见 **第 7 板块：声学科学可视化工具箱**）。
                             </div>
                         </div>
 
@@ -839,27 +963,40 @@ sys/tem</pre>
                                         <td class="p-4">连续即无论哪一组，全局统一递增序列 (1-100)；组内则是每个分组独立的重新计数，以对应实验原始字表。</td>
                                     </tr>
                                     <tr>
-                                        <td class="p-4 font-semibold text-slate-800">多受试整合</td>
-                                        <td class="p-4">独立导出 / 整合导出 (Integrated)</td>
-                                        <td class="p-4">整合导出将全受试、全发音人的所有采样曲线揉合在同一个 Excel 矩阵或折线分布图内（注：TextGrid 不支持整合）。</td>
+                                        <td class="p-4 font-semibold text-slate-800">多受试范围</td>
+                                        <td class="p-4">当前发音人 (Active) / 分别导出 (Separate) / 整合导出 (Integrated)</td>
+                                        <td class="p-4">Active 仅导出当前受试；Separate 遍历受试人并输出对应独立文件；Integrated 智能合并所有人的声学矩阵。</td>
                                     </tr>
                                 </tbody>
                             </table>
                         </div>
 
                         <!-- Project File Note -->
-                        <div class="bg-brand-900 text-slate-100 rounded-2xl p-6 relative overflow-hidden">
+                        <div class="bg-brand-900 text-slate-100 rounded-2xl p-6 relative overflow-hidden shadow-xl">
                             <div class="absolute -right-12 -bottom-12 opacity-10">
                                 <i data-lucide="archive" class="w-48 h-48"></i>
                             </div>
-                            <h3 class="font-bold text-white text-base mb-2 flex items-center">
+                            <h3 class="font-bold text-white text-base mb-3 flex items-center">
                                 <i data-lucide="box" class="w-5 h-5 mr-1.5 text-brand-400"></i>
-                                <span>工程保存的核心：.teproj 文件</span>
+                                <span>6.3 存档神技：工程包导入与自动保存机制</span>
                             </h3>
-                            <p class="text-xs text-slate-300 leading-relaxed mb-4">
-                                日常备份至关重要。仅仅导出 XLSX 或图片只能保留计算成果。正式退出或下班前，请务必在右侧点击“导出项目 (.teproj)”。
-                                <code>.teproj</code> 是压缩包格式，打包了您的音符修改边界、引擎参数、甚至包括<strong>原始音频的无损副本和 F0 数据缓存</strong>。即使今后物理磁盘中的原始素材丢失或路径产生变化，只需在另一台电脑上直接拉入 <code>.teproj</code> 工程即可无损还原实验现场。
-                            </p>
+                            <div class="text-xs text-slate-300 leading-relaxed mb-4 space-y-2">
+                                <p>
+                                    日常备份至关重要。仅仅导出 XLSX 或图片只能保留计算成果。正式退出或下班前，请务必在右侧点击“导出项目 (.teproj)”。
+                                </p>
+                                <p>
+                                    <strong>① 工程包底层机制：</strong> <code>.teproj</code> 实质为标准化 ZIP 包，内部完整包含：<code>project.json</code> (存放参数、多发音人进度、红蓝边界对齐状态)、<code>audio/</code> (音频副本无损副本) 以及 <code>data/</code> (音高与共振峰的二进制高压缩 <code>.npz</code> 二进制矩阵缓存文件)。再次加载时可免去庞大的寻峰计算，无损极速秒开。
+                                </p>
+                                <p>
+                                    <strong>② 工程导入预览与冲突解决：</strong> 导入外部工程时，系统会调起 <code>ProjectImportDialog</code> 预览版本、发音人名册和音频计数。若当前工作区有数据，可选择“覆盖”或“叠加”。叠加导入时，同名发音人自动加封后缀 (如“发音人1_2”)，重叠的发音人 UUID 会在底层重构再生，保证多维层级关系健壮安全。
+                                </p>
+                                <p>
+                                    <strong>③ 自动保存崩溃恢复与原子写入：</strong> 自动保存备份文件存放在用户隐藏根目录 (<code>~/.phon_tracer/auto_save_backup.teproj</code>)。每当发生项目变更时，系统将延时 2 秒防抖，并以每 30 秒进行一次定时同步。写入磁盘时，为防止中途断电文件损毁，软件采用原子操作：先生成 <code>project.json.tmp</code>，待完全落地结构无损后，一次性以原子替换接口 (<code>os.replace</code>) 覆盖正式的 <code>project.json</code>。下次启动检测到有效数据，会自动弹窗询问是否恢复，损毁的数据则静默擦除。
+                                </p>
+                                <p>
+                                    <strong>④ 绘图状态保护锁：</strong> 当“声学科学可视化工具箱”处于开启状态时，导入工程功能将被系统强制阻断锁定，有效避免图表编辑器数据悬空错位造成的闪退报错。
+                                </p>
+                            </div>
                             <div class="bg-slate-800/80 p-3 rounded-lg text-[11px] text-slate-300">
                                 <strong>论文写作与研究记录推荐：</strong> 在论文中记录声学分析方法时，推荐详细记录：
                                 PhonTracer 版本、检测引擎(Praat/REAPER)、最低基频/最高基频限值 (Pitch Floor/Ceiling)、清浊判定阈值 (Voicing Threshold)、采样点数、以及是否进行人工复核调校。
@@ -868,12 +1005,146 @@ sys/tem</pre>
                     </div>
                 </section>
 
-                <!-- Section 7: AudioToolkit -->
+                <!-- Section 7: Scientific Visualization Toolbox -->
+                <section id="visualization" class="scroll-mt-24">
+                    <div class="flex items-center space-x-2 text-slate-400 text-sm font-semibold uppercase mb-3">
+                        <span>07 / 可视化工作台</span>
+                    </div>
+                    <h2 class="text-3xl font-extrabold text-slate-900 tracking-tight font-serif mb-8 border-b pb-3">7. 声学科学可视化工具箱</h2>
+                    
+                    <div class="space-y-8">
+                        <p class="text-slate-600 leading-relaxed">
+                            为了满足语音学实验和学术论文发表对图表的高标准要求，PhonTracer 推出了全新的<strong>声学科学可视化工具箱</strong>（Acoustic Scientific Visualization Toolbox）。当点击“导出 - 科学图表”或在 CLI 执行 <code>export</code> 时即可将其唤起。
+                        </p>
+
+                        <!-- Workshop Interactivity Card -->
+                        <div class="bg-white border border-slate-100 rounded-xl p-6 shadow-sm">
+                            <h3 class="font-bold text-slate-950 text-base mb-4 flex items-center">
+                                <i data-lucide="monitor-play" class="w-5 h-5 text-brand-600 mr-2"></i>
+                                <span>7.1 图表工作台：超爽的操作体验与交互机制</span>
+                            </h3>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 text-xs text-slate-600 leading-relaxed">
+                                <div class="space-y-3">
+                                    <p>
+                                        针对海量样本渲染卡顿、滑块调节延迟的痛点，工具箱从底层进行了深度的交互体验优化：
+                                    </p>
+                                    <ul class="list-disc list-inside space-y-1.5 text-slate-500 pl-1">
+                                        <li><strong>后台异步渲染与撤销：</strong> 图表生成均交由独立后台线程，前台呈递进度条。支持随时点击“取消预览”放弃当前任务。连续拖动滑块时，会自动丢弃之前的积压渲染，仅锁定最终配置，操作极致滑顺。</li>
+                                        <li><strong>实时刷新与手动防抖：</strong> 大样本量或二维 KDE 计算，推荐关闭“实时刷新”，修改好所有参数后一键点击“刷新预览”出图，极大地释放了 CPU 负担。</li>
+                                        <li><strong>DPI 与尺寸自定义：</strong> 设有一键比例适配（4:3, 16:9, 3:2, 1:1 等），导出位图时可通过“最小边像素”自适应重算高清 DPI，防止打字机网格锯齿。发表学术论文首推直接导出 SVG / PDF 矢量图。</li>
+                                    </ul>
+                                </div>
+                                <div class="space-y-3 border-t md:border-t-0 md:border-l border-slate-100 pt-4 md:pt-0 md:pl-6">
+                                    <ul class="list-disc list-inside space-y-2 text-slate-500">
+                                        <li><strong>悬浮模式 (Floating Mode)：</strong> 点击悬浮，自动折叠繁复的左侧和底部工具栏，窗口轻量置顶呈现为 450x380 像素的迷你悬浮框。方便实验人员在声谱图区用橡皮擦剔除噪点的同时，在悬浮小窗内实时观测格局曲线的变化！</li>
+                                        <li><strong>键盘左右键快捷翻页：</strong> 翻阅发音人图册或组别分页图册时，无需鼠标频繁挪移点击，直接敲击键盘<strong>左右方向键</strong>即可一键光速翻页。</li>
+                                        <li><strong>缓存失效机制：</strong> 当在主工作区调整红蓝边界、剔除噪点或更换发音人后，图表区会自适应触发 <code>invalidate_cache()</code>，清空缓存矩阵，让图像秒级联动更新。</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- F0 Chart Family -->
+                        <div class="space-y-4">
+                            <h3 class="font-bold text-slate-950 text-base flex items-center">
+                                <i data-lucide="line-chart" class="w-5 h-5 text-brand-600 mr-2"></i>
+                                <span>7.2 声调 (F0) 专属科学图表家族</span>
+                            </h3>
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+                                <div class="bg-stone-50 border border-slate-200/60 rounded-xl p-5 text-slate-600">
+                                    <strong class="text-slate-800 text-sm block mb-1.5">声调轮廓图 (Tone Contour)</strong>
+                                    即经典的<strong>声学格局图</strong>。横轴支持等距采样点 (normalized) 或物理时长 (duration)；曲线可展示为仅组均值、均值+浅色个体细线 (方便看组内发音变异)、或均值+标准差置信半透明阴影。
+                                </div>
+                                <div class="bg-stone-50 border border-slate-200/60 rounded-xl p-5 text-slate-600">
+                                    <strong class="text-slate-800 text-sm block mb-1.5">声调分布图 (Tone Distribution)</strong>
+                                    定量表征发音的稳定性与离散程度。支持选择<strong>科学箱线图</strong>或<strong>小提琴图</strong>，展现每一物理点位跨样本的概率分布、起-中-终经典三点分布对比、以及各组发音一致性的变异系数 (CV) 柱状图。
+                                </div>
+                                <div class="bg-stone-50 border border-slate-200/60 rounded-xl p-5 text-slate-600">
+                                    <strong class="text-slate-800 text-sm block mb-1.5">时序密度图 (Pitch Time Density)</strong>
+                                    基于二维高斯核密度估计 (2D KDE) 拟合生成时序密度热力图。支持调整核带宽 (bandwidth)。由于核估计对突变噪点极度敏感，提供 <strong>5%-95% 分位数截断</strong>以过滤低频噪声，集中展示发音音域团。
+                                </div>
+                                <div class="bg-stone-50 border border-slate-200/60 rounded-xl p-5 text-slate-600">
+                                    <strong class="text-slate-800 text-sm block mb-1.5">数据质量检查图 (QC Check)</strong>
+                                    论文导出前的“大体检排雷器”。模块细分为：<br>
+                                    ① 逐项基频叠加图，正常画为蓝细线，有大段 NaN 的异常曲线用<strong>红色虚线</strong>醒目标出，方便精准回溯。<br>
+                                    ② 检出率箱线图，设 60% 检出率红虚警戒线。<br>
+                                    ③ 调域误差棒图，直观锁定发生半频/倍频错误的离群发音人。
+                                </div>
+                                <div class="bg-stone-50 border border-slate-200/60 rounded-xl p-5 text-slate-600 col-span-2">
+                                    <strong class="text-slate-800 text-sm block mb-1.5">声调组别概览图 (Group Overview Heatmap)</strong>
+                                    对大样本声调语料库或方言调查大批量字表的快速概览。生成全局采样点上的均值矩阵热图 (Hz 下为 viridis，T值下为红蓝 RdYlBu_r 渐变) 或标准差矩阵热图 (Reds 渐变，红色越深变异度越大)，一目了然定位不稳定声学区段。
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Formant Chart Family -->
+                        <div class="bg-white border border-slate-100 rounded-xl p-6 shadow-sm">
+                            <h3 class="font-bold text-slate-950 text-base mb-3 flex items-center">
+                                <i data-lucide="scatter-chart" class="w-5 h-5 text-brand-600 mr-2"></i>
+                                <span>7.3 共振峰 (F1/F2) 专属科学图表家族</span>
+                            </h3>
+                            <div class="space-y-4 text-xs text-slate-600 leading-relaxed">
+                                <p>
+                                    若在左侧开启“共振峰/F1-F2”分析模式，科学图表编辑器会自动切换装载专属绘图模块，支持以下三把高段位元音分析利器：
+                                </p>
+                                <div class="bg-brand-50 border border-brand-100 rounded-xl p-4 text-brand-900 mb-4">
+                                    <strong class="text-xs font-semibold block mb-1">① 元音共振峰空间图 (Vowel Space Chart) —— 学术论文最核心图表！</strong>
+                                    图表遵循<strong>语音物理声学坐标轴反向惯例 (Academic Inversion)</strong>：
+                                    <ul class="list-disc list-inside space-y-1 mt-1 text-[11px] text-slate-700">
+                                        <li><strong>横轴 F2 反向：</strong> 坐标数值自右向左递增（越靠右值越小，代表后舌位；越靠左值越大，代表前舌位）。</li>
+                                        <li><strong>纵轴 F1 反向：</strong> 坐标数值自上而下递增（越靠上值越小，代表高舌位/口腔闭；越靠下值越大，代表低舌位/口腔开）。</li>
+                                    </ul>
+                                    <p class="mt-1.5 text-[11px] text-slate-600 leading-relaxed">
+                                        该经典的镜像反转轴设计，将纯声学赫兹数据还原为与人类发音时口腔物理空间完全重合的“母音舌位图”（左上 /i/、右上 /u/、下方 /a/）。支持一键绘制 <strong>50% 或 95% 置信度数据椭圆 (Confidence Ellipse)</strong>，清晰刻画群体母音范围；亦可选择叠加强调时间演变渐变线，展现音节内部元音滑移走势。
+                                    </p>
+                                </div>
+                                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-slate-500">
+                                    <div class="bg-stone-50 p-3 rounded-lg border border-slate-100">
+                                        <strong class="text-slate-800 block mb-1">② 共振峰时序轨迹图 (Trajectory)</strong>
+                                        在等距时间轴上，同时分轨追踪 F1、F2 和 F3 的频率演变。在解析协同发声、双元音滑移轨迹中起到核心判定作用。
+                                    </div>
+                                    <div class="bg-stone-50 p-3 rounded-lg border border-slate-100 col-span-2">
+                                        <strong class="text-slate-800 block mb-1">③ 共振峰密度分布图 (Density KDE Map) & 概览热图</strong>
+                                        大样本量下散点会重叠发黑，KDE 密度图利用二维高斯密度模型，勾勒出深邃美丽的“热力星系云团”，直观指明元音空间物理分布的最核心聚拢重心区。概览热图则可一站式快速概览海量音节在稳态 F1/F2 上的数值及变异差表现。
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Pagination and Scope -->
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 text-xs text-slate-600 leading-relaxed">
+                            <div class="bg-stone-50 rounded-xl p-5 border border-slate-200/60">
+                                <strong class="text-slate-900 text-sm block mb-1.5">7.4 智能多组别分页与筛选系统</strong>
+                                <p class="text-slate-500 leading-relaxed">
+                                    当实验分组或词项数超过 8 个时，线条重叠会导致视觉混乱。系统提供了先进的组别分页与滚动穿透优化方案：
+                                </p>
+                                <ul class="list-disc list-inside mt-2 space-y-1 text-slate-500 pl-1">
+                                    <li><strong>自适应多页 PDF/图片序列：</strong> 导出 PDF 时自动排版为整齐的多页图册；导出图片时则在路径下自动追加 <code>_第X页</code> 生成分页图像集。</li>
+                                    <li><strong>智能组别筛选器：</strong> 支持输入汉字/拼音实时模糊检索过滤，支持按样本量大小 (Sample Size) 排序或设置样本量下限阈值，自动筛除合格样本数不足的边缘分组。</li>
+                                    <li><strong>滚动穿透冲突优化：</strong> 优化了长筛选器内部的滚动捕获。悬停滚动内部时仅滚动筛选列表，不带动外层长面板晃动，交互感极强。</li>
+                                </ul>
+                            </div>
+                            <div class="bg-stone-50 rounded-xl p-5 border border-slate-200/60">
+                                <strong class="text-slate-900 text-sm block mb-1.5">7.5 多发音人范围导出策略</strong>
+                                <p class="text-slate-500 leading-relaxed">
+                                    在导出科学可视化图表时，工具箱支持针对多位受试发音人数据进行多样性排列组合：
+                                </p>
+                                <ul class="list-disc list-inside mt-2 space-y-1 text-slate-500 pl-1">
+                                    <li><strong>active (当前发音人)：</strong> 仅对当前被选择的发音人渲染并出图。</li>
+                                    <li><strong>separate (分别导出)：</strong> 引擎在后台自动依次遍历发音人数据树，生成每位发音人专属的命名科学图表。</li>
+                                    <li><strong>integrated (整合导出)：</strong> 将项目内所有受试者的物理声学数据合并，自动应用<strong>发音人归一化算法 (Speaker Normalization)</strong> 对数运算，抹平高低八度音域差，合并生成代表该实验群体发音特征的均值声学格局图或密度云图。</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Section 8: AudioToolkit -->
                 <section id="audiotoolkit" class="scroll-mt-24">
                     <div class="flex items-center space-x-2 text-slate-400 text-sm font-semibold uppercase mb-3">
-                        <span>07 / 独立工具箱</span>
+                        <span>08 / 独立工具箱</span>
                     </div>
-                    <h2 class="text-3xl font-extrabold text-slate-900 tracking-tight font-serif mb-8 border-b pb-3">7. 进阶：AudioToolkit 音频前处理工具箱</h2>
+                    <h2 class="text-3xl font-extrabold text-slate-900 tracking-tight font-serif mb-8 border-b pb-3">8. 进阶：AudioToolkit 音频前处理工具箱</h2>
                     
                     <div class="space-y-6">
                         <p class="text-slate-600 leading-relaxed">
@@ -885,51 +1156,65 @@ sys/tem</pre>
                             <div class="bg-white border border-slate-100 rounded-xl p-6 shadow-sm">
                                 <h3 class="font-bold text-slate-900 mb-3 flex items-center text-sm">
                                     <i data-lucide="combine" class="w-4.5 h-4.5 text-brand-600 mr-1.5"></i>
-                                    <span>合并音频：碎片文件缝合</span>
+                                    <span>合并音频与模糊匹配</span>
                                 </h3>
                                 <ol class="space-y-2 text-xs text-slate-500 list-decimal list-inside leading-relaxed mb-4">
                                     <li>拖入大批次 <code>WAV</code> 或 <code>MP3</code> 小碎片。</li>
-                                    <li>在面板内用鼠标自由拖曳文件调整先后播放队列。</li>
+                                    <li>在面板内用键盘 Delete 键移除错误项，拖曳鼠标调整先后播放排列队列。</li>
                                     <li>设定拼接时的“静音间隔”（默认 0.5s，作为让 VAD 切分的缓冲）。</li>
                                     <li>一键合并，程序在拼接时会自动重采样到 44100 Hz，生成大整轨。</li>
                                 </ol>
-                                <span class="bg-brand-50 border border-brand-100 text-[10px] text-brand-800 p-2.5 rounded block leading-relaxed">
-                                    <strong>独家功能：</strong> “导入字表自动排序”功能，只要录音文件名中模糊包含字表里的词，程序就会极速把文件按字表重新排序，无法对应的音频扔到尾端，极大加速后续处理流程。
+                                <span class="bg-brand-50 border border-brand-100 text-[10px] text-brand-800 p-2.5 rounded block leading-relaxed mb-3">
+                                    <strong>文件名排序优化：</strong> “导入字表自动排序”功能，只要录音文件名中包含字表里的词，程序就会将小文件按字表重排，无法对应的音频扔到尾端，极大加速后续处理。
                                 </span>
+                                <div class="bg-stone-50 border border-stone-100 text-[10px] text-slate-500 p-3 rounded-lg leading-relaxed">
+                                    <strong>工程结构预览与 ZIP 另存：</strong>
+                                    在工具箱中载入 <code>.teproj</code>，无需开主程序即可轻量预览工程版本、发音人名册、发音模式与已分析总量。支持将工程无损另存为普通 <code>.zip</code> 格式，以便研究人员解包直接读取底层 <code>project.json</code> 结构与提取无损音频。
+                                </div>
                             </div>
                             <!-- Split -->
                             <div class="bg-white border border-slate-100 rounded-xl p-6 shadow-sm flex flex-col justify-between">
                                 <div>
                                     <h3 class="font-bold text-slate-900 mb-3 flex items-center text-sm">
                                         <i data-lucide="split" class="w-4.5 h-4.5 text-brand-600 mr-1.5"></i>
-                                        <span>拆分音频：长音频快速切割</span>
+                                        <span>拆分长音频（一键切块）</span>
                                     </h3>
                                     <ol class="space-y-2 text-xs text-slate-500 list-decimal list-inside leading-relaxed mb-4">
-                                        <li>加载整条长音频，粘贴或读取待对应的逐行字表。</li>
-                                        <li>系统运用 VAD 进行初步有声边界判定，支持在分段编辑器微调。</li>
+                                        <li>加载整条长音频，粘贴或读取待对应的逐行字表。文件解析内置<strong>自动剥离 UTF-8 BOM 字符逻辑</strong>，防止因首字符乱码匹配失效。</li>
+                                        <li>系统运用 VAD 判定有声边界，支持在分段编辑器微调：可利用<strong>鼠标滚轮水平滚动波形</strong>，使用 <strong>Ctrl + 滚轮对波形进行水平缩放</strong>，精细锁紧。</li>
                                         <li>设置切割边界的前后缓冲时间 (默认 0.1s 以保留完整的元音开头)。</li>
-                                        <li>生成按序号与文本完美命名的文件夹，如：<code>001_北京.wav</code>、<code>002_上海.wav</code>。</li>
+                                        <li>生成完美命名的文件集：<code>001_北京.wav</code>、<code>002_上海.wav</code>。非法物理文件名符号自动替换为下划线。</li>
                                     </ol>
                                 </div>
-                                <span class="bg-stone-50 border border-stone-200/60 text-[10px] text-slate-500 p-2.5 rounded block">
-                                    <strong>文件名保护：</strong> 如果字表文本中包含系统物理磁盘不允许的保留字或非法字符，程序在输出小文件时会将其进行自动修正。
-                                </span>
+                                <div class="bg-amber-50 border border-amber-100 text-[10px] text-amber-900 p-3 rounded-xl block leading-relaxed mt-2">
+                                    <strong>界面鼠标拖入稳定性保障锁：</strong>
+                                    在 Windows + Tkinter 多线程机制下，系统级鼠标直接拖入（如 <code>windnd</code> 库）极易产生 Python 全局锁 (GIL) 互锁，导致大样本导入时闪退。为绝对保证实验高稳定性，AudioToolkit 关闭了窗口级外部拖入，<strong>统一建议点击“添加音频”或“选择文件”按钮调用资源管理器对话框安全导入</strong>。
+                                </div>
                             </div>
                         </div>
                     </div>
                 </section>
 
-                <!-- Section 8: CLI -->
+                <!-- Section 9: CLI -->
                 <section id="cli" class="scroll-mt-24">
                     <div class="flex items-center space-x-2 text-slate-400 text-sm font-semibold uppercase mb-3">
-                        <span>08 / 自动化与命令行</span>
+                        <span>09 / 自动化与命令行</span>
                     </div>
-                    <h2 class="text-3xl font-extrabold text-slate-900 tracking-tight font-serif mb-8 border-b pb-3">8. 极客批处理与 AI 助手：CLI 命令行指南</h2>
+                    <h2 class="text-3xl font-extrabold text-slate-900 tracking-tight font-serif mb-8 border-b pb-3">9. 极客批处理与 AI 助手：CLI 命令行指南</h2>
                     
                     <div class="space-y-8">
-                        <p class="text-slate-600 leading-relaxed">
-                            为了满足极客用户、Python 程序联动以及时下流行的大语言模型（LLM / AI，例如 Cursor, Trae, Codex）对自动化生产的需求，PhonTracer 内置了完整的纯文本交互 CLI 引擎，所有返回与输出均被规范为结构化 JSON，便于机器读取与流水线作业。
-                        </p>
+                        <div class="space-y-4 text-xs text-slate-600 leading-relaxed">
+                            <p class="text-sm text-slate-600 leading-relaxed">
+                                为了满足极客用户、Python 程序联动以及 AI Agent 自动化（如 Cursor, Trae, Codex）的需求，PhonTracer 内置了功能完备的纯文本交互 CLI 引擎。所有的命令执行状态及错误分析均标准化为结构化 JSON 格式输出，完美支持管道调用。
+                            </p>
+                            <div class="bg-brand-50 border border-brand-100 rounded-xl p-4 text-brand-900">
+                                <strong class="font-semibold block mb-1">CLI 高频运行与 Agent 稳定性设计：</strong>
+                                <ul class="list-disc list-inside space-y-1.5 text-slate-600 pl-1">
+                                    <li><strong>单指令单次直接执行：</strong> 支持 <code>python cli.py status</code> 或 <code>PhonTracerCLI.exe --help</code> 等无窗口非交互直接调用。若参数为已知内置命令，系统会在执行完毕后将结果以 JSON 回显输出在标准输出上，然后安全退出。</li>
+                                    <li><strong>Agent 启动容错与多进程隔离：</strong> Windows 打包版底层集成了 <code>multiprocessing.freeze_support()</code>，并在参数层过滤忽略以 <code>--multiprocessing-*</code> 开头的系统级内部启动参数。这彻底规避了 Windows 下进行多进程基频重算时，子进程被误读为用户交互命令输入的循环死锁崩溃。</li>
+                                </ul>
+                            </div>
+                        </div>
 
                         <!-- CLI syntax and Dictionary -->
                         <div class="space-y-4">
@@ -938,28 +1223,32 @@ sys/tem</pre>
                             <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
                                 <!-- Command Doc -->
                                 <div class="bg-white border border-slate-100 p-4 rounded-xl shadow-sm">
-                                    <span class="font-bold text-brand-700 block mb-1">全局设置</span>
+                                    <span class="font-bold text-brand-700 block mb-2">全局设置与核心配置</span>
                                     <ul class="space-y-2 text-slate-500 font-mono">
-                                        <li><strong class="text-slate-800">lang zh / lang en :</strong> 设定返回信息的中英文语言环境。</li>
-                                        <li><strong class="text-slate-800">speakers :</strong> 输出全局已经建档的发音人档案。</li>
-                                        <li><strong class="text-slate-800">add_speaker 发音人B :</strong> 增设发音人隔离工作区。</li>
-                                        <li><strong class="text-slate-800">set_params pts=11 f0_engine=praat :</strong> 调整核心算法参数。</li>
+                                        <li><strong class="text-slate-800">lang zh / lang en :</strong> 设定中英文回显环境。</li>
+                                        <li><strong class="text-slate-800">speakers / add_speaker :</strong> 查看或新增发音人隔离工作区。</li>
+                                        <li><strong class="text-slate-800">set_params pts=11 f0_engine=reaper :</strong> 设定声调提取链参数。</li>
+                                        <li><strong class="text-slate-800">set_params analysis_mode=formant formant_max_hz=5500 :</strong> 设定共振峰模式与追踪限制上限。</li>
+                                        <li><strong class="text-slate-800">autosave on / off / now :</strong> 查看、启闭自动保存或强制后台执行原子写入。</li>
+                                        <li><strong class="text-slate-800">agent_guide :</strong> 返回包含 AI 交互守则指南的结构化 JSON。</li>
                                     </ul>
                                 </div>
                                 <!-- Command Doc -->
-                                <div class="bg-white border border-slate-100 p-4 rounded-xl shadow-sm">
-                                    <span class="font-bold text-brand-700 block mb-1">加载与修改</span>
+                                <div class="bg-white border border-slate-100 p-4 rounded-xl shadow-sm flex flex-col justify-between">
+                                    <span class="font-bold text-brand-700 mb-2 block font-sans">工程载入与转换命令</span>
                                     <ul class="space-y-2 text-slate-500 font-mono">
-                                        <li><strong class="text-slate-800">load_long "path/audio.wav" :</strong> 调取载入长录音。</li>
-                                        <li><strong class="text-slate-800">apply_wordlist "path/list.txt" fuzzy :</strong> 匹配字表。</li>
-                                        <li><strong class="text-slate-800">list_items warnings :</strong> 列出所有异常、零频和报错的条目。</li>
-                                        <li><strong class="text-slate-800">modify_bounds 3 1.25 1.82 :</strong> 精准指定3号词的边界。</li>
+                                        <li><strong class="text-slate-800">project_import "我的.teproj" :</strong> 加载打包好的工程文件。</li>
+                                        <li><strong class="text-slate-800">project_export "备份.teproj" :</strong> <strong>核心交付命令！</strong>将音频副本、边界进度及声学矩阵打包归档为工程包。</li>
+                                        <li><strong class="text-slate-800">load_long / load_batch :</strong> 导入长录音或小片段集。</li>
+                                        <li><strong class="text-slate-800">apply_wordlist "表.txt" fuzzy / order :</strong> 模糊或顺序对齐字表。</li>
+                                        <li><strong class="text-slate-800">detect_f0 recommended / conservative / fine :</strong> 对录音运行 F0 物理估测并推荐三档上下限范围；<strong>应用时会自动激活局部重算，保护手工边界红蓝线不被重置</strong>。</li>
+                                        <li><strong class="text-slate-800">import_batch_and_export &lt;dir&gt; &lt;out.teproj&gt; :</strong> <strong>数据转换神命令！</strong>批量扫描指定文件夹内 <code>WAV</code> + <code>TextGrid</code> 文件对（按发音人子目录归档），自动以 TextGrid 边界为基准进行声学分析并整合打包为 `.teproj` 工程包，极大方便了历史语料向 PhonTracer 迁移。</li>
                                     </ul>
                                 </div>
                             </div>
                         </div>
-
-                        <!-- PowerShell Pipeline examples -->
+                        
+<!-- PowerShell Pipeline examples -->
                         <div class="space-y-4">
                             <h3 class="font-bold text-slate-950 text-base flex items-center">
                                 <i data-lucide="code" class="w-5 h-5 text-brand-600 mr-2"></i>
@@ -1005,6 +1294,26 @@ export xlsx "自动化测试/batch_results.xlsx" continuous active
 exit
 '@ | python cli.py</pre>
                                 </div>
+
+                                <div class="bg-slate-900 rounded-xl overflow-hidden shadow-lg border border-slate-800 font-mono text-xs code-glow">
+                                    <div class="bg-slate-950 px-4 py-2 flex items-center justify-between border-b border-slate-800">
+                                        <span class="text-slate-400">示例 3: 共振峰 (F1/F2) 精细估计与元音空间图生成</span>
+                                        <button class="text-slate-400 hover:text-white transition inline-flex items-center space-x-1" onclick="copyCode('codeBlock3')">
+                                            <i data-lucide="copy" class="w-3.5 h-3.5"></i>
+                                            <span>Copy</span>
+                                        </button>
+                                    </div>
+                                    <pre id="codeBlock3" class="p-4 text-slate-200 overflow-x-auto leading-relaxed">
+@'
+lang zh
+load_long "我的录音/元音表.wav"
+apply_wordlist "我的字表/元音.txt"
+set_params analysis_mode=formant formant_max_hz=5500 formant_sample_strategy=中段均值
+export xlsx "自动化测试/元音共振峰.xlsx" continuous active
+export formant_space "自动化测试/元音空间图.svg" active groupby=group
+exit
+'@ | python cli.py</pre>
+                                </div>
                             </div>
                         </div>
 
@@ -1044,12 +1353,12 @@ exit
                     </div>
                 </section>
 
-                <!-- Section 9: FAQ -->
+                <!-- Section 10: FAQ -->
                 <section id="faq" class="scroll-mt-24">
                     <div class="flex items-center space-x-2 text-slate-400 text-sm font-semibold uppercase mb-3">
-                        <span>09 / 疑难解答</span>
+                        <span>10 / 疑难解答</span>
                     </div>
-                    <h2 class="text-3xl font-extrabold text-slate-900 tracking-tight font-serif mb-8 border-b pb-3">9. 常见故障排雷与应急指南</h2>
+                    <h2 class="text-3xl font-extrabold text-slate-900 tracking-tight font-serif mb-8 border-b pb-3">10. 常见故障排雷与应急指南</h2>
                     
                     <div class="space-y-4">
                         <!-- Accordion 1 -->
@@ -1111,6 +1420,94 @@ exit
                                 <strong>急救：</strong> 检查您当前运行的工作流模式。在“批量音频”模式下，软件本就不会强行拼接出大 TextGrid，而是会对每个独立的 wav 音频在其目录下生成一个同名的 TextGrid。若需要大整轨 TextGrid，建议首先使用 AudioToolkit 进行音频缝合，进而采用长音频工作流提取。另外注意，在多发音人模式下，无法合并导出同一张 TextGrid 标注层。
                             </div>
                         </div>
+
+                        <!-- Accordion 6 -->
+                        <div class="bg-white border border-slate-100 rounded-xl shadow-sm overflow-hidden transition">
+                            <button class="w-full text-left p-5 flex justify-between items-center font-bold text-slate-900 text-sm hover:bg-slate-50/50" onclick="toggleFaq('faq6')">
+                                <span>Q6：双击 .teproj 启动后，为什么没有弹出“恢复上次异常退出”的提示？</span>
+                                <i data-lucide="chevron-down" class="w-4 h-4 text-slate-400 transform transition-transform" id="faq6-icon"></i>
+                            </button>
+                            <div class="p-5 pt-0 text-xs text-slate-600 leading-relaxed border-t border-slate-50 hidden" id="faq6">
+                                <strong>急救：</strong> 当你双击 <code>.teproj</code> 唤醒软件时，PhonTracer 会认定你有明确的目标工程，因此会采用高优先级载入当前工程文件，并静默清理后台陈旧的自动保存工作区，防止旧缓存数据污染你的新项目。若要恢复上次死机前的数据，请直接双击打开主程序，不要双击外部工程包。
+                            </div>
+                        </div>
+
+                        <!-- Accordion 7 -->
+                        <div class="bg-white border border-slate-100 rounded-xl shadow-sm overflow-hidden transition">
+                            <button class="w-full text-left p-5 flex justify-between items-center font-bold text-slate-900 text-sm hover:bg-slate-50/50" onclick="toggleFaq('faq7')">
+                                <span>Q7：自动保存功能既然开着，为什么还要手动导出 .teproj？</span>
+                                <i data-lucide="chevron-down" class="w-4 h-4 text-slate-400 transform transition-transform" id="faq7-icon"></i>
+                            </button>
+                            <div class="p-5 pt-0 text-xs text-slate-600 leading-relaxed border-t border-slate-50 hidden" id="faq7">
+                                <strong>急救：</strong> 自动保存是“后台保命机制”，备份数据写在用户隐藏目录下，并非用于归档和数据分发的格式。要跨设备工作、数据备份或向他人交付成果时，请务必通过“导出项目 (.teproj)”生成无损打包文件。
+                            </div>
+                        </div>
+
+                        <!-- Accordion 8 -->
+                        <div class="bg-white border border-slate-100 rounded-xl shadow-sm overflow-hidden transition">
+                            <button class="w-full text-left p-5 flex justify-between items-center font-bold text-slate-900 text-sm hover:bg-slate-50/50" onclick="toggleFaq('faq8')">
+                                <span>Q8：在估计窗口应用了推荐的 F0 范围，为什么我的音节边界没有被自动重新切分？</span>
+                                <i data-lucide="chevron-down" class="w-4 h-4 text-slate-400 transform transition-transform" id="faq8-icon"></i>
+                            </button>
+                            <div class="p-5 pt-0 text-xs text-slate-600 leading-relaxed border-t border-slate-50 hidden" id="faq8">
+                                <strong>急救：</strong> 这是新版的音节边界保护机制。应用 F0 参数或估计范围时，系统只会更新音高曲线，强制保护您已经辛苦拉好的红蓝边界线不被覆盖。如果您需要根据新参数强制重新切分，请在左侧面板点击“重新自动识别”或在 CLI 输入 <code>recalculate</code>，但这会覆盖你的手工修改边界。
+                            </div>
+                        </div>
+
+                        <!-- Accordion 9 -->
+                        <div class="bg-white border border-slate-100 rounded-xl shadow-sm overflow-hidden transition">
+                            <button class="w-full text-left p-5 flex justify-between items-center font-bold text-slate-900 text-sm hover:bg-slate-50/50" onclick="toggleFaq('faq9')">
+                                <span>Q9：为什么我的共振峰散点在声谱图上很凌乱，F2 总是跌进 F1 的怀抱（发生错位 swap）？</span>
+                                <i data-lucide="chevron-down" class="w-4 h-4 text-slate-400 transform transition-transform" id="faq9-icon"></i>
+                            </button>
+                            <div class="p-5 pt-0 text-xs text-slate-600 leading-relaxed border-t border-slate-50 hidden" id="faq9">
+                                <strong>急救：</strong> 共振峰高度敏感于发音人和录音质量。请尝试点击参数面板上的“估计”按钮，优先应用“抗错位档”。此外，对于成年男性，建议将最大共振峰频率限制在 5000 Hz 左右，分析窗长设为 0.025-0.030 秒，并适当提高清浊判定阈值；对于女性和儿童则设为 5500 Hz 甚至更高。如果仅有个别跑飞的点，使用“剔除点”工具单点清除即可。
+                            </div>
+                        </div>
+
+                        <!-- Accordion 10 -->
+                        <div class="bg-white border border-slate-100 rounded-xl shadow-sm overflow-hidden transition">
+                            <button class="w-full text-left p-5 flex justify-between items-center font-bold text-slate-900 text-sm hover:bg-slate-50/50" onclick="toggleFaq('faq10')">
+                                <span>Q10：共振峰模式下为什么声谱图右侧没有音高标度，图上也看不到 F0 蓝色音高线？</span>
+                                <i data-lucide="chevron-down" class="w-4 h-4 text-slate-400 transform transition-transform" id="faq10-icon"></i>
+                            </button>
+                            <div class="p-5 pt-0 text-xs text-slate-600 leading-relaxed border-t border-slate-50 hidden" id="faq10">
+                                <strong>急救：</strong> 共振峰模式致力于母音（元音）空间特征分析，因此右侧的 F0 纵轴及蓝色音高曲线会被自动隐藏。若需要检查基频，请将“分析模式”一键切回“声调/F0”模式。
+                            </div>
+                        </div>
+
+                        <!-- Accordion 11 -->
+                        <div class="bg-white border border-slate-100 rounded-xl shadow-sm overflow-hidden transition">
+                            <button class="w-full text-left p-5 flex justify-between items-center font-bold text-slate-900 text-sm hover:bg-slate-50/50" onclick="toggleFaq('faq11')">
+                                <span>Q11：图表编辑器里预览大项目图表或二维 KDE 密度图时非常卡顿？</span>
+                                <i data-lucide="chevron-down" class="w-4 h-4 text-slate-400 transform transition-transform" id="faq11-icon"></i>
+                            </button>
+                            <div class="p-5 pt-0 text-xs text-slate-600 leading-relaxed border-t border-slate-50 hidden" id="faq11">
+                                <strong>急救：</strong> 二维高斯核密度估计（2D KDE）是极度消耗 CPU 的算法。大样本项目建议关闭左侧面板底部的“实时刷新预览”，集中调整完配色、比例、分组与筛选后，手动点击一次“刷新预览”出图。
+                            </div>
+                        </div>
+
+                        <!-- Accordion 12 -->
+                        <div class="bg-white border border-slate-100 rounded-xl shadow-sm overflow-hidden transition">
+                            <button class="w-full text-left p-5 flex justify-between items-center font-bold text-slate-900 text-sm hover:bg-slate-50/50" onclick="toggleFaq('faq12')">
+                                <span>Q12：为什么当科学图表编辑器窗口打开时，系统禁止我导入新的 .teproj？</span>
+                                <i data-lucide="chevron-down" class="w-4 h-4 text-slate-400 transform transition-transform" id="faq12-icon"></i>
+                            </button>
+                            <div class="p-5 pt-0 text-xs text-slate-600 leading-relaxed border-t border-slate-50 hidden" id="faq12">
+                                <strong>急救：</strong> 科学图表编辑器内部对当前项目数据和发音人树进行了高响应性的运行时缓存。如果允许在编辑器打开时导入新工程，很容易引起指针悬空导致崩溃。请关闭图表编辑器窗口，再进行导入操作。
+                            </div>
+                        </div>
+
+                        <!-- Accordion 13 -->
+                        <div class="bg-white border border-slate-100 rounded-xl shadow-sm overflow-hidden transition">
+                            <button class="w-full text-left p-5 flex justify-between items-center font-bold text-slate-900 text-sm hover:bg-slate-50/50" onclick="toggleFaq('faq13')">
+                                <span>Q13：在 Windows 系统下，为什么 AudioToolkit 窗口无法直接拖入文件？</span>
+                                <i data-lucide="chevron-down" class="w-4 h-4 text-slate-400 transform transition-transform" id="faq13-icon"></i>
+                            </button>
+                            <div class="p-5 pt-0 text-xs text-slate-600 leading-relaxed border-t border-slate-50 hidden" id="faq13">
+                                <strong>急救：</strong> 为彻底规避 Windows + Tkinter 多进程架构下偶发的 GIL 锁多线程崩溃，主程序关闭了外部文件直接拖拽的 windnd 入口。请统一使用“添加音频”或“选择长音频”按钮，通过系统的文件资源管理器安全导入文件。列表内部的拖放排序仍可完美使用。
+                            </div>
+                        </div>
                     </div>
                 </section>
 
@@ -1126,25 +1523,45 @@ exit
                             <thead class="bg-slate-50 border-b border-slate-100 font-semibold text-slate-700">
                                 <tr>
                                     <th class="p-4">核心程序模块</th>
-                                    <th class="p-4">掌控的核心功能与底层逻辑说明</th>
+                                    <th class="p-4">掌控的底层功能与机制说明</th>
                                 </tr>
                             </thead>
                             <tbody class="divide-y divide-slate-100 font-mono">
                                 <tr>
                                     <td class="p-4 font-semibold text-slate-900">main.py & cli.py</td>
-                                    <td class="p-4">应用的主入口。分别对图形程序(GUI)和交互式终端控制台(CLI)进行指令流映射分配。</td>
+                                    <td class="p-4">应用的主入口。分别对图形程序(GUI)和交互式终端控制台(CLI)进行指令流映射分配，支持单次单命令调用并回显。</td>
+                                </tr>
+                                <tr>
+                                    <td class="p-4 font-semibold text-slate-900">audio_toolkit.py</td>
+                                    <td class="p-4">独立的音频前处理工具箱，掌控音频合并、拆分、列表排序及工程包轻量级版本结构预览。</td>
+                                </tr>
+                                <tr>
+                                    <td class="p-4 font-semibold text-slate-900">installer.iss</td>
+                                    <td class="p-4">Windows 安装包 Inno Setup 简体中文关联与注册表注册脚本，建立文件关联。</td>
                                 </tr>
                                 <tr>
                                     <td class="p-4 font-semibold text-slate-900">modules/audio_core.py</td>
-                                    <td class="p-4">PhonTracer 的“大脑”。蕴藏着 F0 提取引擎 Praat / REAPER 的参数封装、VAD 判定核心以及微元音核提取等底层逻辑。</td>
+                                    <td class="p-4">PhonTracer 的“大脑”。蕴藏着 F0 提取引擎 Praat / REAPER、共振峰 Burg 算法、VAD 判定以及微观元音核提取等底层物理声学算法。</td>
                                 </tr>
                                 <tr>
                                     <td class="p-4 font-semibold text-slate-900">modules/app.py & spectrogram_panel.py</td>
-                                    <td class="p-4">图形化控制流程。承载声谱图渲染、动态多层网格绘制以及人工鼠标拖曳红蓝边界、橡皮擦擦除等画布交互。</td>
+                                    <td class="p-4">图形化控制中心与声学画布。承载声谱图渲染、交互式多维播放游标、红蓝边界人工调节，以及橡皮擦和剔除点半径滚轮无级缩放。</td>
+                                </tr>
+                                <tr>
+                                    <td class="p-4 font-semibold text-slate-900">modules/project_manager.py</td>
+                                    <td class="p-4">工程项目持久化。负责 .teproj 打包、叠加合并同名发音人自动加后缀、UUID 重构以及自动保存防损坏的延迟原子替换写入。</td>
+                                </tr>
+                                <tr>
+                                    <td class="p-4 font-semibold text-slate-900">modules/acoustic_exporter.py</td>
+                                    <td class="p-4">可视化工具箱核心。负责图表工作台后台多线程异步渲染、多受试者 Speaker Normalization 合并整合计算及多组别分页。</td>
                                 </tr>
                                 <tr>
                                     <td class="p-4 font-semibold text-slate-900">modules/data_utils.py</td>
-                                    <td class="p-4">数据底层清洗工具。专长于字表的字符串分割、拼音模糊正则匹配以及将计算值格式化转换导出。</td>
+                                    <td class="p-4">数据底层清洗工具。专长于字表的 UTF-8 BOM 字符自动剔除、拼音模糊正则匹配、TextGrid 命名清洗以及 Excel 归一化活公式注入。</td>
+                                </tr>
+                                <tr>
+                                    <td class="p-4 font-semibold text-slate-900">modules/*_dialog.py</td>
+                                    <td class="p-4">各种交互弹窗。包含 F0 估测分位数推荐弹窗、共振峰自动推荐评分窗口、版本不兼容提示及叠加/覆盖导入预览选择窗 (ProjectImportDialog)。</td>
                                 </tr>
                             </tbody>
                         </table>
