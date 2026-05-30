@@ -897,11 +897,12 @@ def batch_process_worker_with_textgrid(path: str, tg_path: str, params: Dict[str
         chars_tier = None
         groups_tier = None
         for t in tg.tiers:
-            if t.name == "words" and words_tier is None:
+            name_lower = t.name.strip().lower()
+            if name_lower in ["words", "word"] and words_tier is None:
                 words_tier = t
-            elif t.name == "chars" and chars_tier is None:
+            elif name_lower in ["chars", "char"] and chars_tier is None:
                 chars_tier = t
-            elif t.name in ["groups", "group"] and groups_tier is None:
+            elif name_lower in ["groups", "group"] and groups_tier is None:
                 groups_tier = t
 
         if not words_tier:

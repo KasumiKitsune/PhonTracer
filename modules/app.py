@@ -163,7 +163,14 @@ class PhoneticsApp:
         except Exception:
             pass
 
-        self._initial_files_list = initial_files
+        cleaned_initial = []
+        if initial_files:
+            for f in initial_files:
+                if f:
+                    s = str(f).strip().strip('"\'')
+                    if s:
+                        cleaned_initial.append(s)
+        self._initial_files_list = cleaned_initial if cleaned_initial else None
 
         # Check for autosave recovery after window is initialized
         self.root.after(200, self._check_autosave_recovery)
@@ -293,20 +300,35 @@ class PhoneticsApp:
         decoded_paths = []
         for f in files:
             if isinstance(f, bytes):
-                try: decoded_paths.append(f.decode('gbk'))
-                except UnicodeDecodeError: decoded_paths.append(f.decode('utf-8'))
+                try: path_str = f.decode('gbk')
+                except UnicodeDecodeError: path_str = f.decode('utf-8')
             else:
-                decoded_paths.append(str(f))
+                path_str = str(f)
+            path_str = path_str.strip().strip('"\'')
+            if path_str:
+                decoded_paths.append(path_str)
 
         txt_files = [p for p in decoded_paths if p.lower().endswith(('.txt', '.csv'))]
         tg_files = [p for p in decoded_paths if p.lower().endswith('.textgrid')]
 
         if tg_files:
             if self.active_import_mode == 'batch':
-                dlg = self.active_import_dlg
-                dlg.destroy()
-                self.process_batch_with_textgrid(tg_files)
-                return
+                if len(tg_files) > 1 or len(self.pending_batch_paths) == 1:
+                    dlg = self.active_import_dlg
+                    dlg.destroy()
+                    self.process_batch_with_textgrid(tg_files)
+                    return
+                else:
+                    path = tg_files[0]
+                    try:
+                        from modules.data_utils import extract_wordlist_from_textgrid
+                        text = extract_wordlist_from_textgrid(path)
+                        self.active_import_textbox.delete("1.0", tk.END)
+                        self.active_import_textbox.insert("1.0", text)
+                        self.active_import_update_stats()
+                    except Exception as e:
+                        messagebox.showerror("错误", f"解析 TextGrid 失败: {e}", parent=self.active_import_dlg)
+                    return
             path = tg_files[0]
             if self.active_import_mode != 'long':
                 messagebox.showwarning("提示", "目前仅在“单条长音频”模式下支持导入 TextGrid 词表。", parent=self.active_import_dlg)
@@ -318,9 +340,10 @@ class PhoneticsApp:
                 groups_tier = None
                 chars_tier = None
                 for t in tg.tiers:
-                    if t.name == "words" and words_tier is None: words_tier = t
-                    elif t.name == "chars" and chars_tier is None: chars_tier = t
-                    elif t.name in ["groups", "group"] and groups_tier is None: groups_tier = t
+                    name_lower = t.name.strip().lower()
+                    if name_lower in ["words", "word"] and words_tier is None: words_tier = t
+                    elif name_lower in ["chars", "char"] and chars_tier is None: chars_tier = t
+                    elif name_lower in ["groups", "group"] and groups_tier is None: groups_tier = t
                 if not words_tier:
                     for t in tg.tiers:
                         if isinstance(t, textgrid.IntervalTier):
@@ -415,10 +438,13 @@ class PhoneticsApp:
         decoded_paths = []
         for f in files:
             if isinstance(f, bytes):
-                try: decoded_paths.append(f.decode('gbk'))
-                except UnicodeDecodeError: decoded_paths.append(f.decode('utf-8'))
+                try: path_str = f.decode('gbk')
+                except UnicodeDecodeError: path_str = f.decode('utf-8')
             else:
-                decoded_paths.append(str(f))
+                path_str = str(f)
+            path_str = path_str.strip().strip('"\'')
+            if path_str:
+                decoded_paths.append(path_str)
 
         # Check for project files (.teproj, .zip)
         teproj_files = [p for p in decoded_paths if p.lower().endswith(('.teproj', '.zip'))]
@@ -2763,15 +2789,24 @@ class PhoneticsApp:
         toolbar.pack(fill=tk.X, padx=20, pady=(15, 0))
 
         def load_txt():
-            path = filedialog.askopenfilename(filetypes=[("Text/CSV Files", "*.txt *.csv"), ("All Files", "*.*")])
+            path = filedialog.askopenfilename(filetypes=[
+                ("Supported Files", "*.txt *.csv *.TextGrid"),
+                ("Text/CSV Files", "*.txt *.csv"),
+                ("TextGrid Files", "*.TextGrid"),
+                ("All Files", "*.*")
+            ])
             if not path: return
             try:
-                with open(path, 'r', encoding='utf-8') as f: text = f.read()
-            except UnicodeDecodeError:
-                try:
-                    with open(path, 'r', encoding='gbk') as f: text = f.read()
-                except Exception as e:
-                    return messagebox.showerror("错误", f"读取文件失败: {e}")
+                if path.lower().endswith('.textgrid'):
+                    from modules.data_utils import extract_wordlist_from_textgrid
+                    text = extract_wordlist_from_textgrid(path)
+                else:
+                    try:
+                        with open(path, 'r', encoding='utf-8') as f: text = f.read()
+                    except UnicodeDecodeError:
+                        with open(path, 'r', encoding='gbk') as f: text = f.read()
+            except Exception as e:
+                return messagebox.showerror("错误", f"读取文件失败: {e}", parent=dlg)
             text_box.delete("1.0", tk.END)
             text_box.insert("1.0", text)
             update_stats()
@@ -2782,8 +2817,8 @@ class PhoneticsApp:
             self.root.clipboard_append(prompt)
             messagebox.showinfo("成功", "AI 整理提示词已复制！\n您可以前往 ChatGPT / 豆包 / DeepSeek 等平台粘贴使用。", parent=dlg)
 
-        btn_import = ctk.CTkButton(toolbar, text=" 导入 .txt文件", image=self.icons.get("import_white"), compound="left",
-                                   width=110, height=28, corner_radius=14, fg_color="#3B82F6", text_color="white",
+        btn_import = ctk.CTkButton(toolbar, text=" 导入词表文件", image=self.icons.get("import_white"), compound="left",
+                                   width=120, height=28, corner_radius=14, fg_color="#3B82F6", text_color="white",
                                    hover_color="#2563EB", command=load_txt)
         btn_import.pack(side=tk.LEFT)
 
@@ -2804,11 +2839,12 @@ class PhoneticsApp:
                 chars_tier = None
                 groups_tier = None
                 for t in tg.tiers:
-                    if t.name == "words" and words_tier is None:
+                    name_lower = t.name.strip().lower()
+                    if name_lower in ["words", "word"] and words_tier is None:
                         words_tier = t
-                    elif t.name == "chars" and chars_tier is None:
+                    elif name_lower in ["chars", "char"] and chars_tier is None:
                         chars_tier = t
-                    elif t.name in ["groups", "group"] and groups_tier is None:
+                    elif name_lower in ["groups", "group"] and groups_tier is None:
                         groups_tier = t
 
                 if not words_tier:
@@ -3369,28 +3405,55 @@ class PhoneticsApp:
         project_json = os.path.join(self.project_manager.workspace_dir, "project.json")
         has_autosave = os.path.exists(project_json)
         
+        # Clean and normalize initial_files to handle quote wrapping in Windows
         initial_files = getattr(self, '_initial_files_list', None)
+        cleaned_files = []
+        if initial_files:
+            for f in initial_files:
+                s = str(f).strip().strip('"\'')
+                if s:
+                    cleaned_files.append(s)
+        self._initial_files_list = cleaned_files if cleaned_files else None
+        initial_files = self._initial_files_list
+
         has_teproj = False
+        teproj_path = None
         if initial_files:
             for f in initial_files:
                 if str(f).lower().endswith(('.teproj', '.zip')):
-                    has_teproj = True
-                    break
+                    path_candidate = str(f)
+                    if os.path.isfile(path_candidate):
+                        import zipfile
+                        if zipfile.is_zipfile(path_candidate):
+                            has_teproj = True
+                            teproj_path = path_candidate
+                            break
 
-        if has_autosave:
-            if has_teproj:
-                # If we are loading a project file, clean up the autosaved files automatically
+        if has_teproj:
+            # If we are loading a project file, clean up the autosaved files automatically
+            if has_autosave:
                 try:
                     import shutil
                     shutil.rmtree(self.project_manager.workspace_dir)
                     os.makedirs(self.project_manager.workspace_dir)
                 except Exception as e:
                     print(f"Failed to clean up autosave workspace: {e}")
-                # Load the project from initial_files directly
-                if initial_files:
-                    self.on_files_dropped(initial_files)
-                return
+            # Load the project from initial_files directly (bypass the preview dialog)
+            if teproj_path:
+                self.execute_project_import(teproj_path, overlay=False)
+            return
 
+        if has_autosave and not self.project_manager.auto_save_enabled:
+            # Discard any leftover workspace files to prevent contamination, since auto-save is disabled
+            try:
+                import shutil
+                shutil.rmtree(self.project_manager.workspace_dir)
+                os.makedirs(self.project_manager.workspace_dir)
+            except Exception as e:
+                print(f"Failed to clean up workspace on startup: {e}")
+            has_autosave = False
+
+        if has_autosave:
             # Ask user
             ans = messagebox.askyesno("恢复工程", "检测到上次未正常关闭的自动保存数据，是否恢复？", parent=self.root)
             if ans:
@@ -3514,6 +3577,7 @@ class PhoneticsApp:
 
     def on_auto_save_toggled(self, is_enabled):
         self.project_manager.auto_save_enabled = bool(is_enabled)
+        self.project_manager.save_config()
         if is_enabled:
             self.project_manager.trigger_auto_save()
         else:

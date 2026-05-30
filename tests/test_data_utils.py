@@ -256,3 +256,34 @@ def test_sample_formant_points_by_bounds():
     assert not np.isnan(f1).any()
     assert (np.array(f2) > np.array(f1)).all()
 
+
+def test_extract_wordlist_from_textgrid(tmp_path):
+    import textgrid
+    import os
+    from modules.data_utils import extract_wordlist_from_textgrid
+
+    # Create a dummy textgrid
+    tg = textgrid.TextGrid(maxTime=2.0)
+    groups_tier = textgrid.IntervalTier(name="groups", minTime=0.0, maxTime=2.0)
+    groups_tier.add(0.0, 1.0, "组别A")
+    groups_tier.add(1.0, 2.0, "组别B")
+    
+    words_tier = textgrid.IntervalTier(name="words", minTime=0.0, maxTime=2.0)
+    words_tier.add(0.0, 0.5, "词1")
+    words_tier.add(0.5, 1.0, "词2")
+    words_tier.add(1.0, 1.5, "词3")
+    words_tier.add(1.5, 2.0, "")
+
+    tg.append(groups_tier)
+    tg.append(words_tier)
+
+    tg_file = os.path.join(tmp_path, "test.TextGrid")
+    tg.write(tg_file)
+
+    res = extract_wordlist_from_textgrid(tg_file)
+    assert "【组别A】" in res
+    assert "词1 词2" in res
+    assert "【组别B】" in res
+    assert "词3" in res
+
+

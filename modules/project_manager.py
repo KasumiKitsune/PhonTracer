@@ -35,6 +35,7 @@ class ProjectManager:
         self.app = app
         self.workspace_dir = os.path.join(os.path.expanduser("~"), ".phon_tracer", "workspace")
         self.backup_path = os.path.join(os.path.expanduser("~"), ".phon_tracer", "auto_save_backup.teproj")
+        self.config_path = os.path.join(os.path.expanduser("~"), ".phon_tracer", "config.json")
         self.auto_save_enabled = False
         self._auto_save_timer = None
         self._save_lock = threading.RLock()
@@ -43,6 +44,8 @@ class ProjectManager:
         
         if not os.path.exists(self.workspace_dir):
             os.makedirs(self.workspace_dir)
+            
+        self.load_config()
             
     def _get_data_dir(self):
         d = os.path.join(self.workspace_dir, "data")
@@ -197,6 +200,39 @@ class ProjectManager:
             except FileExistsError:
                 continue
         raise RuntimeError("无法创建工程导入临时目录")
+
+    def load_config(self):
+        import sys
+        if any(k in sys.modules for k in ('unittest', 'pytest')):
+            self.auto_save_enabled = False
+            return
+
+        config_path = self.config_path
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    config = json.load(f)
+                self.auto_save_enabled = bool(config.get("auto_save_enabled", False))
+            except Exception as e:
+                print(f"Failed to load config: {e}")
+        else:
+            self.auto_save_enabled = False
+
+    def save_config(self):
+        import sys
+        if any(k in sys.modules for k in ('unittest', 'pytest')):
+            return
+
+        config_path = self.config_path
+        try:
+            os.makedirs(os.path.dirname(config_path), exist_ok=True)
+            config = {
+                "auto_save_enabled": self.auto_save_enabled
+            }
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump(config, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"Failed to save config: {e}")
 
     def trigger_auto_save(self):
         if not self.auto_save_enabled:

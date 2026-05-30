@@ -3771,7 +3771,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         if self._is_formant_mode():
             if "论文主图" in val:
                 selected_count = sum(1 for v in self.group_checkbox_vars.values() if v.get())
-                if selected_count > 8 and messagebox.askyesno("论文主图模式", f"当前选中了 {selected_count} 个组，论文主图建议展示 8 组以内以保证可读性。\n是否自动精选样本量最大的 8 组？"):
+                if selected_count > 8 and messagebox.askyesno("论文主图模式", f"当前选中了 {selected_count} 个组，论文主图建议展示 8 组以内以保证可读性。\n是否自动精选样本量最大的 8 组？", parent=self):
                     self._apply_featured_contrast_mode()
                 if self.var_chart_type.get() == "formant_space":
                     self.combo_formant_label_mode.set("显示分组标签")
@@ -3781,13 +3781,13 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
                 self._populate_groups_list()
                 self.combo_format.set("PDF 文档 (.pdf)")
                 self._on_group_filter_changed()
-                messagebox.showinfo("附录图册模式", "已选中所有组别，并将导出格式设为 PDF。导出时将自动分页绘制完整图册。")
+                messagebox.showinfo("附录图册模式", "已选中所有组别，并将导出格式设为 PDF。导出时将自动分页绘制完整图册。", parent=self)
             return
 
         if "论文主图" in val:
             selected_count = sum(1 for v in self.group_checkbox_vars.values() if v.get())
             if selected_count > 8:
-                if messagebox.askyesno("论文主图模式", f"当前选中了 {selected_count} 个组，论文主图建议展示 8 组以内以保证可读性。\n是否自动精选样本量最大的 8 组？"):
+                if messagebox.askyesno("论文主图模式", f"当前选中了 {selected_count} 个组，论文主图建议展示 8 组以内以保证可读性。\n是否自动精选样本量最大的 8 组？", parent=self):
                     self._apply_featured_contrast_mode()
 
             if self.var_chart_type.get() == "quality" or self.var_chart_type.get() == "overview_heatmap":
@@ -3808,7 +3808,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
                 self._on_type_changed("声调轮廓图")
 
             self._on_group_filter_changed()
-            messagebox.showinfo("附录图册模式", "已选中所有组别，并将导出格式设为 PDF。导出时将自动分页绘制完整图册。")
+            messagebox.showinfo("附录图册模式", "已选中所有组别，并将导出格式设为 PDF。导出时将自动分页绘制完整图册。", parent=self)
 
         elif "数据诊断" in val:
             self.combo_type.set("数据质量检查")
@@ -3820,7 +3820,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
                 var.set(True)
             self._populate_groups_list()
             self._on_group_filter_changed()
-            messagebox.showinfo("数据诊断模式", "已切换至“数据质量检查”视图，将重点排查 F0 缺失、异常与变异。")
+            messagebox.showinfo("数据诊断模式", "已切换至“数据质量检查”视图，将重点排查 F0 缺失、异常与变异。", parent=self)
 
     def _apply_featured_contrast_mode(self):
         if not self.group_counts:
@@ -3853,7 +3853,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
 
         selected_iids = self.project_tree.tree.selection()
         if not selected_iids:
-            messagebox.showinfo("提示", "当前主界面的目录树中没有选中任何项。\n请先在主界面目录树中选择组别或词条。")
+            messagebox.showinfo("提示", "当前主界面的目录树中没有选中任何项。\n请先在主界面目录树中选择组别或词条。", parent=self)
             return
 
         selected_groups = set()
@@ -3870,7 +3870,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
                     selected_groups.add(item['tone'])
 
         if not selected_groups:
-            messagebox.showinfo("提示", "未能在当前目录树选中项中识别到有效组别。")
+            messagebox.showinfo("提示", "未能在当前目录树选中项中识别到有效组别。", parent=self)
             return
 
         for g, var in self.group_checkbox_vars.items():

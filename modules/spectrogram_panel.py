@@ -161,6 +161,10 @@ class SpectrogramPanel:
         CTkReleaseButton(bottom_bar, text=" 导出工程", image=self.icons.get("save_black"), compound="left", command=self.on_export_project_clicked, corner_radius=15, height=30, fg_color="#E5E7EB", text_color="#1F2937", hover_color="#D1D5DB").pack(side=tk.LEFT, padx=5, pady=5)
 
         self.switch_auto_save = ctk.CTkSwitch(bottom_bar, text="自动保存", font=ctk.CTkFont(family="Microsoft YaHei", size=12), progress_color="#10B981", command=self.on_auto_save_toggled)
+        if self.app and getattr(self.app, 'project_manager', None) and self.app.project_manager.auto_save_enabled:
+            self.switch_auto_save.select()
+        else:
+            self.switch_auto_save.deselect()
         self.switch_auto_save.pack(side=tk.RIGHT, padx=(5, 15), pady=5)
 
         self.setup_playback_controls(center_frame)
