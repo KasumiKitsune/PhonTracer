@@ -3158,15 +3158,17 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
         action = arg.strip().lower()
         if action == "on":
             self.project_manager.auto_save_enabled = True
+            self.project_manager.save_config()
             self.project_manager.trigger_auto_save()
             self._emit(True, "自动保存已开启。之后 CLI 状态变化会触发后台工程备份。", autosave=True)
         elif action == "off":
             self.project_manager.auto_save_enabled = False
+            self.project_manager.save_config()
             self.project_manager.cancel_auto_save()
             self._emit(True, "自动保存已关闭。", autosave=False)
         elif action == "now":
             try:
-                self.project_manager.save_to_workspace()
+                self.project_manager.save_autosave_snapshot()
                 self._emit(True, "已立即保存一次当前工程。", autosave=self.project_manager.auto_save_enabled)
             except Exception as e:
                 self._emit(False, error=str(e))

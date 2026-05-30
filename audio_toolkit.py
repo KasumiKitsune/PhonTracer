@@ -4,8 +4,6 @@ import threading
 import re
 import subprocess
 import platform
-import json
-import zipfile
 import shutil
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -40,6 +38,7 @@ import numpy as np
 import parselmouth
 from PIL import Image, ImageTk
 from modules.data_utils import fuzzy_match_word_to_path
+from modules.project_manager import read_project_metadata_from_archive
 
 try:
     import sounddevice as sd
@@ -1953,29 +1952,25 @@ class AudioToolkitApp(ctk.CTk):
         )
         
         self.show_loading_placeholder()
-        try:
-            if not zipfile.is_zipfile(path):
-                raise ValueError("所选文件不是有效的 ZIP 格式压缩包")
+        def run():
+            try:
+                project_data, namelist = read_project_metadata_from_archive(path)
+                self.after(0, lambda: self._finish_project_preview(project_data, namelist))
+            except Exception as e:
+                self.after(0, lambda message=str(e): self._show_project_preview_error(message))
 
-            with zipfile.ZipFile(path, 'r') as zf:
-                namelist = zf.namelist()
-                if "project.json" not in namelist:
-                    raise ValueError("未在压缩包中找到 project.json，这可能不是一个合法的 PhonTracer 工程文件")
+        start_safe_thread(run)
 
-                with zf.open("project.json") as f:
-                    project_data = json.loads(f.read().decode('utf-8'))
+    def _finish_project_preview(self, project_data, namelist):
+        self.display_project_preview(project_data, namelist)
+        self.btn_convert_zip.configure(state="normal")
 
-            self.display_project_preview(project_data, namelist)
-            self.btn_convert_zip.configure(state="normal")
-
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            err_msg = f"❌ 无法解析工程文件: {str(e)}"
-            self.show_error_placeholder(err_msg)
-            self.btn_convert_zip.configure(state="disabled")
-            self.lbl_proj_file.configure(text="解析失败", text_color=self.colors["danger"])
-            messagebox.showerror("错误", f"解析 .teproj 文件失败:\n{str(e)}")
+    def _show_project_preview_error(self, message):
+        err_msg = f"❌ 无法解析工程文件: {message}"
+        self.show_error_placeholder(err_msg)
+        self.btn_convert_zip.configure(state="disabled")
+        self.lbl_proj_file.configure(text="解析失败", text_color=self.colors["danger"])
+        messagebox.showerror("错误", f"解析 .teproj 文件失败:\n{message}")
 
     def format_project_preview(self, project_data, namelist):
         def pad_chinese(text, width):

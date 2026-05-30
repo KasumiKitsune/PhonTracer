@@ -3,10 +3,80 @@ import json
 import uuid
 import zipfile
 import shutil
+import copy
+import stat
 import numpy as np
 import threading
 import traceback
 import time
+
+MAX_ARCHIVE_MEMBERS = 10000
+MAX_ARCHIVE_MEMBER_BYTES = 2 * 1024 * 1024 * 1024
+MAX_ARCHIVE_TOTAL_BYTES = 20 * 1024 * 1024 * 1024
+MAX_PROJECT_JSON_BYTES = 20 * 1024 * 1024
+SUPPORTED_PROJECT_VERSIONS = {"1.0"}
+
+def validate_project_version(state):
+    version = str(state.get("version", "1.0"))
+    if version not in SUPPORTED_PROJECT_VERSIONS:
+        raise ValueError(f"不支持的工程版本：{version}")
+    return version
+
+def validate_project_archive_members(zip_file):
+    infos = zip_file.infolist()
+    if len(infos) > MAX_ARCHIVE_MEMBERS:
+        raise ValueError(f"工程文件包含过多成员：{len(infos)} 个")
+
+    seen = set()
+    total_size = 0
+    for member in infos:
+        normalized = member.filename.replace("\\", "/")
+        if not normalized:
+            raise ValueError("工程文件包含空路径成员")
+        if normalized in seen:
+            raise ValueError(f"工程文件包含重复成员：{normalized}")
+        seen.add(normalized)
+
+        parts = [part for part in normalized.split("/") if part not in ("", ".")]
+        if normalized.startswith("/") or any(part == ".." for part in parts):
+            raise ValueError("工程文件包含非法路径")
+        if len(normalized) >= 2 and normalized[1] == ":":
+            raise ValueError("工程文件包含非法路径")
+
+        file_type = (member.external_attr >> 16) & 0o170000
+        if file_type == stat.S_IFLNK:
+            raise ValueError("工程文件不能包含符号链接")
+        if member.file_size > MAX_ARCHIVE_MEMBER_BYTES:
+            raise ValueError(f"工程文件成员过大：{normalized}")
+        total_size += member.file_size
+        if total_size > MAX_ARCHIVE_TOTAL_BYTES:
+            raise ValueError("工程文件解压后的总大小超过限制")
+
+    return infos
+
+def read_project_metadata_from_archive(zip_path):
+    if not zipfile.is_zipfile(zip_path):
+        raise ValueError("该文件不是有效的工程压缩包 (ZIP/teproj)")
+
+    with zipfile.ZipFile(zip_path, "r") as zip_file:
+        infos = validate_project_archive_members(zip_file)
+        info_by_name = {info.filename.replace("\\", "/"): info for info in infos}
+        project_info = info_by_name.get("project.json")
+        if project_info is None:
+            raise ValueError("工程文件损坏：未找到 project.json")
+        if project_info.file_size > MAX_PROJECT_JSON_BYTES:
+            raise ValueError("工程文件中的 project.json 过大")
+
+        with zip_file.open(project_info) as project_file:
+            raw = project_file.read(MAX_PROJECT_JSON_BYTES + 1)
+        if len(raw) > MAX_PROJECT_JSON_BYTES:
+            raise ValueError("工程文件中的 project.json 过大")
+
+    state = json.loads(raw.decode("utf-8"))
+    if not isinstance(state, dict):
+        raise ValueError("工程文件损坏：project.json 顶层必须是对象")
+    validate_project_version(state)
+    return state, [info.filename.replace("\\", "/") for info in infos]
 
 def to_json_serializable(val):
     if isinstance(val, dict):
@@ -38,6 +108,8 @@ class ProjectManager:
         self.config_path = os.path.join(os.path.expanduser("~"), ".phon_tracer", "config.json")
         self.auto_save_enabled = False
         self._auto_save_timer = None
+        self._auto_save_generation = 0
+        self._timer_lock = threading.RLock()
         self._save_lock = threading.RLock()
         self.auto_save_delay = 2.0
         self.auto_save_interval = 30.0
@@ -79,7 +151,7 @@ class ProjectManager:
             abs_path = os.path.abspath(path)
             abs_workspace = os.path.abspath(self.workspace_dir)
             rel = os.path.relpath(abs_path, abs_workspace)
-            if not rel.startswith("..") and rel != "." and not os.path.isabs(rel):
+            if os.path.commonpath([abs_path, abs_workspace]) == abs_workspace and rel != "." and not os.path.isabs(rel):
                 return rel.replace(os.sep, "/")
         except (TypeError, ValueError):
             pass
@@ -105,7 +177,7 @@ class ProjectManager:
             return existing_rel
 
         if not os.path.exists(src_path):
-            return src_path
+            raise FileNotFoundError(f"工程资源不存在：{src_path}")
 
         target_dir = self._get_audio_dir() if subdir == "audio" else self._get_data_dir()
         base = os.path.basename(src_path)
@@ -171,26 +243,38 @@ class ProjectManager:
 
         yield project_json, "project.json"
 
-        try:
-            with open(project_json, "r", encoding="utf-8") as f:
-                state = json.load(f)
-        except (OSError, json.JSONDecodeError):
-            return
+        with open(project_json, "r", encoding="utf-8") as f:
+            state = json.load(f)
 
         for rel_path in sorted(self._collect_project_file_refs(state)):
             file_path = self._resolve_project_path(rel_path)
-            if os.path.isfile(file_path):
-                yield file_path, rel_path
+            if not os.path.isfile(file_path):
+                raise FileNotFoundError(f"工程资源不存在：{rel_path}")
+            yield file_path, rel_path
 
     def _write_project_archive(self, zip_path):
-        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
-            for file_path, arcname in self._iter_project_archive_files():
-                zf.write(file_path, arcname)
+        abs_zip_path = os.path.abspath(zip_path)
+        parent_dir = os.path.dirname(abs_zip_path)
+        if parent_dir:
+            os.makedirs(parent_dir, exist_ok=True)
+        temp_zip_path = f"{abs_zip_path}.{uuid.uuid4().hex}.tmp"
+        try:
+            with zipfile.ZipFile(temp_zip_path, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                for file_path, arcname in self._iter_project_archive_files():
+                    zip_file.write(file_path, arcname)
+            read_project_metadata_from_archive(temp_zip_path)
+            os.replace(temp_zip_path, abs_zip_path)
+        finally:
+            if os.path.exists(temp_zip_path):
+                try:
+                    os.remove(temp_zip_path)
+                except OSError:
+                    pass
 
-    def _make_import_workspace(self):
+    def _make_import_workspace(self, prefix="workspace_import"):
         parent_dir = os.path.dirname(self.workspace_dir)
         os.makedirs(parent_dir, exist_ok=True)
-        base_name = f"workspace_import_{os.getpid()}_{threading.get_ident()}_{int(time.time() * 1000)}"
+        base_name = f"{prefix}_{os.getpid()}_{threading.get_ident()}_{int(time.time() * 1000)}"
         for idx in range(100):
             name = base_name if idx == 0 else f"{base_name}_{idx}"
             path = os.path.join(parent_dir, name)
@@ -236,47 +320,85 @@ class ProjectManager:
         except Exception as e:
             print(f"Failed to save config: {e}")
 
+    def capture_ui_state(self):
+        if self.app and getattr(self.app, "active_speaker", None) and getattr(self.app, "tabview", None):
+            try:
+                self.app.active_speaker.tab_mode = self.app.tabview.get()
+            except Exception:
+                pass
+        export_rule_var = getattr(self.app, "export_numbering_rule_var", None)
+        if export_rule_var is not None:
+            try:
+                self.app.export_numbering_rule_value = export_rule_var.get()
+            except Exception:
+                pass
+
+    def _ensure_timer_state(self):
+        if not hasattr(self, "_auto_save_generation"):
+            self._auto_save_generation = 0
+        if not hasattr(self, "_timer_lock"):
+            self._timer_lock = threading.RLock()
+
     def trigger_auto_save(self):
         if not self.auto_save_enabled:
             return
-        if self._auto_save_timer:
-            self._auto_save_timer.cancel()
-        self._schedule_auto_save(self.auto_save_delay)
+        self._ensure_timer_state()
+        with self._timer_lock:
+            self._auto_save_generation += 1
+            generation = self._auto_save_generation
+            if self._auto_save_timer:
+                self._auto_save_timer.cancel()
+            self._schedule_auto_save(self.auto_save_delay, generation)
 
     def cancel_auto_save(self):
-        if self._auto_save_timer:
-            self._auto_save_timer.cancel()
-            self._auto_save_timer = None
+        self._ensure_timer_state()
+        with self._timer_lock:
+            self._auto_save_generation += 1
+            if self._auto_save_timer:
+                self._auto_save_timer.cancel()
+                self._auto_save_timer = None
 
-    def _schedule_auto_save(self, delay):
+    def _schedule_auto_save(self, delay, generation=None):
         if not self.auto_save_enabled:
             return
-            
+
+        self._ensure_timer_state()
+        if generation is None:
+            generation = self._auto_save_generation
+
         def run_save():
+            with self._timer_lock:
+                if generation != self._auto_save_generation or not self.auto_save_enabled:
+                    return
+                self._auto_save_timer = None
             try:
-                self.save_to_workspace()
+                self.save_autosave_snapshot()
             except Exception as e:
                 print(f"Auto-save failed in timer: {e}")
                 traceback.print_exc()
             finally:
-                if self.auto_save_enabled:
-                    self._schedule_auto_save(self.auto_save_interval)
-                
+                with self._timer_lock:
+                    if (
+                        self.auto_save_enabled
+                        and generation == self._auto_save_generation
+                        and self._auto_save_timer is None
+                    ):
+                        self._schedule_auto_save(self.auto_save_interval, generation)
+
         self._auto_save_timer = threading.Timer(delay, run_save)
         self._auto_save_timer.daemon = True
         self._auto_save_timer.start()
 
+    def save_autosave_snapshot(self):
+        self.save_to_workspace()
+        self._create_backup()
+
     def save_to_workspace(self):
         with self._save_lock:
-            if self.app and getattr(self.app, 'active_speaker', None) and getattr(self.app, 'tabview', None):
-                try:
-                    self.app.active_speaker.tab_mode = self.app.tabview.get()
-                except Exception:
-                    pass
-
             state = {
                 "version": "1.0",
                 "active_speaker_id": self.app.speaker_manager.active_speaker_id,
+                "export_numbering_rule": getattr(self.app, "export_numbering_rule_value", "continuous"),
                 "speakers": {}
             }
             
@@ -294,6 +416,7 @@ class ProjectManager:
                     "pending_batch_paths": spk.pending_batch_paths,
                     "current_macro_segments": spk.current_macro_segments,
                     "manual_segments": spk.manual_segments,
+                    "last_selected_iid": getattr(spk, "last_selected_iid", None),
                     "items": {}
                 }
                 
@@ -398,12 +521,161 @@ class ProjectManager:
             self._show_error("导出失败", str(e))
             return False
 
+    def _normalize_managed_ref(self, path, field_name):
+        if not path:
+            return None
+        normalized = str(path).replace("\\", "/")
+        parts = normalized.split("/")
+        if (
+            len(parts) >= 2
+            and parts[0] in ("audio", "data")
+            and all(part not in ("", ".", "..") for part in parts)
+        ):
+            return normalized
+        raise ValueError(f"工程文件损坏：{field_name} 不是工程内资源路径")
+
+    def _iter_state_resource_refs(self, state):
+        for spk_data in state.get("speakers", {}).values():
+            long_audio_path = spk_data.get("long_audio_path")
+            if long_audio_path:
+                yield spk_data, "long_audio_path", None, self._normalize_managed_ref(long_audio_path, "long_audio_path")
+            for idx, path in enumerate(spk_data.get("pending_batch_paths", [])):
+                yield spk_data, "pending_batch_paths", idx, self._normalize_managed_ref(path, "pending_batch_paths")
+            for item in spk_data.get("items", {}).values():
+                for key in ("path", "pitch_data_file", "formant_data_file"):
+                    path = item.get(key)
+                    if path:
+                        yield item, key, None, self._normalize_managed_ref(path, key)
+
+    def _validate_project_resources(self, state, workspace_dir):
+        speakers = state.get("speakers")
+        if not isinstance(speakers, dict) or not speakers:
+            raise ValueError("工程文件损坏：未找到发音人数据")
+
+        speaker_ids = []
+        for old_spk_id, spk_data in speakers.items():
+            if not isinstance(spk_data, dict):
+                raise ValueError(f"工程文件损坏：发音人 {old_spk_id} 数据格式错误")
+            speaker_id = spk_data.get("id", old_spk_id)
+            if not isinstance(speaker_id, str) or not speaker_id:
+                raise ValueError(f"工程文件损坏：发音人 {old_spk_id} 的 ID 格式错误")
+            speaker_ids.append(speaker_id)
+            pending_batch_paths = spk_data.get("pending_batch_paths", [])
+            if not isinstance(pending_batch_paths, list):
+                raise ValueError(f"工程文件损坏：发音人 {old_spk_id} 的批量音频路径格式错误")
+            items = spk_data.get("items", {})
+            if not isinstance(items, dict):
+                raise ValueError(f"工程文件损坏：发音人 {old_spk_id} 的条目格式错误")
+            if any(not isinstance(item, dict) for item in items.values()):
+                raise ValueError(f"工程文件损坏：发音人 {old_spk_id} 的条目内容格式错误")
+        if len(set(speaker_ids)) != len(speaker_ids):
+            raise ValueError("工程文件损坏：存在重复的发音人 ID")
+
+        audio_paths = set()
+        cache_paths = {}
+        for _owner, key, _index, rel_path in self._iter_state_resource_refs(state):
+            file_path = self._resolve_project_path(rel_path, workspace_dir=workspace_dir)
+            if not os.path.isfile(file_path):
+                raise FileNotFoundError(f"工程文件缺少资源：{rel_path}")
+            if rel_path.startswith("audio/"):
+                audio_paths.add(file_path)
+            elif key == "pitch_data_file":
+                cache_paths[file_path] = ("xs", "freqs")
+            elif key == "formant_data_file":
+                cache_paths[file_path] = ("xs", "f1", "f2")
+
+        import parselmouth
+        for audio_path in sorted(audio_paths):
+            parselmouth.Sound(audio_path)
+
+        for cache_path, required_keys in cache_paths.items():
+            with np.load(cache_path) as loaded:
+                missing = [key for key in required_keys if key not in loaded]
+                if missing:
+                    raise ValueError(f"工程缓存损坏：{os.path.basename(cache_path)} 缺少 {', '.join(missing)}")
+
+    def _copy_overlay_resources(self, state, import_workspace, merged_workspace):
+        remapped_state = copy.deepcopy(state)
+        ref_mapping = {}
+        namespace = f"import_{uuid.uuid4().hex[:12]}"
+
+        for owner, key, index, rel_path in self._iter_state_resource_refs(remapped_state):
+            mapped_path = ref_mapping.get(rel_path)
+            if mapped_path is None:
+                subdir, file_name = rel_path.split("/", 1)
+                mapped_path = f"{subdir}/{namespace}_{uuid.uuid4().hex[:8]}_{os.path.basename(file_name)}"
+                source_path = self._resolve_project_path(rel_path, workspace_dir=import_workspace)
+                target_path = self._resolve_project_path(mapped_path, workspace_dir=merged_workspace)
+                os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                shutil.copy2(source_path, target_path)
+                ref_mapping[rel_path] = mapped_path
+
+            if index is None:
+                owner[key] = mapped_path
+            else:
+                owner[key][index] = mapped_path
+
+        return remapped_state
+
+    def _swap_workspace(self, staged_workspace):
+        backup_workspace = None
+        if os.path.exists(self.workspace_dir):
+            backup_workspace = self._make_import_workspace(prefix="workspace_backup")
+            os.rmdir(backup_workspace)
+            os.replace(self.workspace_dir, backup_workspace)
+        try:
+            os.replace(staged_workspace, self.workspace_dir)
+        except Exception:
+            if backup_workspace and os.path.exists(backup_workspace):
+                os.replace(backup_workspace, self.workspace_dir)
+            raise
+        return backup_workspace
+
+    def _rollback_workspace(self, backup_workspace):
+        if os.path.exists(self.workspace_dir):
+            shutil.rmtree(self.workspace_dir, ignore_errors=True)
+        if backup_workspace and os.path.exists(backup_workspace):
+            os.replace(backup_workspace, self.workspace_dir)
+        else:
+            os.makedirs(self.workspace_dir, exist_ok=True)
+
+    def _discard_workspace_backup(self, backup_workspace):
+        if backup_workspace and os.path.exists(backup_workspace):
+            shutil.rmtree(backup_workspace, ignore_errors=True)
+
+    def _remap_restored_workspace_paths(self, restored, old_workspace, new_workspace):
+        old_workspace = os.path.abspath(old_workspace)
+        new_workspace = os.path.abspath(new_workspace)
+
+        def remap(path):
+            if not path:
+                return path
+            abs_path = os.path.abspath(path)
+            rel_path = os.path.relpath(abs_path, old_workspace)
+            if (
+                os.path.commonpath([abs_path, old_workspace]) == old_workspace
+                and not os.path.isabs(rel_path)
+            ):
+                return os.path.join(new_workspace, rel_path)
+            return path
+
+        for spk in restored.values():
+            spk.long_audio_path = remap(getattr(spk, "long_audio_path", None))
+            spk.pending_batch_paths = [remap(path) for path in spk.pending_batch_paths]
+            for item in spk.items.values():
+                if item.get("path"):
+                    item["path"] = remap(item["path"])
+
     def load_project(self, zip_path, overlay=False):
         temp_workspace = None
+        staged_workspace = None
+        backup_workspace = None
+        old_speakers = None
+        old_active_speaker_id = None
+        old_export_numbering_rule_value = None
+        had_export_numbering_rule_value = False
         try:
-            if not zipfile.is_zipfile(zip_path):
-                raise ValueError("工程文件格式不正确")
-            
+            state, _namelist = read_project_metadata_from_archive(zip_path)
             temp_workspace = self._make_import_workspace()
             with zipfile.ZipFile(zip_path, 'r') as zf:
                 self._safe_extract(zf, temp_workspace)
@@ -412,43 +684,67 @@ class ProjectManager:
             if not os.path.exists(project_json):
                 raise ValueError("工程文件损坏：未找到 project.json")
                 
-            with open(project_json, "r", encoding="utf-8") as f:
-                state = json.load(f)
-                
-            speakers = state.get("speakers", {})
-            if not speakers:
-                raise ValueError("工程文件损坏：未找到发音人数据")
+            self._validate_project_resources(state, temp_workspace)
 
             with self._save_lock:
+                old_speakers = dict(self.app.speaker_manager.speakers)
+                old_active_speaker_id = self.app.speaker_manager.active_speaker_id
+                had_export_numbering_rule_value = hasattr(self.app, "export_numbering_rule_value")
+                old_export_numbering_rule_value = getattr(self.app, "export_numbering_rule_value", None)
+
                 if not overlay:
-                    if os.path.exists(self.workspace_dir):
-                        shutil.rmtree(self.workspace_dir)
-                    shutil.move(temp_workspace, self.workspace_dir)
+                    restored, active_id = self._build_restored_state(
+                        state,
+                        overlay=False,
+                        workspace_dir=temp_workspace
+                    )
+                    staged_workspace = temp_workspace
                     temp_workspace = None
+                    old_staged_workspace = staged_workspace
+                    backup_workspace = self._swap_workspace(staged_workspace)
+                    staged_workspace = None
+                    self._remap_restored_workspace_paths(restored, old_staged_workspace, self.workspace_dir)
+                    self._apply_restored_state(restored, active_id, overlay=False)
+                    self._restore_app_state(state)
                     self._prune_unused_workspace_files(self._collect_project_file_refs(state))
                 else:
-                    # Overlay mode: merge files to existing workspace
-                    if not os.path.exists(self.workspace_dir):
-                        os.makedirs(self.workspace_dir)
-                    for subdir in ("audio", "data"):
-                        src_sub = os.path.join(temp_workspace, subdir)
-                        if os.path.isdir(src_sub):
-                            dst_sub = os.path.join(self.workspace_dir, subdir)
-                            if not os.path.exists(dst_sub):
-                                os.makedirs(dst_sub)
-                            for file_name in os.listdir(src_sub):
-                                shutil.copy2(os.path.join(src_sub, file_name), os.path.join(dst_sub, file_name))
-                
-                self._restore_state(state, overlay=overlay)
+                    staged_workspace = self._make_import_workspace(prefix="workspace_overlay")
+                    if os.path.exists(self.workspace_dir):
+                        shutil.copytree(self.workspace_dir, staged_workspace, dirs_exist_ok=True)
+                    remapped_state = self._copy_overlay_resources(state, temp_workspace, staged_workspace)
+                    restored, active_id = self._build_restored_state(
+                        remapped_state,
+                        overlay=True,
+                        workspace_dir=staged_workspace
+                    )
+                    old_staged_workspace = staged_workspace
+                    backup_workspace = self._swap_workspace(staged_workspace)
+                    staged_workspace = None
+                    self._remap_restored_workspace_paths(restored, old_staged_workspace, self.workspace_dir)
+                    self._apply_restored_state(restored, active_id, overlay=True)
+                    self.save_to_workspace()
+
+                self._discard_workspace_backup(backup_workspace)
+                backup_workspace = None
             
             return True
         except Exception as e:
+            if backup_workspace is not None:
+                self._rollback_workspace(backup_workspace)
+            if old_speakers is not None:
+                self.app.speaker_manager.speakers.clear()
+                self.app.speaker_manager.speakers.update(old_speakers)
+                self.app.speaker_manager.active_speaker_id = old_active_speaker_id
+            if had_export_numbering_rule_value:
+                self.app.export_numbering_rule_value = old_export_numbering_rule_value
             traceback.print_exc()
             self._show_error("导入失败", str(e))
             return False
         finally:
             if temp_workspace and os.path.exists(temp_workspace):
                 shutil.rmtree(temp_workspace, ignore_errors=True)
+            if staged_workspace and os.path.exists(staged_workspace):
+                shutil.rmtree(staged_workspace, ignore_errors=True)
 
     def load_from_workspace(self):
         try:
@@ -458,7 +754,9 @@ class ProjectManager:
             with open(project_json, "r", encoding="utf-8") as f:
                 state = json.load(f)
             with self._save_lock:
+                self._validate_project_resources(state, self.workspace_dir)
                 self._restore_state(state, overlay=False)
+                self._restore_app_state(state)
                 # Restore the project path if autosave_meta.json exists
                 meta_path = os.path.join(self.workspace_dir, "autosave_meta.json")
                 if os.path.exists(meta_path):
@@ -477,24 +775,40 @@ class ProjectManager:
 
     def _safe_extract(self, zip_file, target_dir):
         target_dir_abs = os.path.abspath(target_dir)
-        for member in zip_file.infolist():
-            member_path = os.path.abspath(os.path.join(target_dir_abs, member.filename))
-            if not member_path.startswith(target_dir_abs + os.sep) and member_path != target_dir_abs:
+        infos = validate_project_archive_members(zip_file)
+        for member in infos:
+            normalized = member.filename.replace("\\", "/")
+            member_path = os.path.abspath(os.path.join(target_dir_abs, *normalized.split("/")))
+            if os.path.commonpath([member_path, target_dir_abs]) != target_dir_abs:
                 raise ValueError("工程文件包含非法路径")
-        zip_file.extractall(target_dir_abs)
+            if member.is_dir():
+                os.makedirs(member_path, exist_ok=True)
+                continue
+            os.makedirs(os.path.dirname(member_path), exist_ok=True)
+            with zip_file.open(member) as source, open(member_path, "wb") as target:
+                shutil.copyfileobj(source, target)
 
-    def _resolve_project_path(self, path):
+    def _resolve_project_path(self, path, workspace_dir=None):
         if not path:
             return path
         norm = str(path).replace("\\", "/")
         if norm == "audio" or norm.startswith("audio/") or norm == "data" or norm.startswith("data/"):
-            return os.path.join(self.workspace_dir, *norm.split("/"))
+            return os.path.join(workspace_dir or self.workspace_dir, *norm.split("/"))
         return path
 
-    def _restore_state(self, state, overlay=False):
+    def _restore_state(self, state, overlay=False, workspace_dir=None):
+        restored, active_id = self._build_restored_state(
+            state,
+            overlay=overlay,
+            workspace_dir=workspace_dir or self.workspace_dir
+        )
+        self._apply_restored_state(restored, active_id, overlay=overlay)
+
+    def _build_restored_state(self, state, overlay=False, workspace_dir=None):
         import parselmouth
         from .speaker_manager import SpeakerState
 
+        workspace_dir = workspace_dir or self.workspace_dir
         restored = {}
         id_mapping = {}
         
@@ -531,7 +845,7 @@ class ProjectManager:
 
             long_audio_rel = spk_data.get("long_audio_path")
             if long_audio_rel:
-                spk.long_audio_path = self._resolve_project_path(long_audio_rel)
+                spk.long_audio_path = self._resolve_project_path(long_audio_rel, workspace_dir=workspace_dir)
                 if os.path.exists(spk.long_audio_path):
                     spk.pending_long_snd = parselmouth.Sound(spk.long_audio_path)
 
@@ -545,16 +859,19 @@ class ProjectManager:
                     spk.tab_mode = "单条长音频"
 
             spk.pending_batch_paths = [
-                self._resolve_project_path(p)
+                self._resolve_project_path(p, workspace_dir=workspace_dir)
                 for p in spk_data.get("pending_batch_paths", [])
             ]
             spk.current_macro_segments = spk_data.get("current_macro_segments", [])
             spk.manual_segments = spk_data.get("manual_segments", None)
+            last_selected_iid = spk_data.get("last_selected_iid")
+            if last_selected_iid in spk_data.get("items", {}):
+                spk.last_selected_iid = last_selected_iid
 
             for item_id, item_data in spk_data.get("items", {}).items():
                 item = dict(item_data)
                 if 'path' in item:
-                    item['path'] = self._resolve_project_path(item['path'])
+                    item['path'] = self._resolve_project_path(item['path'], workspace_dir=workspace_dir)
 
                 if spk.tab_mode == "多条独立音频" and item.get('path') and os.path.exists(item['path']):
                     item['snd'] = parselmouth.Sound(item['path'])
@@ -562,14 +879,14 @@ class ProjectManager:
                     item['snd'] = spk.pending_long_snd
 
                 if 'pitch_data_file' in item:
-                    npz_path = self._resolve_project_path(item['pitch_data_file'])
+                    npz_path = self._resolve_project_path(item['pitch_data_file'], workspace_dir=workspace_dir)
                     if os.path.exists(npz_path):
                         with np.load(npz_path) as loaded:
                             item['pitch_data'] = {'xs': loaded['xs'].copy(), 'freqs': loaded['freqs'].copy()}
                     del item['pitch_data_file']
 
                 if 'formant_data_file' in item:
-                    npz_path = self._resolve_project_path(item['formant_data_file'])
+                    npz_path = self._resolve_project_path(item['formant_data_file'], workspace_dir=workspace_dir)
                     if os.path.exists(npz_path):
                         with np.load(npz_path) as loaded:
                             formant_dict = {
@@ -587,17 +904,27 @@ class ProjectManager:
             restored[spk.id] = spk
 
         if not overlay:
-            self.app.speaker_manager.speakers.clear()
-            self.app.speaker_manager.speakers.update(restored)
             active_id = state.get("active_speaker_id")
             if active_id not in restored:
                 active_id = next(iter(restored)) if restored else None
+        else:
+            imported_active_id = state.get("active_speaker_id")
+            active_id = id_mapping.get(imported_active_id)
+            if not active_id and restored:
+                active_id = next(iter(restored))
+
+        return restored, active_id
+
+    def _apply_restored_state(self, restored, active_id, overlay=False):
+        if not overlay:
+            self.app.speaker_manager.speakers.clear()
+            self.app.speaker_manager.speakers.update(restored)
             self.app.speaker_manager.active_speaker_id = active_id
         else:
             self.app.speaker_manager.speakers.update(restored)
-            imported_active_id = state.get("active_speaker_id")
-            new_active_id = id_mapping.get(imported_active_id)
-            if not new_active_id and restored:
-                new_active_id = next(iter(restored))
-            if new_active_id:
-                self.app.speaker_manager.active_speaker_id = new_active_id
+            if active_id:
+                self.app.speaker_manager.active_speaker_id = active_id
+
+    def _restore_app_state(self, state):
+        if hasattr(self.app, "export_numbering_rule_value"):
+            self.app.export_numbering_rule_value = state.get("export_numbering_rule", "continuous")

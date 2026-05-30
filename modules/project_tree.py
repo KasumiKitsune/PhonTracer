@@ -754,6 +754,9 @@ class ProjectTreePanel:
             return 1
 
     def on_export_numbering_rule_changed(self):
+        if self.app:
+            self.app.export_numbering_rule_value = self.num_rule_var.get()
+            self.app.mark_modified()
         self.update_preview()
 
 

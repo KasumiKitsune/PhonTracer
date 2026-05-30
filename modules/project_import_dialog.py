@@ -1,8 +1,9 @@
 import os
-import json
-import zipfile
+import queue
+import threading
 import tkinter as tk
 import customtkinter as ctk
+from .project_manager import read_project_metadata_from_archive
 
 class ProjectImportPreviewDialog(ctk.CTkToplevel):
     def __init__(self, parent, app, zip_path):
@@ -31,23 +32,52 @@ class ProjectImportPreviewDialog(ctk.CTkToplevel):
         self.font_small = ctk.CTkFont(family="Microsoft YaHei", size=12)
         self.font_mono = ctk.CTkFont(family="Consolas", size=12)
         
-        try:
-            self.metadata = self.read_metadata(zip_path)
-            self.is_empty = self.app.is_project_empty()
-            self.setup_ui()
-        except Exception as e:
-            from tkinter import messagebox
-            messagebox.showerror("解析工程失败", f"解析工程文件失败:\n{str(e)}", parent=self.parent)
-            self.destroy()
+        self._metadata_queue = queue.Queue()
+        self._show_loading_ui()
+        threading.Thread(target=self._load_metadata, daemon=True).start()
+        self.after(50, self._poll_metadata_result)
 
     def read_metadata(self, zip_path):
-        if not zipfile.is_zipfile(zip_path):
-            raise ValueError("该文件不是有效的工程压缩包 (ZIP/teproj)")
-        with zipfile.ZipFile(zip_path, 'r') as zf:
-            if "project.json" not in zf.namelist():
-                raise ValueError("工程文件损坏：未找到 project.json")
-            with zf.open("project.json") as f:
-                return json.loads(f.read().decode('utf-8'))
+        metadata, _namelist = read_project_metadata_from_archive(zip_path)
+        return metadata
+
+    def _show_loading_ui(self):
+        self._loading_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self._loading_frame.pack(fill="both", expand=True, padx=24, pady=24)
+        ctk.CTkLabel(
+            self._loading_frame,
+            text="正在解析工程文件...",
+            font=self.font_subtitle,
+            text_color=("#374151", "#E5E7EB")
+        ).pack(expand=True)
+        self.geometry("460x180")
+
+    def _load_metadata(self):
+        try:
+            metadata = self.read_metadata(self.zip_path)
+            self._metadata_queue.put(("ok", metadata))
+        except Exception as e:
+            self._metadata_queue.put(("error", str(e)))
+
+    def _poll_metadata_result(self):
+        if not self.winfo_exists():
+            return
+        try:
+            status, payload = self._metadata_queue.get_nowait()
+        except queue.Empty:
+            self.after(50, self._poll_metadata_result)
+            return
+
+        if status == "error":
+            from tkinter import messagebox
+            messagebox.showerror("解析工程失败", f"解析工程文件失败:\n{payload}", parent=self.parent)
+            self.destroy()
+            return
+
+        self.metadata = payload
+        self.is_empty = self.app.is_project_empty()
+        self._loading_frame.destroy()
+        self.setup_ui()
 
     def setup_ui(self):
         # Main container

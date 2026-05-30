@@ -11,6 +11,7 @@
 # 3. 白名单：必须保留的核心根目录文件
 !.gitignore
 !README.md
+!README_REVISION_GUIDE.md
 !requirements.txt
 !main.py
 !cli.py

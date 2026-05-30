@@ -81,7 +81,8 @@ class PhoneticsApp:
         self.debounce_timer = None
         self.speaker_manager = SpeakerManager()
         self.project_manager = ProjectManager(self)
-        self.export_numbering_rule_var = ctk.StringVar(value="continuous")
+        self.export_numbering_rule_value = "continuous"
+        self.export_numbering_rule_var = ctk.StringVar(value=self.export_numbering_rule_value)
         self.has_changes = False
         self.current_project_path = None
         self.active_chart_dialog = None
@@ -94,6 +95,7 @@ class PhoneticsApp:
             if getattr(self, 'has_changes', False):
                 ans = messagebox.askyesnocancel("保存项目", "项目已被修改，是否在关闭前保存？")
                 if ans is True: # Yes
+                    self.project_manager.capture_ui_state()
                     if getattr(self, 'current_project_path', None):
                         success = self.project_manager.export_project(self.current_project_path)
                         if not success:
@@ -227,6 +229,7 @@ class PhoneticsApp:
     def mark_modified(self):
         self.has_changes = True
         if hasattr(self, 'project_manager'):
+            self.project_manager.capture_ui_state()
             self.project_manager.trigger_auto_save()
         # If chart editor is active and live refresh is enabled, update it
         if getattr(self, 'active_chart_dialog', None):
@@ -3505,15 +3508,8 @@ class PhoneticsApp:
         )
 
         if teproj_path:
-            # If we are loading a project file, clean up the autosaved files automatically
-            if has_autosave:
-                try:
-                    import shutil
-                    shutil.rmtree(self.project_manager.workspace_dir)
-                    os.makedirs(self.project_manager.workspace_dir)
-                except Exception as e:
-                    print(f"Failed to clean up autosave workspace: {e}")
-            # 启动参数来自双击文件关联或拖到 exe；直接走工程导入，失败时由 ProjectManager 弹出明确错误。
+            # 启动参数来自双击文件关联或拖到 exe。导入逻辑会在完整验证后事务式替换工作区；
+            # 如果新工程损坏，保留原自动保存数据供下次恢复。
             self.execute_project_import(teproj_path, overlay=False)
             return
 
@@ -3598,6 +3594,7 @@ class PhoneticsApp:
         spk = self.active_speaker
         self.speaker_option_var.set(spk.name)
         self.tabview.set(spk.tab_mode)
+        self.export_numbering_rule_var.set(getattr(self, "export_numbering_rule_value", "continuous"))
 
         if spk.tab_mode == "多条独立音频":
             cnt = len(spk.pending_batch_paths)
@@ -3637,6 +3634,7 @@ class PhoneticsApp:
         )
         if not path: return
         self._last_exported_path = path
+        self.project_manager.capture_ui_state()
         self.start_loading("正在导出工程...")
 
         def run():
@@ -3655,6 +3653,7 @@ class PhoneticsApp:
         self.project_manager.auto_save_enabled = bool(is_enabled)
         self.project_manager.save_config()
         if is_enabled:
+            self.project_manager.capture_ui_state()
             self.project_manager.trigger_auto_save()
         else:
             self.project_manager.cancel_auto_save()
