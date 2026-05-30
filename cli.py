@@ -40,7 +40,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from modules.audio_core import macroscopic_vad, core_microscopic_vowel_nucleus, auto_split_inner_word, auto_split_to_chars_bounds, batch_process_worker, recalculate_bounds_fast, extract_f0
 from modules.speaker_manager import SpeakerManager
-from modules.data_utils import parse_wordlist, fuzzy_match_word_to_path, get_export_text_for_item, build_five_point_chart, split_into_syllables
+from modules.data_utils import parse_wordlist, fuzzy_match_word_to_path, get_export_text_for_item, build_five_point_chart, split_into_syllables, make_textgrid_export_stem
 from modules.project_manager import ProjectManager
 from modules.version import APP_NAME, __version__
 from modules.acoustic_exporter import AcousticChartExporter
@@ -3682,8 +3682,13 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                     path_to_items[path] = []
                 path_to_items[path].append(item)
 
+            used_stems = {}
             for path, items in path_to_items.items():
-                base_name = os.path.splitext(os.path.basename(path))[0]
+                base_name = make_textgrid_export_stem(path, items[0].get('label', '') if items else '')
+                stem_count = used_stems.get(base_name, 0) + 1
+                used_stems[base_name] = stem_count
+                if stem_count > 1:
+                    base_name = f"{base_name}_{stem_count}"
                 tg_path = os.path.join(out_subdir, f"{base_name}.TextGrid")
                 self._write_textgrid(tg_path, items)
 

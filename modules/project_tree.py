@@ -13,7 +13,7 @@ matplotlib.use("Agg", force=True)
 import matplotlib.pyplot as plt
 import logging
 import threading
-from .data_utils import get_export_text_for_item, build_five_point_chart, write_analysis_sheet_with_formulas, write_formant_analysis_sheet_with_formulas, split_into_syllables
+from .data_utils import get_export_text_for_item, build_five_point_chart, write_analysis_sheet_with_formulas, write_formant_analysis_sheet_with_formulas, split_into_syllables, make_textgrid_export_stem
 from .anomaly_detection import detect_pitch_anomaly_points
 from .ui_widgets import CTkReleaseButton, AutoScrollbar
 from PIL import Image, ImageDraw, ImageTk
@@ -3339,8 +3339,13 @@ class ProjectTreePanel:
         out_subdir = os.path.join(out_dir, "Textgrid_export")
         os.makedirs(out_subdir, exist_ok=True)
 
+        used_stems = {}
         for path, items in path_to_items.items():
-            base_name = os.path.splitext(os.path.basename(path))[0]
+            base_name = make_textgrid_export_stem(path, items[0].get('label', '') if items else '')
+            stem_count = used_stems.get(base_name, 0) + 1
+            used_stems[base_name] = stem_count
+            if stem_count > 1:
+                base_name = f"{base_name}_{stem_count}"
             tg_path = os.path.join(out_subdir, f"{base_name}.TextGrid")
 
             # Since it's batch mode, usually each item corresponds to the full file.

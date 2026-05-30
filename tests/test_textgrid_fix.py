@@ -6,9 +6,19 @@ import numpy as np
 
 from tests.shared_root import get_shared_root
 from modules.audio_core import process_single_long_word
+from modules.data_utils import make_textgrid_export_stem
 from modules.project_tree import ProjectTreePanel
 
 class TestTextGridFix(unittest.TestCase):
+    def test_textgrid导出名会移除工程内部前缀(self):
+        uuid_a = "123e4567-e89b-12d3-a456-426614174000"
+        path = f"C:/Users/Sager/.phon_tracer/workspace/audio/{uuid_a}_batch_0_ma.wav"
+
+        self.assertEqual(make_textgrid_export_stem(path), "ma")
+
+    def test_textgrid导出名保留普通音频文件名(self):
+        self.assertEqual(make_textgrid_export_stem("C:/audios/experiment_batch_0_ma.wav"), "experiment_batch_0_ma")
+
     @patch('modules.audio_core.long_process_worker')
     def test_process_single_long_word_mapping(self, mock_worker):
         # Mock long_process_worker output

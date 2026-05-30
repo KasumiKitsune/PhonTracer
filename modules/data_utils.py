@@ -39,6 +39,35 @@ def split_into_syllables(word: str) -> List[str]:
     cleaned = word.strip()
     return [cleaned] if cleaned else []
 
+_UUID_TOKEN_RE = re.compile(
+    r'^(?:[0-9a-fA-F]{32}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})_+'
+)
+
+def make_textgrid_export_stem(path: str = "", fallback_label: str = "", default: str = "audio") -> str:
+    name = os.path.splitext(os.path.basename(str(path or "")))[0].strip()
+    if not name or name.lower() == "unknown":
+        name = str(fallback_label or "").strip()
+
+    norm_path = str(path or "").replace("\\", "/").lower()
+    is_project_managed_audio = (
+        norm_path.startswith("audio/")
+        or "/.phon_tracer/workspace/audio/" in norm_path
+    )
+
+    if is_project_managed_audio:
+        batch_match = re.match(r"^.+?_batch_\d+_(.+)$", name)
+        if batch_match and batch_match.group(1):
+            name = batch_match.group(1)
+        else:
+            previous = None
+            while previous != name:
+                previous = name
+                name = _UUID_TOKEN_RE.sub("", name)
+                name = re.sub(r"^batch_\d+_", "", name)
+
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", name).strip(" ._")
+    return name or str(default or "audio")
+
 def clean_str(s, is_cjk_mode=None):
     if not s: return ""
     import unicodedata

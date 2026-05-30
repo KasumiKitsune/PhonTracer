@@ -5,6 +5,7 @@ import customtkinter as ctk
 import parselmouth
 import copy
 import os
+import re
 import threading
 import concurrent.futures
 import numpy as np
@@ -163,20 +164,42 @@ class PhoneticsApp:
         except Exception:
             pass
 
-        cleaned_initial = []
-        if initial_files:
-            for f in initial_files:
-                if f:
-                    s = str(f).strip().strip('"\'')
-                    if s:
-                        cleaned_initial.append(s)
-        self._initial_files_list = cleaned_initial if cleaned_initial else None
+        self._initial_files_list = self._normalize_startup_files(initial_files)
 
         # Check for autosave recovery after window is initialized
         self.root.after(200, self._check_autosave_recovery)
 
         # 启动时后台静默检查更新 (已取消自动获取最新版本机制，改为手动检测更新)
         # self.root.after(3000, lambda: self.check_update(is_manual=False))
+
+    @staticmethod
+    def _normalize_startup_files(files):
+        cleaned = []
+        if not files:
+            return None
+        for f in files:
+            if not f:
+                continue
+            s = str(f).strip().strip('"\'')
+            if s.lower().startswith("file://"):
+                try:
+                    from urllib.parse import unquote, urlparse
+                    parsed = urlparse(s)
+                    s = unquote(parsed.path or "")
+                    if os.name == "nt" and re.match(r"^/[A-Za-z]:", s):
+                        s = s[1:]
+                except Exception:
+                    pass
+            if s:
+                cleaned.append(os.path.normpath(s))
+        return cleaned or None
+
+    @classmethod
+    def _find_startup_project_file(cls, files):
+        for path in cls._normalize_startup_files(files) or []:
+            if str(path).lower().endswith(('.teproj', '.zip')) and os.path.isfile(path):
+                return path
+        return None
 
     def mark_modified(self):
         self.has_changes = True
@@ -3405,31 +3428,11 @@ class PhoneticsApp:
         project_json = os.path.join(self.project_manager.workspace_dir, "project.json")
         has_autosave = os.path.exists(project_json)
         
-        # Clean and normalize initial_files to handle quote wrapping in Windows
-        initial_files = getattr(self, '_initial_files_list', None)
-        cleaned_files = []
-        if initial_files:
-            for f in initial_files:
-                s = str(f).strip().strip('"\'')
-                if s:
-                    cleaned_files.append(s)
-        self._initial_files_list = cleaned_files if cleaned_files else None
-        initial_files = self._initial_files_list
+        initial_files = self._normalize_startup_files(getattr(self, '_initial_files_list', None))
+        self._initial_files_list = initial_files
+        teproj_path = self._find_startup_project_file(initial_files)
 
-        has_teproj = False
-        teproj_path = None
-        if initial_files:
-            for f in initial_files:
-                if str(f).lower().endswith(('.teproj', '.zip')):
-                    path_candidate = str(f)
-                    if os.path.isfile(path_candidate):
-                        import zipfile
-                        if zipfile.is_zipfile(path_candidate):
-                            has_teproj = True
-                            teproj_path = path_candidate
-                            break
-
-        if has_teproj:
+        if teproj_path:
             # If we are loading a project file, clean up the autosaved files automatically
             if has_autosave:
                 try:
@@ -3438,9 +3441,8 @@ class PhoneticsApp:
                     os.makedirs(self.project_manager.workspace_dir)
                 except Exception as e:
                     print(f"Failed to clean up autosave workspace: {e}")
-            # Load the project from initial_files directly (bypass the preview dialog)
-            if teproj_path:
-                self.execute_project_import(teproj_path, overlay=False)
+            # 启动参数来自双击文件关联或拖到 exe；直接走工程导入，失败时由 ProjectManager 弹出明确错误。
+            self.execute_project_import(teproj_path, overlay=False)
             return
 
         if has_autosave and not self.project_manager.auto_save_enabled:
