@@ -10,6 +10,7 @@ def parse_wordlist(raw_text: str) -> Tuple[List[Dict[str, Any]], List[str]]:
     flat_words =[]
     curr_group = "未分组"
     curr_items =[]
+    raw_text = raw_text.lstrip('\ufeff')
     for line in raw_text.split('\n'):
         line = line.strip()
         if not line: continue

@@ -139,6 +139,7 @@ def macroscopic_vad(snd: parselmouth.Sound, min_dur=0.1, merge_thresh=0.25):
 def parse_wordlist(raw_text: str):
     """解析字表，兼容主程序的【组别】格式"""
     flat_words = []
+    raw_text = raw_text.lstrip('\ufeff')
     for line in raw_text.split('\n'):
         line = line.strip()
         if not line: continue

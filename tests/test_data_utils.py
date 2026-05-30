@@ -287,3 +287,17 @@ def test_extract_wordlist_from_textgrid(tmp_path):
     assert "词3" in res
 
 
+def test_parse_wordlist_bom():
+    raw_text = "\ufeff【第一组】\n字1 字2"
+    groups, flat_words = parse_wordlist(raw_text)
+    assert len(groups) == 1
+    assert groups[0]["group"] == "第一组"
+    assert groups[0]["items"] == ["字1", "字2"]
+    
+    # Also test parse_wordlist in audio_toolkit
+    from audio_toolkit import parse_wordlist as parse_wordlist_tk
+    flat_words_tk = parse_wordlist_tk(raw_text)
+    assert flat_words_tk == ["字1", "字2"]
+
+
+
