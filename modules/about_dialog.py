@@ -16,7 +16,7 @@ class AboutDialog(ctk.CTkToplevel):
         self.resizable(False, False)
         
         # 居中显示
-        width, height = 460, 360
+        width, height = 460, 420
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         x = (screen_width - width) // 2
@@ -112,6 +112,36 @@ class AboutDialog(ctk.CTkToplevel):
         )
         lbl_intro.pack(padx=20, pady=(0, 10))
 
+        # 扩展套件快速启动入口
+        suite_frame = ctk.CTkFrame(card, fg_color="transparent")
+        suite_frame.pack(fill="x", padx=30, pady=(0, 5))
+        
+        btn_toolkit = ctk.CTkButton(
+            suite_frame,
+            text="🛠️ 启动音频工具箱",
+            height=32,
+            corner_radius=16,
+            fg_color=("#F3F4F6", "#374151"),
+            text_color=("#1F2937", "#E5E7EB"),
+            hover_color=("#E5E7EB", "#4B5563"),
+            font=ctk.CTkFont(family="Microsoft YaHei", size=12),
+            command=self.launch_toolkit
+        )
+        btn_toolkit.pack(side="left", expand=True, padx=5, fill="x")
+        
+        btn_cli = ctk.CTkButton(
+            suite_frame,
+            text="💻 启动命令行界面",
+            height=32,
+            corner_radius=16,
+            fg_color=("#F3F4F6", "#374151"),
+            text_color=("#1F2937", "#E5E7EB"),
+            hover_color=("#E5E7EB", "#4B5563"),
+            font=ctk.CTkFont(family="Microsoft YaHei", size=12),
+            command=self.launch_cli
+        )
+        btn_cli.pack(side="left", expand=True, padx=5, fill="x")
+
         # 分割线
         sep = ctk.CTkFrame(card, height=1, fg_color=("#E5E7EB", "#374151"))
         sep.pack(fill="x", padx=30, pady=5)
@@ -186,3 +216,48 @@ class AboutDialog(ctk.CTkToplevel):
         else:
             # 如果不存在，尝试给出友好警告
             tk.messagebox.showwarning("提示", "使用手册正在编写中，敬请期待！", parent=self)
+
+    def launch_toolkit(self):
+        import subprocess
+        # 检查是否是在打包后的环境中运行
+        if getattr(sys, 'frozen', False):
+            base_dir = os.path.dirname(sys.executable)
+            exe_path = os.path.join(base_dir, "AudioToolkit.exe")
+            if os.path.exists(exe_path):
+                subprocess.Popen([exe_path])
+            else:
+                tk.messagebox.showerror("错误", f"未找到音频工具箱可执行程序：{exe_path}", parent=self)
+        else:
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            script_path = os.path.join(base_dir, "audio_toolkit.py")
+            if os.path.exists(script_path):
+                subprocess.Popen([sys.executable, script_path])
+            else:
+                tk.messagebox.showerror("错误", f"未找到音频工具箱脚本：{script_path}", parent=self)
+
+    def launch_cli(self):
+        import subprocess
+        # 检查是否是在打包后的环境中运行
+        if getattr(sys, 'frozen', False):
+            base_dir = os.path.dirname(sys.executable)
+            exe_path = os.path.join(base_dir, "PhonTracerCLI.exe")
+            if os.path.exists(exe_path):
+                kwargs = {}
+                if sys.platform == 'win32':
+                    kwargs['creationflags'] = subprocess.CREATE_NEW_CONSOLE
+                subprocess.Popen([exe_path], **kwargs)
+            else:
+                tk.messagebox.showerror("错误", f"未找到命令行接口可执行程序：{exe_path}", parent=self)
+        else:
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            script_path = os.path.join(base_dir, "cli.py")
+            if os.path.exists(script_path):
+                python_exe = sys.executable
+                if python_exe.endswith("pythonw.exe"):
+                    python_exe = python_exe.replace("pythonw.exe", "python.exe")
+                kwargs = {}
+                if sys.platform == 'win32':
+                    kwargs['creationflags'] = subprocess.CREATE_NEW_CONSOLE
+                subprocess.Popen([python_exe, script_path], **kwargs)
+            else:
+                tk.messagebox.showerror("错误", f"未找到命令行脚本：{script_path}", parent=self)
