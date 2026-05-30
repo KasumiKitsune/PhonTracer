@@ -3162,6 +3162,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         self.var_image_ratio_custom = ctk.DoubleVar(value=1.5)
         self.var_image_pixel_mode = ctk.StringVar(value="默认")
         self.var_image_pixel_custom = ctk.IntVar(value=1080)
+        self.is_minimized = False
 
     def _init_group_filters(self):
         # Extract all unique group names across all speakers
@@ -3210,6 +3211,14 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
 
         self.preview_lbl = ctk.CTkLabel(self.preview_container, text="正在加载图表预览...", font=self.font_title, text_color="#6B7280")
         self.preview_lbl.grid(row=0, column=0)
+
+        # Minimize / Restore button overlay on preview_container
+        self.btn_toggle_minimize = ctk.CTkButton(
+            self.preview_container, text="📌 悬浮模式", width=90, height=26, corner_radius=13,
+            font=self.font_small, fg_color=("#E5E7EB", "#374151"), text_color=("#374151", "#E5E7EB"),
+            hover_color=("#D1D5DB", "#4B5563"), bg_color="transparent", command=self.toggle_minimize
+        )
+        self.btn_toggle_minimize.place(x=10, y=10)
 
         self.preview_wrapper.bind("<Configure>", lambda e: self.on_preview_wrapper_configure())
 
@@ -3263,7 +3272,8 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         self.bottom_frame = ctk.CTkFrame(self.right_frame, fg_color="transparent")
         self.bottom_frame.grid(row=3, column=0, sticky="ew")
 
-        ctk.CTkButton(self.bottom_frame, text="🔄 刷新预览", width=120, height=38, corner_radius=19, fg_color="#E5E7EB", text_color="#374151", hover_color="#D1D5DB", font=self.font_main, command=self.manual_refresh_preview).pack(side=tk.LEFT, padx=5)
+        self.btn_manual_refresh = ctk.CTkButton(self.bottom_frame, text="🔄 刷新预览", width=120, height=38, corner_radius=19, fg_color="#E5E7EB", text_color="#374151", hover_color="#D1D5DB", font=self.font_main, command=self.manual_refresh_preview)
+        self.btn_manual_refresh.pack(side=tk.LEFT, padx=5)
 
         self.switch_live_refresh = ctk.CTkSwitch(
             self.bottom_frame, text="实时刷新", variable=self.var_live_refresh,
@@ -3279,6 +3289,12 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
 
         self.btn_export = ctk.CTkButton(self.bottom_frame, text="💾 导出", width=120, height=38, corner_radius=19, font=self.font_title, command=self.on_confirm)
         self.btn_export.pack(side=tk.RIGHT, padx=5)
+
+        # Hidden by default, only packed in floating mode
+        self.btn_restore = ctk.CTkButton(
+            self.bottom_frame, text="🗗 还原", width=80, height=30, corner_radius=15,
+            font=self.font_small, command=self.toggle_minimize
+        )
 
     def _prev_page(self):
         if not self.all_speakers:
@@ -4219,10 +4235,13 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         if status == "ok":
             fig = done_payload["fig"]
             for widget in self.preview_container.winfo_children():
-                widget.destroy()
+                if widget != getattr(self, 'btn_toggle_minimize', None):
+                    widget.destroy()
             canvas = FigureCanvasTkAgg(fig, master=self.preview_container)
             canvas.draw()
             canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+            if getattr(self, 'btn_toggle_minimize', None):
+                self.btn_toggle_minimize.lift()
             if getattr(self, "active_figure", None) is not None and self.active_figure is not fig:
                 try:
                     plt.close(self.active_figure)
@@ -4238,6 +4257,11 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
                 self.preview_lbl.configure(text=f"图表渲染发生错误: {done_payload.get('message', '')[:35]}", text_color="#EF4444")
 
     def update_preview(self):
+        if getattr(self, 'sm', None):
+            active_spk = self.sm.get_active_speaker()
+            if active_spk:
+                self.active_speaker = active_spk
+
         if hasattr(self, '_debounce_timer_id') and self._debounce_timer_id is not None:
             try:
                 self.after_cancel(self._debounce_timer_id)
@@ -4257,7 +4281,11 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
 
         # Clear existing preview canvas
         for widget in self.preview_container.winfo_children():
-            widget.destroy()
+            if widget != getattr(self, 'btn_toggle_minimize', None):
+                widget.destroy()
+        
+        if getattr(self, 'btn_toggle_minimize', None):
+            self.btn_toggle_minimize.lift()
 
         preview_status = ctk.CTkFrame(self.preview_container, fg_color="transparent")
         preview_status.grid(row=0, column=0)
@@ -4693,3 +4721,107 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             "ext": ext
         }]
         self._start_async_export(jobs, f"图表已成功保存至:\n{out_file}", params_snapshot=params_snapshot)
+
+    def toggle_minimize(self):
+        if not hasattr(self, 'is_minimized'):
+            self.is_minimized = False
+            
+        if not self.is_minimized:
+            # Minimize (Floating Mode):
+            # 1. Save current geometry
+            self.saved_geometry = self.geometry()
+            # 2. Hide left sidebar
+            self.left_scroll.grid_remove()
+            self.grid_columnconfigure(0, minsize=0)
+            
+            # 3. Reconfigure bottom frame elements to be smaller with less padding
+            if hasattr(self, 'btn_manual_refresh'):
+                self.btn_manual_refresh.configure(
+                    width=90,
+                    height=30,
+                    corner_radius=15,
+                    font=self.font_small
+                )
+                self.btn_manual_refresh.pack_forget()
+                self.btn_manual_refresh.pack(side=tk.LEFT, padx=3)
+                
+            if hasattr(self, 'switch_live_refresh'):
+                self.switch_live_refresh.configure(font=self.font_small)
+                self.switch_live_refresh.pack_forget()
+                self.switch_live_refresh.pack(side=tk.LEFT, padx=6)
+                
+            if hasattr(self, 'switch_high_precision'):
+                self.switch_high_precision.pack_forget()
+            if hasattr(self, 'btn_export'):
+                self.btn_export.pack_forget()
+            
+            # Hide pagination frames
+            self.pagination_frame.grid_remove()
+            self.group_pagination_frame.grid_remove()
+            
+            # 4. Hide the canvas toggle button completely so it doesn't block the chart
+            self.btn_toggle_minimize.place_forget()
+            
+            # 5. Pack the restore button at the bottom
+            if hasattr(self, 'btn_restore'):
+                self.btn_restore.pack(side=tk.LEFT, padx=3)
+            
+            # 6. Set always-on-top
+            self.attributes("-topmost", True)
+            
+            # 7. Allow window to scale down to a very small size
+            self.minsize(300, 200)
+            
+            # 8. Change geometry to smaller default size
+            self.geometry("450x380")
+            self.is_minimized = True
+        else:
+            # Restore:
+            # 1. Disable always-on-top
+            self.attributes("-topmost", False)
+            
+            # 2. Set minsize back to default
+            self.minsize(800, 500)
+            
+            # 3. Show left sidebar
+            self.left_scroll.grid(row=0, column=0, sticky="nsew", padx=(15, 10), pady=15)
+            self.grid_columnconfigure(0, weight=0, minsize=420)
+            
+            # 4. Restore bottom frame elements to normal sizes and order
+            if hasattr(self, 'btn_manual_refresh'):
+                self.btn_manual_refresh.configure(
+                    width=120,
+                    height=38,
+                    corner_radius=19,
+                    font=self.font_main
+                )
+                self.btn_manual_refresh.pack_forget()
+                self.btn_manual_refresh.pack(side=tk.LEFT, padx=5)
+                
+            if hasattr(self, 'switch_live_refresh'):
+                self.switch_live_refresh.configure(font=self.font_main)
+                self.switch_live_refresh.pack_forget()
+                self.switch_live_refresh.pack(side=tk.LEFT, padx=10)
+                
+            if hasattr(self, 'switch_high_precision'):
+                self.switch_high_precision.pack(side=tk.LEFT, padx=10)
+            if hasattr(self, 'btn_export'):
+                self.btn_export.pack(side=tk.RIGHT, padx=5)
+                
+            # 5. Hide restore button and place toggle button back on canvas
+            if hasattr(self, 'btn_restore'):
+                self.btn_restore.pack_forget()
+                
+            self.btn_toggle_minimize.place(x=10, y=10)
+            self.btn_toggle_minimize.lift()
+                
+            # 6. Restore geometry
+            if hasattr(self, 'saved_geometry') and self.saved_geometry:
+                self.geometry(self.saved_geometry)
+            else:
+                self.geometry("980x640")
+                
+            self.is_minimized = False
+            
+            # 7. Update preview
+            self.update_preview()

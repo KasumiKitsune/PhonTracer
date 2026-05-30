@@ -205,6 +205,13 @@ class PhoneticsApp:
         self.has_changes = True
         if hasattr(self, 'project_manager'):
             self.project_manager.trigger_auto_save()
+        # If chart editor is active and live refresh is enabled, update it
+        if getattr(self, 'active_chart_dialog', None):
+            try:
+                if self.active_chart_dialog.winfo_exists() and self.active_chart_dialog.var_live_refresh.get():
+                    self.active_chart_dialog.trigger_preview_update()
+            except Exception:
+                pass
 
     @property
     def active_speaker(self): return self.speaker_manager.get_active_speaker()
@@ -3422,11 +3429,47 @@ class PhoneticsApp:
     def _check_autosave_recovery(self):
         # Skip checking autosave recovery when running unit tests to prevent GUI dialog block/crash
         import sys
+        import json
         if any(k in sys.modules for k in ('unittest', 'pytest')):
             return
 
         project_json = os.path.join(self.project_manager.workspace_dir, "project.json")
-        has_autosave = os.path.exists(project_json)
+        has_autosave = False
+        if os.path.exists(project_json) and os.path.getsize(project_json) > 0:
+            try:
+                with open(project_json, "r", encoding="utf-8") as f:
+                    state = json.load(f)
+                
+                # Check if the project actually has any speakers with data
+                is_empty = True
+                speakers = state.get("speakers", {})
+                if len(speakers) > 1:
+                    is_empty = False
+                elif len(speakers) == 1:
+                    spk_id = next(iter(speakers))
+                    spk_data = speakers[spk_id]
+                    if spk_data.get("items") or spk_data.get("long_audio_path") or spk_data.get("pending_batch_paths"):
+                        is_empty = False
+                
+                if not is_empty:
+                    has_autosave = True
+                else:
+                    # Clean up the empty workspace silently
+                    try:
+                        import shutil
+                        shutil.rmtree(self.project_manager.workspace_dir)
+                        os.makedirs(self.project_manager.workspace_dir)
+                    except Exception as e:
+                        print(f"Failed to clean up empty autosave workspace: {e}")
+            except Exception as e:
+                print(f"Failed to parse project.json for autosave check: {e}")
+                # Clean up the corrupted workspace silently
+                try:
+                    import shutil
+                    shutil.rmtree(self.project_manager.workspace_dir)
+                    os.makedirs(self.project_manager.workspace_dir)
+                except Exception as e2:
+                    print(f"Failed to clean up corrupted autosave workspace: {e2}")
         
         initial_files = self._normalize_startup_files(getattr(self, '_initial_files_list', None))
         self._initial_files_list = initial_files
