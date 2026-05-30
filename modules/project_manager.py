@@ -203,9 +203,10 @@ class ProjectManager:
 
     def load_config(self):
         import sys
-        if any(k in sys.modules for k in ('unittest', 'pytest')):
-            self.auto_save_enabled = False
-            return
+        if not getattr(sys, 'frozen', False):
+            if any(k in sys.modules for k in ('unittest', 'pytest')):
+                self.auto_save_enabled = False
+                return
 
         config_path = self.config_path
         if os.path.exists(config_path):
@@ -220,8 +221,9 @@ class ProjectManager:
 
     def save_config(self):
         import sys
-        if any(k in sys.modules for k in ('unittest', 'pytest')):
-            return
+        if not getattr(sys, 'frozen', False):
+            if any(k in sys.modules for k in ('unittest', 'pytest')):
+                return
 
         config_path = self.config_path
         try:

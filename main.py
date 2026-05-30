@@ -1,9 +1,27 @@
 import sys
+
+# 打包版通过双击 .teproj 启动时，工程路径只会出现在进程初始参数里。
+# 这里尽早复制一份，避免启动界面、运行时钩子或后续初始化过程意外改动 sys.argv。
+STARTUP_ARGS = sys.argv[1:].copy()
+
 import os
 import time
 import tkinter as tk
 import customtkinter as ctk
 import logging
+
+def _startup_debug(message):
+    if os.environ.get("PHONTRACER_STARTUP_DEBUG") != "1":
+        return
+    try:
+        log_dir = os.path.join(os.path.expanduser("~"), ".phon_tracer")
+        os.makedirs(log_dir, exist_ok=True)
+        with open(os.path.join(log_dir, "startup_debug.log"), "a", encoding="utf-8") as f:
+            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} [main:{os.getpid()}] {message}\n")
+    except Exception:
+        pass
+
+_startup_debug(f"捕获启动参数: {STARTUP_ARGS!r}")
 
 # 全局打补丁：使所有 CTkCheckBox 在未勾选时为圆角矩形(6)，勾选后为圆形(1000)
 _orig_checkbox_draw = ctk.CTkCheckBox._draw
@@ -24,7 +42,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def show_splash_and_load():
+def show_splash_and_load(startup_files=None):
+    startup_files = list(STARTUP_ARGS if startup_files is None else startup_files)
+    _startup_debug(f"show_splash_and_load startup_files={startup_files!r}")
+
     # 强制使用明亮主题，配合干净的排版
     ctk.set_appearance_mode("Light")
     ctk.set_default_color_theme("blue")
@@ -165,7 +186,12 @@ def show_splash_and_load():
     # --- 动画与状态管理系统 ---
     progress_state = {"current": 0.0, "target": 0.0}
 
+    splash_alive = {"value": True}
+
     def render_wave():
+        if not splash_alive["value"] or not splash.winfo_exists():
+            return
+
         # 丝滑且响应迅速的声波填充缓动动画
         if progress_state["current"] < progress_state["target"]:
             progress_state["current"] += 0.06
@@ -179,7 +205,8 @@ def show_splash_and_load():
                 else:
                     eq_canvas.itemconfig(bars[i], fill="#F3F4F6")
         
-        splash.after(16, render_wave) # 每 16ms 刷新 (60FPS)
+        if splash_alive["value"] and splash.winfo_exists():
+            splash.after(16, render_wave) # 每 16ms 刷新 (60FPS)
 
     render_wave()
 
@@ -195,10 +222,10 @@ def show_splash_and_load():
         time.sleep(0.005)
 
     # 开始加载流程（立即启动）
-    root.after(10, lambda: _load_phase_1(root, splash, set_target_progress))
+    root.after(10, lambda: _load_phase_1(root, splash, set_target_progress, startup_files, splash_alive))
     root.mainloop()
 
-def _load_phase_1(root, splash, set_target_progress):
+def _load_phase_1(root, splash, set_target_progress, startup_files, splash_alive):
     set_target_progress(0.25, "加载核心计算库 (Matplotlib)...")
     
     import matplotlib
@@ -208,9 +235,9 @@ def _load_phase_1(root, splash, set_target_progress):
     warnings.filterwarnings("ignore", category=RuntimeWarning)
     
     # 缩短阶段转换的人为延迟
-    root.after(10, lambda: _load_phase_2(root, splash, set_target_progress))
+    root.after(10, lambda: _load_phase_2(root, splash, set_target_progress, startup_files, splash_alive))
 
-def _load_phase_2(root, splash, set_target_progress):
+def _load_phase_2(root, splash, set_target_progress, startup_files, splash_alive):
     set_target_progress(0.60, "构建声学分析界面...")
     try:
         from modules.app import PhoneticsApp
@@ -218,29 +245,38 @@ def _load_phase_2(root, splash, set_target_progress):
         PhoneticsApp = None 
     
     # 缩短阶段转换的人为延迟
-    root.after(10, lambda: _load_phase_3(root, splash, set_target_progress, PhoneticsApp))
+    root.after(10, lambda: _load_phase_3(root, splash, set_target_progress, PhoneticsApp, startup_files, splash_alive))
 
-def _load_phase_3(root, splash, set_target_progress, PhoneticsApp):
+def _load_phase_3(root, splash, set_target_progress, PhoneticsApp, startup_files, splash_alive):
     set_target_progress(1.0, "就绪，准备开启...")
     
+    app = None
     if PhoneticsApp:
-        app = PhoneticsApp(root, initial_files=sys.argv[1:])
+        _startup_debug(f"创建 PhoneticsApp startup_files={startup_files!r}")
+        app = PhoneticsApp(root, initial_files=startup_files, defer_startup_check=True)
+        root._phontracer_app = app
     
     def finish():
+        splash_alive["value"] = False
         # 退出淡出动效（缩短等待时间）
         for i in range(10, -1, -1):
-            splash.attributes('-alpha', i / 10.0)
-            splash.update()
+            if splash.winfo_exists():
+                splash.attributes('-alpha', i / 10.0)
+                splash.update()
             time.sleep(0.005)
-        splash.destroy()
+        if splash.winfo_exists():
+            splash.destroy()
         
         root.deiconify() # 显示主窗口
+        if app:
+            _startup_debug("主窗口显示后调度 run_startup_check")
+            root.after(50, app.run_startup_check)
 
     # 预留极少时间（100ms）以便用户感知到 100% 载入完成
     root.after(100, finish)
 
 def main():
-    show_splash_and_load()
+    show_splash_and_load(STARTUP_ARGS)
 
 if __name__ == "__main__":
     import multiprocessing

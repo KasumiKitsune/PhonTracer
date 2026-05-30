@@ -24,6 +24,18 @@ from .project_manager import ProjectManager
 from .version import APP_NAME, __version__
 import sys
 
+def _startup_debug(message):
+    if os.environ.get("PHONTRACER_STARTUP_DEBUG") != "1":
+        return
+    try:
+        import time
+        log_dir = os.path.join(os.path.expanduser("~"), ".phon_tracer")
+        os.makedirs(log_dir, exist_ok=True)
+        with open(os.path.join(log_dir, "startup_debug.log"), "a", encoding="utf-8") as f:
+            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} [app:{os.getpid()}] {message}\n")
+    except Exception:
+        pass
+
 # Monkey patch CTkScrollableFrame._mouse_wheel_all to increase scroll speed on Windows by a factor of 3.0
 orig_mouse_wheel_all = ctk.CTkScrollableFrame._mouse_wheel_all
 def patched_mouse_wheel_all(self, event):
@@ -43,7 +55,7 @@ ctk.CTkScrollableFrame._mouse_wheel_all = patched_mouse_wheel_all
 
 
 class PhoneticsApp:
-    def __init__(self, root, initial_files=None):
+    def __init__(self, root, initial_files=None, defer_startup_check=False):
         self.root = root
         self.root.title(f"{APP_NAME} v{__version__} - 声调提取与分析工具")
         self.root.geometry("1200x700")
@@ -165,9 +177,15 @@ class PhoneticsApp:
             pass
 
         self._initial_files_list = self._normalize_startup_files(initial_files)
+        _startup_debug(
+            f"PhoneticsApp 初始化 initial_files={initial_files!r} "
+            f"normalized={self._initial_files_list!r} defer={defer_startup_check}"
+        )
 
-        # Check for autosave recovery after window is initialized
-        self.root.after(200, self._check_autosave_recovery)
+        # Check for autosave recovery after window is initialized. 打包版带启动界面时，
+        # 这一步由 main.py 在主窗口显示后显式触发，避免启动画面回调链路吞掉工程导入。
+        if not defer_startup_check:
+            self.root.after(200, self.run_startup_check)
 
         # 启动时后台静默检查更新 (已取消自动获取最新版本机制，改为手动检测更新)
         # self.root.after(3000, lambda: self.check_update(is_manual=False))
@@ -197,9 +215,14 @@ class PhoneticsApp:
     @classmethod
     def _find_startup_project_file(cls, files):
         for path in cls._normalize_startup_files(files) or []:
-            if str(path).lower().endswith(('.teproj', '.zip')) and os.path.isfile(path):
-                return path
+            abs_path = os.path.abspath(path)
+            if str(abs_path).lower().endswith(('.teproj', '.zip')):
+                return abs_path
         return None
+
+    def run_startup_check(self):
+        _startup_debug("run_startup_check 开始")
+        self._check_autosave_recovery()
 
     def mark_modified(self):
         self.has_changes = True
@@ -3431,8 +3454,9 @@ class PhoneticsApp:
         # Skip checking autosave recovery when running unit tests to prevent GUI dialog block/crash
         import sys
         import json
-        if any(k in sys.modules for k in ('unittest', 'pytest')):
-            return
+        if not getattr(sys, 'frozen', False):
+            if any(k in sys.modules for k in ('unittest', 'pytest')):
+                return
 
         project_json = os.path.join(self.project_manager.workspace_dir, "project.json")
         has_autosave = False
@@ -3475,6 +3499,10 @@ class PhoneticsApp:
         initial_files = self._normalize_startup_files(getattr(self, '_initial_files_list', None))
         self._initial_files_list = initial_files
         teproj_path = self._find_startup_project_file(initial_files)
+        _startup_debug(
+            f"_check_autosave_recovery initial_files={initial_files!r} "
+            f"teproj_path={teproj_path!r} has_autosave={has_autosave}"
+        )
 
         if teproj_path:
             # If we are loading a project file, clean up the autosaved files automatically
@@ -3551,12 +3579,14 @@ class PhoneticsApp:
         ProjectImportPreviewDialog(self.root, self, path)
 
     def execute_project_import(self, path, overlay):
+        _startup_debug(f"execute_project_import path={path!r} overlay={overlay}")
         self._last_imported_path = path
         self._last_import_was_overlay = overlay
         self.start_loading("正在导入工程...")
 
         def run():
             success = self.project_manager.load_project(path, overlay=overlay)
+            _startup_debug(f"load_project 返回 success={success} path={path!r}")
             self.root.after(0, self.stop_loading)
             if success:
                 self.root.after(0, self._sync_ui_after_project_load)
