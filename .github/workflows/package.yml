@@ -45,8 +45,9 @@ jobs:
 
     - name: Build Setup Installer with Inno Setup (Windows)
       if: matrix.os == 'windows-latest'
+      shell: pwsh
       run: |
-        iscc /DMyAppVersion="${{ github.ref_name }}" installer.iss
+        & "C:\Program Files (x86)\Inno Setup 6\iscc.exe" /DMyAppVersion="${{ github.ref_name }}" installer.iss
 
     - name: Create DMG Archive (macOS)
       if: matrix.os == 'macos-latest'
@@ -64,9 +65,9 @@ jobs:
       if: startsWith(github.ref, 'refs/tags/')
       with:
         files: |
-          dist/PhonTracer_Suite-Windows.zip
-          dist/PhonTracer_Setup_Windows.exe
-          dist/PhonTracer_Suite-macOS.dmg
+          dist/*.zip
+          dist/*.dmg
+          dist/*.exe
         name: PhonTracer ${{ github.ref_name }}
         body: |
           ### 自动化发布
@@ -75,6 +76,7 @@ jobs:
           - 基于最新代码逻辑与资源路径
         draft: false
         prerelease: false
+        fail_on_unresolved_files: false
 
     - name: Upload Artifact (Development)
       if: "!startsWith(github.ref, 'refs/tags/')"
@@ -82,6 +84,7 @@ jobs:
       with:
         name: PhonTracer-Suite-${{ matrix.os }}
         path: |
-          dist/PhonTracer_Suite-Windows.zip
-          dist/PhonTracer_Setup_Windows.exe
-          dist/PhonTracer_Suite-macOS.dmg
+          dist/*.zip
+          dist/*.dmg
+          dist/*.exe
+        if-no-files-found: warn
