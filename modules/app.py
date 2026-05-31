@@ -2672,6 +2672,141 @@ class PhoneticsApp:
             self.root.after(0, finalize)
         threading.Thread(target=run, daemon=True).start()
 
+    def _build_batch_tasks(self, groups, match_mode):
+        tasks = []
+        if match_mode == 'fuzzy':
+            # 自然排序：确保 1, 2, 10 的顺序
+            def natural_sort_key(s):
+                return [int(text) if text.isdigit() else text.lower()
+                        for text in re.split('([0-9]+)', s)]
+
+            sorted_paths = sorted(self.pending_batch_paths, key=natural_sort_key)
+            used_indices = set()
+
+            for grp in groups:
+                group_name = grp['group']
+                for word in grp['items']:
+                    idx = fuzzy_match_word_to_path(word, sorted_paths, used_indices=list(used_indices))
+                    if idx is not None:
+                        path = sorted_paths[idx]
+                        used_indices.add(idx)
+                        tasks.append({'word': word, 'group': group_name, 'path': path, 'missing': False})
+                    else:
+                        tasks.append({'word': word, 'group': group_name, 'missing': True})
+        else:
+            path_idx = 0
+            for grp in groups:
+                group_name = grp['group']
+                for word in grp['items']:
+                    if path_idx < len(self.pending_batch_paths):
+                        path = self.pending_batch_paths[path_idx]
+                        tasks.append({'word': word, 'group': group_name, 'path': path, 'missing': False})
+                        path_idx += 1
+                    else:
+                        tasks.append({'word': word, 'group': group_name, 'missing': True})
+        return tasks
+
+    def _process_batch_tasks(self, tasks, params, trim):
+        results = [None] * len(tasks)
+        futures = {}
+        executor = concurrent.futures.ProcessPoolExecutor(max_workers=min(os.cpu_count() or 4, 8))
+        for i, t in enumerate(tasks):
+            if t['missing']:
+                results[i] = {'label': t['word'], 'group': t['group'], 'success': False, 'missing': True}
+            else:
+                path = t['path']
+                if path in self.audio_cache:
+                    res = self.audio_cache[path]
+                    results[i] = {**res, 'missing': False, 'group': t['group']}
+                else:
+                    futures[executor.submit(batch_process_worker, path, params, trim, tasks[i]['word'])] = i
+
+        total_futures = len(futures) if futures else 1
+        done_count = 0
+        if futures:
+            for future in concurrent.futures.as_completed(futures):
+                orig_idx = futures[future]
+                try:
+                    res = future.result()
+                    self.audio_cache[tasks[orig_idx]['path']] = res
+                    results[orig_idx] = {**res, 'missing': False, 'group': tasks[orig_idx]['group']}
+                except Exception as e:
+                    results[orig_idx] = {'label': tasks[orig_idx]['word'], 'group': tasks[orig_idx]['group'], 'success': False, 'missing': True, 'error': str(e)}
+
+                done_count += 1
+                self.root.after(0, lambda v=done_count/total_futures: self.set_progress(v))
+        else:
+            self.root.after(0, lambda: self.set_progress(1.0))
+
+        executor.shutdown(wait=False)
+        return results
+
+    def _fix_batch_mismatches(self, tasks, results):
+        # 在后台线程补全字表不匹配时的蓝线修复（因为基于Cache抓取的可能是错误的）
+        for i, res in enumerate(results):
+            if res and not res.get('missing') and res.get('success'):
+                word = tasks[i]['word']
+                syls = split_into_syllables(word)
+                cached_label = res.get('label', '')
+                cached_syls = split_into_syllables(cached_label)
+                if len(syls) > 1 and (len(cached_syls) != len(syls) or ('/' in word and cached_label != word)):
+                    try:
+                        snd = parselmouth.Sound(res['path'])
+                        meta = {}
+                        p_data = res.get('pitch_data')
+                        r_s = res.get('raw_start', res['start'])
+                        r_e = res.get('raw_end', res['end'])
+                        res['inner_splits'] = auto_split_inner_word(snd, r_s, r_e, len(syls), pitch_data=p_data, output_meta=meta)
+                        from modules.audio_core import auto_split_to_chars_bounds
+                        res['chars_bounds'] = auto_split_to_chars_bounds(snd, r_s, r_e, res['inner_splits'], len(syls), self.last_params)
+                        if res['chars_bounds']:
+                            res['start'] = res['chars_bounds'][0][0]
+                            res['end'] = res['chars_bounds'][-1][1]
+                        res['split_warnings'] = meta.get('split_warnings', [])
+                        res['split_confidence'] = meta.get('split_confidence', 1.0)
+                        res['has_empty_data'] = res.get('has_empty_data', False)
+                    except Exception:
+                        res['inner_splits'] = []
+                        res['chars_bounds'] = [[res['start'], res['end']]]
+                elif len(syls) <= 1:
+                    res['inner_splits'] = []
+                    res['chars_bounds'] = [[res['start'], res['end']]]
+                    res['split_warnings'] = []
+                    res['split_confidence'] = 1.0
+
+    def _finalize_batch_processing(self, tasks, results, match_mode, params, total):
+        matched_count = 0
+        for i, res in enumerate(results):
+            gid = self.tree_panel.ensure_group(res['group'])
+            if not res.get('missing') and res.get('success'):
+                res['group'] = tasks[i]['group']
+                res['label'] = tasks[i]['word']
+                if 'pitch_floor' not in res:
+                    res['pitch_floor'] = params['pitch_floor']
+                    res['pitch_ceiling'] = params['pitch_ceiling']
+                    res['voicing_threshold'] = params['voicing_threshold']
+                self._stamp_formant_params_on_item(res, params)
+                display = f"{res['label']} ← {os.path.basename(res['path'])}" if match_mode == 'fuzzy' else res['label']
+                iid = f"batch_wl_{res['label']}_{id(res)}"
+
+                has_empty = res.get('has_empty_data', False)
+                img = self.tk_icons.get('warning', '') if has_empty else ''
+                self.tree_panel.tree.insert(gid, tk.END, iid=iid, text=display, tags=('item',), image=img)
+
+                self.items[iid] = res
+                res['is_user_specified_structure'] = '/' in res['label']
+                self.tree_panel.update_item_icon(iid)
+                matched_count += 1
+            else:
+                suffix = " (未匹配)" if match_mode == 'fuzzy' else " (缺失)"
+                iid = f"missing_{res['label']}_{id(res)}"
+                self.tree_panel.tree.insert(gid, tk.END, iid=iid, text=res['label'] + suffix, tags=('item',))
+                self.items[iid] = {'label': res['label'], 'group': res['group'], 'snd': None, 'start': None, 'end': None, 'inner_splits': []}
+
+        self.stop_loading(f"并行处理完成: {matched_count}/{total}")
+        self.tree_panel.select_first_item()
+        self._maybe_refresh_formants_after_import()
+
     def process_batch_with_wordlist(self, raw_text, match_mode='order'):
         groups, flat_words = parse_wordlist(raw_text)
         if not flat_words: return
@@ -2681,139 +2816,17 @@ class PhoneticsApp:
             self.root.after(0, self.tree_panel.clear_all)
             total = len(flat_words)
 
-            tasks = []
-            if match_mode == 'fuzzy':
-                # 自然排序：确保 1, 2, 10 的顺序
-                import re
-                def natural_sort_key(s):
-                    return [int(text) if text.isdigit() else text.lower()
-                            for text in re.split('([0-9]+)', s)]
+            tasks = self._build_batch_tasks(groups, match_mode)
 
-                sorted_paths = sorted(self.pending_batch_paths, key=natural_sort_key)
-                used_indices = set()
-
-                for grp in groups:
-                    group_name = grp['group']
-                    for word in grp['items']:
-                        idx = fuzzy_match_word_to_path(word, sorted_paths, used_indices=list(used_indices))
-                        if idx is not None:
-                            path = sorted_paths[idx]
-                            used_indices.add(idx)
-                            tasks.append({'word': word, 'group': group_name, 'path': path, 'missing': False})
-                        else:
-                            tasks.append({'word': word, 'group': group_name, 'missing': True})
-            else:
-                path_idx = 0
-                for grp in groups:
-                    group_name = grp['group']
-                    for word in grp['items']:
-                        if path_idx < len(self.pending_batch_paths):
-                            path = self.pending_batch_paths[path_idx]
-                            tasks.append({'word': word, 'group': group_name, 'path': path, 'missing': False})
-                            path_idx += 1
-                        else:
-                            tasks.append({'word': word, 'group': group_name, 'missing': True})
-
-            results = [None] * len(tasks)
             params = self._build_worker_params()
             trim = self.switch_trim_silence.get()
 
-            futures = {}
-            executor = concurrent.futures.ProcessPoolExecutor(max_workers=min(os.cpu_count() or 4, 8))
-            for i, t in enumerate(tasks):
-                if t['missing']:
-                    results[i] = {'label': t['word'], 'group': t['group'], 'success': False, 'missing': True}
-                else:
-                    path = t['path']
-                    if path in self.audio_cache:
-                        res = self.audio_cache[path]
-                        results[i] = {**res, 'missing': False, 'group': t['group']}
-                    else:
-                        futures[executor.submit(batch_process_worker, path, params, trim, tasks[i]['word'])] = i
+            results = self._process_batch_tasks(tasks, params, trim)
 
-            total_futures = len(futures) if futures else 1
-            done_count = 0
-            if futures:
-                for future in concurrent.futures.as_completed(futures):
-                    orig_idx = futures[future]
-                    try:
-                        res = future.result()
-                        self.audio_cache[tasks[orig_idx]['path']] = res
-                        results[orig_idx] = {**res, 'missing': False, 'group': tasks[orig_idx]['group']}
-                    except Exception as e:
-                        results[orig_idx] = {'label': tasks[orig_idx]['word'], 'group': tasks[orig_idx]['group'], 'success': False, 'missing': True, 'error': str(e)}
-
-                    done_count += 1
-                    self.root.after(0, lambda v=done_count/total_futures: self.set_progress(v))
-            else:
-                self.root.after(0, lambda: self.set_progress(1.0))
-
-            executor.shutdown(wait=False)
-
-            # 在后台线程补全字表不匹配时的蓝线修复（因为基于Cache抓取的可能是错误的）
-            for i, res in enumerate(results):
-                if res and not res.get('missing') and res.get('success'):
-                    word = tasks[i]['word']
-                    syls = split_into_syllables(word)
-                    cached_label = res.get('label', '')
-                    cached_syls = split_into_syllables(cached_label)
-                    if len(syls) > 1 and (len(cached_syls) != len(syls) or ('/' in word and cached_label != word)):
-                        try:
-                            snd = parselmouth.Sound(res['path'])
-                            meta = {}
-                            p_data = res.get('pitch_data')
-                            r_s = res.get('raw_start', res['start'])
-                            r_e = res.get('raw_end', res['end'])
-                            res['inner_splits'] = auto_split_inner_word(snd, r_s, r_e, len(syls), pitch_data=p_data, output_meta=meta)
-                            from modules.audio_core import auto_split_to_chars_bounds
-                            res['chars_bounds'] = auto_split_to_chars_bounds(snd, r_s, r_e, res['inner_splits'], len(syls), self.last_params)
-                            if res['chars_bounds']:
-                                res['start'] = res['chars_bounds'][0][0]
-                                res['end'] = res['chars_bounds'][-1][1]
-                            res['split_warnings'] = meta.get('split_warnings', [])
-                            res['split_confidence'] = meta.get('split_confidence', 1.0)
-                            res['has_empty_data'] = res.get('has_empty_data', False)
-                        except Exception:
-                            res['inner_splits'] = []
-                            res['chars_bounds'] = [[res['start'], res['end']]]
-                    elif len(syls) <= 1:
-                        res['inner_splits'] = []
-                        res['chars_bounds'] = [[res['start'], res['end']]]
-                        res['split_warnings'] = []
-                        res['split_confidence'] = 1.0
+            self._fix_batch_mismatches(tasks, results)
 
             def finalize():
-                matched_count = 0
-                for i, res in enumerate(results):
-                    gid = self.tree_panel.ensure_group(res['group'])
-                    if not res.get('missing') and res.get('success'):
-                        res['group'] = tasks[i]['group']
-                        res['label'] = tasks[i]['word']
-                        if 'pitch_floor' not in res:
-                            res['pitch_floor'] = params['pitch_floor']
-                            res['pitch_ceiling'] = params['pitch_ceiling']
-                            res['voicing_threshold'] = params['voicing_threshold']
-                        self._stamp_formant_params_on_item(res, params)
-                        display = f"{res['label']} ← {os.path.basename(res['path'])}" if match_mode == 'fuzzy' else res['label']
-                        iid = f"batch_wl_{res['label']}_{id(res)}"
-
-                        has_empty = res.get('has_empty_data', False)
-                        img = self.tk_icons.get('warning', '') if has_empty else ''
-                        self.tree_panel.tree.insert(gid, tk.END, iid=iid, text=display, tags=('item',), image=img)
-
-                        self.items[iid] = res
-                        res['is_user_specified_structure'] = '/' in res['label']
-                        self.tree_panel.update_item_icon(iid)
-                        matched_count += 1
-                    else:
-                        suffix = " (未匹配)" if match_mode == 'fuzzy' else " (缺失)"
-                        iid = f"missing_{res['label']}_{id(res)}"
-                        self.tree_panel.tree.insert(gid, tk.END, iid=iid, text=res['label'] + suffix, tags=('item',))
-                        self.items[iid] = {'label': res['label'], 'group': res['group'], 'snd': None, 'start': None, 'end': None, 'inner_splits': []}
-
-                self.stop_loading(f"并行处理完成: {matched_count}/{total}")
-                self.tree_panel.select_first_item()
-                self._maybe_refresh_formants_after_import()
+                self._finalize_batch_processing(tasks, results, match_mode, params, total)
 
             self.root.after(0, finalize)
         threading.Thread(target=run, daemon=True).start()
