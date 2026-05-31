@@ -87,7 +87,8 @@ jobs:
           - 基于最新代码逻辑与资源路径
         draft: false
         prerelease: false
-        fail_on_unresolved_files: false
+        overwrite_files: true
+        fail_on_unmatched_files: false
 
     - name: Upload Artifact (Development)
       if: "!startsWith(github.ref, 'refs/tags/')"
