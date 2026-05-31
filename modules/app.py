@@ -2299,135 +2299,141 @@ class PhoneticsApp:
                     self.root.after(0, lambda: self.stop_loading(f"检测失败: {e}"))
             threading.Thread(target=run_vad, daemon=True).start()
 
-    def on_visual_split_confirm(self, segments, is_update=False, deleted_count=0):
-        if is_update:
-            # segments 包含了所有的有效段映射：{'id': new_iid, 'old_id': old_iid, 'start', 'end', 'inner_splits', 'is_modified'}
-            mapped_segs = {seg['id']: seg for seg in segments}
 
-            # 备份旧的 micro 边界，以便在未修改宏观边界时重用（避免覆盖手动微调且节省算力）
-            old_micro_bounds = {}
-            for iid, item in self.items.items():
-                if item.get('start') is not None and item.get('end') is not None:
-                    old_micro_bounds[iid] = (item['start'], item['end'], item.get('inner_splits', []), item.get('chars_bounds', []))
+    def _backup_old_micro_bounds(self):
+        old_micro_bounds = {}
+        for iid, item in self.items.items():
+            if item.get('start') is not None and item.get('end') is not None:
+                old_micro_bounds[iid] = (item['start'], item['end'], item.get('inner_splits', []), item.get('chars_bounds', []))
+        return old_micro_bounds
 
-            # 1. 收集树中所有的 word items (保持顺序)
-            all_iids = []
-            for grp_name in self.tree_panel.project_groups:
-                grp_node = self.tree_panel.group_nodes[grp_name]
-                for child in self.tree_panel.tree.get_children(grp_node):
-                    if child in self.items:
-                        all_iids.append(child)
+    def _get_all_ordered_iids(self):
+        all_iids = []
+        for grp_name in self.tree_panel.project_groups:
+            grp_node = self.tree_panel.group_nodes[grp_name]
+            for child in self.tree_panel.tree.get_children(grp_node):
+                if child in self.items:
+                    all_iids.append(child)
+        return all_iids
 
-            # 提前准备好全局 Pitch，避免在循环中重复计算耗时巨大
-            global_pitch_cache = None
+    def _apply_modified_segment(self, item, seg):
+        item['start'] = seg['start']
+        item['end'] = seg['end']
+        item['inner_splits'] = list(seg.get('inner_splits', []))
 
-            # 2. 应用映射
-            for iid in all_iids:
-                item = self.items[iid]
-                if iid in mapped_segs:
-                    # 有对应的音频段
-                    seg = mapped_segs[iid]
-                    item['macro_start'] = seg['start']
-                    item['macro_end'] = seg['end']
-
-                    # 恢复 snd 和 pitch
-                    if not item.get('snd'):
-                        item['snd'] = self.pending_long_snd
-                        if global_pitch_cache is None:
-                            global_pitch_cache = extract_f0(self.pending_long_snd, self.last_params)
-                        item['pitch_data'] = global_pitch_cache
-                        if 'pitch' in item:
-                            del item['pitch']
-
-                    # 核心优化：如果没有被拖拽修改边界，且原来就有微观边界，直接继承！
-                    if not seg.get('is_modified') and seg.get('old_id') and seg['old_id'] in old_micro_bounds:
-                        item['start'], item['end'], item['inner_splits'], item['chars_bounds'] = old_micro_bounds[seg['old_id']]
-                        if 'raw_start' in self.items[seg['old_id']]:
-                            item['raw_start'] = self.items[seg['old_id']]['raw_start']
-                            item['raw_end'] = self.items[seg['old_id']]['raw_end']
-                    else:
-                        if seg.get('is_modified'):
-                            # 词语模式：如果用户在界面上明确改了红线蓝线，那用户的操作就是绝对真理！不跑自动识别覆盖。
-                            item['start'] = seg['start']
-                            item['end'] = seg['end']
-                            item['inner_splits'] = list(seg.get('inner_splits', []))
-
-                            # 重新计算独立的字符边界 chars_bounds，确保跟蓝线位置同步！
-                            label = item['label'].replace(" (缺失)", "")
-                            syls = split_into_syllables(label)
-                            if len(syls) > 1:
-                                from modules.audio_core import auto_split_to_chars_bounds
-                                item['chars_bounds'] = auto_split_to_chars_bounds(
-                                    item['snd'], item['start'], item['end'],
-                                    item['inner_splits'], len(syls), self.last_params
-                                )
-                            else:
-                                item['chars_bounds'] = [[item['start'], item['end']]]
-
-                            item['raw_start'] = seg['start']
-                            item['raw_end'] = seg['end']
-                        else:
-                            # 纯新分配的自动识别段落，调用完整识别流
-                            mic_s, mic_e, raw_s, raw_e = self._microscopic_vowel_nucleus(
-                                item['snd'], item.get('pitch_data', item.get('pitch')), item['macro_start'], item['macro_end']
-                            )
-                            item['start'], item['end'] = mic_s, mic_e
-                            item['raw_start'], item['raw_end'] = raw_s, raw_e
-
-                            label = item['label'].replace(" (缺失)", "")
-                            syls = split_into_syllables(label)
-                            split_warnings = []
-                            split_confidence = 1.0
-                            if len(syls) > 1:
-                                meta = {}
-                                p_data = item.get('pitch_data', item.get('pitch'))
-                                item['inner_splits'] = auto_split_inner_word(item['snd'], raw_s, raw_e, len(syls), pitch_data=p_data, output_meta=meta)
-                                split_warnings = meta.get('split_warnings', [])
-                                split_confidence = meta.get('split_confidence', 1.0)
-                                from modules.audio_core import auto_split_to_chars_bounds
-                                item['chars_bounds'] = auto_split_to_chars_bounds(item['snd'], raw_s, raw_e, item['inner_splits'], len(syls), self.last_params)
-                                if item['chars_bounds']:
-                                    item['start'] = item['chars_bounds'][0][0]
-                                    item['end'] = item['chars_bounds'][-1][1]
-                            else:
-                                item['inner_splits'] = []
-                                item['chars_bounds'] = [[item['start'], item['end']]]
-                            item['split_warnings'] = split_warnings
-                            item['split_confidence'] = split_confidence
-                            item['has_empty_data'] = item.get('has_empty_data', False) or len(split_warnings) > 0
-
-                    # 移除可能的 "(缺失)" 后缀
-                    if item['label'].endswith(" (缺失)"):
-                        item['label'] = item['label'].replace(" (缺失)", "")
-                    self.tree_panel.tree.item(iid, text=item['label'])
-                    self.tree_panel.update_item_icon(iid)
-                else:
-                    # 音频段不够了，标记为缺失
-                    item['snd'] = None
-                    item['pitch'] = None
-                    item['macro_start'] = None
-                    item['macro_end'] = None
-                    item['start'] = None
-                    item['end'] = None
-                    item['inner_splits'] = []
-
-                    if not item['label'].endswith(" (缺失)"):
-                        self.tree_panel.tree.item(iid, text=item['label'] + " (缺失)")
-                    self.tree_panel.tree.item(iid, image='')
-
-            if self.spectrogram_panel.current_item:
-                self.spectrogram_panel.clear_canvas()
-
-            # 3. 更新全局的宏观区段记录，以便下次打开时仍能顺延
-            self.current_macro_segments = [(seg['start'], seg['end']) for seg in segments]
-
-            self.tree_panel.update_preview()
-
-            deleted_msg = f"\n由于您删除了音频段，后续字表已自动向前顺延对齐。" if deleted_count else ""
-            messagebox.showinfo("提示", f"手动微调已应用，时间边界已更新。{deleted_msg}")
+        label = item['label'].replace(" (缺失)", "")
+        from modules.data_utils import split_into_syllables
+        syls = split_into_syllables(label)
+        if len(syls) > 1:
+            from modules.audio_core import auto_split_to_chars_bounds
+            item['chars_bounds'] = auto_split_to_chars_bounds(
+                item['snd'], item['start'], item['end'],
+                item['inner_splits'], len(syls), self.last_params
+            )
         else:
+            item['chars_bounds'] = [[item['start'], item['end']]]
+
+        item['raw_start'] = seg['start']
+        item['raw_end'] = seg['end']
+
+    def _apply_new_segment(self, item):
+        mic_s, mic_e, raw_s, raw_e = self._microscopic_vowel_nucleus(
+            item['snd'], item.get('pitch_data', item.get('pitch')), item['macro_start'], item['macro_end']
+        )
+        item['start'], item['end'] = mic_s, mic_e
+        item['raw_start'], item['raw_end'] = raw_s, raw_e
+
+        label = item['label'].replace(" (缺失)", "")
+        from modules.data_utils import split_into_syllables
+        syls = split_into_syllables(label)
+        split_warnings = []
+        split_confidence = 1.0
+        if len(syls) > 1:
+            meta = {}
+            p_data = item.get('pitch_data', item.get('pitch'))
+            from modules.audio_core import auto_split_inner_word
+            item['inner_splits'] = auto_split_inner_word(item['snd'], raw_s, raw_e, len(syls), pitch_data=p_data, output_meta=meta)
+            split_warnings = meta.get('split_warnings', [])
+            split_confidence = meta.get('split_confidence', 1.0)
+            from modules.audio_core import auto_split_to_chars_bounds
+            item['chars_bounds'] = auto_split_to_chars_bounds(item['snd'], raw_s, raw_e, item['inner_splits'], len(syls), self.last_params)
+            if item['chars_bounds']:
+                item['start'] = item['chars_bounds'][0][0]
+                item['end'] = item['chars_bounds'][-1][1]
+        else:
+            item['inner_splits'] = []
+            item['chars_bounds'] = [[item['start'], item['end']]]
+        item['split_warnings'] = split_warnings
+        item['split_confidence'] = split_confidence
+        item['has_empty_data'] = item.get('has_empty_data', False) or len(split_warnings) > 0
+
+    def _mark_item_missing(self, iid, item):
+        item['snd'] = None
+        item['pitch'] = None
+        item['macro_start'] = None
+        item['macro_end'] = None
+        item['start'] = None
+        item['end'] = None
+        item['inner_splits'] = []
+
+        if not item['label'].endswith(" (缺失)"):
+            self.tree_panel.tree.item(iid, text=item['label'] + " (缺失)")
+        self.tree_panel.tree.item(iid, image='')
+
+    def on_visual_split_confirm(self, segments, is_update=False, deleted_count=0):
+        if not is_update:
             self.manual_segments = segments
             messagebox.showinfo("提示", f"全新手动切分完成，共 {len(segments)} 个片段。\n现在请点击“导入字表”来匹配文本。")
+            return
+
+        mapped_segs = {seg['id']: seg for seg in segments}
+        old_micro_bounds = self._backup_old_micro_bounds()
+        all_iids = self._get_all_ordered_iids()
+
+        global_pitch_cache = None
+        from modules.audio_core import extract_f0
+
+        for iid in all_iids:
+            item = self.items[iid]
+            if iid not in mapped_segs:
+                self._mark_item_missing(iid, item)
+                continue
+
+            seg = mapped_segs[iid]
+            item['macro_start'] = seg['start']
+            item['macro_end'] = seg['end']
+
+            if not item.get('snd'):
+                item['snd'] = self.pending_long_snd
+                if global_pitch_cache is None:
+                    global_pitch_cache = extract_f0(self.pending_long_snd, self.last_params)
+                item['pitch_data'] = global_pitch_cache
+                if 'pitch' in item:
+                    del item['pitch']
+
+            if not seg.get('is_modified') and seg.get('old_id') and seg['old_id'] in old_micro_bounds:
+                item['start'], item['end'], item['inner_splits'], item['chars_bounds'] = old_micro_bounds[seg['old_id']]
+                if 'raw_start' in self.items[seg['old_id']]:
+                    item['raw_start'] = self.items[seg['old_id']]['raw_start']
+                    item['raw_end'] = self.items[seg['old_id']]['raw_end']
+            elif seg.get('is_modified'):
+                self._apply_modified_segment(item, seg)
+            else:
+                self._apply_new_segment(item)
+
+            if item['label'].endswith(" (缺失)"):
+                item['label'] = item['label'].replace(" (缺失)", "")
+            self.tree_panel.tree.item(iid, text=item['label'])
+            self.tree_panel.update_item_icon(iid)
+
+        if self.spectrogram_panel.current_item:
+            self.spectrogram_panel.clear_canvas()
+
+        self.current_macro_segments = [(seg['start'], seg['end']) for seg in segments]
+        self.tree_panel.update_preview()
+
+        deleted_msg = f"\n由于您删除了音频段，后续字表已自动向前顺延对齐。" if deleted_count else ""
+        messagebox.showinfo("提示", f"手动微调已应用，时间边界已更新。{deleted_msg}")
 
     def process_long_with_wordlist(self, raw_text):
         groups, flat_words = parse_wordlist(raw_text)
