@@ -3962,6 +3962,250 @@ class PhoneticsApp:
         self.on_param_change(recalculate_current=False)
         self.recalculate_all_audio(recompute_pitch=True, only_pitch_changed=True)
 
+    def _collect_formant_snippets(self, tab_mode, pending_long_snd, long_audio_path, items_snapshot):
+        import parselmouth
+        import os
+        snippets = []
+        if tab_mode == "单条长音频":
+            snd = pending_long_snd
+            if snd is None and long_audio_path and os.path.exists(long_audio_path):
+                snd = parselmouth.Sound(long_audio_path)
+            if snd:
+                for item in items_snapshot:
+                    m_s = item.get('macro_start')
+                    m_e = item.get('macro_end')
+                    if m_s is not None and m_e is not None and m_e > m_s + 0.06:
+                        try:
+                            part = snd.extract_part(from_time=m_s + 0.025, to_time=m_e - 0.025)
+                            snippets.append(part)
+                        except Exception:
+                            pass
+        else: # "多条独立音频"
+            for item in items_snapshot:
+                item_snd = item.get('snd')
+                if item_snd is None and item.get('path') and os.path.exists(item['path']):
+                    try:
+                        item_snd = parselmouth.Sound(item['path'])
+                    except Exception:
+                        pass
+                if item_snd:
+                    t_s = item.get('start', 0.0)
+                    t_e = item.get('end', item_snd.get_total_duration())
+                    if t_e > t_s + 0.06:
+                        try:
+                            part = item_snd.extract_part(from_time=t_s + 0.025, to_time=t_e - 0.025)
+                            snippets.append(part)
+                        except Exception:
+                            pass
+                    else:
+                        try:
+                            snippets.append(item_snd)
+                        except Exception:
+                            pass
+        return snippets
+
+    def _crop_snippets_for_formant_analysis(self, snippets):
+        import numpy as np
+        if len(snippets) > 10:
+            indices = np.linspace(0, len(snippets) - 1, 10, dtype=int)
+            snippets = [snippets[idx] for idx in indices]
+
+        cropped_snippets = []
+        for s in snippets:
+            try:
+                dur = s.get_total_duration()
+                if dur > 0.150:
+                    mid = dur / 2.0
+                    cropped_snippets.append(s.extract_part(from_time=mid - 0.075, to_time=mid + 0.075))
+                else:
+                    cropped_snippets.append(s)
+            except Exception:
+                cropped_snippets.append(s)
+        return cropped_snippets
+
+    def _evaluate_configs_parallel(self, snippets, configs):
+        import concurrent.futures
+        import numpy as np
+        from modules.formant_optimizer import score_config
+        results_dict = {}
+        def eval_single(cfg):
+            h, win, pre = cfg
+            try:
+                score, vr, m_f1, m_f2 = score_config(snippets, h, win, pre)
+                return cfg, (score, vr, m_f1, m_f2)
+            except Exception:
+                return cfg, (0.0, 0.0, np.nan, np.nan)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(configs), 8)) as executor:
+            mapped_results = list(executor.map(eval_single, configs))
+        for cfg, res in mapped_results:
+            results_dict[cfg] = res
+        return results_dict
+
+    def _search_best_formant_config(self, snippets):
+        import numpy as np
+
+        # 3. Coarse search (并行计算)
+        coarse_candidates = [3500, 4000, 4500, 5000, 5500, 6000, 6500]
+        coarse_configs = [(h, 0.025, 50) for h in coarse_candidates]
+        coarse_eval_results = self._evaluate_configs_parallel(snippets, coarse_configs)
+
+        coarse_results = {}
+        for h in coarse_candidates:
+            score, vr, m_f1, m_f2 = coarse_eval_results[(h, 0.025, 50)]
+            coarse_results[h] = {
+                'score': score,
+                'valid_rate': vr,
+                'med_f1': m_f1,
+                'med_f2': m_f2
+            }
+
+        # Apply consistency drift penalty
+        final_coarse_scores = {}
+        for i, h in enumerate(coarse_candidates):
+            res = coarse_results[h]
+            score = res['score']
+            med_f1 = res['med_f1']
+            med_f2 = res['med_f2']
+            drift_penalty = 1.0
+
+            if i > 0:
+                left_res = coarse_results[coarse_candidates[i-1]]
+                if np.isfinite(med_f1) and np.isfinite(left_res['med_f1']) and abs(med_f1 - left_res['med_f1']) > 100:
+                    drift_penalty *= 0.85
+                if np.isfinite(med_f2) and np.isfinite(left_res['med_f2']) and abs(med_f2 - left_res['med_f2']) > 200:
+                    drift_penalty *= 0.85
+
+            if i < len(coarse_candidates) - 1:
+                right_res = coarse_results[coarse_candidates[i+1]]
+                if np.isfinite(med_f1) and np.isfinite(right_res['med_f1']) and abs(med_f1 - right_res['med_f1']) > 100:
+                    drift_penalty *= 0.85
+                if np.isfinite(med_f2) and np.isfinite(right_res['med_f2']) and abs(med_f2 - right_res['med_f2']) > 200:
+                    drift_penalty *= 0.85
+
+            final_coarse_scores[h] = score * drift_penalty
+
+        best_coarse_h = max(coarse_candidates, key=lambda h: final_coarse_scores[h])
+
+        # 4. Fine search (并行计算所有候选参数)
+        fine_h_candidates = [
+            best_coarse_h - 500,
+            best_coarse_h - 250,
+            best_coarse_h,
+            best_coarse_h + 250,
+            best_coarse_h + 500
+        ]
+        fine_h_candidates = [h for h in fine_h_candidates if 3000 <= h <= 7000]
+
+        win_candidates = [0.020, 0.025, 0.030, 0.035]
+        pre_candidates = [50, 80, 100]
+
+        fine_configs = []
+        for h in fine_h_candidates:
+            for win in win_candidates:
+                for pre in pre_candidates:
+                    fine_configs.append((h, win, pre))
+
+        fine_eval_results = self._evaluate_configs_parallel(snippets, fine_configs)
+
+        best_score = -1.0
+        best_config = None
+        all_fine_results = []
+
+        total_steps = len(fine_configs)
+        for step_idx, cfg in enumerate(fine_configs):
+            h, win, pre = cfg
+            score, vr, _, _ = fine_eval_results[cfg]
+            all_fine_results.append((h, win, pre, score))
+            if score > best_score:
+                best_score = score
+                best_config = (h, 5, win, pre, score)
+
+            if (step_idx + 1) % 5 == 0 or (step_idx + 1) == total_steps:
+                self.root.after(0, lambda v=(step_idx + 1)/total_steps: self.set_progress(v))
+
+        return best_score, best_config, all_fine_results
+
+    def _generate_formant_gears(self, best_score, best_config, all_fine_results):
+        # 1. Recommended
+        reco_params = best_config
+
+        # 2. Anti-misalignment (lower max_hz, longer window)
+        anti_candidates = [
+            cfg for cfg in all_fine_results
+            if cfg[1] >= 0.030 and cfg[0] <= reco_params[0] - 250 and cfg[3] >= best_score - 0.18
+        ]
+        if not anti_candidates:
+            anti_candidates = [
+                cfg for cfg in all_fine_results
+                if cfg[1] >= 0.025 and cfg[0] <= reco_params[0] and cfg[3] >= best_score - 0.25
+            ]
+        if anti_candidates:
+            best_anti = max(anti_candidates, key=lambda c: (c[3], -c[0], c[1]))
+            anti_params = (best_anti[0], 5, best_anti[1], best_anti[2], best_anti[3])
+        else:
+            anti_params = (reco_params[0], 5, max(0.025, reco_params[2]), reco_params[3], reco_params[4] * 0.9)
+
+        # 3. High-resolution (shorter window, score within 0.05 of best)
+        fine_candidates = [
+            cfg for cfg in all_fine_results
+            if cfg[1] <= 0.025 and cfg[3] >= best_score - 0.08
+        ]
+        if fine_candidates:
+            best_fine = sorted(fine_candidates, key=lambda c: (c[1], -c[3]))[0]
+            fine_params = (best_fine[0], 5, best_fine[1], best_fine[2], best_fine[3])
+        else:
+            fine_params = (reco_params[0], 5, min(0.025, reco_params[2]), reco_params[3], reco_params[4] * 0.9)
+
+        return reco_params, anti_params, fine_params
+
+    def _run_formant_detection_task(self, tab_mode, pending_long_snd, long_audio_path, items_snapshot):
+        try:
+            snippets = self._collect_formant_snippets(tab_mode, pending_long_snd, long_audio_path, items_snapshot)
+
+            if not snippets:
+                self.root.after(0, self.stop_loading)
+                self.root.after(0, lambda: messagebox.showwarning("提示", "没有有效发音片段可进行分析。"))
+                return
+
+            snippets = self._crop_snippets_for_formant_analysis(snippets)
+
+            best_score, best_config, all_fine_results = self._search_best_formant_config(snippets)
+
+            if best_config is None:
+                self.root.after(0, self.stop_loading)
+                self.root.after(0, lambda: messagebox.showwarning("提示", "未找到有效的最佳配置。"))
+                return
+
+            voiced_duration = 0.0
+            for s in snippets:
+                try:
+                    voiced_duration += float(s.get_total_duration())
+                except Exception:
+                    pass
+            insufficient_data = voiced_duration < 0.5
+
+            reco_params, anti_params, fine_params = self._generate_formant_gears(best_score, best_config, all_fine_results)
+
+            def show_result_dialog():
+                self.stop_loading()
+                from modules.formant_detection_dialog import FormantDetectionDialog
+                FormantDetectionDialog(
+                    parent=self.root,
+                    app=self,
+                    voiced_duration=voiced_duration,
+                    insufficient_data=insufficient_data,
+                    reco_params=reco_params,
+                    anti_params=anti_params,
+                    fine_params=fine_params
+                )
+
+            self.root.after(0, show_result_dialog)
+
+        except Exception as e:
+            self.root.after(0, self.stop_loading)
+            self.root.after(0, lambda: messagebox.showerror("错误", f"检测过程中发生错误: {e}"))
+
     def on_detect_formant_clicked(self):
         if not self.items:
             messagebox.showwarning("提示", "请先导入音频文件以进行检测。")
@@ -3985,401 +4229,12 @@ class PhoneticsApp:
                 'end': item.get('end')
             })
 
-        def run_detection():
-            try:
-                import parselmouth
-                import os
-                import numpy as np
-
-                # 1. Collect snippets
-                snippets = []
-                if tab_mode == "单条长音频":
-                    snd = pending_long_snd
-                    if snd is None and long_audio_path and os.path.exists(long_audio_path):
-                        snd = parselmouth.Sound(long_audio_path)
-                    if snd:
-                        for item in items_snapshot:
-                            m_s = item.get('macro_start')
-                            m_e = item.get('macro_end')
-                            if m_s is not None and m_e is not None and m_e > m_s + 0.06:
-                                try:
-                                    part = snd.extract_part(from_time=m_s + 0.025, to_time=m_e - 0.025)
-                                    snippets.append(part)
-                                except Exception:
-                                    pass
-                else: # "多条独立音频"
-                    for item in items_snapshot:
-                        item_snd = item.get('snd')
-                        if item_snd is None and item.get('path') and os.path.exists(item['path']):
-                            try:
-                                item_snd = parselmouth.Sound(item['path'])
-                            except Exception:
-                                pass
-                        if item_snd:
-                            t_s = item.get('start', 0.0)
-                            t_e = item.get('end', item_snd.get_total_duration())
-                            if t_e > t_s + 0.06:
-                                try:
-                                    part = item_snd.extract_part(from_time=t_s + 0.025, to_time=t_e - 0.025)
-                                    snippets.append(part)
-                                except Exception:
-                                    pass
-                            else:
-                                try:
-                                    snippets.append(item_snd)
-                                except Exception:
-                                    pass
-
-                if not snippets:
-                    self.root.after(0, self.stop_loading)
-                    self.root.after(0, lambda: messagebox.showwarning("提示", "没有有效发音片段可进行分析。"))
-                    return
-
-                # 限制分析片段数量至多 10 个以保障性能，统计上这已足够代表发音人特征
-                if len(snippets) > 10:
-                    indices = np.linspace(0, len(snippets) - 1, 10, dtype=int)
-                    snippets = [snippets[idx] for idx in indices]
-
-                # 对每个音频片段进行裁剪，仅保留中间 150ms 稳定的元音核段，极大地减少 Burg LPC 算法的数据量与计算耗时
-                cropped_snippets = []
-                for s in snippets:
-                    try:
-                        dur = s.get_total_duration()
-                        if dur > 0.150:
-                            mid = dur / 2.0
-                            cropped_snippets.append(s.extract_part(from_time=mid - 0.075, to_time=mid + 0.075))
-                        else:
-                            cropped_snippets.append(s)
-                    except Exception:
-                        cropped_snippets.append(s)
-                snippets = cropped_snippets
-
-                # 2. Scoring Helper
-                def score_config(formant_max_hz, window_length, pre_emphasis):
-                    total_frames = 0
-                    valid_frames = 0
-
-                    continuity_scores = []
-                    gap_scores = []
-                    range_scores = []
-                    fragmentation_scores = []
-                    edge_scores = []
-
-                    all_valid_f1 = []
-                    all_valid_f2 = []
-
-                    def clipped_score(value, low, high):
-                        if high <= low:
-                            return 0.0
-                        return float(np.clip((value - low) / (high - low), 0.0, 1.0))
-
-                    def adjacent_jump_rate(xs_arr, vals, threshold):
-                        vals = np.asarray(vals, dtype=float)
-                        xs_arr = np.asarray(xs_arr, dtype=float)
-                        valid = np.isfinite(vals)
-                        if np.sum(valid) < 3:
-                            return 1.0
-                        idx = np.where(valid)[0]
-                        jump_count = 0
-                        pair_count = 0
-                        for left, right in zip(idx[:-1], idx[1:]):
-                            if xs_arr[right] - xs_arr[left] > 0.055:
-                                continue
-                            pair_count += 1
-                            if abs(vals[right] - vals[left]) > threshold:
-                                jump_count += 1
-                        if pair_count == 0:
-                            return 1.0
-                        return jump_count / pair_count
-
-                    def fragmentation_penalty(valid_mask):
-                        if len(valid_mask) == 0:
-                            return 1.0
-                        runs = []
-                        run_len = 0
-                        for flag in valid_mask:
-                            if flag:
-                                run_len += 1
-                            elif run_len:
-                                runs.append(run_len)
-                                run_len = 0
-                        if run_len:
-                            runs.append(run_len)
-                        if not runs:
-                            return 1.0
-                        short = sum(r for r in runs if r < 4)
-                        return short / max(1, sum(runs))
-
-                    for snd_part in snippets:
-                        try:
-                            formant = snd_part.to_formant_burg(
-                                time_step=None,
-                                max_number_of_formants=5,
-                                maximum_formant=formant_max_hz,
-                                window_length=window_length,
-                                pre_emphasis_from=pre_emphasis
-                            )
-                        except Exception:
-                            continue
-
-                        xs = formant.xs()
-                        if len(xs) == 0:
-                            continue
-
-                        f1_vals = []
-                        f2_vals = []
-                        f3_vals = []
-                        for t in xs:
-                            f1_vals.append(formant.get_value_at_time(1, t))
-                            f2_vals.append(formant.get_value_at_time(2, t))
-                            f3_vals.append(formant.get_value_at_time(3, t))
-
-                        f1 = np.array(f1_vals)
-                        f2 = np.array(f2_vals)
-                        f3 = np.array(f3_vals)
-
-                        gap = f2 - f1
-                        valid_mask = (
-                            np.isfinite(f1) & np.isfinite(f2) &
-                            (f1 >= 90.0) & (f1 <= 1300.0) &
-                            (f2 >= 350.0) & (f2 <= min(float(formant_max_hz) * 0.96, 4200.0)) &
-                            (gap >= 120.0)
-                        )
-                        total_frames += len(xs)
-                        valid_frames += np.sum(valid_mask)
-
-                        if np.sum(valid_mask) < 4:
-                            continue
-
-                        vf1 = f1[valid_mask]
-                        vf2 = f2[valid_mask]
-                        vf3 = f3[valid_mask]
-
-                        all_valid_f1.extend(vf1.tolist())
-                        all_valid_f2.extend(vf2.tolist())
-
-                        valid_f1_series = np.where(valid_mask, f1, np.nan)
-                        valid_f2_series = np.where(valid_mask, f2, np.nan)
-                        f1_jump_threshold = max(150.0, 0.28 * np.nanmedian(vf1))
-                        f2_jump_threshold = max(260.0, 0.20 * np.nanmedian(vf2))
-                        f1_jump_rate = adjacent_jump_rate(xs, valid_f1_series, f1_jump_threshold)
-                        f2_jump_rate = adjacent_jump_rate(xs, valid_f2_series, f2_jump_threshold)
-                        continuity_scores.append(1.0 - min(1.0, 3.0 * (0.45 * f1_jump_rate + 0.55 * f2_jump_rate)))
-
-                        diff = vf2 - vf1
-                        diff_p10 = np.percentile(diff, 10)
-                        diff_cv = np.std(diff) / np.mean(diff) if np.mean(diff) > 0 else 1.0
-                        gap_score = 0.65 * clipped_score(diff_p10, 140.0, 450.0) + 0.35 * (1.0 - min(1.0, diff_cv / 0.85))
-                        gap_scores.append(gap_score)
-
-                        f1_p95 = np.percentile(vf1, 95)
-                        f2_p99 = np.percentile(vf2, 99)
-                        f1_range_penalty = clipped_score(f1_p95, 1050.0, 1450.0)
-                        f2_range_penalty = clipped_score(f2_p99, 3300.0, 4300.0)
-                        range_scores.append(1.0 - min(1.0, 0.55 * f1_range_penalty + 0.45 * f2_range_penalty))
-
-                        fragmentation_scores.append(1.0 - fragmentation_penalty(valid_mask))
-
-                        near_edge_f2 = np.sum(vf2 > 0.93 * formant_max_hz) / len(vf2)
-                        vf3_clean = vf3[np.isfinite(vf3)]
-                        near_edge_f3 = np.sum(vf3_clean > 0.93 * formant_max_hz) / len(vf3_clean) if len(vf3_clean) > 0 else 0.0
-                        edge_scores.append(1.0 - min(1.0, 0.7 * near_edge_f2 + 0.3 * near_edge_f3))
-
-                    if total_frames == 0:
-                        return 0.0, 0.0, np.nan, np.nan
-
-                    valid_rate = valid_frames / total_frames
-                    coverage_score = min(1.0, valid_rate / 0.82)
-                    continuity_score = np.mean(continuity_scores) if continuity_scores else 0.0
-                    gap_score = np.mean(gap_scores) if gap_scores else 0.0
-                    range_score = np.mean(range_scores) if range_scores else 0.0
-                    fragmentation_score = np.mean(fragmentation_scores) if fragmentation_scores else 0.0
-                    edge_score = np.mean(edge_scores) if edge_scores else 0.0
-
-                    quality_score = (
-                        0.22 * coverage_score +
-                        0.30 * continuity_score +
-                        0.22 * gap_score +
-                        0.12 * range_score +
-                        0.08 * fragmentation_score +
-                        0.06 * edge_score
-                    )
-
-                    if valid_rate < 0.25:
-                        quality_score *= 0.55
-
-                    # Prefer a lower ceiling when the observed F1/F2 quality is effectively tied.
-                    quality_score *= (1.0 - max(0.0, formant_max_hz - 5000.0) / 30000.0)
-
-                    median_f1 = np.median(all_valid_f1) if all_valid_f1 else np.nan
-                    median_f2 = np.median(all_valid_f2) if all_valid_f2 else np.nan
-
-                    return quality_score, valid_rate, median_f1, median_f2
-
-                import concurrent.futures
-
-                # 并行评估参数配置的辅助函数
-                def evaluate_configs(configs):
-                    results_dict = {}
-                    def eval_single(cfg):
-                        h, win, pre = cfg
-                        try:
-                            score, vr, m_f1, m_f2 = score_config(h, win, pre)
-                            return cfg, (score, vr, m_f1, m_f2)
-                        except Exception:
-                            return cfg, (0.0, 0.0, np.nan, np.nan)
-
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(configs), 8)) as executor:
-                        mapped_results = list(executor.map(eval_single, configs))
-                    for cfg, res in mapped_results:
-                        results_dict[cfg] = res
-                    return results_dict
-
-                # 3. Coarse search (并行计算)
-                coarse_candidates = [3500, 4000, 4500, 5000, 5500, 6000, 6500]
-                coarse_configs = [(h, 0.025, 50) for h in coarse_candidates]
-                coarse_eval_results = evaluate_configs(coarse_configs)
-
-                coarse_results = {}
-                for h in coarse_candidates:
-                    score, vr, m_f1, m_f2 = coarse_eval_results[(h, 0.025, 50)]
-                    coarse_results[h] = {
-                        'score': score,
-                        'valid_rate': vr,
-                        'med_f1': m_f1,
-                        'med_f2': m_f2
-                    }
-
-                # Apply consistency drift penalty
-                final_coarse_scores = {}
-                for i, h in enumerate(coarse_candidates):
-                    res = coarse_results[h]
-                    score = res['score']
-                    med_f1 = res['med_f1']
-                    med_f2 = res['med_f2']
-                    drift_penalty = 1.0
-
-                    if i > 0:
-                        left_res = coarse_results[coarse_candidates[i-1]]
-                        if np.isfinite(med_f1) and np.isfinite(left_res['med_f1']) and abs(med_f1 - left_res['med_f1']) > 100:
-                            drift_penalty *= 0.85
-                        if np.isfinite(med_f2) and np.isfinite(left_res['med_f2']) and abs(med_f2 - left_res['med_f2']) > 200:
-                            drift_penalty *= 0.85
-
-                    if i < len(coarse_candidates) - 1:
-                        right_res = coarse_results[coarse_candidates[i+1]]
-                        if np.isfinite(med_f1) and np.isfinite(right_res['med_f1']) and abs(med_f1 - right_res['med_f1']) > 100:
-                            drift_penalty *= 0.85
-                        if np.isfinite(med_f2) and np.isfinite(right_res['med_f2']) and abs(med_f2 - right_res['med_f2']) > 200:
-                            drift_penalty *= 0.85
-
-                    final_coarse_scores[h] = score * drift_penalty
-
-                best_coarse_h = max(coarse_candidates, key=lambda h: final_coarse_scores[h])
-
-                # 4. Fine search (并行计算所有候选参数)
-                fine_h_candidates = [
-                    best_coarse_h - 500,
-                    best_coarse_h - 250,
-                    best_coarse_h,
-                    best_coarse_h + 250,
-                    best_coarse_h + 500
-                ]
-                fine_h_candidates = [h for h in fine_h_candidates if 3000 <= h <= 7000]
-
-                win_candidates = [0.020, 0.025, 0.030, 0.035]
-                pre_candidates = [50, 80, 100]
-
-                fine_configs = []
-                for h in fine_h_candidates:
-                    for win in win_candidates:
-                        for pre in pre_candidates:
-                            fine_configs.append((h, win, pre))
-
-                fine_eval_results = evaluate_configs(fine_configs)
-
-                best_score = -1.0
-                best_config = None
-                all_fine_results = []
-
-                total_steps = len(fine_configs)
-                for step_idx, cfg in enumerate(fine_configs):
-                    h, win, pre = cfg
-                    score, vr, _, _ = fine_eval_results[cfg]
-                    all_fine_results.append((h, win, pre, score))
-                    if score > best_score:
-                        best_score = score
-                        best_config = (h, 5, win, pre, score)
-                    
-                    if (step_idx + 1) % 5 == 0 or (step_idx + 1) == total_steps:
-                        self.root.after(0, lambda v=(step_idx + 1)/total_steps: self.set_progress(v))
-
-                if best_config is None:
-                    self.root.after(0, self.stop_loading)
-                    self.root.after(0, lambda: messagebox.showwarning("提示", "未找到有效的最佳配置。"))
-                    return
-
-                # Determine insufficient data
-                voiced_duration = 0.0
-                for s in snippets:
-                    try:
-                        voiced_duration += float(s.get_total_duration())
-                    except Exception:
-                        pass
-                insufficient_data = voiced_duration < 0.5
-
-                # Generate gears
-                # 1. Recommended
-                reco_params = best_config
-
-                # 2. Anti-misalignment (lower max_hz, longer window)
-                anti_candidates = [
-                    cfg for cfg in all_fine_results 
-                    if cfg[1] >= 0.030 and cfg[0] <= reco_params[0] - 250 and cfg[3] >= best_score - 0.18
-                ]
-                if not anti_candidates:
-                    anti_candidates = [
-                        cfg for cfg in all_fine_results
-                        if cfg[1] >= 0.025 and cfg[0] <= reco_params[0] and cfg[3] >= best_score - 0.25
-                    ]
-                if anti_candidates:
-                    best_anti = max(anti_candidates, key=lambda c: (c[3], -c[0], c[1]))
-                    anti_params = (best_anti[0], 5, best_anti[1], best_anti[2], best_anti[3])
-                else:
-                    anti_params = (reco_params[0], 5, max(0.025, reco_params[2]), reco_params[3], reco_params[4] * 0.9)
-
-                # 3. High-resolution (shorter window, score within 0.05 of best)
-                fine_candidates = [
-                    cfg for cfg in all_fine_results
-                    if cfg[1] <= 0.025 and cfg[3] >= best_score - 0.08
-                ]
-                if fine_candidates:
-                    best_fine = sorted(fine_candidates, key=lambda c: (c[1], -c[3]))[0]
-                    fine_params = (best_fine[0], 5, best_fine[1], best_fine[2], best_fine[3])
-                else:
-                    fine_params = (reco_params[0], 5, min(0.025, reco_params[2]), reco_params[3], reco_params[4] * 0.9)
-
-                def show_result_dialog():
-                    self.stop_loading()
-                    from modules.formant_detection_dialog import FormantDetectionDialog
-                    FormantDetectionDialog(
-                        parent=self.root,
-                        app=self,
-                        voiced_duration=voiced_duration,
-                        insufficient_data=insufficient_data,
-                        reco_params=reco_params,
-                        anti_params=anti_params,
-                        fine_params=fine_params
-                    )
-
-                self.root.after(0, show_result_dialog)
-
-            except Exception as e:
-                self.root.after(0, self.stop_loading)
-                self.root.after(0, lambda: messagebox.showerror("错误", f"检测过程中发生错误: {e}"))
-
         import threading
-        threading.Thread(target=run_detection, daemon=True).start()
+        threading.Thread(
+            target=self._run_formant_detection_task,
+            args=(tab_mode, pending_long_snd, long_audio_path, items_snapshot),
+            daemon=True
+        ).start()
 
     def apply_formant_params(self, max_hz, count, window_length, pre_emphasis):
         # Update entry fields UI
