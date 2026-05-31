@@ -410,15 +410,25 @@ class SpectrogramPanel:
         self._update_playback_status()
 
     def _update_selection_graphics(self, redraw=True):
-        if self.selection_patch:
-            try:
-                self.selection_patch.remove()
-            except Exception:
-                pass
-            self.selection_patch = None
         if self.ax and self._has_playback_selection():
             s, e = self.playback_selection
-            self.selection_patch = self.ax.axvspan(s, e, color="#FDE68A", alpha=0.38, zorder=4)
+            if self.selection_patch:
+                xy = self.selection_patch.get_xy()
+                xy[0, 0] = s
+                xy[1, 0] = s
+                xy[2, 0] = e
+                xy[3, 0] = e
+                xy[4, 0] = s
+                self.selection_patch.set_xy(xy)
+            else:
+                self.selection_patch = self.ax.axvspan(s, e, color="#FDE68A", alpha=0.38, zorder=4)
+        else:
+            if self.selection_patch:
+                try:
+                    self.selection_patch.remove()
+                except Exception:
+                    pass
+                self.selection_patch = None
         if redraw and self.canvas:
             self.canvas.draw_idle()
 
@@ -669,13 +679,7 @@ class SpectrogramPanel:
         if event.inaxes not in [self.ax, self.ax2] or event.button != 1: return
 
         if self.is_playing:
-            try:
-                import sounddevice as sd
-                sd.stop()
-            except Exception:
-                pass
-            self.is_playing = False
-            self._update_play_button_state(playing=False)
+            self._stop_playback(reset_cursor=False)
             return
 
         if self.eraser_mode:
@@ -791,32 +795,55 @@ class SpectrogramPanel:
         
         if not self.dragging:
             is_hovering = False
+            needs_redraw = False
             for i, (c_s, c_e) in enumerate(chars_bounds):
                 s_px = self.ax.transData.transform((c_s, 0))[0]
                 e_px = self.ax.transData.transform((c_e, 0))[0]
                 
                 if abs(event.x - s_px) < 15:
-                    self.bound_lines[i][0].set_linewidth(4); self.bound_lines[i][0].set_color('#B91C1C')
+                    if self.bound_lines[i][0].get_linewidth() != 4:
+                        self.bound_lines[i][0].set_linewidth(4)
+                        self.bound_lines[i][0].set_color('#B91C1C')
+                        needs_redraw = True
                     is_hovering = True
                 else:
-                    self.bound_lines[i][0].set_linewidth(2); self.bound_lines[i][0].set_color('#EF4444')
+                    if self.bound_lines[i][0].get_linewidth() != 2:
+                        self.bound_lines[i][0].set_linewidth(2)
+                        self.bound_lines[i][0].set_color('#EF4444')
+                        needs_redraw = True
 
                 if abs(event.x - e_px) < 15:
-                    self.bound_lines[i][1].set_linewidth(4); self.bound_lines[i][1].set_color('#B91C1C')
+                    if self.bound_lines[i][1].get_linewidth() != 4:
+                        self.bound_lines[i][1].set_linewidth(4)
+                        self.bound_lines[i][1].set_color('#B91C1C')
+                        needs_redraw = True
                     is_hovering = True
                 else:
-                    self.bound_lines[i][1].set_linewidth(2); self.bound_lines[i][1].set_color('#EF4444')
+                    if self.bound_lines[i][1].get_linewidth() != 2:
+                        self.bound_lines[i][1].set_linewidth(2)
+                        self.bound_lines[i][1].set_color('#EF4444')
+                        needs_redraw = True
                 
             if self.cursor_x is not None:
                 c_px = self.ax.transData.transform((self.cursor_x, 0))[0]
                 if abs(event.x - c_px) < 15:
-                    self.cursor_line.set_linewidth(2.5); self.cursor_line.set_color('#065F46')
+                    if self.cursor_line.get_linewidth() != 2.5:
+                        self.cursor_line.set_linewidth(2.5)
+                        self.cursor_line.set_color('#065F46')
+                        needs_redraw = True
                     is_hovering = True
                 else:
-                    self.cursor_line.set_linewidth(1.5); self.cursor_line.set_color('#1B5E20')
+                    if self.cursor_line.get_linewidth() != 1.5:
+                        self.cursor_line.set_linewidth(1.5)
+                        self.cursor_line.set_color('#1B5E20')
+                        needs_redraw = True
 
-            self.canvas.get_tk_widget().config(cursor="sb_h_double_arrow" if is_hovering else "arrow")
-            self.canvas.draw_idle()
+            cursor_name = "sb_h_double_arrow" if is_hovering else "arrow"
+            if self.canvas.get_tk_widget().cget("cursor") != cursor_name:
+                self.canvas.get_tk_widget().config(cursor=cursor_name)
+
+            if needs_redraw:
+                self.canvas.draw_idle()
             return
             
         if event.xdata is None:
@@ -908,16 +935,20 @@ class SpectrogramPanel:
         chars_bounds = item.get('chars_bounds', [])
         if not chars_bounds or len(self.bound_lines) != len(chars_bounds): return
         
-        for fill in self.span_fills:
-            try: fill.remove()
-            except: pass
-        self.span_fills.clear()
-        
         for i, (c_s, c_e) in enumerate(chars_bounds):
             self.bound_lines[i][0].set_xdata([c_s, c_s])
             self.bound_lines[i][1].set_xdata([c_e, c_e])
-            span = self.ax.axvspan(c_s, c_e, color='#BFDBFE', alpha=0.35)
-            self.span_fills.append(span)
+
+            if i < len(self.span_fills):
+                poly = self.span_fills[i]
+                xy = poly.get_xy()
+                # xy shape is (5, 2) for a rectangle
+                xy[0, 0] = c_s
+                xy[1, 0] = c_s
+                xy[2, 0] = c_e
+                xy[3, 0] = c_e
+                xy[4, 0] = c_s
+                poly.set_xy(xy)
 
             if i < len(self.char_texts):
                 cx = (c_s + c_e) / 2
@@ -1136,7 +1167,7 @@ class SpectrogramPanel:
 
         self.cursor_x = current_audio_time
         self.update_cursor_graphics(prefer_blit=True)
-        self._playback_job = self.canvas.get_tk_widget().after(10, self._playback_update_loop)
+        self._playback_job = self.canvas.get_tk_widget().after(30, self._playback_update_loop)
 
     def apply_auto_detect(self):
         if self.on_auto_detect_callback:

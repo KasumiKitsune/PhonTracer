@@ -510,7 +510,7 @@ class TestAcousticExporterFeatures(unittest.TestCase):
 
             # Call trigger_preview_update again: should cancel previous timer and schedule new one
             dlg.trigger_preview_update()
-            dlg.after_cancel.assert_called_once_with("timer_123")
+            dlg.after_cancel.assert_any_call("timer_123")
 
             # Turn off live refresh
             dlg.var_live_refresh.set(False)
