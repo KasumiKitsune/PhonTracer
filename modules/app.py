@@ -62,15 +62,7 @@ class PhoneticsApp:
         self.root.minsize(1100, 650)
         self.root.configure(fg_color="#F3F4F6")
 
-        # 设置窗口图标
-        try:
-            icon_file = os.path.join("assets", "icon.ico")
-            if not os.path.exists(icon_file):
-                icon_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "icon.ico")
-            if os.path.exists(icon_file):
-                self.root.iconbitmap(icon_file)
-        except Exception:
-            pass
+        self._setup_window_icon()
 
         self.drop_queue = queue.Queue()
         self._drop_queue_idle_delay = 500
@@ -91,80 +83,9 @@ class PhoneticsApp:
         max_workers = min(os.cpu_count() or 4, 8)
         self.executor = concurrent.futures.ProcessPoolExecutor(max_workers=max_workers)
 
-        def on_closing():
-            if getattr(self, 'has_changes', False):
-                ans = messagebox.askyesnocancel("保存项目", "项目已被修改，是否在关闭前保存？")
-                if ans is True: # Yes
-                    self.project_manager.capture_ui_state()
-                    if getattr(self, 'current_project_path', None):
-                        success = self.project_manager.export_project(self.current_project_path)
-                        if not success:
-                            return
-                    else:
-                        import datetime
-                        spk_name = self.active_speaker.name if getattr(self, 'active_speaker', None) else "发音人1"
-                        date_str = datetime.datetime.now().strftime("%m%d-%H%M")
-                        default_filename = f"{spk_name}_{date_str}"
-                        path = filedialog.asksaveasfilename(
-                            initialfile=default_filename,
-                            defaultextension=".teproj",
-                            filetypes=[("PhonTracer Project", "*.teproj")]
-                        )
-                        if not path:
-                            return
-                        success = self.project_manager.export_project(path)
-                        if not success:
-                            return
-                        self.current_project_path = path
-                elif ans is None: # Cancel
-                    return
+        self.root.protocol("WM_DELETE_WINDOW", self._on_closing)
 
-            if self._drop_queue_job is not None:
-                try:
-                    self.root.after_cancel(self._drop_queue_job)
-                except Exception:
-                    pass
-                self._drop_queue_job = None
-            if self._window_guard_job is not None:
-                try:
-                    self.root.after_cancel(self._window_guard_job)
-                except Exception:
-                    pass
-                self._window_guard_job = None
-
-            # Clean up workspace on normal exit
-            try:
-                if hasattr(self, 'project_manager'):
-                    self.project_manager.cancel_auto_save()
-                    ws_dir = getattr(self.project_manager, 'workspace_dir', None)
-                    if ws_dir and isinstance(ws_dir, str):
-                        with getattr(self.project_manager, '_save_lock'):
-                            if os.path.exists(ws_dir):
-                                import shutil
-                                shutil.rmtree(ws_dir)
-            except Exception as e:
-                print(f"Failed to clean up workspace on exit: {e}")
-
-            # 主动关闭并销毁 ProcessPoolExecutor 的子进程，避免程序关闭后滞留在后台
-            import multiprocessing
-            try:
-                for child in multiprocessing.active_children():
-                    child.terminate()
-            except Exception:
-                pass
-
-            self.executor.shutdown(wait=False)
-            self.root.destroy()
-        self.root.protocol("WM_DELETE_WINDOW", on_closing)
-
-        try:
-            self.font_title = ctk.CTkFont(family="Microsoft YaHei", size=15, weight="bold")
-            self.font_main = ctk.CTkFont(family="Microsoft YaHei", size=13)
-            self.font_code = ctk.CTkFont(family="Consolas", size=13)
-        except Exception:
-            self.font_title = ("Microsoft YaHei", 15, "bold")
-            self.font_main = ("Microsoft YaHei", 13)
-            self.font_code = ("Consolas", 13)
+        self._setup_fonts()
 
         self.setup_icons()
         self.setup_ui()
@@ -191,6 +112,92 @@ class PhoneticsApp:
 
         # 启动时后台静默检查更新 (已取消自动获取最新版本机制，改为手动检测更新)
         # self.root.after(3000, lambda: self.check_update(is_manual=False))
+
+    def _setup_window_icon(self):
+        # 设置窗口图标
+        try:
+            icon_file = os.path.join("assets", "icon.ico")
+            if not os.path.exists(icon_file):
+                icon_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "icon.ico")
+            if os.path.exists(icon_file):
+                self.root.iconbitmap(icon_file)
+        except Exception:
+            pass
+
+    def _setup_fonts(self):
+        try:
+            self.font_title = ctk.CTkFont(family="Microsoft YaHei", size=15, weight="bold")
+            self.font_main = ctk.CTkFont(family="Microsoft YaHei", size=13)
+            self.font_code = ctk.CTkFont(family="Consolas", size=13)
+        except Exception:
+            self.font_title = ("Microsoft YaHei", 15, "bold")
+            self.font_main = ("Microsoft YaHei", 13)
+            self.font_code = ("Consolas", 13)
+
+    def _on_closing(self):
+        if getattr(self, 'has_changes', False):
+            ans = messagebox.askyesnocancel("保存项目", "项目已被修改，是否在关闭前保存？")
+            if ans is True: # Yes
+                self.project_manager.capture_ui_state()
+                if getattr(self, 'current_project_path', None):
+                    success = self.project_manager.export_project(self.current_project_path)
+                    if not success:
+                        return
+                else:
+                    import datetime
+                    spk_name = self.active_speaker.name if getattr(self, 'active_speaker', None) else "发音人1"
+                    date_str = datetime.datetime.now().strftime("%m%d-%H%M")
+                    default_filename = f"{spk_name}_{date_str}"
+                    path = filedialog.asksaveasfilename(
+                        initialfile=default_filename,
+                        defaultextension=".teproj",
+                        filetypes=[("PhonTracer Project", "*.teproj")]
+                    )
+                    if not path:
+                        return
+                    success = self.project_manager.export_project(path)
+                    if not success:
+                        return
+                    self.current_project_path = path
+            elif ans is None: # Cancel
+                return
+
+        if self._drop_queue_job is not None:
+            try:
+                self.root.after_cancel(self._drop_queue_job)
+            except Exception:
+                pass
+            self._drop_queue_job = None
+        if self._window_guard_job is not None:
+            try:
+                self.root.after_cancel(self._window_guard_job)
+            except Exception:
+                pass
+            self._window_guard_job = None
+
+        # Clean up workspace on normal exit
+        try:
+            if hasattr(self, 'project_manager'):
+                self.project_manager.cancel_auto_save()
+                ws_dir = getattr(self.project_manager, 'workspace_dir', None)
+                if ws_dir and isinstance(ws_dir, str):
+                    with getattr(self.project_manager, '_save_lock'):
+                        if os.path.exists(ws_dir):
+                            import shutil
+                            shutil.rmtree(ws_dir)
+        except Exception as e:
+            print(f"Failed to clean up workspace on exit: {e}")
+
+        # 主动关闭并销毁 ProcessPoolExecutor 的子进程，避免程序关闭后滞留在后台
+        import multiprocessing
+        try:
+            for child in multiprocessing.active_children():
+                child.terminate()
+        except Exception:
+            pass
+
+        self.executor.shutdown(wait=False)
+        self.root.destroy()
 
     @staticmethod
     def _normalize_startup_files(files):
