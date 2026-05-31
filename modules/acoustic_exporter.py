@@ -191,6 +191,7 @@ class AcousticChartExporter:
 
             # overview specific
             'overview_metric': lambda: getattr(self, 'combo_overview_metric').get() if hasattr(self, 'combo_overview_metric') else None,
+            'overview_show_deviation': lambda: getattr(self, 'var_overview_show_deviation').get() if hasattr(self, 'var_overview_show_deviation') else False,
             'formant_overview_mode': lambda: getattr(self, 'combo_formant_overview_mode').get() if hasattr(self, 'combo_formant_overview_mode') else None,
 
             # formant space specific
@@ -533,7 +534,7 @@ class AcousticChartExporter:
         elif chart_type == "distribution":
             fig = self._plot_tone_distribution(data_entries, group_key, scale)
         elif chart_type == "density":
-            fig = self._plot_temporal_density(data_entries, group_key, is_preview=is_preview)
+            fig = self._plot_temporal_density(data_entries, group_key, scale=scale, is_preview=is_preview)
         elif chart_type == "quality":
             fig = self._plot_quality_check(data_entries)
         elif chart_type == "overview_heatmap":
@@ -554,23 +555,45 @@ class AcousticChartExporter:
         ratio_mode = self.get_param('image_ratio_mode', '默认')
         custom_ratio = self.get_param('image_ratio_custom', 1.5)
 
+        ratio_map = {
+            "4:3": 4.0 / 3.0,
+            "16:9": 16.0 / 9.0,
+            "3:2": 3.0 / 2.0,
+            "1:1": 1.0,
+            "16:10": 16.0 / 10.0,
+            "2:1": 2.0
+        }
+        R = ratio_map.get(ratio_mode, custom_ratio)
+
+        # Get available preview container size in pixels if in preview mode
+        if is_preview and hasattr(self, 'preview_wrapper'):
+            try:
+                w_avail = self.preview_wrapper.winfo_width()
+                h_avail = self.preview_wrapper.winfo_height()
+            except Exception:
+                w_avail, h_avail = 0, 0
+        else:
+            w_avail, h_avail = 0, 0
+
         if ratio_mode != "默认":
-            ratio_map = {
-                "4:3": 4.0 / 3.0,
-                "16:9": 16.0 / 9.0,
-                "3:2": 3.0 / 2.0,
-                "1:1": 1.0,
-                "16:10": 16.0 / 10.0,
-                "2:1": 2.0
-            }
-            R = ratio_map.get(ratio_mode, custom_ratio)
-            S_min = 6.0
-            if R >= 1.0:
-                w_inches = R * S_min
-                h_inches = S_min
+            if is_preview and w_avail > 50 and h_avail > 50:
+                # Subtract small padding to prevent edge overflow
+                w_avail_pad = max(50, w_avail - 16)
+                h_avail_pad = max(50, h_avail - 16)
+                if w_avail_pad / h_avail_pad >= R:
+                    h_inches = h_avail_pad / fig.dpi
+                    w_inches = h_inches * R
+                else:
+                    w_inches = w_avail_pad / fig.dpi
+                    h_inches = w_inches / R
             else:
-                w_inches = S_min
-                h_inches = S_min / R
+                S_min = 6.0
+                if R >= 1.0:
+                    w_inches = R * S_min
+                    h_inches = S_min
+                else:
+                    w_inches = S_min
+                    h_inches = S_min / R
 
             fig.set_size_inches(w_inches, h_inches, forward=True)
             if not getattr(fig, "_phontracer_skip_tight_layout", False):
@@ -578,6 +601,35 @@ class AcousticChartExporter:
                     fig.tight_layout()
                 except Exception:
                     pass
+        else:
+            # Under "Default" ratio mode in preview, adaptively resize the figure to fill 100% of available space!
+            if is_preview and w_avail > 50 and h_avail > 50:
+                w_avail_pad = max(50, w_avail - 16)
+                h_avail_pad = max(50, h_avail - 16)
+                fig.set_size_inches(w_avail_pad / fig.dpi, h_avail_pad / fig.dpi, forward=True)
+                if not getattr(fig, "_phontracer_skip_tight_layout", False):
+                    try:
+                        fig.tight_layout()
+                    except Exception:
+                        pass
+
+        if getattr(self, 'is_minimized', False):
+            import matplotlib.text as mtext
+            for text in fig.findobj(mtext.Text):
+                curr_size = text.get_size()
+                if isinstance(curr_size, (int, float)):
+                    text.set_size(max(7.0, curr_size * 0.72))
+                elif isinstance(curr_size, str):
+                    try:
+                        text.set_size(max(7.0, float(curr_size) * 0.72))
+                    except ValueError:
+                        pass
+            
+            # Ensure proper margins and tight layout for small floating window
+            try:
+                fig.tight_layout(pad=1.2)
+            except Exception:
+                pass
 
         if truncated:
             if getattr(self, 'is_minimized', False):
@@ -813,6 +865,36 @@ class AcousticChartExporter:
             ax.text(0.5, 0.5, "没有找到有效的声调数据用于生成概览图", ha='center', va='center')
             return fig
 
+        show_deviation = bool(self.get_param('overview_show_deviation', False))
+        tone_averages = {}
+
+        if show_deviation:
+            # Step 1: Pre-calculate the average F0 contour for each tone group (base tone shapes)
+            tone_counts = {}
+            for entry in data_entries:
+                syl_list = entry['normalized_syl_data'] if "T 值" in scale else entry['syl_data']
+                y_flat = []
+                for s_dur, pts in syl_list:
+                    y_flat.extend(pts)
+                if len(y_flat) < total_points:
+                    y_flat.extend([np.nan] * (total_points - len(y_flat)))
+                elif len(y_flat) > total_points:
+                    y_flat = y_flat[:total_points]
+                y_flat = np.array(y_flat, dtype=float)
+
+                tg = entry['group']
+                if tg not in tone_averages:
+                    tone_averages[tg] = np.zeros(total_points)
+                    tone_counts[tg] = np.zeros(total_points)
+
+                valid = ~np.isnan(y_flat)
+                tone_averages[tg][valid] += y_flat[valid]
+                tone_counts[tg][valid] += 1
+
+            for tg in tone_averages:
+                counts = tone_counts[tg]
+                tone_averages[tg] = np.where(counts > 0, tone_averages[tg] / counts, np.nan)
+
         matrix = []
         y_ticks = []
         y_labels = []
@@ -842,6 +924,14 @@ class AcousticChartExporter:
                     y_flat.extend([np.nan] * (total_points - len(y_flat)))
                 elif len(y_flat) > total_points:
                     y_flat = y_flat[:total_points]
+                
+                y_flat = np.array(y_flat, dtype=float)
+                if show_deviation:
+                    entry_tg = entry['group']
+                    if entry_tg in tone_averages:
+                        # Subtract tone group base average to get deviation
+                        y_flat = y_flat - tone_averages[entry_tg]
+
                 vectors.append(y_flat)
 
             if vectors:
@@ -865,14 +955,23 @@ class AcousticChartExporter:
         fig_height = max(4, current_row_idx * 0.35 + 1.5)
         fig, ax = plt.subplots(figsize=(8, fig_height))
 
-        if "均值" in metric:
-            cmap = 'RdYlBu_r' if "T 值" in scale else 'viridis'
-            vmin = 0.0 if "T 值" in scale else None
-            vmax = 5.0 if "T 值" in scale else None
+        if show_deviation:
+            cmap = 'RdBu_r'
+            # Symmetric limits around 0
+            max_abs = np.nanmax(np.abs(matrix)) if len(matrix) > 0 else 1.0
+            if np.isnan(max_abs) or max_abs <= 0:
+                max_abs = 1.0
+            vmin = -max_abs
+            vmax = max_abs
         else:
-            cmap = 'Reds'
-            vmin = 0.0
-            vmax = None
+            if "均值" in metric:
+                cmap = 'RdYlBu_r' if "T 值" in scale else 'viridis'
+                vmin = 0.0 if "T 值" in scale else None
+                vmax = 5.0 if "T 值" in scale else None
+            else:
+                cmap = 'Reds'
+                vmin = 0.0
+                vmax = None
 
         try:
             current_cmap = plt.colormaps.get_cmap(cmap).copy()
@@ -883,7 +982,9 @@ class AcousticChartExporter:
         im = ax.imshow(matrix, cmap=current_cmap, aspect='auto', vmin=vmin, vmax=vmax)
 
         cbar = fig.colorbar(im, ax=ax, pad=0.02)
-        if "均值" in metric:
+        if show_deviation:
+            cbar.set_label("与组均值的偏差 (T 值)" if "T 值" in scale else "与组均值的偏差 (Hz)")
+        elif "均值" in metric:
             cbar.set_label("平均 T 值" if "T 值" in scale else "平均基频 (Hz)")
         else:
             cbar.set_label("标准差 (SD)" if "T 值" in scale else "标准差 (Hz)")
@@ -1381,7 +1482,7 @@ class AcousticChartExporter:
         fig, ax = plt.subplots()
         return fig
 
-    def _plot_temporal_density(self, data_entries, group_key, is_preview=True):
+    def _plot_temporal_density(self, data_entries, group_key, scale="T 值", is_preview=True):
         bw_method = float(self.get_param('density_bw', 0.15))
         f0_mode_val = self.get_param('density_f0_mode', 'percentile')
         facet_val = self.get_param('density_facet', 'group')
@@ -1463,55 +1564,72 @@ class AcousticChartExporter:
 
             return dense_y
 
-        if normalization == "global":
-            all_raw_f0_list = []
+        if "T 值" in scale:
+            if normalization == "global":
+                all_raw_f0_list = []
+                for entry in data_entries:
+                    valid_f = entry['raw_freqs'][entry['raw_freqs'] > 0]
+                    if valid_f.size > 0:
+                        all_raw_f0_list.append(valid_f)
+
+                if not all_raw_f0_list:
+                    return empty_density_fig("没有有效基频点可进行 KDE 计算")
+                all_raw_f0 = np.concatenate(all_raw_f0_list)
+
+                p_low_val = self.get_param('density_p_low', 5.0)
+                p_high_val = self.get_param('density_p_high', 95.0)
+                min_hz_val = self.get_param('density_m_min', 75.0)
+                max_hz_val = self.get_param('density_m_max', 600.0)
+
+                try:
+                    p_low = float(p_low_val)
+                    p_high = float(p_high_val)
+                except ValueError:
+                    p_low, p_high = 5.0, 95.0
+
+                try:
+                    min_f0 = float(min_hz_val)
+                    max_f0 = float(max_hz_val)
+                except ValueError:
+                    min_f0, max_f0 = 75.0, 600.0
+
+                if f0_mode == 'percentile':
+                    min_f0 = np.percentile(all_raw_f0, p_low)
+                    max_f0 = np.percentile(all_raw_f0, p_high)
+                elif f0_mode == 'minmax':
+                    min_f0 = np.min(all_raw_f0)
+                    max_f0 = np.max(all_raw_f0)
+
+                def hz_to_t(hz_array):
+                    hz_array = np.asarray(hz_array, dtype=float)
+                    if max_f0 == min_f0 or min_f0 <= 0 or max_f0 <= min_f0:
+                        return np.full_like(hz_array, 3.0)
+                    hz_val = np.clip(hz_array, min_f0, max_f0)
+                    return 5 * (np.log(hz_val) - np.log(min_f0)) / (np.log(max_f0) - np.log(min_f0))
+            elif not any(np.any(np.isfinite(entry.get('normalized_raw_freqs', []))) for entry in data_entries):
+                return empty_density_fig("没有有效归一化基频点可进行 KDE 计算")
+
+            ymin, ymax = -0.5, 5.5
+        else:
+            all_ys = []
             for entry in data_entries:
-                valid_f = entry['raw_freqs'][entry['raw_freqs'] > 0]
-                if valid_f.size > 0:
-                    all_raw_f0_list.append(valid_f)
-
-            if not all_raw_f0_list:
+                syl_bounds = self.project_tree._get_syllables_and_bounds(entry['raw_item'])[1]
+                for s_idx, (c_s, c_e) in enumerate(syl_bounds):
+                    y_dense = self.project_tree._extract_kde_contour(entry['raw_xs'], entry['raw_freqs'], c_s, c_e, N_DENSE)
+                    if y_dense is not None:
+                        all_ys.append(y_dense[np.isfinite(y_dense)])
+            if not all_ys:
                 return empty_density_fig("没有有效基频点可进行 KDE 计算")
-            all_raw_f0 = np.concatenate(all_raw_f0_list)
-
-            p_low_val = self.get_param('density_p_low', 5.0)
-            p_high_val = self.get_param('density_p_high', 95.0)
-            min_hz_val = self.get_param('density_m_min', 75.0)
-            max_hz_val = self.get_param('density_m_max', 600.0)
-
-            try:
-                p_low = float(p_low_val)
-                p_high = float(p_high_val)
-            except ValueError:
-                p_low, p_high = 5.0, 95.0
-
-            try:
-                min_f0 = float(min_hz_val)
-                max_f0 = float(max_hz_val)
-            except ValueError:
-                min_f0, max_f0 = 75.0, 600.0
-
-            if f0_mode == 'percentile':
-                min_f0 = np.percentile(all_raw_f0, p_low)
-                max_f0 = np.percentile(all_raw_f0, p_high)
-            elif f0_mode == 'minmax':
-                min_f0 = np.min(all_raw_f0)
-                max_f0 = np.max(all_raw_f0)
-
-            def hz_to_t(hz_array):
-                hz_array = np.asarray(hz_array, dtype=float)
-                if max_f0 == min_f0 or min_f0 <= 0 or max_f0 <= min_f0:
-                    return np.full_like(hz_array, 3.0)
-                hz_val = np.clip(hz_array, min_f0, max_f0)
-                return 5 * (np.log(hz_val) - np.log(min_f0)) / (np.log(max_f0) - np.log(min_f0))
-        elif not any(np.any(np.isfinite(entry.get('normalized_raw_freqs', []))) for entry in data_entries):
-            return empty_density_fig("没有有效归一化基频点可进行 KDE 计算")
+            all_y = np.concatenate(all_ys)
+            if len(all_y) > 0:
+                ymin = max(0.0, np.min(all_y) - 15.0)
+                ymax = np.max(all_y) + 15.0
+            else:
+                ymin, ymax = 50.0, 500.0
 
         facet_keys = ["Default"]
-        if facet == "声调类型分面 (默认)":
-            facet_keys = sorted(list(set(e['group'] for e in data_entries)))
-        elif facet == "按词语分面":
-            facet_keys = sorted(list(set(e['label'] for e in data_entries)))
+        if facet != "不分面 (混合叠加)":
+            facet_keys = sorted(list(set(e[group_key] for e in data_entries)))
 
         n_facets = len(facet_keys)
         n_cols = min(2, n_facets)
@@ -1527,10 +1645,8 @@ class AcousticChartExporter:
             ax = axes_flat[f_idx]
 
             facet_entries = data_entries
-            if facet == "声调类型分面 (默认)":
-                facet_entries = [e for e in data_entries if e['group'] == f_key]
-            elif facet == "按词语分面":
-                facet_entries = [e for e in data_entries if e['label'] == f_key]
+            if facet != "不分面 (混合叠加)":
+                facet_entries = [e for e in data_entries if e[group_key] == f_key]
 
             X_all_list, Y_all_list = [], []
             for e_idx, entry in enumerate(facet_entries):
@@ -1538,11 +1654,14 @@ class AcousticChartExporter:
                     self._check_export_cancelled()
                 syl_bounds = self.project_tree._get_syllables_and_bounds(entry['raw_item'])[1]
                 for s_idx, (c_s, c_e) in enumerate(syl_bounds):
-                    if normalization == "speaker":
-                        y_t_dense = extract_normalized_contour(entry, c_s, c_e)
+                    if "T 值" in scale:
+                        if normalization == "speaker":
+                            y_t_dense = extract_normalized_contour(entry, c_s, c_e)
+                        else:
+                            y_dense = self.project_tree._extract_kde_contour(entry['raw_xs'], entry['raw_freqs'], c_s, c_e, N_DENSE)
+                            y_t_dense = hz_to_t(y_dense) if y_dense is not None else None
                     else:
-                        y_dense = self.project_tree._extract_kde_contour(entry['raw_xs'], entry['raw_freqs'], c_s, c_e, N_DENSE)
-                        y_t_dense = hz_to_t(y_dense) if y_dense is not None else None
+                        y_t_dense = self.project_tree._extract_kde_contour(entry['raw_xs'], entry['raw_freqs'], c_s, c_e, N_DENSE)
                     if y_t_dense is not None:
                         x_dense = np.linspace(s_idx * 100, (s_idx + 1) * 100, N_DENSE)
                         valid = np.isfinite(y_t_dense)
@@ -1554,7 +1673,6 @@ class AcousticChartExporter:
                 continue
 
             xmin, xmax = 0, max_syls * 100
-            ymin, ymax = -0.5, 5.5
 
             x_arr = np.concatenate(X_all_list)
             y_arr = np.concatenate(Y_all_list)
@@ -1600,7 +1718,10 @@ class AcousticChartExporter:
             col_idx = f_idx % n_cols
 
             if col_idx == 0:
-                ax.set_ylabel("T 值 (0-5 标度)")
+                if "T 值" in scale:
+                    ax.set_ylabel("T 值 (0-5 标度)")
+                else:
+                    ax.set_ylabel("频率 (Hz)")
             else:
                 ax.set_ylabel("")
 
@@ -1619,8 +1740,9 @@ class AcousticChartExporter:
                 ax.set_xticks(ticks)
                 ax.set_xticklabels([])
 
-            ax.set_ylim(-0.5, 5.5)
-            ax.set_yticks([0, 1, 2, 3, 4, 5])
+            ax.set_ylim(ymin, ymax)
+            if "T 值" in scale:
+                ax.set_yticks([0, 1, 2, 3, 4, 5])
 
             title_text = f_key if f_key != "Default" else "时序密度热力图"
             if len(title_text) > 20:
@@ -3154,6 +3276,9 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         # Legend configuration
         self.var_legend_outside = ctk.BooleanVar(value=False)
 
+        # Overview heatmap settings
+        self.var_overview_show_deviation = ctk.BooleanVar(value=False)
+
         # Dynamic Options - Formant Space
         self.var_formant_ellipse = ctk.StringVar(value="1-sigma 置信椭圆")
         self.var_formant_label_mode = ctk.StringVar(value="显示分组标签")
@@ -3786,6 +3911,16 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
                 self.combo_scale.configure(state="disabled")
             else:
                 self.combo_scale.configure(state="normal")
+        
+        # Dynamically adjust overview heatmap options if currently showing it
+        if hasattr(self, 'combo_overview_metric') and self.combo_overview_metric.winfo_exists():
+            is_integrated = ("整合" in val)
+            if is_integrated:
+                self.combo_overview_metric.configure(values=["均值热图 (Mean Map)", "标准差热图 (SD Map)"])
+            else:
+                self.combo_overview_metric.set("均值热图 (Mean Map)")
+                self.combo_overview_metric.configure(values=["均值热图 (Mean Map)"])
+
         self.update_preview()
 
     def _on_groupby_changed(self, val):
@@ -3977,18 +4112,44 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
     def _filter_groups_list(self):
         self._populate_groups_list()
 
+    def _on_overview_metric_changed(self, val):
+        if hasattr(self, 'cb_show_deviation') and self.cb_show_deviation.winfo_exists():
+            if "标准差" in val:
+                self.var_overview_show_deviation.set(False)
+                self.cb_show_deviation.configure(state="disabled")
+            else:
+                self.cb_show_deviation.configure(state="normal")
+        self.trigger_preview_update()
+
     def _build_overview_heatmap_settings(self):
         ctk.CTkLabel(self.dynamic_content_frame, text="热图展示维度:", font=self.font_small).pack(anchor="w", pady=(5, 2))
-        self.combo_overview_metric = ctk.CTkOptionMenu(self.dynamic_content_frame, values=["均值热图 (Mean Map)", "标准差热图 (SD Map)"], command=lambda _: self.trigger_preview_update(), **self.dropdown_kwargs)
+        is_integrated = (self.var_export_scope.get() == "integrated")
+        metric_values = ["均值热图 (Mean Map)", "标准差热图 (SD Map)"] if is_integrated else ["均值热图 (Mean Map)"]
+        self.combo_overview_metric = ctk.CTkOptionMenu(
+            self.dynamic_content_frame, 
+            values=metric_values, 
+            command=self._on_overview_metric_changed, 
+            **self.dropdown_kwargs
+        )
         self.combo_overview_metric.set("均值热图 (Mean Map)")
         self.combo_overview_metric.pack(fill=tk.X, pady=(2, 10))
         self._apply_custom_arrow(self.combo_overview_metric)
 
+        # Checkbox for showing deviation
+        self.cb_show_deviation = ctk.CTkCheckBox(
+            self.dynamic_content_frame, text="查看与组别均值的偏差 (对比模式)", variable=self.var_overview_show_deviation,
+            font=self.font_small, checkbox_width=18, checkbox_height=18,
+            command=self.trigger_preview_update
+        )
+        self.cb_show_deviation.pack(anchor="w", pady=(5, 10))
+
     def _build_formant_overview_heatmap_settings(self):
         ctk.CTkLabel(self.dynamic_content_frame, text="热图展示维度:", font=self.font_small).pack(anchor="w", pady=(5, 2))
+        is_integrated = (self.var_export_scope.get() == "integrated")
+        metric_values = ["均值热图 (Mean Map)", "标准差热图 (SD Map)"] if is_integrated else ["均值热图 (Mean Map)"]
         self.combo_overview_metric = ctk.CTkOptionMenu(
             self.dynamic_content_frame,
-            values=["均值热图 (Mean Map)", "标准差热图 (SD Map)"],
+            values=metric_values,
             command=lambda _: self.trigger_preview_update(),
             **self.dropdown_kwargs
         )
@@ -4517,6 +4678,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
                 relheight=1.0,
                 anchor="nw",
             )
+            self.trigger_preview_update()
             return
 
         ratio_map = {
@@ -4541,6 +4703,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         self.preview_container.place(
             relx=0.5, rely=0.5, anchor="center"
         )
+        self.trigger_preview_update()
 
     def _update_pixel_options_state(self):
         fmt = self.combo_format.get()

@@ -121,6 +121,99 @@ class TestAcousticExporterFeatures(unittest.TestCase):
 
             dlg.destroy()
 
+    def test_overview_heatmap_plot_with_deviation(self):
+        project_tree = MagicMock()
+        project_tree.app_state_params = {'pts': 5}
+
+        speaker = MagicMock()
+        speaker.name = "Speaker 1"
+
+        app = MagicMock()
+        app.speaker_manager.get_active_speaker.return_value = speaker
+
+        dummy_data = [
+            {
+                'speaker_name': 'Speaker 1',
+                'group': 'Group1',
+                'label': 'ma',
+                'syl_data': [(0.8, [100.0, 110.0, 120.0, 130.0, 140.0])],
+                'normalized_syl_data': [(0.8, [1.0, 2.0, 3.0, 4.0, 5.0])],
+            },
+            {
+                'speaker_name': 'Speaker 1',
+                'group': 'Group2',
+                'label': 'ba',
+                'syl_data': [(0.8, [110.0, 120.0, 130.0, 140.0, 150.0])],
+                'normalized_syl_data': [(0.8, [1.5, 2.5, 3.5, 4.5, 5.0])],
+            }
+        ]
+
+        with patch.object(AcousticChartExportDialog, '_extract_active_data', return_value=dummy_data), \
+             patch.object(AcousticChartExportDialog, 'update_preview'):
+
+            dlg = AcousticChartExportDialog(
+                self.root, app=app, project_tree=project_tree,
+                mode='single', all_speakers=[speaker]
+            )
+
+            # Enable deviation mode
+            dlg.var_overview_show_deviation.set(True)
+
+            dlg.combo_overview_metric = MagicMock()
+            dlg.combo_overview_metric.get.return_value = "均值热图 (Mean Map)"
+
+            fig = dlg._plot_tone_overview_heatmap(dummy_data, "group", "T 值")
+            self.assertIsNotNone(fig)
+
+            # Verify that RdBu_r colormap is used and color limits are symmetric
+            ax = fig.axes[0]
+            self.assertTrue(len(ax.images) > 0)
+            im = ax.images[0]
+            self.assertEqual(im.get_cmap().name, 'RdBu_r')
+            clim = im.get_clim()
+            self.assertIsNotNone(clim)
+            self.assertAlmostEqual(clim[0], -clim[1])
+
+            dlg.destroy()
+
+    def test_overview_heatmap_metric_change_callback(self):
+        project_tree = MagicMock()
+        project_tree.app_state_params = {'pts': 5}
+        speaker = MagicMock()
+        speaker.name = "Speaker 1"
+        app = MagicMock()
+        app.speaker_manager.get_active_speaker.return_value = speaker
+
+        with patch.object(AcousticChartExportDialog, 'update_preview'):
+            dlg = AcousticChartExportDialog(
+                self.root, app=app, project_tree=project_tree,
+                mode='integrated', all_speakers=[speaker]
+            )
+
+            # Switch chart type to overview heatmap to build settings widgets
+            dlg.combo_type.set("声调组别概览图")
+            dlg._on_type_changed("声调组别概览图")
+
+            # Initially, metric is Mean Map, deviation checkbox should be normal
+            self.assertEqual(dlg.cb_show_deviation.cget("state"), "normal")
+
+            # Switch to Standard Deviation Map
+            dlg.combo_overview_metric.set("标准差热图 (SD Map)")
+            dlg._on_overview_metric_changed("标准差热图 (SD Map)")
+
+            # Deviation checkbox should now be disabled and its variable set to False
+            self.assertEqual(dlg.cb_show_deviation.cget("state"), "disabled")
+            self.assertFalse(dlg.var_overview_show_deviation.get())
+
+            # Switch back to Mean Map
+            dlg.combo_overview_metric.set("均值热图 (Mean Map)")
+            dlg._on_overview_metric_changed("均值热图 (Mean Map)")
+
+            # Deviation checkbox should be re-enabled
+            self.assertEqual(dlg.cb_show_deviation.cget("state"), "normal")
+
+            dlg.destroy()
+
     def test_integrated_density_defaults_to_speaker_normalized_contours(self):
         project_tree = MagicMock()
         project_tree._get_syllables_and_bounds.return_value = ([], [(0.0, 1.0)])
@@ -205,6 +298,97 @@ class TestAcousticExporterFeatures(unittest.TestCase):
 
         self.assertIsNotNone(fig)
         project_tree._extract_kde_contour.assert_called_once()
+
+    def test_density_hz_scale_uses_absolute_contours(self):
+        project_tree = MagicMock()
+        project_tree._get_syllables_and_bounds.return_value = ([], [(0.0, 1.0)])
+        project_tree._extract_kde_contour.return_value = np.linspace(100.0, 140.0, 100)
+
+        exporter = AcousticChartExporter(project_tree=project_tree)
+        exporter.params = {
+            'chart_type': 'density',
+            'export_scope': 'integrated',
+            'density_facet': 'none',
+        }
+
+        data_entries = [{
+            'speaker_name': 'S1',
+            'group': 'T1',
+            'label': 'a',
+            'syl_data': [(1.0, [100.0, 110.0, 120.0])],
+            'raw_xs': np.linspace(0.0, 1.0, 20),
+            'raw_freqs': np.linspace(100.0, 140.0, 20),
+            'normalized_raw_freqs': np.linspace(1.0, 4.0, 20),
+            'raw_item': {},
+        }]
+
+        class FakeKDE:
+            def __init__(self, positions, bw_method=None):
+                self.positions = positions
+
+            def __call__(self, values):
+                return np.ones(values.shape[1])
+
+        with patch('modules.acoustic_exporter.gaussian_kde', FakeKDE):
+            fig = exporter._plot_temporal_density(data_entries, "group", scale="Hz")
+
+        self.assertIsNotNone(fig)
+        project_tree._extract_kde_contour.assert_called()
+
+    def test_density_groupby_alignment(self):
+        project_tree = MagicMock()
+        project_tree._get_syllables_and_bounds.return_value = ([], [(0.0, 1.0)])
+        project_tree._extract_kde_contour.return_value = np.linspace(100.0, 140.0, 100)
+
+        exporter = AcousticChartExporter(project_tree=project_tree)
+        exporter.params = {
+            'chart_type': 'density',
+            'export_scope': 'integrated',
+            'density_facet': '声调类型分面 (默认)',
+        }
+
+        data_entries = [
+            {
+                'speaker_name': 'SpeakerA',
+                'group': 'Tone1',
+                'label': 'Word1',
+                'syl_data': [(1.0, [100.0, 110.0, 120.0])],
+                'raw_xs': np.linspace(0.0, 1.0, 20),
+                'raw_freqs': np.linspace(100.0, 140.0, 20),
+                'normalized_raw_freqs': np.linspace(1.0, 4.0, 20),
+                'raw_item': {},
+            },
+            {
+                'speaker_name': 'SpeakerB',
+                'group': 'Tone2',
+                'label': 'Word2',
+                'syl_data': [(1.0, [100.0, 110.0, 120.0])],
+                'raw_xs': np.linspace(0.0, 1.0, 20),
+                'raw_freqs': np.linspace(100.0, 140.0, 20),
+                'normalized_raw_freqs': np.linspace(1.0, 4.0, 20),
+                'raw_item': {},
+            }
+        ]
+
+        class FakeKDE:
+            def __init__(self, positions, bw_method=None):
+                self.positions = positions
+
+            def __call__(self, values):
+                return np.ones(values.shape[1])
+
+        with patch('modules.acoustic_exporter.gaussian_kde', FakeKDE):
+            # Test By Word
+            fig_word = exporter._plot_temporal_density(data_entries, "label", scale="T 值")
+            titles_word = [ax.get_title() for ax in fig_word.axes if ax.get_title()]
+            self.assertIn("Word1", titles_word)
+            self.assertIn("Word2", titles_word)
+
+            # Test By Speaker
+            fig_spk = exporter._plot_temporal_density(data_entries, "speaker_name", scale="T 值")
+            titles_spk = [ax.get_title() for ax in fig_spk.axes if ax.get_title()]
+            self.assertIn("SpeakerA", titles_spk)
+            self.assertIn("SpeakerB", titles_spk)
 
     def test_group_pagination(self):
         project_tree = MagicMock()
