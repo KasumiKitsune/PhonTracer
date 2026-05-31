@@ -2880,102 +2880,7 @@ class PhoneticsApp:
         btn_import.pack(side=tk.LEFT)
 
         def load_textgrid():
-            if mode == 'batch':
-                paths = filedialog.askopenfilenames(filetypes=[("TextGrid Files", "*.TextGrid"), ("All Files", "*.*")])
-                if not paths: return
-                dlg.destroy()
-                self.process_batch_with_textgrid(list(paths))
-                return
-            path = filedialog.askopenfilename(filetypes=[("TextGrid Files", "*.TextGrid"), ("All Files", "*.*")])
-            if not path: return
-            try:
-                import textgrid
-                tg = textgrid.TextGrid.fromFile(path)
-
-                words_tier = None
-                chars_tier = None
-                groups_tier = None
-                for t in tg.tiers:
-                    name_lower = t.name.strip().lower()
-                    if name_lower in ["words", "word"] and words_tier is None:
-                        words_tier = t
-                    elif name_lower in ["chars", "char"] and chars_tier is None:
-                        chars_tier = t
-                    elif name_lower in ["groups", "group"] and groups_tier is None:
-                        groups_tier = t
-
-                if not words_tier:
-                    for t in tg.tiers:
-                        if isinstance(t, textgrid.IntervalTier):
-                            words_tier = t
-                            break
-
-                if not words_tier:
-                    return messagebox.showerror("错误", "TextGrid 中没有找到 IntervalTier")
-
-                tg_intervals = []
-                for interval in words_tier:
-                    lbl = interval.mark.strip()
-                    if lbl:
-                        grp_name = "导入内容"
-                        if groups_tier:
-                            center = (interval.minTime + interval.maxTime) / 2.0
-                            for g_interval in groups_tier:
-                                if g_interval.minTime <= center <= g_interval.maxTime:
-                                    g_lbl = g_interval.mark.strip()
-                                    if g_lbl:
-                                        grp_name = g_lbl
-                                        break
-
-                        chars_bounds = []
-                        inner_splits = []
-                        if chars_tier:
-                            overlapping_chars = []
-                            for c_interval in chars_tier:
-                                c_lbl = c_interval.mark.strip()
-                                if c_lbl:
-                                    # Use interval center to check overlap and robust tolerance
-                                    center = (c_interval.minTime + c_interval.maxTime) / 2.0
-                                    if interval.minTime <= center <= interval.maxTime:
-                                        overlapping_chars.append(c_interval)
-
-                            overlapping_chars.sort(key=lambda c: c.minTime)
-                            if overlapping_chars:
-                                for c in overlapping_chars:
-                                    chars_bounds.append([c.minTime, c.maxTime])
-                                for j in range(len(overlapping_chars) - 1):
-                                    inner_splits.append(overlapping_chars[j].maxTime)
-
-                        # Fallback to even splits if chars tier data is missing or empty
-                        if not chars_bounds:
-                            syls = split_into_syllables(lbl)
-                            w_len = len(syls)
-                            if w_len > 1:
-                                splits = np.linspace(interval.minTime, interval.maxTime, w_len + 1).tolist()
-                                chars_bounds = [[splits[j], splits[j+1]] for j in range(w_len)]
-                                inner_splits = splits[1:-1]
-                            else:
-                                chars_bounds = [[interval.minTime, interval.maxTime]]
-                                inner_splits = []
-
-                        tg_intervals.append({
-                            'start': interval.minTime,
-                            'end': interval.maxTime,
-                            'label': lbl,
-                            'group': grp_name,
-                            'inner_splits': inner_splits,
-                            'chars_bounds': chars_bounds
-                        })
-
-                if not tg_intervals:
-                    return messagebox.showerror("错误", "TextGrid 中没有非空标签的区间")
-
-                dlg.destroy()
-                self.process_long_with_textgrid(tg_intervals)
-            except Exception as e:
-                return messagebox.showerror("错误", f"解析 TextGrid 失败: {e}")
-
-
+            self._handle_import_textgrid_dialog(mode, dlg)
 
         btn_prompt = ctk.CTkButton(toolbar, text=" 复制 AI 整理提示词", image=self.icons.get("copy_white"), compound="left",
                                    width=150, height=28, corner_radius=14, fg_color="#F59E0B", text_color="white",
@@ -3034,73 +2939,7 @@ class PhoneticsApp:
         rule_frame.bind("<Button-1>", toggle_rules)
 
         def update_stats(event=None):
-            raw_text = text_box.get("1.0", tk.END)
-            groups, flat_words = parse_wordlist(raw_text)
-            color = "#10B981" if flat_words else "#6B7280"
-            lbl_stats.configure(text=f"实时统计：已识别 {len(groups)} 个组别 | {len(flat_words)} 个项", text_color=color)
-
-            text_box.tag_remove("group_title", "1.0", tk.END)
-            text_box.tag_remove("word_item", "1.0", tk.END)
-            text_box.tag_remove("separator", "1.0", tk.END)
-            text_box.tag_remove("excluded", "1.0", tk.END)
-
-            # 控制浮动占位符的显示/隐藏
-            if not raw_text.strip():
-                placeholder_label.place(x=10, y=10)
-                lbl_stats.configure(text="实时统计：待输入...", text_color="#6B7280")
-                return
-            else:
-                placeholder_label.place_forget()
-
-            text_box.tag_config("group_title", foreground="#2563EB")
-            text_box.tag_config("word_item", foreground="#10B981")
-            text_box.tag_config("separator", foreground="#3B82F6")
-            text_box.tag_config("excluded", foreground="#9CA3AF")
-            text_box.tag_raise("separator")
-            text_box.tag_raise("excluded")
-
-            lines = raw_text.split('\n')
-            current_line_idx = 1
-            import re
-            for line in lines:
-                stripped = line.strip()
-                if not stripped:
-                    current_line_idx += 1
-                    continue
-                if stripped.startswith('【') or stripped.startswith('[') or stripped.startswith('［') or stripped.startswith('#'):
-                    text_box.tag_add("group_title", f"{current_line_idx}.0", f"{current_line_idx}.end")
-                else:
-                    words = [w for w in re.split(r'[\s,，、]+', stripped) if w]
-                    start_char = 0
-                    for w in words:
-                        idx = line.find(w, start_char)
-                        if idx != -1:
-                            w_start_idx = f"{current_line_idx}.{idx}"
-                            w_end_idx = f"{current_line_idx}.{idx+len(w)}"
-                            text_box.tag_add("word_item", w_start_idx, w_end_idx)
-
-                            # 细化词内部的字符高亮
-                            is_cjk = has_cjk(w)
-                            for char_offset, char in enumerate(w):
-                                char_pos = f"{current_line_idx}.{idx + char_offset}"
-                                char_end_pos = f"{current_line_idx}.{idx + char_offset + 1}"
-                                if char == '/':
-                                    text_box.tag_add("separator", char_pos, char_end_pos)
-                                else:
-                                    is_excluded = False
-                                    if is_cjk:
-                                        # CJK 模式下，非 CJK 字符被排除
-                                        if not re.match(r'[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]', char):
-                                            is_excluded = True
-                                    else:
-                                        # 非 CJK 模式下，非字母被排除
-                                        if not re.match(r'[^\W\d_]', char):
-                                            is_excluded = True
-                                    if is_excluded:
-                                        text_box.tag_add("excluded", char_pos, char_end_pos)
-
-                            start_char = idx + len(w)
-                current_line_idx += 1
+            self._update_import_dialog_stats(text_box, lbl_stats, placeholder_label)
 
         text_box.bind("<KeyRelease>", update_stats)
 
@@ -3116,32 +2955,7 @@ class PhoneticsApp:
 
         # 5. 执行处理与防错预检
         def process():
-            raw_text = text_box.get("1.0", tk.END)
-            groups, flat_words = parse_wordlist(raw_text)
-
-            if not flat_words:
-                return messagebox.showwarning("提示", "未识别到任何数据项，请检查文本格式。")
-
-            # --- 防呆设计：数量与音频数匹配预检 ---
-            if mode == 'batch':
-                audio_count = len(self.pending_batch_paths)
-                word_count = len(flat_words)
-                if audio_count != word_count:
-                    if not messagebox.askyesno("数量不匹配警告", f"检测到 {audio_count} 个独立音频文件，但字表内包含 {word_count} 个项。\n\n数量不一致可能导致映射错位或部分缺失，是否继续强制提取？"):
-                        return
-            elif mode == 'long':
-                if hasattr(self, 'manual_segments') and self.manual_segments:
-                    seg_count = len(self.manual_segments)
-                    word_count = len(flat_words)
-                    if seg_count != word_count:
-                        if not messagebox.askyesno("数量不匹配警告", f"您刚才手动切分了 {seg_count} 个片段，但字表内包含 {word_count} 个项。\n\n数量不一致将导致音频与文本错位，是否继续强制提取？"):
-                            return
-
-            self.global_wordlist_text = raw_text
-            if mode == 'batch': self.global_wordlist_match_mode = match_mode_var.get()
-            dlg.destroy()
-            if mode == 'long': self.process_long_with_wordlist(raw_text)
-            else: self.process_batch_with_wordlist(raw_text, match_mode=match_mode_var.get())
+            self._process_import_text_dialog(mode, text_box, match_mode_var, dlg)
 
         # 底部按钮栏
         btn_row = ctk.CTkFrame(dlg, fg_color="transparent")
@@ -3168,6 +2982,199 @@ class PhoneticsApp:
         except Exception as e:
             import logging
             logging.getLogger(__name__).warning(f"Failed to hook dropfiles on import dialog: {e}")
+
+    def _handle_import_textgrid_dialog(self, mode, dlg):
+        if mode == 'batch':
+            paths = filedialog.askopenfilenames(filetypes=[("TextGrid Files", "*.TextGrid"), ("All Files", "*.*")])
+            if not paths: return
+            dlg.destroy()
+            self.process_batch_with_textgrid(list(paths))
+            return
+        path = filedialog.askopenfilename(filetypes=[("TextGrid Files", "*.TextGrid"), ("All Files", "*.*")])
+        if not path: return
+        try:
+            import textgrid
+            tg = textgrid.TextGrid.fromFile(path)
+
+            words_tier = None
+            chars_tier = None
+            groups_tier = None
+            for t in tg.tiers:
+                name_lower = t.name.strip().lower()
+                if name_lower in ["words", "word"] and words_tier is None:
+                    words_tier = t
+                elif name_lower in ["chars", "char"] and chars_tier is None:
+                    chars_tier = t
+                elif name_lower in ["groups", "group"] and groups_tier is None:
+                    groups_tier = t
+
+            if not words_tier:
+                for t in tg.tiers:
+                    if isinstance(t, textgrid.IntervalTier):
+                        words_tier = t
+                        break
+
+            if not words_tier:
+                return messagebox.showerror("错误", "TextGrid 中没有找到 IntervalTier")
+
+            tg_intervals = []
+            for interval in words_tier:
+                lbl = interval.mark.strip()
+                if lbl:
+                    grp_name = "导入内容"
+                    if groups_tier:
+                        center = (interval.minTime + interval.maxTime) / 2.0
+                        for g_interval in groups_tier:
+                            if g_interval.minTime <= center <= g_interval.maxTime:
+                                g_lbl = g_interval.mark.strip()
+                                if g_lbl:
+                                    grp_name = g_lbl
+                                    break
+
+                    chars_bounds = []
+                    inner_splits = []
+                    if chars_tier:
+                        overlapping_chars = []
+                        for c_interval in chars_tier:
+                            c_lbl = c_interval.mark.strip()
+                            if c_lbl:
+                                # Use interval center to check overlap and robust tolerance
+                                center = (c_interval.minTime + c_interval.maxTime) / 2.0
+                                if interval.minTime <= center <= interval.maxTime:
+                                    overlapping_chars.append(c_interval)
+
+                        overlapping_chars.sort(key=lambda c: c.minTime)
+                        if overlapping_chars:
+                            for c in overlapping_chars:
+                                chars_bounds.append([c.minTime, c.maxTime])
+                            for j in range(len(overlapping_chars) - 1):
+                                inner_splits.append(overlapping_chars[j].maxTime)
+
+                    # Fallback to even splits if chars tier data is missing or empty
+                    if not chars_bounds:
+                        syls = split_into_syllables(lbl)
+                        w_len = len(syls)
+                        if w_len > 1:
+                            splits = np.linspace(interval.minTime, interval.maxTime, w_len + 1).tolist()
+                            chars_bounds = [[splits[j], splits[j+1]] for j in range(w_len)]
+                            inner_splits = splits[1:-1]
+                        else:
+                            chars_bounds = [[interval.minTime, interval.maxTime]]
+                            inner_splits = []
+
+                    tg_intervals.append({
+                        'start': interval.minTime,
+                        'end': interval.maxTime,
+                        'label': lbl,
+                        'group': grp_name,
+                        'inner_splits': inner_splits,
+                        'chars_bounds': chars_bounds
+                    })
+
+            if not tg_intervals:
+                return messagebox.showerror("错误", "TextGrid 中没有非空标签的区间")
+
+            dlg.destroy()
+            self.process_long_with_textgrid(tg_intervals)
+        except Exception as e:
+            return messagebox.showerror("错误", f"解析 TextGrid 失败: {e}")
+
+    def _update_import_dialog_stats(self, text_box, lbl_stats, placeholder_label):
+        raw_text = text_box.get("1.0", tk.END)
+        groups, flat_words = parse_wordlist(raw_text)
+        color = "#10B981" if flat_words else "#6B7280"
+        lbl_stats.configure(text=f"实时统计：已识别 {len(groups)} 个组别 | {len(flat_words)} 个项", text_color=color)
+
+        text_box.tag_remove("group_title", "1.0", tk.END)
+        text_box.tag_remove("word_item", "1.0", tk.END)
+        text_box.tag_remove("separator", "1.0", tk.END)
+        text_box.tag_remove("excluded", "1.0", tk.END)
+
+        # 控制浮动占位符的显示/隐藏
+        if not raw_text.strip():
+            placeholder_label.place(x=10, y=10)
+            lbl_stats.configure(text="实时统计：待输入...", text_color="#6B7280")
+            return
+        else:
+            placeholder_label.place_forget()
+
+        text_box.tag_config("group_title", foreground="#2563EB")
+        text_box.tag_config("word_item", foreground="#10B981")
+        text_box.tag_config("separator", foreground="#3B82F6")
+        text_box.tag_config("excluded", foreground="#9CA3AF")
+        text_box.tag_raise("separator")
+        text_box.tag_raise("excluded")
+
+        lines = raw_text.split('\n')
+        current_line_idx = 1
+        import re
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                current_line_idx += 1
+                continue
+            if stripped.startswith('【') or stripped.startswith('[') or stripped.startswith('［') or stripped.startswith('#'):
+                text_box.tag_add("group_title", f"{current_line_idx}.0", f"{current_line_idx}.end")
+            else:
+                words = [w for w in re.split(r'[\s,，、]+', stripped) if w]
+                start_char = 0
+                for w in words:
+                    idx = line.find(w, start_char)
+                    if idx != -1:
+                        w_start_idx = f"{current_line_idx}.{idx}"
+                        w_end_idx = f"{current_line_idx}.{idx+len(w)}"
+                        text_box.tag_add("word_item", w_start_idx, w_end_idx)
+
+                        # 细化词内部的字符高亮
+                        is_cjk = has_cjk(w)
+                        for char_offset, char in enumerate(w):
+                            char_pos = f"{current_line_idx}.{idx + char_offset}"
+                            char_end_pos = f"{current_line_idx}.{idx + char_offset + 1}"
+                            if char == '/':
+                                text_box.tag_add("separator", char_pos, char_end_pos)
+                            else:
+                                is_excluded = False
+                                if is_cjk:
+                                    # CJK 模式下，非 CJK 字符被排除
+                                    if not re.match(r'[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]', char):
+                                        is_excluded = True
+                                else:
+                                    # 非 CJK 模式下，非字母被排除
+                                    if not re.match(r'[^\W\d_]', char):
+                                        is_excluded = True
+                                if is_excluded:
+                                    text_box.tag_add("excluded", char_pos, char_end_pos)
+
+                        start_char = idx + len(w)
+            current_line_idx += 1
+
+    def _process_import_text_dialog(self, mode, text_box, match_mode_var, dlg):
+        raw_text = text_box.get("1.0", tk.END)
+        groups, flat_words = parse_wordlist(raw_text)
+
+        if not flat_words:
+            return messagebox.showwarning("提示", "未识别到任何数据项，请检查文本格式。")
+
+        # --- 防呆设计：数量与音频数匹配预检 ---
+        if mode == 'batch':
+            audio_count = len(self.pending_batch_paths)
+            word_count = len(flat_words)
+            if audio_count != word_count:
+                if not messagebox.askyesno("数量不匹配警告", f"检测到 {audio_count} 个独立音频文件，但字表内包含 {word_count} 个项。\n\n数量不一致可能导致映射错位或部分缺失，是否继续强制提取？"):
+                    return
+        elif mode == 'long':
+            if hasattr(self, 'manual_segments') and self.manual_segments:
+                seg_count = len(self.manual_segments)
+                word_count = len(flat_words)
+                if seg_count != word_count:
+                    if not messagebox.askyesno("数量不匹配警告", f"您刚才手动切分了 {seg_count} 个片段，但字表内包含 {word_count} 个项。\n\n数量不一致将导致音频与文本错位，是否继续强制提取？"):
+                        return
+
+        self.global_wordlist_text = raw_text
+        if mode == 'batch': self.global_wordlist_match_mode = match_mode_var.get()
+        dlg.destroy()
+        if mode == 'long': self.process_long_with_wordlist(raw_text)
+        else: self.process_batch_with_wordlist(raw_text, match_mode=match_mode_var.get())
 
     def process_batch_with_textgrid(self, tg_paths):
         if not self.pending_batch_paths:
