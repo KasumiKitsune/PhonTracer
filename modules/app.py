@@ -1825,19 +1825,7 @@ class PhoneticsApp:
                         
         return preview_times.tolist(), preview_f1, preview_f2
 
-    def recalculate_all_audio(self, only_trim_silence=False, recompute_pitch=True, only_pitch_changed=False):
-        if not self.items: return
-
-        # Capture parameter values before sync
-        old_params = dict(self.last_params) if hasattr(self, 'last_params') and self.last_params else {}
-
-        # 1. 确保所有 UI 输入框的最新的参数值都已经同步到了 self.last_params 中（在主线程中执行）
-        try:
-            self.on_param_change(recalculate_current=False)
-        except Exception:
-            pass
-
-        # Check if ONLY acoustic parameters (pitch or formant) changed
+    def _is_only_pitch_changed(self, only_pitch_changed, old_params):
         if not only_pitch_changed and old_params and hasattr(self, 'last_params') and self.last_params:
             new_params = self.last_params
             pitch_changed = (
@@ -1858,43 +1846,193 @@ class PhoneticsApp:
                 old_params.get('skip_front') != new_params.get('skip_front')
             )
             if (pitch_changed or formant_changed) and not boundary_params_changed:
-                only_pitch_changed = True
+                return True
+        return only_pitch_changed
+
+    def _recalculate_trim_silence_only(self, items_snapshot, trim_silence):
+        total = len(items_snapshot)
+        for i, (iid, item) in enumerate(items_snapshot):
+            if item.get('snd') and 'raw_start' in item and 'raw_end' in item:
+                mic_s, mic_e = recalculate_bounds_fast(
+                    item['snd'], item.get('pitch_data', item.get('pitch')), item['raw_start'], item['raw_end'], trim_silence
+                )
+                # 等比例缩放内部蓝线和 chars_bounds (如果只因裁切而变化)
+                old_s, old_e = item.get('start', mic_s), item.get('end', mic_e)
+
+                # 如果用户手动修改了 start/end，我们可以检查 item.get('is_manual_edited', False)
+                # 但由于没有这个 flag，我们依然等比例缩放它们。
+                if 'inner_splits' in item and item['inner_splits'] and old_e > old_s:
+                    ratio = (mic_e - mic_s) / (old_e - old_s)
+                    item['inner_splits'] = [mic_s + (s - old_s) * ratio for s in item['inner_splits']]
+                    if 'chars_bounds' in item and item['chars_bounds']:
+                        item['chars_bounds'] = [[mic_s + (c[0] - old_s) * ratio, mic_s + (c[1] - old_s) * ratio] for c in item['chars_bounds']]
+
+                # 如果有 chars_bounds，则基于 chars_bounds 更新 start/end 以防错位
+                if 'chars_bounds' in item and item['chars_bounds']:
+                    item['start'] = item['chars_bounds'][0][0]
+                    item['end'] = item['chars_bounds'][-1][1]
+                else:
+                    item['start'], item['end'] = mic_s, mic_e
+
+            if i % 5 == 0 or i == total - 1:
+                self.root.after(0, lambda v=(i + 1) / total: self.set_progress(v))
+
+    def _prepare_recalculate_tasks(self, items_snapshot, params, recompute_pitch):
+        tasks = []
+        valid_items = []
+        recomputed_pitches = {}
+        for iid, item in items_snapshot:
+            if item.get('snd'):
+                snd = item['snd']
+                snd_id = id(snd)
+
+                # 性能优化：按 snd 实例缓存 Pitch，避免长音频模式下被重复计算上千次
+                if recompute_pitch:
+                    try:
+                        if snd_id not in recomputed_pitches:
+                            recomputed_pitches[snd_id] = extract_f0(snd, self.last_params)
+                        item['pitch_data'] = recomputed_pitches[snd_id]
+                        if 'pitch' in item:
+                            del item['pitch']
+                    except Exception: pass
+
+                # 保存计算该项时所用的参数实现所见即所得导出
+                item['pitch_floor'] = params['pitch_floor']
+                item['pitch_ceiling'] = params['pitch_ceiling']
+                item['voicing_threshold'] = params['voicing_threshold']
+                item['f0_engine'] = self.last_params.get('f0_engine', 'praat')
+
+                mac_s, mac_e = item['macro_start'], item['macro_end']
+                valid_ms = max(0, mac_s)
+                valid_me = min(snd.get_total_duration(), mac_e)
+
+                if valid_me > valid_ms:
+                    part = snd.extract_part(from_time=valid_ms, to_time=valid_me)
+
+                    # 性能优化：切片 Pitch 数组，大幅减少 IPC 数据量
+                    p_xs = item['pitch_data']['xs']
+                    p_freqs = item['pitch_data']['freqs']
+                    idx_start = np.searchsorted(p_xs, valid_ms)
+                    idx_end = np.searchsorted(p_xs, valid_me)
+
+                    tasks.append({
+                        'ms': mac_s, 'me': mac_e,
+                        'snd_values': part.values, 'snd_sf': part.sampling_frequency,
+                        'pitch_xs': p_xs[idx_start:idx_end], 'pitch_freqs': p_freqs[idx_start:idx_end],
+                        'word_label': item['label'].replace(" (缺失)", "")
+                    })
+                    valid_items.append(item)
+            elif item.get('path'):
+                # 独立音频模式：直接记录路径，后续使用多进程批处理
+                tasks.append({
+                    'path': item['path'],
+                    'word_label': item['label'].replace(" (缺失)", ""),
+                    'type': 'batch'
+                })
+                valid_items.append(item)
+        return tasks, valid_items
+
+    def _apply_recalculate_result_to_item(self, target_item, res, is_batch, only_pitch_changed):
+        if is_batch:
+            # 合并独立音频处理结果
+            if not target_item.get('is_manual_edited') and not only_pitch_changed:
+                target_item['start'] = res['start']
+                target_item['end'] = res['end']
+                target_item['raw_start'] = res['raw_start']
+                target_item['raw_end'] = res['raw_end']
+                target_item['inner_splits'] = res.get('inner_splits', [])
+                target_item['chars_bounds'] = res.get('chars_bounds', [])
+                target_item['split_warnings'] = res.get('split_warnings', [])
+                target_item['split_confidence'] = res.get('split_confidence', 1.0)
+            target_item['pitch_data'] = res['pitch_data']
+            if 'pitch' in target_item:
+                del target_item['pitch']
+            target_item.pop('has_empty_data', None)
+            target_item['preview_f0'] = res.get('preview_f0', [])
+            if 'formant_data' in res:
+                target_item['formant_data'] = res['formant_data']
+            if 'preview_formants' in res:
+                target_item['preview_formants'] = res['preview_formants']
+            # 如果是独立音频，还需要把 Cache 也更新了，防止下次加载又是旧的
+            if target_item.get('path'):
+                self.audio_cache[target_item['path']] = res
+        else:
+            # 合并长音频处理结果
+            if not target_item.get('is_manual_edited') and not only_pitch_changed:
+                target_item['start'] = res['mis']
+                target_item['end'] = res['mie']
+                target_item['raw_start'] = res['raw_s']
+                target_item['raw_end'] = res['raw_e']
+                target_item['inner_splits'] = res.get('inner_splits', [])
+                target_item['chars_bounds'] = res.get('chars_bounds', [])
+                target_item['split_warnings'] = res.get('split_warnings', [])
+                target_item['split_confidence'] = res.get('split_confidence', 1.0)
+            target_item.pop('has_empty_data', None)
+            target_item['preview_f0'] = res.get('preview_f0', [])
+            if 'formant_data' in res:
+                target_item['formant_data'] = res['formant_data']
+            if 'preview_formants' in res:
+                target_item['preview_formants'] = res['preview_formants']
+
+    def _process_recalculate_tasks(self, tasks, valid_items, params, trim_silence, only_pitch_changed):
+        if not tasks:
+            return
+
+        engine = self.last_params.get('f0_engine', 'praat')
+        max_workers = 2 if engine == 'reaper' else min(os.cpu_count() or 4, 8)
+        with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+            futures = {}
+            for idx, task in enumerate(tasks):
+                if task.get('type') == 'batch':
+                    # 独立音频：重新运行 batch_process_worker
+                    f = executor.submit(batch_process_worker, task['path'], params, trim_silence, task.get('word_label', ""))
+                else:
+                    # 长音频：重新运行 long_process_worker
+                    f = executor.submit(
+                        long_process_worker,
+                        task['snd_values'], task['snd_sf'], task['pitch_xs'], task['pitch_freqs'],
+                        task['ms'], task['me'], params, trim_silence, task['word_label']
+                    )
+                futures[f] = idx
+
+            completed = 0
+            for future in concurrent.futures.as_completed(futures):
+                idx = futures[future]
+                try:
+                    res = future.result()
+                    if res.get('success'):
+                        target_item = valid_items[idx]
+                        is_batch = (tasks[idx].get('type') == 'batch')
+                        self._apply_recalculate_result_to_item(target_item, res, is_batch, only_pitch_changed)
+                except Exception: pass
+
+                completed += 1
+                if completed % max(1, len(futures)//10) == 0 or completed == len(futures):
+                    self.root.after(0, lambda v=completed/len(futures): self.set_progress(v))
+
+    def recalculate_all_audio(self, only_trim_silence=False, recompute_pitch=True, only_pitch_changed=False):
+        if not self.items: return
+
+        # Capture parameter values before sync
+        old_params = dict(self.last_params) if hasattr(self, 'last_params') and self.last_params else {}
+
+        # 1. 确保所有 UI 输入框的最新的参数值都已经同步到了 self.last_params 中（在主线程中执行）
+        try:
+            self.on_param_change(recalculate_current=False)
+        except Exception:
+            pass
+
+        only_pitch_changed = self._is_only_pitch_changed(only_pitch_changed, old_params)
 
         items_snapshot = list(self.items.items())
-        total = len(items_snapshot)
 
         def run():
             self.root.after(0, lambda: self.start_loading("正在重新计算..."))
             trim_silence = self.switch_trim_silence.get()
 
             if only_trim_silence:
-                for i, (iid, item) in enumerate(items_snapshot):
-                    if item.get('snd') and 'raw_start' in item and 'raw_end' in item:
-                        mic_s, mic_e = recalculate_bounds_fast(
-                            item['snd'], item.get('pitch_data', item.get('pitch')), item['raw_start'], item['raw_end'], trim_silence
-                        )
-                        # 等比例缩放内部蓝线和 chars_bounds (如果只因裁切而变化)
-                        old_s, old_e = item.get('start', mic_s), item.get('end', mic_e)
-
-                        # 如果用户手动修改了 start/end，我们可以检查 item.get('is_manual_edited', False)
-                        # 但由于没有这个 flag，我们依然等比例缩放它们。
-                        if 'inner_splits' in item and item['inner_splits'] and old_e > old_s:
-                            ratio = (mic_e - mic_s) / (old_e - old_s)
-                            item['inner_splits'] = [mic_s + (s - old_s) * ratio for s in item['inner_splits']]
-                            if 'chars_bounds' in item and item['chars_bounds']:
-                                item['chars_bounds'] = [[mic_s + (c[0] - old_s) * ratio, mic_s + (c[1] - old_s) * ratio] for c in item['chars_bounds']]
-
-                        # 如果有 chars_bounds，则基于 chars_bounds 更新 start/end 以防错位
-                        if 'chars_bounds' in item and item['chars_bounds']:
-                            item['start'] = item['chars_bounds'][0][0]
-                            item['end'] = item['chars_bounds'][-1][1]
-                        else:
-                            item['start'], item['end'] = mic_s, mic_e
-
-                    if i % 5 == 0 or i == total - 1:
-                        self.root.after(0, lambda v=(i + 1) / total: self.set_progress(v))
+                self._recalculate_trim_silence_only(items_snapshot, trim_silence)
             else:
-                tasks = []
                 params = {
                     'db': self.last_params['db'],
                     'skip_front': self.last_params['skip_front'],
@@ -1911,129 +2049,8 @@ class PhoneticsApp:
                     'pts': self.last_params.get('pts', 11),
                 }
 
-                valid_items = []
-                recomputed_pitches = {}
-                for iid, item in items_snapshot:
-                    if item.get('snd'):
-                        snd = item['snd']
-                        snd_id = id(snd)
-
-                        # 性能优化：按 snd 实例缓存 Pitch，避免长音频模式下被重复计算上千次
-                        if recompute_pitch:
-                            try:
-                                if snd_id not in recomputed_pitches:
-                                    recomputed_pitches[snd_id] = extract_f0(snd, self.last_params)
-                                item['pitch_data'] = recomputed_pitches[snd_id]
-                                if 'pitch' in item:
-                                    del item['pitch']
-                            except Exception: pass
-
-                        # 保存计算该项时所用的参数实现所见即所得导出
-                        item['pitch_floor'] = params['pitch_floor']
-                        item['pitch_ceiling'] = params['pitch_ceiling']
-                        item['voicing_threshold'] = params['voicing_threshold']
-                        item['f0_engine'] = self.last_params.get('f0_engine', 'praat')
-
-                        mac_s, mac_e = item['macro_start'], item['macro_end']
-                        valid_ms = max(0, mac_s)
-                        valid_me = min(snd.get_total_duration(), mac_e)
-
-                        if valid_me > valid_ms:
-                            part = snd.extract_part(from_time=valid_ms, to_time=valid_me)
-
-                            # 性能优化：切片 Pitch 数组，大幅减少 IPC 数据量
-                            p_xs = item['pitch_data']['xs']
-                            p_freqs = item['pitch_data']['freqs']
-                            idx_start = np.searchsorted(p_xs, valid_ms)
-                            idx_end = np.searchsorted(p_xs, valid_me)
-
-                            tasks.append({
-                                'ms': mac_s, 'me': mac_e,
-                                'snd_values': part.values, 'snd_sf': part.sampling_frequency,
-                                'pitch_xs': p_xs[idx_start:idx_end], 'pitch_freqs': p_freqs[idx_start:idx_end],
-                                'word_label': item['label'].replace(" (缺失)", "")
-                            })
-                            valid_items.append(item)
-                    elif item.get('path'):
-                        # 独立音频模式：直接记录路径，后续使用多进程批处理
-                        tasks.append({
-                            'path': item['path'],
-                            'word_label': item['label'].replace(" (缺失)", ""),
-                            'type': 'batch'
-                        })
-                        valid_items.append(item)
-
-                if tasks:
-                    # 使用 ProcessPoolExecutor 进行 CPU 密集型任务
-                    engine = self.last_params.get('f0_engine', 'praat')
-                    max_workers = 2 if engine == 'reaper' else min(os.cpu_count() or 4, 8)
-                    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-                        futures = {}
-                        for idx, task in enumerate(tasks):
-                            if task.get('type') == 'batch':
-                                # 独立音频：重新运行 batch_process_worker
-                                f = executor.submit(batch_process_worker, task['path'], params, trim_silence, task.get('word_label', ""))
-                            else:
-                                # 长音频：重新运行 long_process_worker
-                                f = executor.submit(
-                                    long_process_worker,
-                                    task['snd_values'], task['snd_sf'], task['pitch_xs'], task['pitch_freqs'],
-                                    task['ms'], task['me'], params, trim_silence, task['word_label']
-                                )
-                            futures[f] = idx
-
-                        completed = 0
-                        for future in concurrent.futures.as_completed(futures):
-                            idx = futures[future]
-                            try:
-                                res = future.result()
-                                if res.get('success'):
-                                    target_item = valid_items[idx]
-                                    if tasks[idx].get('type') == 'batch':
-                                        # 合并独立音频处理结果
-                                        if not target_item.get('is_manual_edited') and not only_pitch_changed:
-                                            target_item['start'] = res['start']
-                                            target_item['end'] = res['end']
-                                            target_item['raw_start'] = res['raw_start']
-                                            target_item['raw_end'] = res['raw_end']
-                                            target_item['inner_splits'] = res.get('inner_splits', [])
-                                            target_item['chars_bounds'] = res.get('chars_bounds', [])
-                                            target_item['split_warnings'] = res.get('split_warnings', [])
-                                            target_item['split_confidence'] = res.get('split_confidence', 1.0)
-                                        target_item['pitch_data'] = res['pitch_data']
-                                        if 'pitch' in target_item:
-                                            del target_item['pitch']
-                                        target_item.pop('has_empty_data', None)
-                                        target_item['preview_f0'] = res.get('preview_f0', [])
-                                        if 'formant_data' in res:
-                                            target_item['formant_data'] = res['formant_data']
-                                        if 'preview_formants' in res:
-                                            target_item['preview_formants'] = res['preview_formants']
-                                        # 如果是独立音频，还需要把 Cache 也更新了，防止下次加载又是旧的
-                                        if target_item.get('path'):
-                                            self.audio_cache[target_item['path']] = res
-                                    else:
-                                        # 合并长音频处理结果
-                                        if not target_item.get('is_manual_edited') and not only_pitch_changed:
-                                            target_item['start'] = res['mis']
-                                            target_item['end'] = res['mie']
-                                            target_item['raw_start'] = res['raw_s']
-                                            target_item['raw_end'] = res['raw_e']
-                                            target_item['inner_splits'] = res.get('inner_splits', [])
-                                            target_item['chars_bounds'] = res.get('chars_bounds', [])
-                                            target_item['split_warnings'] = res.get('split_warnings', [])
-                                            target_item['split_confidence'] = res.get('split_confidence', 1.0)
-                                        target_item.pop('has_empty_data', None)
-                                        target_item['preview_f0'] = res.get('preview_f0', [])
-                                        if 'formant_data' in res:
-                                            target_item['formant_data'] = res['formant_data']
-                                        if 'preview_formants' in res:
-                                            target_item['preview_formants'] = res['preview_formants']
-                            except Exception: pass
-
-                            completed += 1
-                            if completed % max(1, len(futures)//10) == 0 or completed == len(futures):
-                                self.root.after(0, lambda v=completed/len(futures): self.set_progress(v))
+                tasks, valid_items = self._prepare_recalculate_tasks(items_snapshot, params, recompute_pitch)
+                self._process_recalculate_tasks(tasks, valid_items, params, trim_silence, only_pitch_changed)
 
             def finalize():
                 if self.spectrogram_panel.current_item:
