@@ -413,13 +413,21 @@ class SpectrogramPanel:
         if self.ax and self._has_playback_selection():
             s, e = self.playback_selection
             if self.selection_patch:
-                xy = self.selection_patch.get_xy()
-                xy[0, 0] = s
-                xy[1, 0] = s
-                xy[2, 0] = e
-                xy[3, 0] = e
-                xy[4, 0] = s
-                self.selection_patch.set_xy(xy)
+                import matplotlib.patches
+                if isinstance(self.selection_patch, matplotlib.patches.Rectangle):
+                    self.selection_patch.set_x(s)
+                    self.selection_patch.set_width(e - s)
+                else:
+                    try:
+                        xy = self.selection_patch.get_xy()
+                        xy[0, 0] = s
+                        xy[1, 0] = s
+                        xy[2, 0] = e
+                        xy[3, 0] = e
+                        xy[4, 0] = s
+                        self.selection_patch.set_xy(xy)
+                    except Exception:
+                        pass
             else:
                 self.selection_patch = self.ax.axvspan(s, e, color="#FDE68A", alpha=0.38, zorder=4)
         else:
@@ -941,14 +949,21 @@ class SpectrogramPanel:
 
             if i < len(self.span_fills):
                 poly = self.span_fills[i]
-                xy = poly.get_xy()
-                # xy shape is (5, 2) for a rectangle
-                xy[0, 0] = c_s
-                xy[1, 0] = c_s
-                xy[2, 0] = c_e
-                xy[3, 0] = c_e
-                xy[4, 0] = c_s
-                poly.set_xy(xy)
+                import matplotlib.patches
+                if isinstance(poly, matplotlib.patches.Rectangle):
+                    poly.set_x(c_s)
+                    poly.set_width(c_e - c_s)
+                else:
+                    try:
+                        xy = poly.get_xy()
+                        xy[0, 0] = c_s
+                        xy[1, 0] = c_s
+                        xy[2, 0] = c_e
+                        xy[3, 0] = c_e
+                        xy[4, 0] = c_s
+                        poly.set_xy(xy)
+                    except Exception:
+                        pass
 
             if i < len(self.char_texts):
                 cx = (c_s + c_e) / 2
@@ -1167,7 +1182,7 @@ class SpectrogramPanel:
 
         self.cursor_x = current_audio_time
         self.update_cursor_graphics(prefer_blit=True)
-        self._playback_job = self.canvas.get_tk_widget().after(30, self._playback_update_loop)
+        self._playback_job = self.canvas.get_tk_widget().after(10, self._playback_update_loop)
 
     def apply_auto_detect(self):
         if self.on_auto_detect_callback:
