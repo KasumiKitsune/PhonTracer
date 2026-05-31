@@ -11,6 +11,7 @@ jobs:
     name: Build for ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         os: [windows-latest, macos-latest]
     permissions:
@@ -58,7 +59,17 @@ jobs:
         mv PhonTracer.app PhonTracer_Suite/
         mv AudioToolkit.app PhonTracer_Suite/
         # Create a DMG file for macOS distribution
-        hdiutil create -volname "PhonTracer_Suite" -srcfolder PhonTracer_Suite -ov -format UDZO PhonTracer_Suite-macOS.dmg
+        for attempt in 1 2 3; do
+          hdiutil detach "/Volumes/PhonTracer_Suite" -force 2>/dev/null || true
+          rm -f PhonTracer_Suite-macOS.dmg
+          if hdiutil create -volname "PhonTracer_Suite" -srcfolder PhonTracer_Suite -ov -format UDZO PhonTracer_Suite-macOS.dmg; then
+            break
+          fi
+          if [ "$attempt" = "3" ]; then
+            exit 1
+          fi
+          sleep 5
+        done
 
     - name: Create Release and Upload Artifacts
       uses: softprops/action-gh-release@v2
