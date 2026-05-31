@@ -2949,6 +2949,90 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                     seen.append(group)
             speaker.cli_groups = seen
 
+    def _process_speaker_batch_items(self, spk, sorted_audios, matched_audio_to_tg, params):
+        from modules.audio_core import batch_process_worker_with_textgrid, batch_process_worker, extract_f0
+        import parselmouth
+        import concurrent.futures
+        import os
+
+        trim = params.get('trim_silence', True)
+
+        futures = {}
+        for i, ap in enumerate(sorted_audios):
+            tp = matched_audio_to_tg.get(ap)
+            if tp:
+                futures[self.executor.submit(batch_process_worker_with_textgrid, ap, tp, params, trim)] = i
+            else:
+                word_lbl = os.path.splitext(os.path.basename(ap))[0]
+                futures[self.executor.submit(batch_process_worker, ap, params, trim, word_lbl)] = i
+
+        results = [None] * len(sorted_audios)
+        for future in concurrent.futures.as_completed(futures):
+            orig_idx = futures[future]
+            try:
+                res = future.result()
+                results[orig_idx] = res
+            except Exception as e:
+                ap = sorted_audios[orig_idx]
+                lbl = os.path.splitext(os.path.basename(ap))[0]
+                results[orig_idx] = {'label': lbl, 'group': '导入内容', 'success': False, 'error': str(e), 'path': ap}
+
+        for res in results:
+            if not res: continue
+            grp_name = res.get('group', '导入内容')
+            if res.get('success'):
+                res['group'] = grp_name
+                if 'pitch_floor' not in res:
+                    res['pitch_floor'] = params['pitch_floor']
+                    res['pitch_ceiling'] = params['pitch_ceiling']
+                    res['voicing_threshold'] = params['voicing_threshold']
+
+                try:
+                    snd = parselmouth.Sound(res['path'])
+                    res['snd'] = snd
+                    if 'pitch_data' not in res or not res['pitch_data']:
+                        res['pitch_data'] = extract_f0(snd, params)
+                except Exception:
+                    pass
+
+                iid = f"batch_tg_{res['label']}_{id(res)}"
+                spk.items[iid] = res
+            else:
+                iid = f"missing_{res['label']}_{id(res)}"
+                spk.items[iid] = {'label': res['label'], 'group': grp_name, 'snd': None, 'start': None, 'end': None, 'inner_splits': []}
+
+    def _match_audio_to_textgrid(self, sorted_audios, sorted_tgs):
+        matched_audio_to_tg = {}
+        matched_tg_to_audio = {}
+
+        import os
+        tg_base_map = {os.path.splitext(os.path.basename(tp))[0].lower(): tp for tp in sorted_tgs}
+        for ap in sorted_audios:
+            abase = os.path.splitext(os.path.basename(ap))[0].lower()
+            if abase in tg_base_map:
+                tp = tg_base_map[abase]
+                matched_audio_to_tg[ap] = tp
+                matched_tg_to_audio[tp] = ap
+
+        for ap in sorted_audios:
+            if ap in matched_audio_to_tg: continue
+            abase = os.path.splitext(os.path.basename(ap))[0].lower()
+            for tp in sorted_tgs:
+                if tp in matched_tg_to_audio: continue
+                tbase = os.path.splitext(os.path.basename(tp))[0].lower()
+                if abase in tbase or tbase in abase:
+                    matched_audio_to_tg[ap] = tp
+                    matched_tg_to_audio[tp] = ap
+                    break
+
+        remaining_audios = [ap for ap in sorted_audios if ap not in matched_audio_to_tg]
+        remaining_tgs = [tp for tp in sorted_tgs if tp not in matched_tg_to_audio]
+        for ap, tp in zip(remaining_audios, remaining_tgs):
+            matched_audio_to_tg[ap] = tp
+            matched_tg_to_audio[tp] = ap
+
+        return matched_audio_to_tg
+
     def do_import_batch_and_export(self, arg):
         """
         Import a folder containing subfolders of speaker WAV + TextGrid files and export as a .teproj project.
@@ -3000,81 +3084,10 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
             sorted_audios = sorted(wavs, key=natural_sort_key)
             sorted_tgs = sorted(textgrids, key=natural_sort_key)
 
-            matched_audio_to_tg = {}
-            matched_tg_to_audio = {}
-
-            tg_base_map = {os.path.splitext(os.path.basename(tp))[0].lower(): tp for tp in sorted_tgs}
-            for ap in sorted_audios:
-                abase = os.path.splitext(os.path.basename(ap))[0].lower()
-                if abase in tg_base_map:
-                    tp = tg_base_map[abase]
-                    matched_audio_to_tg[ap] = tp
-                    matched_tg_to_audio[tp] = ap
-
-            for ap in sorted_audios:
-                if ap in matched_audio_to_tg: continue
-                abase = os.path.splitext(os.path.basename(ap))[0].lower()
-                for tp in sorted_tgs:
-                    if tp in matched_tg_to_audio: continue
-                    tbase = os.path.splitext(os.path.basename(tp))[0].lower()
-                    if abase in tbase or tbase in abase:
-                        matched_audio_to_tg[ap] = tp
-                        matched_tg_to_audio[tp] = ap
-                        break
-
-            remaining_audios = [ap for ap in sorted_audios if ap not in matched_audio_to_tg]
-            remaining_tgs = [tp for tp in sorted_tgs if tp not in matched_tg_to_audio]
-            for ap, tp in zip(remaining_audios, remaining_tgs):
-                matched_audio_to_tg[ap] = tp
-                matched_tg_to_audio[tp] = ap
+            matched_audio_to_tg = self._match_audio_to_textgrid(sorted_audios, sorted_tgs)
 
             spk.pending_batch_paths = sorted_audios
-            params = self.params
-            trim = params.get('trim_silence', True)
-
-            futures = {}
-            for i, ap in enumerate(sorted_audios):
-                tp = matched_audio_to_tg.get(ap)
-                if tp:
-                    futures[self.executor.submit(batch_process_worker_with_textgrid, ap, tp, params, trim)] = i
-                else:
-                    word_lbl = os.path.splitext(os.path.basename(ap))[0]
-                    futures[self.executor.submit(batch_process_worker, ap, params, trim, word_lbl)] = i
-
-            results = [None] * len(sorted_audios)
-            for future in concurrent.futures.as_completed(futures):
-                orig_idx = futures[future]
-                try:
-                    res = future.result()
-                    results[orig_idx] = res
-                except Exception as e:
-                    ap = sorted_audios[orig_idx]
-                    lbl = os.path.splitext(os.path.basename(ap))[0]
-                    results[orig_idx] = {'label': lbl, 'group': '导入内容', 'success': False, 'error': str(e), 'path': ap}
-
-            for res in results:
-                if not res: continue
-                grp_name = res.get('group', '导入内容')
-                if res.get('success'):
-                    res['group'] = grp_name
-                    if 'pitch_floor' not in res:
-                        res['pitch_floor'] = params['pitch_floor']
-                        res['pitch_ceiling'] = params['pitch_ceiling']
-                        res['voicing_threshold'] = params['voicing_threshold']
-
-                    try:
-                        snd = parselmouth.Sound(res['path'])
-                        res['snd'] = snd
-                        if 'pitch_data' not in res or not res['pitch_data']:
-                            res['pitch_data'] = extract_f0(snd, params)
-                    except Exception:
-                        pass
-
-                    iid = f"batch_tg_{res['label']}_{id(res)}"
-                    spk.items[iid] = res
-                else:
-                    iid = f"missing_{res['label']}_{id(res)}"
-                    spk.items[iid] = {'label': res['label'], 'group': grp_name, 'snd': None, 'start': None, 'end': None, 'inner_splits': []}
+            self._process_speaker_batch_items(spk, sorted_audios, matched_audio_to_tg, self.params)
 
             imported_speakers.append(spk_name)
 
