@@ -2794,23 +2794,62 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
         fig.savefig(out_file, dpi=300, bbox_inches='tight')
         plt.close(fig)
 
-    def _export_kde_heatmap_integrated(self, out_file, speakers):
-        import matplotlib.pyplot as plt
+    def _process_kde_item(self, item, N_DENSE):
         from scipy.interpolate import interp1d
         from scipy.signal import savgol_filter
-        from scipy.stats import gaussian_kde
         import numpy as np
-        import math
 
-        N_DENSE = 100
-        group_syl_contours = {}
+        if item.get('start') is None or not item.get('snd'): return None
 
+        pitch_data = item.get('pitch_data')
+        if pitch_data:
+            p_xs = pitch_data['xs']
+            p_freqs = pitch_data['freqs']
+        else:
+            pitch = item.get('pitch')
+            if not pitch: return None
+            p_xs, p_freqs = pitch.xs(), pitch.selected_array['frequency']
+
+        t_s, t_e = item['start'], item['end']
+        label = item.get('label', '')
+        inner_splits = item.get('inner_splits', [])
+
+        splits = [t_s] + [s_split for s_split in inner_splits if t_s < s_split < t_e] + [t_e]
+        if len(splits) != len(label) + 1: splits = np.linspace(t_s, t_e, len(label) + 1).tolist()
+        if len(label) <= 1: splits = [t_s, t_e]
+
+        y_denses = {}
+        for k in range(len(splits) - 1):
+            c_s, c_e = splits[k], splits[k+1]
+            valid_idx = np.where((p_xs >= c_s) & (p_xs <= c_e) & (p_freqs > 0))[0]
+            if len(valid_idx) >= 2:
+                v_s, v_e = p_xs[valid_idx[0]], p_xs[valid_idx[-1]]
+                mask = (p_xs >= v_s) & (p_xs <= v_e) & (p_freqs > 0)
+                valid_freqs = p_freqs[mask]
+                if len(valid_freqs) < 3: continue
+
+                win = len(valid_freqs) // 3
+                if win % 2 == 0: win += 1
+                win = max(win, 3)
+                smoothed = savgol_filter(valid_freqs, win, 2) if len(valid_freqs) > win else valid_freqs
+
+                x_orig = np.linspace(0, 1, len(smoothed))
+                f_interp = interp1d(x_orig, smoothed, kind='linear')
+                y_dense = f_interp(np.linspace(0, 1, N_DENSE))
+
+                y_denses[k] = y_dense
+        return y_denses
+
+    def _get_kde_max_syls(self, speakers):
         max_syls = 1
         for s in speakers:
             for item in s.items.values():
                 lbl = item.get('label', '')
                 if len(lbl) > max_syls: max_syls = len(lbl)
+        return max_syls
 
+    def _extract_kde_heatmap_contours(self, speakers, N_DENSE):
+        group_syl_contours = {}
         for s in speakers:
             s_struct = [(grp, [iid for iid, item in s.items.items() if item.get('group') == grp]) for grp in getattr(s, 'cli_groups', [])]
             for grp_name, children in s_struct:
@@ -2818,46 +2857,15 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                     group_syl_contours[grp_name] = {}
                 for child in children:
                     item = s.items[child]
-                    if item.get('start') is None or not item.get('snd'): continue
+                    y_denses = self._process_kde_item(item, N_DENSE)
+                    if not y_denses: continue
+                    for k, y_dense in y_denses.items():
+                        if k not in group_syl_contours[grp_name]: group_syl_contours[grp_name][k] = []
+                        group_syl_contours[grp_name][k].append(y_dense)
+        return group_syl_contours
 
-                    pitch_data = item.get('pitch_data')
-                    if pitch_data:
-                        p_xs = pitch_data['xs']
-                        p_freqs = pitch_data['freqs']
-                    else:
-                        pitch = item.get('pitch')
-                        if not pitch: continue
-                        p_xs, p_freqs = pitch.xs(), pitch.selected_array['frequency']
-
-                    t_s, t_e = item['start'], item['end']
-                    label = item.get('label', '')
-                    inner_splits = item.get('inner_splits', [])
-
-                    splits = [t_s] + [s_split for s_split in inner_splits if t_s < s_split < t_e] + [t_e]
-                    if len(splits) != len(label) + 1: splits = np.linspace(t_s, t_e, len(label) + 1).tolist()
-                    if len(label) <= 1: splits = [t_s, t_e]
-
-                    for k in range(len(splits) - 1):
-                        c_s, c_e = splits[k], splits[k+1]
-                        valid_idx = np.where((p_xs >= c_s) & (p_xs <= c_e) & (p_freqs > 0))[0]
-                        if len(valid_idx) >= 2:
-                            v_s, v_e = p_xs[valid_idx[0]], p_xs[valid_idx[-1]]
-                            mask = (p_xs >= v_s) & (p_xs <= v_e) & (p_freqs > 0)
-                            valid_freqs = p_freqs[mask]
-                            if len(valid_freqs) < 3: continue
-
-                            win = len(valid_freqs) // 3
-                            if win % 2 == 0: win += 1
-                            win = max(win, 3)
-                            smoothed = savgol_filter(valid_freqs, win, 2) if len(valid_freqs) > win else valid_freqs
-
-                            x_orig = np.linspace(0, 1, len(smoothed))
-                            f_interp = interp1d(x_orig, smoothed, kind='linear')
-                            y_dense = f_interp(np.linspace(0, 1, N_DENSE))
-
-                            if k not in group_syl_contours[grp_name]: group_syl_contours[grp_name][k] = []
-                            group_syl_contours[grp_name][k].append(y_dense)
-
+    def _calculate_kde_f0_bounds(self, group_syl_contours):
+        import numpy as np
         all_mean_vals = []
         for name, syls_dict in group_syl_contours.items():
             for k, y_arrays in syls_dict.items():
@@ -2866,11 +2874,11 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                     all_mean_vals.extend(mean_contour.tolist())
 
         if not all_mean_vals:
-            print('{"success": False, "error": "No valid data to plot"}')
-            return
+            return None, None
+        return min(all_mean_vals), max(all_mean_vals)
 
-        min_f0, max_f0 = min(all_mean_vals), max(all_mean_vals)
-
+    def _normalize_kde_points(self, group_syl_contours, min_f0, max_f0, N_DENSE):
+        import numpy as np
         def hz_to_5_scale(hz):
             if max_f0 == min_f0: return 3.0
             return 5 * (np.log(hz) - np.log(min_f0)) / (np.log(max_f0) - np.log(min_f0))
@@ -2884,6 +2892,13 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                     X_all.extend(x_dense.tolist())
                     Y_all.extend([hz_to_5_scale(h) for h in y_arr])
             group_norm_points[name] = (np.array(X_all), np.array(Y_all))
+        return group_norm_points
+
+    def _draw_kde_heatmap_integrated(self, out_file, speakers, group_norm_points, max_syls):
+        import matplotlib.pyplot as plt
+        from scipy.stats import gaussian_kde
+        import numpy as np
+        import math
 
         plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
         plt.rcParams['axes.unicode_minus'] = False
@@ -2937,6 +2952,20 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
         fig.tight_layout()
         fig.savefig(out_file, dpi=300, bbox_inches='tight')
         plt.close(fig)
+
+    def _export_kde_heatmap_integrated(self, out_file, speakers):
+        N_DENSE = 100
+
+        max_syls = self._get_kde_max_syls(speakers)
+        group_syl_contours = self._extract_kde_heatmap_contours(speakers, N_DENSE)
+        min_f0, max_f0 = self._calculate_kde_f0_bounds(group_syl_contours)
+
+        if min_f0 is None or max_f0 is None:
+            print('{"success": False, "error": "No valid data to plot"}')
+            return
+
+        group_norm_points = self._normalize_kde_points(group_syl_contours, min_f0, max_f0, N_DENSE)
+        self._draw_kde_heatmap_integrated(out_file, speakers, group_norm_points, max_syls)
 
     def _sync_cli_state_after_project_load(self):
         for speaker in self.speaker_manager.get_all_speakers():
