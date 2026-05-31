@@ -939,7 +939,7 @@ class AudioToolkitApp(ctk.CTk):
         }
 
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(1, weight=1)
+        self.grid_rowconfigure(0, weight=1)
 
         style = ttk.Style()
         style.theme_use("default")
@@ -972,38 +972,8 @@ class AudioToolkitApp(ctk.CTk):
             foreground=[("selected", "#FFFFFF")],
         )
 
-        header_frame = ctk.CTkFrame(self, fg_color=self.colors["surface"], corner_radius=0, height=88)
-        header_frame.grid(row=0, column=0, sticky="ew")
-        header_frame.grid_propagate(False)
-        header_frame.grid_columnconfigure(1, weight=1)
-
-        brand = ctk.CTkFrame(header_frame, fg_color="transparent")
-        brand.grid(row=0, column=0, sticky="w", padx=28, pady=16)
-        if self.icons.get("logo"):
-            ctk.CTkLabel(brand, text="", image=self.icons.get("logo")).pack(side=tk.LEFT, padx=(0, 14))
-        title_block = ctk.CTkFrame(brand, fg_color="transparent")
-        title_block.pack(side=tk.LEFT)
-        ctk.CTkLabel(
-            title_block,
-            text="PhonTracer 音频处理套件",
-            font=self.font_heading,
-            text_color=self.colors["text"],
-        ).pack(anchor="w")
-        ctk.CTkLabel(
-            title_block,
-            text="合并长音频、按字表拆分、预览工程文件",
-            font=self.font_small,
-            text_color=self.colors["muted"],
-        ).pack(anchor="w", pady=(2, 0))
-
-        status_frame = ctk.CTkFrame(header_frame, fg_color=self.colors["success_soft"], corner_radius=999)
-        status_frame.grid(row=0, column=2, sticky="e", padx=28)
-        ctk.CTkLabel(status_frame, text="●", font=self.font_small, text_color=self.colors["success"]).pack(side=tk.LEFT, padx=(8, 4), pady=3)
-        self.lbl_status = ctk.CTkLabel(status_frame, text="就绪", text_color="#047857", font=self.font_small)
-        self.lbl_status.pack(side=tk.LEFT, padx=(0, 8), pady=3)
-
         self.main_shell = ctk.CTkFrame(self, fg_color="transparent")
-        self.main_shell.grid(row=1, column=0, sticky="nsew", padx=24, pady=20)
+        self.main_shell.grid(row=0, column=0, sticky="nsew", padx=24, pady=20)
         self.main_shell.grid_columnconfigure(0, weight=1)
         self.main_shell.grid_rowconfigure(0, weight=1)
 
@@ -1052,7 +1022,7 @@ class AudioToolkitApp(ctk.CTk):
 
         self.progress = ctk.CTkProgressBar(self, height=5, progress_color=self.colors["primary"], fg_color="#D8E0EA")
         self.progress.set(0)
-        self.progress.grid(row=2, column=0, sticky="ew")
+        self.progress.grid(row=1, column=0, sticky="ew")
         self.progress.grid_remove()
 
     def build_merge_tab(self):
@@ -1445,12 +1415,14 @@ class AudioToolkitApp(ctk.CTk):
             return
 
         if state:
-            self.lbl_status.configure(text=msg or "处理中...", text_color="#1D4ED8")
+            if hasattr(self, 'lbl_status'):
+                self.lbl_status.configure(text=msg or "处理中...", text_color="#1D4ED8")
             self.progress.grid()
             self.progress.set(0.06)
             self.update_idletasks()
         else:
-            self.lbl_status.configure(text="就绪" if not msg else msg, text_color="#047857")
+            if hasattr(self, 'lbl_status'):
+                self.lbl_status.configure(text="就绪" if not msg else msg, text_color="#047857")
             self.progress.set(0)
             self.progress.grid_remove()
 
