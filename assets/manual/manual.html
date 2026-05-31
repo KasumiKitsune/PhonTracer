@@ -827,22 +827,18 @@ sys/tem</pre>
                             </div>
                         </div>
 
-                        <!-- Engine Switch Comparison -->
+                        <!-- F0 Algorithm Notes -->
                         <div class="bg-white border border-slate-100 rounded-xl p-6 shadow-sm">
-                            <h4 class="text-sm font-bold text-slate-900 mb-3 flex items-center"><i data-lucide="cpu" class="w-4.5 h-4.5 text-brand-600 mr-1.5"></i> F0 基频提取算法引擎的差异</h4>
-                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs text-slate-600 leading-relaxed">
+                            <h4 class="text-sm font-bold text-slate-900 mb-3 flex items-center"><i data-lucide="cpu" class="w-4.5 h-4.5 text-brand-600 mr-1.5"></i> F0 基频提取算法说明</h4>
+                            <div class="text-xs text-slate-600 leading-relaxed">
                                 <div class="border border-slate-100 p-4 rounded-lg">
-                                    <strong class="text-brand-600 text-sm block mb-1">1. Praat 引擎 (推荐)</strong>
+                                    <strong class="text-brand-600 text-sm block mb-1">Praat 自相关算法</strong>
                                     使用最经典的自相关 (Autocorrelation) 算法，是目前学术界进行语音声学分析最认可且具有高解释度的基石算法。
-                                </div>
-                                <div class="border border-slate-100 p-4 rounded-lg">
-                                    <strong class="text-brand-600 text-sm block mb-1">2. REAPER 引擎</strong>
-                                    由 Google 开源并维护的一种高效算法方案。针对环境低噪强抗扰、重采样 16kHz 并进行平滑，对不平整的声音（边缘颤动）处理优于 Praat。
                                 </div>
                             </div>
                             <div class="bg-amber-50 text-amber-950 p-3 rounded-lg text-[11px] mt-4 flex items-start space-x-1.5">
                                 <i data-lucide="alert-triangle" class="w-4 h-4 text-amber-600 shrink-0"></i>
-                                <span>在同一个对比实验中，一旦选定其中一个基频引擎后，务必保持一致，切勿在分析过程中混合调换引擎类型，以免结果产生差异。</span>
+                                <span>对于嘎裂声、严重不规则振动或弱周期信号，无法可靠测量时会保留为缺失值。请结合声谱图人工复核，不要为了得到连续曲线而强行补齐。</span>
                             </div>
                         </div>
 
@@ -999,7 +995,7 @@ sys/tem</pre>
                             </div>
                             <div class="bg-slate-800/80 p-3 rounded-lg text-[11px] text-slate-300">
                                 <strong>论文写作与研究记录推荐：</strong> 在论文中记录声学分析方法时，推荐详细记录：
-                                PhonTracer 版本、检测引擎(Praat/REAPER)、最低基频/最高基频限值 (Pitch Floor/Ceiling)、清浊判定阈值 (Voicing Threshold)、采样点数、以及是否进行人工复核调校。
+                                PhonTracer 版本、最低基频/最高基频限值 (Pitch Floor/Ceiling)、清浊判定阈值 (Voicing Threshold)、采样点数、以及是否进行人工复核调校。
                             </div>
                         </div>
                     </div>
@@ -1227,7 +1223,7 @@ sys/tem</pre>
                                     <ul class="space-y-2 text-slate-500 font-mono">
                                         <li><strong class="text-slate-800">lang zh / lang en :</strong> 设定中英文回显环境。</li>
                                         <li><strong class="text-slate-800">speakers / add_speaker :</strong> 查看或新增发音人隔离工作区。</li>
-                                        <li><strong class="text-slate-800">set_params pts=11 f0_engine=reaper :</strong> 设定声调提取链参数。</li>
+                                        <li><strong class="text-slate-800">set_params pts=11 db=60 pitch_floor=75 :</strong> 设定声调提取链参数。</li>
                                         <li><strong class="text-slate-800">set_params analysis_mode=formant formant_max_hz=5500 :</strong> 设定共振峰模式与追踪限制上限。</li>
                                         <li><strong class="text-slate-800">autosave on / off / now :</strong> 查看、启闭自动保存或强制后台执行原子写入。</li>
                                         <li><strong class="text-slate-800">agent_guide :</strong> 返回包含 AI 交互守则指南的结构化 JSON。</li>
@@ -1381,7 +1377,7 @@ exit
                             </button>
                             <div class="p-5 pt-0 text-xs text-slate-600 leading-relaxed border-t border-slate-50 hidden" id="faq2">
                                 <strong>症状：</strong> 表格和可视化绘图中曲线多处空缺，均值受到极大扭曲。<br>
-                                <strong>急救：</strong> 首先确认该片段是否是真正的浊音（声带产生明显振动），清辅音由于物理原理本就不含基频。如果是浊音但算法不予捕捉，可以在左侧全局参数设置中适当将 <strong>Pitch Floor (最低基频)</strong> 調低；再将 <strong>Voicing Threshold (清浊判定阈值)</strong> 调低（如调成 0.15/0.2 ），让算法的提取门槛更加宽泛；如果Praat不佳，果断切成 REAPER 引擎一试。
+                                <strong>急救：</strong> 首先确认该片段是否是真正的浊音（声带产生明显振动），清辅音由于物理原理本就不含基频。如果是正常浊音但算法不予捕捉，可以谨慎降低 <strong>Pitch Floor (最低基频)</strong> 和 <strong>Voicing Threshold (清浊判定阈值)</strong>，再结合声谱图人工复核。如果片段存在嘎裂声、严重不规则振动或弱周期信号，应保留缺失值，不要为了得到连续曲线而强行补齐。
                             </div>
                         </div>
 
@@ -1541,7 +1537,7 @@ exit
                                 </tr>
                                 <tr>
                                     <td class="p-4 font-semibold text-slate-900">modules/audio_core.py</td>
-                                    <td class="p-4">PhonTracer 的“大脑”。蕴藏着 F0 提取引擎 Praat / REAPER、共振峰 Burg 算法、VAD 判定以及微观元音核提取等底层物理声学算法。</td>
+                                    <td class="p-4">PhonTracer 的“大脑”。蕴藏着 Praat F0 提取、共振峰 Burg 算法、VAD 判定以及微观元音核提取等底层物理声学算法。</td>
                                 </tr>
                                 <tr>
                                     <td class="p-4 font-semibold text-slate-900">modules/app.py & spectrogram_panel.py</td>

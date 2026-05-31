@@ -9,7 +9,7 @@ from .ui_widgets import CTkReleaseButton
 from .data_utils import split_into_syllables
 
 class VisualSplitter(ctk.CTkToplevel):
-    def __init__(self, master, snd, icons, callback, existing_items=None, vad_segments=None):
+    def __init__(self, master, snd, icons, callback, existing_items=None, vad_segments=None, word_items=None):
         super().__init__(master)
         self.title("段落编辑器")
         
@@ -33,12 +33,21 @@ class VisualSplitter(ctk.CTkToplevel):
         # 'cut'    - 手动添加切分线（无 VAD 预检测时的兜底）
         if existing_items:
             self.mode = 'edit'
-            self.segments = existing_items
+            self.segments = []
+            for source_seg in existing_items:
+                seg = dict(source_seg)
+                seg['inner_splits'] = list(source_seg.get('inner_splits', []))
+                self.segments.append(seg)
             for i, seg in enumerate(self.segments):
                 seg['orig_start'] = seg['start']
                 seg['orig_end'] = seg['end']
                 seg['orig_inner_splits'] = list(seg.get('inner_splits', []))
-            self.original_words = [{'id': s['id'], 'label': s['label']} for s in existing_items if s.get('id') is not None]
+            source_words = word_items if word_items is not None else existing_items
+            self.original_words = [
+                {'id': s['id'], 'label': s['label']}
+                for s in source_words
+                if s.get('id') is not None
+            ]
         elif vad_segments:
             self.mode = 'review'
             # 将 VAD 元组转为字典格式，方便统一处理
@@ -576,20 +585,21 @@ class VisualSplitter(ctk.CTkToplevel):
             self.callback(kept_segments, False)
         else:
             kept_segments = []
-            for seg in self.segments:
-                if seg.get('dyn_id') is not None:
-                    # 识别是否修改了边界或内部蓝线
-                    is_mod = (seg['start'] != seg.get('orig_start', seg['start'])) or \
-                             (seg['end'] != seg.get('orig_end', seg['end'])) or \
-                             (seg.get('inner_splits', []) != seg.get('orig_inner_splits', []))
-                    
-                    kept_segments.append({
-                        'id': seg['dyn_id'],
-                        'old_id': seg.get('id'),
-                        'start': seg['start'],
-                        'end': seg['end'],
-                        'inner_splits': seg.get('inner_splits', []),
-                        'is_modified': is_mod
-                    })
+            for idx, seg in enumerate(self.segments):
+                if idx in self.deleted_indices:
+                    continue
+                # 识别是否修改了边界或内部蓝线
+                is_mod = (seg['start'] != seg.get('orig_start', seg['start'])) or \
+                         (seg['end'] != seg.get('orig_end', seg['end'])) or \
+                         (seg.get('inner_splits', []) != seg.get('orig_inner_splits', []))
+
+                kept_segments.append({
+                    'id': seg.get('dyn_id'),
+                    'old_id': seg.get('id'),
+                    'start': seg['start'],
+                    'end': seg['end'],
+                    'inner_splits': list(seg.get('inner_splits', [])),
+                    'is_modified': is_mod
+                })
             self.destroy()
             self.callback(kept_segments, True, len(self.deleted_indices))

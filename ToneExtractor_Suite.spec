@@ -2,18 +2,16 @@
 import os
 import sys
 import customtkinter
-from PyInstaller.utils.hooks import collect_submodules, copy_metadata
 
 # 获取 customtkinter 资源路径
 ctk_path = os.path.dirname(customtkinter.__file__)
-package_datas = copy_metadata('pyreaper') + copy_metadata('setuptools')
 
 # 隐式导入与排除列表
 hidden_imports = [
     'parselmouth', 'PIL._tkinter_finder', 'xlsxwriter',
     'scipy.interpolate', 'scipy.signal', 'scipy.stats', 'scipy.special._cdflib',
-    'textgrid', 'pyreaper', 'setuptools', 'pkg_resources', 'matplotlib.backends.backend_svg'
-] + collect_submodules('pkg_resources')
+    'textgrid', 'matplotlib.backends.backend_svg'
+]
 if sys.platform == 'win32':
     hidden_imports.append('windnd')
 
@@ -31,7 +29,7 @@ a = Analysis(
     datas=[
         ('assets', 'assets'),
         (ctk_path, 'customtkinter')
-    ] + package_datas,
+    ],
     hiddenimports=hidden_imports,
     excludes=excluded_modules,
     win_no_prefer_redirects=False,
@@ -49,7 +47,7 @@ b = Analysis(
     datas=[
         ('assets', 'assets'),
         (ctk_path, 'customtkinter')
-    ] + package_datas,
+    ],
     hiddenimports=hidden_imports,
     excludes=excluded_modules,
     win_no_prefer_redirects=False,
@@ -72,7 +70,7 @@ if is_win:
         ['cli.py'],
         pathex=['.'],
         binaries=[],
-        datas=package_datas,  # CLI 不需要 GUI 资源，但 REAPER 需要包元数据
+        datas=[],
         hiddenimports=cli_hidden_imports,
         excludes=excluded_modules + ['customtkinter', 'tkinter'], # CLI 排除 GUI 库，但保留 Pillow 供 Matplotlib 无窗口导出
         win_no_prefer_redirects=False,

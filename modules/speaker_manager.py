@@ -13,7 +13,6 @@ class SpeakerState:
             'pitch_floor': 75,
             'pitch_ceiling': 600,
             'voicing_threshold': 0.25,
-            'f0_engine': 'praat',
             'analysis_mode': 'f0',
             'formant_max_hz': 5500.0,
             'formant_count': 5,
@@ -37,9 +36,8 @@ class SpeakerManager:
     def get_active_speaker(self):
         return self.speakers[self.active_speaker_id]
 
-    def add_speaker(self, name, default_engine='praat'):
+    def add_speaker(self, name):
         new_speaker = SpeakerState(name)
-        new_speaker.last_params['f0_engine'] = default_engine
         self.speakers[new_speaker.id] = new_speaker
         return new_speaker
 

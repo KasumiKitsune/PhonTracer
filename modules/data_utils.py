@@ -131,7 +131,6 @@ def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: 
     p_floor = item.get('pitch_floor', pitch_floor)
     p_ceiling = item.get('pitch_ceiling', pitch_ceiling)
     v_thresh = item.get('voicing_threshold', voicing_threshold)
-    engine = item.get('f0_engine', 'praat')
  
     from .audio_core import extract_f0
  
@@ -147,7 +146,7 @@ def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: 
         else:
             try:
                 item['snd'] = parselmouth.Sound(item['path'])
-                item['pitch_data'] = extract_f0(item['snd'], {'f0_engine': engine, 'pitch_floor': p_floor, 'pitch_ceiling': p_ceiling, 'voicing_threshold': v_thresh})
+                item['pitch_data'] = extract_f0(item['snd'], {'pitch_floor': p_floor, 'pitch_ceiling': p_ceiling, 'voicing_threshold': v_thresh})
             except Exception: return ""
  
     if duration <= 0 or not item.get('snd'): return ""
@@ -185,7 +184,7 @@ def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: 
                 if c_end - c_start <= 0.01:
                     raise ValueError("segment too short")
                 c_snd = item['snd'].extract_part(from_time=c_start, to_time=c_end)
-                c_pitch_data = extract_f0(c_snd, {'f0_engine': engine, 'pitch_floor': p_floor, 'pitch_ceiling': p_ceiling, 'voicing_threshold': v_thresh})
+                c_pitch_data = extract_f0(c_snd, {'pitch_floor': p_floor, 'pitch_ceiling': p_ceiling, 'voicing_threshold': v_thresh})
                 p_xs = c_pitch_data['xs'] + c_start
                 p_freqs = c_pitch_data['freqs']
                 

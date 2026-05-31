@@ -1,7 +1,5 @@
 import numpy as np
 import os
-import sys
-import types
 from typing import Tuple, List, Union, Dict, Any
 import parselmouth
 
@@ -12,30 +10,7 @@ VOP_WIN_LEN_SEC = 0.010
 VOP_HOP_LEN_SEC = 0.002
 VAD_TIME_STEP = 0.01
 VAD_MIN_DURATION = 0.1
-VAD_MERGE_THRESHOLD = 0.25
-
-
-def _import_pyreaper():
-    try:
-        import pyreaper
-        return pyreaper
-    except ModuleNotFoundError as exc:
-        if exc.name != "pkg_resources":
-            raise
-
-        # pyreaper imports pkg_resources only to read its own version. Some
-        # packaged builds omit setuptools/pkg_resources even though pyreaper's
-        # compiled extension is present, so provide the tiny API it needs.
-        fallback = types.ModuleType("pkg_resources")
-
-        class _Distribution:
-            version = "unknown"
-
-        fallback.get_distribution = lambda _name: _Distribution()
-        sys.modules["pkg_resources"] = fallback
-
-        import pyreaper
-        return pyreaper
+VAD_CLEAR_GAP_THRESHOLD = 0.12
 
 def detect_vowel_onset(snd: parselmouth.Sound, rough_start: float, rough_end: float) -> float:
     """
@@ -123,8 +98,32 @@ def detect_vowel_onset(snd: parselmouth.Sound, rough_start: float, rough_end: fl
     return valid_times[best_idx]
 
 
-def macroscopic_vad(snd: parselmouth.Sound) -> List[List[float]]:
-    """长音频宏观静音检测分割"""
+def _merge_vad_segments(segs: List[List[float]], merge_threshold: float) -> List[List[float]]:
+    merged = []
+    for start, end in segs:
+        if not merged or start - merged[-1][1] >= merge_threshold:
+            merged.append([start, end])
+        else:
+            merged[-1][1] = end
+    return merged
+
+
+def _fit_vad_segments_to_expected_count(segs: List[List[float]], expected_count: int) -> List[List[float]]:
+    """按停顿长度保留最可信的边界，使宏观段落尽量贴合字表数量。"""
+    expected_count = max(1, int(expected_count))
+    fitted = [list(seg) for seg in segs]
+    while len(fitted) > expected_count:
+        merge_idx = min(
+            range(len(fitted) - 1),
+            key=lambda idx: fitted[idx + 1][0] - fitted[idx][1]
+        )
+        fitted[merge_idx][1] = fitted[merge_idx + 1][1]
+        fitted.pop(merge_idx + 1)
+    return fitted
+
+
+def macroscopic_vad(snd: parselmouth.Sound, expected_count: int = None) -> List[List[float]]:
+    """长音频宏观静音检测分割，可按字表数量择优保留停顿。"""
     intensity = snd.to_intensity(time_step=VAD_TIME_STEP)
     vals = intensity.values[0]
     xs = intensity.xs()
@@ -149,13 +148,14 @@ def macroscopic_vad(snd: parselmouth.Sound) -> List[List[float]]:
         if s_idx < len(xs) and e_idx < len(xs):
             segs.append([xs[s_idx], xs[e_idx]])
 
-    merged =[]
-    for s in segs:
-        if not merged: merged.append(s)
-        else:
-            if s[0] - merged[-1][1] < VAD_MERGE_THRESHOLD: merged[-1][1] = s[1]
-            else: merged.append(s)
-    return [s for s in merged if s[1]-s[0] > VAD_MIN_DURATION]
+    usable_segs = [s for s in segs if s[1] - s[0] > VAD_TIME_STEP * 2]
+    if expected_count:
+        # 从原始候选段开始合并，等价于优先保留最长、最清晰的静音间隔。
+        merged = _fit_vad_segments_to_expected_count(usable_segs, expected_count)
+    else:
+        # 明显静音应当保留为段落边界；更短的停顿仍视为词内波动。
+        merged = _merge_vad_segments(usable_segs, VAD_CLEAR_GAP_THRESHOLD)
+    return [s for s in merged if s[1] - s[0] > VAD_MIN_DURATION]
 
 
 def core_microscopic_vowel_nucleus(snd: parselmouth.Sound, global_pitch_or_arrays: Union[parselmouth.Pitch, Tuple[np.ndarray, np.ndarray], Dict[str, Any]], t_min: float, t_max: float, drop_db: float, skip_front: float, trim_silence: bool) -> Tuple[float, float, float, float]:
@@ -434,106 +434,36 @@ def auto_split_inner_word(snd: parselmouth.Sound, t_min: float, t_max: float, wo
 
 def extract_f0(snd: parselmouth.Sound, params: Dict[str, Any]) -> Dict[str, Any]:
     """
-    统一的基频提取工厂函数，支持 Parselmouth (Praat) 与 REAPER 双引擎。
+    使用 Parselmouth (Praat) 提取基频。
     返回结构:
     {
         "xs": np.ndarray,      # 时间点的一维 Numpy 数组
         "freqs": np.ndarray,   # 基频值的一维 Numpy 数组 (0.0 表示无声段)
-        "engine": str          # 提取引擎类型: "praat" 或 "reaper"
+        "engine": "praat"
     }
     """
-    engine = params.get('f0_engine', 'praat')
     pitch_floor = int(params.get('pitch_floor', 75))
     pitch_ceiling = int(params.get('pitch_ceiling', 600))
     voicing_threshold = float(params.get('voicing_threshold', 0.25))
 
-    if engine == 'reaper':
-        pyreaper = _import_pyreaper()
-        # REAPER 推荐使用 16000Hz 采样率
-        sr_reaper = 16000
-        original_samples = snd.values.shape[1]
+    pitch = snd.to_pitch_ac(
+        time_step=None,
+        pitch_floor=pitch_floor,
+        pitch_ceiling=pitch_ceiling,
+        voicing_threshold=voicing_threshold,
+        very_accurate=bool(params.get('very_accurate', True)),
+        octave_jump_cost=0.9
+    )
+    xs = pitch.xs()
+    freqs = pitch.selected_array['frequency']
+    # 确保无声段是 0.0
+    freqs_clean = np.where(np.isnan(freqs) | (freqs <= 0), 0.0, freqs)
 
-        # 极速且无素数性能陷阱的线性插值重采样
-        if snd.sampling_frequency != sr_reaper:
-            new_samples = int(original_samples * sr_reaper / snd.sampling_frequency)
-            if new_samples > 2:
-                original_times = np.arange(original_samples) / snd.sampling_frequency
-                new_times = np.arange(new_samples) / sr_reaper
-                resampled = np.interp(new_times, original_times, snd.values[0])
-            else:
-                resampled = snd.values[0]
-        else:
-            resampled = snd.values[0]
-
-        # 转换并裁剪为 16-bit 整数输入 pyreaper
-        x_int = (np.clip(resampled, -1.0, 1.0) * 32767).astype(np.int16)
-
-        # 将 Praat 浊音阈值映射为 REAPER 的 unvoiced_cost (方向相反)
-        # default voicing_threshold = 0.25 -> unvoiced_cost = 0.90
-        # clamping to safe range [0.1, 1.5]
-        unvoiced_cost = np.clip(1.15 - voicing_threshold, 0.1, 1.5)
-
-        # 执行 REAPER 提取
-        pm_times, pm, f0_times, f0, corr = pyreaper.reaper(
-            x_int,
-            sr_reaper,
-            minf0=float(pitch_floor),
-            maxf0=float(pitch_ceiling),
-            unvoiced_cost=float(unvoiced_cost)
-        )
-
-        # 将无声段标记 -1.0 转换为 0.0
-        f0_clean = np.where(f0 < 0, 0.0, f0)
-
-        # 针对 REAPER 整数周期点带来的阶梯状硬阶跃（quantization steps）进行高精度边缘自适应平滑
-        # 采用归一化掩码（Mask Normalization）消除静音交界处的出血效应
-        if len(f0_clean) > 0:
-            voiced_mask = f0_clean > 0
-            if np.any(voiced_mask):
-                try:
-                    from scipy.ndimage import gaussian_filter1d
-                    float_mask = voiced_mask.astype(float)
-                    smoothed_values = gaussian_filter1d(f0_clean, sigma=1.2)
-                    smoothed_mask = gaussian_filter1d(float_mask, sigma=1.2)
-                    smoothed_mask = np.where(smoothed_mask < 1e-5, 1.0, smoothed_mask)
-                    f0_smooth = smoothed_values / smoothed_mask
-                    f0_clean = np.where(voiced_mask, f0_smooth, 0.0)
-                except Exception:
-                    # 极速且鲁棒的滑动均值备用平滑器
-                    window_len = 3
-                    window = np.ones(window_len) / window_len
-                    float_mask = voiced_mask.astype(float)
-                    smoothed_values = np.convolve(f0_clean, window, mode='same')
-                    smoothed_mask = np.convolve(float_mask, window, mode='same')
-                    smoothed_mask = np.where(smoothed_mask < 1e-5, 1.0, smoothed_mask)
-                    f0_smooth = smoothed_values / smoothed_mask
-                    f0_clean = np.where(voiced_mask, f0_smooth, 0.0)
-
-        return {
-            "xs": f0_times.astype(np.float64),
-            "freqs": f0_clean.astype(np.float64),
-            "engine": "reaper"
-        }
-    else:
-        # Praat 引擎提取
-        pitch = snd.to_pitch_ac(
-            time_step=None,
-            pitch_floor=pitch_floor,
-            pitch_ceiling=pitch_ceiling,
-            voicing_threshold=voicing_threshold,
-            very_accurate=bool(params.get('very_accurate', True)),
-            octave_jump_cost=0.9
-        )
-        xs = pitch.xs()
-        freqs = pitch.selected_array['frequency']
-        # 确保无声段是 0.0
-        freqs_clean = np.where(np.isnan(freqs) | (freqs <= 0), 0.0, freqs)
-
-        return {
-            "xs": xs.astype(np.float64),
-            "freqs": freqs_clean.astype(np.float64),
-            "engine": "praat"
-        }
+    return {
+        "xs": xs.astype(np.float64),
+        "freqs": freqs_clean.astype(np.float64),
+        "engine": "praat"
+    }
 
 
 def extract_formants(snd: parselmouth.Sound, params: Dict[str, Any]) -> Dict[str, Any]:

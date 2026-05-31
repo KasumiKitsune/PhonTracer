@@ -1,11 +1,7 @@
-import sys
-import types
 import numpy as np
-import pytest
-import parselmouth
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-from modules.audio_core import extract_f0, auto_split_to_chars_bounds, _import_pyreaper
+from modules.audio_core import extract_f0, auto_split_to_chars_bounds
 from modules.data_utils import get_export_text_for_item
 
 class MockPitch:
@@ -44,7 +40,6 @@ class MockSound:
 def test_extract_f0_praat():
     snd = MockSound()
     params = {
-        'f0_engine': 'praat',
         'pitch_floor': 75,
         'pitch_ceiling': 500,
         'voicing_threshold': 0.25
@@ -59,63 +54,24 @@ def test_extract_f0_praat():
     assert not np.any(np.isnan(res['freqs']))
     assert np.all(res['freqs'] >= 0.0)
 
-def test_extract_f0_reaper():
-    snd = MockSound(duration=0.5, sampling_frequency=44100)
+def test_extract_f0_ignores_removed_legacy_engine():
+    snd = MockSound()
     params = {
         'f0_engine': 'reaper',
         'pitch_floor': 75,
         'pitch_ceiling': 500,
         'voicing_threshold': 0.25
     }
-    
-    # Mock pyreaper to avoid platform binary execution in basic tests
-    mock_pm_times = np.array([0.05, 0.1, 0.15])
-    mock_pm = np.array([1, 1, 0])
-    mock_f0_times = np.array([0.05, 0.1, 0.15])
-    mock_f0 = np.array([150.0, 160.0, -1.0])  # Contains unvoiced -1.0
-    mock_corr = np.array([0.9, 0.9, 0.1])
 
-    with patch('pyreaper.reaper', return_value=(mock_pm_times, mock_pm, mock_f0_times, mock_f0, mock_corr)) as mock_reaper:
-        res = extract_f0(snd, params)
-        assert res['engine'] == 'reaper'
-        assert np.array_equal(res['xs'], mock_f0_times)
-        # Unvoiced -1.0 must be converted to 0.0, and voiced segments are smoothed to remove steps
-        assert np.allclose(res['freqs'], np.array([153.59988256, 155.31211722, 0.0]))
-        
-        # Verify correct parameter mapping (0.25 threshold maps to 0.90 unvoiced_cost)
-        mock_reaper.assert_called_once()
-        call_args, call_kwargs = mock_reaper.call_args
-        assert call_kwargs['minf0'] == 75.0
-        assert call_kwargs['maxf0'] == 500.0
-        assert abs(call_kwargs['unvoiced_cost'] - 0.9) < 1e-5
+    res = extract_f0(snd, params)
 
-def test_import_pyreaper_falls_back_without_pkg_resources():
-    fake_pyreaper = types.SimpleNamespace(reaper=MagicMock())
-    import_calls = {"pyreaper": 0}
+    assert res['engine'] == 'praat'
+    assert isinstance(res['xs'], np.ndarray)
+    assert isinstance(res['freqs'], np.ndarray)
 
-    def fake_import(name, *args, **kwargs):
-        if name == "pyreaper":
-            import_calls["pyreaper"] += 1
-            if import_calls["pyreaper"] == 1:
-                raise ModuleNotFoundError("No module named 'pkg_resources'", name="pkg_resources")
-            return fake_pyreaper
-        return real_import(name, *args, **kwargs)
-
-    real_import = __import__
-    old_pkg_resources = sys.modules.pop("pkg_resources", None)
-    try:
-        with patch("builtins.__import__", side_effect=fake_import):
-            assert _import_pyreaper() is fake_pyreaper
-            assert sys.modules["pkg_resources"].get_distribution("pyreaper").version == "unknown"
-    finally:
-        sys.modules.pop("pkg_resources", None)
-        if old_pkg_resources is not None:
-            sys.modules["pkg_resources"] = old_pkg_resources
-
-def test_auto_split_to_chars_bounds_dual_engines():
+def test_auto_split_to_chars_bounds_praat():
     snd = MockSound(duration=1.0)
     params = {
-        'f0_engine': 'praat',
         'pitch_floor': 75,
         'pitch_ceiling': 500,
         'voicing_threshold': 0.25
@@ -139,12 +95,11 @@ def test_get_export_text_for_item_with_pitch_data():
         'pitch_data': {
             'xs': np.array([0.1, 0.3, 0.5, 0.7, 0.9]),
             'freqs': np.array([150.0, 155.0, 160.0, 0.0, 165.0]),  # Contains a voiced-unvoiced gap
-            'engine': 'reaper'
+            'engine': 'praat'
         },
         'pitch_floor': 75,
         'pitch_ceiling': 500,
         'voicing_threshold': 0.25,
-        'f0_engine': 'reaper'
     }
 
     # Verify standard export works with pitch_data
@@ -177,13 +132,12 @@ def test_get_export_text_for_item_with_eraser_sync():
         'pitch_data': {
             'xs': parent_xs,
             'freqs': parent_freqs,
-            'engine': 'reaper'
+            'engine': 'praat'
         },
         'chars_bounds': [[0.1, 0.5], [0.5, 0.9]],
         'pitch_floor': 75,
         'pitch_ceiling': 500,
         'voicing_threshold': 0.25,
-        'f0_engine': 'reaper'
     }
 
     # Mock extract_f0 inside get_export_text_for_item to return F0 points that would normally be non-zero
@@ -191,7 +145,7 @@ def test_get_export_text_for_item_with_eraser_sync():
     mock_child_pitch = {
         'xs': np.linspace(0.01, 0.39, 10), # Will be offset by c_start
         'freqs': np.array([150.0] * 10),
-        'engine': 'reaper'
+        'engine': 'praat'
     }
 
     with patch('modules.audio_core.extract_f0', return_value=mock_child_pitch) as mock_extract:

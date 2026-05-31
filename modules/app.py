@@ -1129,7 +1129,6 @@ class PhoneticsApp:
                     item['pitch_floor'] = self.last_params['pitch_floor']
                     item['pitch_ceiling'] = self.last_params['pitch_ceiling']
                     item['voicing_threshold'] = self.last_params.get('voicing_threshold', 0.25)
-                    item['f0_engine'] = self.last_params.get('f0_engine', 'praat')
 
                     self.set_status("就绪", "#10B981", "status_success")
                     self._sync_ui_and_plot(item)
@@ -1350,9 +1349,7 @@ class PhoneticsApp:
             if not any(s.name == name for s in self.speaker_manager.get_all_speakers()):
                 break
             idx += 1
-        # 新增发音人时自动继承当前活动发音人的基频提取引擎设置，避免非预期的重置
-        current_engine = self.last_params.get('f0_engine', 'praat')
-        new_speaker = self.speaker_manager.add_speaker(name, default_engine=current_engine)
+        new_speaker = self.speaker_manager.add_speaker(name)
         new_speaker.tab_mode = self.tabview.get()
         self._update_speaker_dropdown()
         self.speaker_option_var.set(new_speaker.name)
@@ -1502,7 +1499,6 @@ class PhoneticsApp:
             'pitch_floor': self.last_params['pitch_floor'],
             'pitch_ceiling': self.last_params['pitch_ceiling'],
             'voicing_threshold': self.last_params.get('voicing_threshold', 0.25),
-            'f0_engine': self.last_params.get('f0_engine', 'praat'),
             'analysis_mode': self.last_params.get('analysis_mode', 'f0'),
             'formant_max_hz': self.last_params.get('formant_max_hz', 5500.0),
             'formant_count': self.last_params.get('formant_count', 5),
@@ -1649,16 +1645,6 @@ class PhoneticsApp:
 
     def on_trim_silence_toggle(self):
         self.recalculate_current_item(only_trim_silence=True)
-
-    def on_engine_change(self, value):
-        self.last_params['f0_engine'] = value
-        self._update_engine_button_text_colors()
-        if hasattr(self, 'audio_cache'):
-            self.audio_cache.clear()
-        self.recalculate_current_item(recompute_pitch=True)
-
-    def _update_engine_button_text_colors(self):
-        pass
 
     def on_formant_strategy_change(self, value):
         self.last_params['formant_sample_strategy'] = value
@@ -1923,7 +1909,6 @@ class PhoneticsApp:
                     'pitch_floor': self.last_params['pitch_floor'],
                     'pitch_ceiling': self.last_params['pitch_ceiling'],
                     'voicing_threshold': self.last_params.get('voicing_threshold', 0.25),
-                    'f0_engine': self.last_params.get('f0_engine', 'praat'),
                     'analysis_mode': self.last_params.get('analysis_mode', 'f0'),
                     'formant_max_hz': self.last_params.get('formant_max_hz', 5500.0),
                     'formant_count': self.last_params.get('formant_count', 5),
@@ -1954,7 +1939,6 @@ class PhoneticsApp:
                         item['pitch_floor'] = params['pitch_floor']
                         item['pitch_ceiling'] = params['pitch_ceiling']
                         item['voicing_threshold'] = params['voicing_threshold']
-                        item['f0_engine'] = self.last_params.get('f0_engine', 'praat')
 
                         mac_s, mac_e = item['macro_start'], item['macro_end']
                         valid_ms = max(0, mac_s)
@@ -1987,8 +1971,7 @@ class PhoneticsApp:
 
                 if tasks:
                     # 使用 ProcessPoolExecutor 进行 CPU 密集型任务
-                    engine = self.last_params.get('f0_engine', 'praat')
-                    max_workers = 2 if engine == 'reaper' else min(os.cpu_count() or 4, 8)
+                    max_workers = min(os.cpu_count() or 4, 8)
                     with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
                         futures = {}
                         for idx, task in enumerate(tasks):
@@ -2120,7 +2103,6 @@ class PhoneticsApp:
                         item['pitch_floor'] = self.last_params['pitch_floor']
                         item['pitch_ceiling'] = self.last_params['pitch_ceiling']
                         item['voicing_threshold'] = self.last_params.get('voicing_threshold', 0.25)
-                        item['f0_engine'] = self.last_params.get('f0_engine', 'praat')
                     
                     # 总是为单项重新生成 formant
                     item['formant_data'] = get_segmented_formant(item['snd'], self.last_params)
@@ -2140,7 +2122,6 @@ class PhoneticsApp:
                     item['pitch_floor'] = self.last_params['pitch_floor']
                     item['pitch_ceiling'] = self.last_params['pitch_ceiling']
                     item['voicing_threshold'] = self.last_params.get('voicing_threshold', 0.25)
-                    item['f0_engine'] = self.last_params.get('f0_engine', 'praat')
                     
                     # 重新生成 formant
                     item['formant_data'] = get_segmented_formant(item['snd'], self.last_params)
@@ -2276,6 +2257,10 @@ class PhoneticsApp:
         if not self.pending_long_snd:
             return messagebox.showwarning("提示", "请先导入一条长音频。")
 
+        speaker_id = self.speaker_manager.active_speaker_id
+        callback = lambda segments, is_update=False, deleted_count=0: self.on_visual_split_confirm(
+            segments, is_update, deleted_count, speaker_id=speaker_id
+        )
         existing_items = []
         if self.items:
             for iid, item in self.items.items():
@@ -2291,10 +2276,9 @@ class PhoneticsApp:
 
             # 追加剩余的未分配音频段
             if hasattr(self, 'current_macro_segments') and self.current_macro_segments:
-                num_assigned = len(existing_items)
-                if num_assigned < len(self.current_macro_segments):
-                    for i in range(num_assigned, len(self.current_macro_segments)):
-                        ms, me = self.current_macro_segments[i]
+                assigned_bounds = {(item['start'], item['end']) for item in existing_items}
+                for ms, me in self.current_macro_segments:
+                    if (ms, me) not in assigned_bounds:
                         existing_items.append({
                             'id': None,
                             'label': f"【未分配段】",
@@ -2302,10 +2286,18 @@ class PhoneticsApp:
                             'end': me,
                             'inner_splits': []
                         })
+                existing_items.sort(key=lambda x: x['start'])
 
         if existing_items:
             # 已有字表匹配结果 → 直接进入 edit 模式微调
-            VisualSplitter(self.root, self.pending_long_snd, self.icons, self.on_visual_split_confirm, existing_items=existing_items)
+            word_items = [
+                {'id': iid, 'label': self.items[iid]['label'].replace(" (缺失)", "")}
+                for iid in self._get_all_ordered_iids()
+            ]
+            VisualSplitter(
+                self.root, self.pending_long_snd, self.icons, callback,
+                existing_items=existing_items, word_items=word_items
+            )
         else:
             # 未导入字表 → 先自动跑 VAD，然后进入 review 模式
             def run_vad():
@@ -2315,7 +2307,7 @@ class PhoneticsApp:
                     def open_splitter():
                         self.stop_loading(f"检测到 {len(vad_segs)} 个区段")
                         VisualSplitter(self.root, self.pending_long_snd, self.icons,
-                                      self.on_visual_split_confirm, vad_segments=vad_segs)
+                                      callback, vad_segments=vad_segs)
                     self.root.after(0, open_splitter)
                 except Exception as e:
                     self.root.after(0, lambda: self.stop_loading(f"检测失败: {e}"))
@@ -2326,7 +2318,14 @@ class PhoneticsApp:
         old_micro_bounds = {}
         for iid, item in self.items.items():
             if item.get('start') is not None and item.get('end') is not None:
-                old_micro_bounds[iid] = (item['start'], item['end'], item.get('inner_splits', []), item.get('chars_bounds', []))
+                old_micro_bounds[iid] = {
+                    'start': item['start'],
+                    'end': item['end'],
+                    'inner_splits': copy.deepcopy(item.get('inner_splits', [])),
+                    'chars_bounds': copy.deepcopy(item.get('chars_bounds', [])),
+                    'raw_start': item.get('raw_start'),
+                    'raw_end': item.get('raw_end')
+                }
         return old_micro_bounds
 
     def _get_all_ordered_iids(self):
@@ -2402,13 +2401,19 @@ class PhoneticsApp:
             self.tree_panel.tree.item(iid, text=item['label'] + " (缺失)")
         self.tree_panel.tree.item(iid, image='')
 
-    def on_visual_split_confirm(self, segments, is_update=False, deleted_count=0):
+    def on_visual_split_confirm(self, segments, is_update=False, deleted_count=0, speaker_id=None):
+        if speaker_id is not None and speaker_id != self.speaker_manager.active_speaker_id:
+            messagebox.showwarning("提示", "段落编辑期间发音人已切换。为避免覆盖其他发音人的数据，请切回原发音人后重新打开段落编辑器。")
+            return
+
         if not is_update:
             self.manual_segments = segments
+            self.current_macro_segments = list(segments)
+            self.mark_modified()
             messagebox.showinfo("提示", f"全新手动切分完成，共 {len(segments)} 个片段。\n现在请点击“导入字表”来匹配文本。")
             return
 
-        mapped_segs = {seg['id']: seg for seg in segments}
+        mapped_segs = {seg['id']: seg for seg in segments if seg.get('id') is not None}
         old_micro_bounds = self._backup_old_micro_bounds()
         all_iids = self._get_all_ordered_iids()
 
@@ -2434,10 +2439,14 @@ class PhoneticsApp:
                     del item['pitch']
 
             if not seg.get('is_modified') and seg.get('old_id') and seg['old_id'] in old_micro_bounds:
-                item['start'], item['end'], item['inner_splits'], item['chars_bounds'] = old_micro_bounds[seg['old_id']]
-                if 'raw_start' in self.items[seg['old_id']]:
-                    item['raw_start'] = self.items[seg['old_id']]['raw_start']
-                    item['raw_end'] = self.items[seg['old_id']]['raw_end']
+                old_bounds = old_micro_bounds[seg['old_id']]
+                item['start'] = old_bounds['start']
+                item['end'] = old_bounds['end']
+                item['inner_splits'] = copy.deepcopy(old_bounds['inner_splits'])
+                item['chars_bounds'] = copy.deepcopy(old_bounds['chars_bounds'])
+                if old_bounds['raw_start'] is not None:
+                    item['raw_start'] = old_bounds['raw_start']
+                    item['raw_end'] = old_bounds['raw_end']
             elif seg.get('is_modified'):
                 self._apply_modified_segment(item, seg)
             else:
@@ -2452,7 +2461,9 @@ class PhoneticsApp:
             self.spectrogram_panel.clear_canvas()
 
         self.current_macro_segments = [(seg['start'], seg['end']) for seg in segments]
+        self.manual_segments = list(self.current_macro_segments)
         self.tree_panel.update_preview()
+        self.mark_modified()
 
         deleted_msg = f"\n由于您删除了音频段，后续字表已自动向前顺延对齐。" if deleted_count else ""
         messagebox.showinfo("提示", f"手动微调已应用，时间边界已更新。{deleted_msg}")
@@ -2467,14 +2478,14 @@ class PhoneticsApp:
 
             snd = self.pending_long_snd
             global_pitch_data = extract_f0(snd, self.last_params)
+            total = len(flat_words)
 
             if hasattr(self, 'manual_segments') and self.manual_segments:
                 macro_segments = self.manual_segments
             else:
-                macro_segments = macroscopic_vad(snd)
+                macro_segments = macroscopic_vad(snd, expected_count=total)
 
             self.current_macro_segments = macro_segments.copy()
-            total = len(flat_words)
             results = []
 
             # 准备参数
@@ -3765,7 +3776,6 @@ class PhoneticsApp:
             items_snapshot = [items_snapshot[idx] for idx in indices]
 
         params_temp = {
-            'f0_engine': self.last_params.get('f0_engine', 'praat'),
             'pitch_floor': 50,
             'pitch_ceiling': 700,
             'voicing_threshold': self.last_params.get('voicing_threshold', 0.25),

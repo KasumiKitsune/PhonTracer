@@ -4,7 +4,7 @@ import pytest
 import parselmouth
 
 from modules.data_utils import get_export_text_for_item
-from modules.audio_core import core_microscopic_vowel_nucleus, auto_split_inner_word
+from modules.audio_core import core_microscopic_vowel_nucleus, auto_split_inner_word, macroscopic_vad
 
 class MockPitch:
     def __init__(self, freqs, xs_array=None):
@@ -43,6 +43,38 @@ class MockSound:
             def xs(self):
                 return np.linspace(0, 1.0, 100)
         return MockIntensity()
+
+
+class MockVadSound:
+    def __init__(self, values):
+        self._values = np.asarray(values, dtype=float)
+
+    def to_intensity(self, *args, **kwargs):
+        values = self._values
+
+        class MockIntensity:
+            def __init__(self):
+                self.values = np.array([values])
+
+            def xs(self):
+                return np.arange(len(values)) * 0.01
+
+        return MockIntensity()
+
+
+def test_macroscopic_vad_preserves_clear_pause():
+    snd = MockVadSound([0] * 10 + [70] * 15 + [0] * 20 + [70] * 15 + [0] * 10)
+
+    segments = macroscopic_vad(snd)
+
+    assert len(segments) == 2
+
+
+def test_macroscopic_vad_uses_word_count_to_preserve_best_short_pause():
+    snd = MockVadSound([0] * 10 + [70] * 15 + [0] * 5 + [70] * 15 + [0] * 10)
+
+    assert len(macroscopic_vad(snd)) == 1
+    assert len(macroscopic_vad(snd, expected_count=2)) == 2
 
 def test_export_f0_gap():
     # Test F0 gap interpolation logic

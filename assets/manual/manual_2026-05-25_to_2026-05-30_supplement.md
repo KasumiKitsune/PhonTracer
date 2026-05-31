@@ -1377,7 +1377,7 @@ project_export "D:/out/corpus_checked.teproj"
 | `modules/project_manager.py` | 工程工作区、自动保存、`.teproj` 读写、音频与声学缓存保存。 |
 | `modules/acoustic_exporter.py` | 声调和共振峰科学图表导出、预览、分页、浮动模式。 |
 | `modules/data_utils.py` | 字表解析、TextGrid 命名、F0/共振峰导出文本和 Excel 公式辅助。 |
-| `modules/audio_core.py` | F0、REAPER、VAD、元音核、共振峰 Burg 提取。 |
+| `modules/audio_core.py` | Praat F0、VAD、元音核、共振峰 Burg 提取。 |
 | `modules/spectrogram_panel.py` | 声谱图交互、播放、选区、F0 橡皮擦、共振峰剔除点。 |
 | `audio_toolkit.py` | 独立音频工具箱，合并、拆分、工程预览。 |
 | `installer.iss` | Windows 安装包、开始菜单入口、`.teproj` 文件关联。 |
@@ -1505,4 +1505,3 @@ project_export "D:/out/corpus_checked.teproj"
 - `import_batch_and_export`。
 - `project_export` 优先于 `project_save`。
 - AudioToolkit 按钮导入是稳定路径。
-

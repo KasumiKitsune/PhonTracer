@@ -97,7 +97,6 @@ def test_recalculate_all_audio_preserves_bounds():
         "pitch_ceiling": 600,
         "voicing_threshold": 0.25,
         "pts": 11,
-        "f0_engine": "praat"
     }
     
     # Mock entry widgets/variables
@@ -127,6 +126,9 @@ def test_recalculate_all_audio_preserves_bounds():
     
     # When recalculate_all_audio is called, it should call on_param_change(recalculate_current=False)
     # Let's bind the real on_param_change to app
+    app._check_general_params = PhoneticsApp._check_general_params.__get__(app, DummyApp)
+    app._check_f0_params = PhoneticsApp._check_f0_params.__get__(app, DummyApp)
+    app._check_formant_params = PhoneticsApp._check_formant_params.__get__(app, DummyApp)
     app.on_param_change = PhoneticsApp.on_param_change.__get__(app, DummyApp)
     
     # Call on_param_change(recalculate_current=False) directly to verify it doesn't trigger recalculate_current_item
@@ -180,7 +182,6 @@ def test_cli_detect_f0():
         'pitch_floor': 75,
         'pitch_ceiling': 600,
         'voicing_threshold': 0.25,
-        'f0_engine': 'praat'
     }
     speaker.cli_groups = ['T1']
     

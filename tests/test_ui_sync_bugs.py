@@ -215,6 +215,139 @@ class TestUISyncBugs(unittest.TestCase):
             self.assertEqual(splitter.segments[1]['start'], 2.75) # 3.0 - 0.25
             self.assertEqual(splitter.segments[1]['end'], 3.25)   # 3.0 + 0.25
             self.assertEqual(splitter.segments[2]['start'], 4.0)
+            splitter.destroy()
+
+    def test_add_segment_assigns_next_missing_word_in_sequence(self):
+        """新增段落后，后续段落应顺延到字表中的缺失词，而不是显示为未分配段"""
+        from modules.visual_splitter import VisualSplitter
+
+        mock_snd = MagicMock()
+        mock_snd.get_total_duration.return_value = 10.0
+        existing_items = [
+            {'id': 'a', 'label': '甲', 'start': 1.0, 'end': 2.0},
+            {'id': 'b', 'label': '乙', 'start': 4.0, 'end': 5.0}
+        ]
+        word_items = [
+            {'id': 'a', 'label': '甲'},
+            {'id': 'b', 'label': '乙'},
+            {'id': 'c', 'label': '丙'}
+        ]
+
+        with patch.object(VisualSplitter, 'setup_ui'), \
+             patch.object(VisualSplitter, 'init_data'), \
+             patch.object(VisualSplitter, 'render_canvas'), \
+             patch.object(VisualSplitter, 'auto_fit_scale'):
+            splitter = VisualSplitter(
+                master=self.root,
+                snd=mock_snd,
+                icons={},
+                callback=MagicMock(),
+                existing_items=existing_items,
+                word_items=word_items
+            )
+            splitter.add_segment_at(3.0, 3.5)
+
+        self.assertEqual([seg['dyn_label'] for seg in splitter.segments], ['甲', '乙', '丙'])
+        self.assertEqual([seg['dyn_id'] for seg in splitter.segments], ['a', 'b', 'c'])
+        splitter.destroy()
+
+    def test_visual_splitter_edits_private_inner_split_copy(self):
+        """打开编辑器后修改蓝线，不应在确认前直接污染原始段落"""
+        from modules.visual_splitter import VisualSplitter
+
+        mock_snd = MagicMock()
+        mock_snd.get_total_duration.return_value = 10.0
+        existing_items = [
+            {'id': 'a', 'label': '甲/乙', 'start': 1.0, 'end': 2.0, 'inner_splits': [1.5]}
+        ]
+
+        with patch.object(VisualSplitter, 'setup_ui'), \
+             patch.object(VisualSplitter, 'init_data'), \
+             patch.object(VisualSplitter, 'render_canvas'), \
+             patch.object(VisualSplitter, 'auto_fit_scale'):
+            splitter = VisualSplitter(
+                master=self.root,
+                snd=mock_snd,
+                icons={},
+                callback=MagicMock(),
+                existing_items=existing_items
+            )
+            splitter.segments[0]['inner_splits'][0] = 1.6
+
+        self.assertEqual(existing_items[0]['inner_splits'], [1.5])
+        splitter.destroy()
+
+    def test_visual_splitter_confirm_preserves_unassigned_segments(self):
+        """确认编辑时仍需保留超出字表数量的音频段，便于下次继续调整"""
+        from modules.visual_splitter import VisualSplitter
+
+        mock_snd = MagicMock()
+        mock_snd.get_total_duration.return_value = 10.0
+        callback = MagicMock()
+        existing_items = [
+            {'id': 'a', 'label': '甲', 'start': 1.0, 'end': 2.0},
+            {'id': None, 'label': '【未分配段】', 'start': 3.0, 'end': 4.0}
+        ]
+
+        with patch.object(VisualSplitter, 'setup_ui'), \
+             patch.object(VisualSplitter, 'init_data'), \
+             patch.object(VisualSplitter, 'render_canvas'), \
+             patch.object(VisualSplitter, 'auto_fit_scale'):
+            splitter = VisualSplitter(
+                master=self.root,
+                snd=mock_snd,
+                icons={},
+                callback=callback,
+                existing_items=existing_items
+            )
+            splitter.confirm()
+
+        segments = callback.call_args.args[0]
+        self.assertEqual(len(segments), 2)
+        self.assertIsNone(segments[1]['id'])
+
+    def test_visual_split_confirm_reorders_from_snapshot(self):
+        """段落顺延或交换时，应从确认前快照复制边界，避免读到已被覆盖的数据"""
+        items = {
+            'a': {
+                'label': '甲', 'snd': MagicMock(), 'macro_start': 0.0, 'macro_end': 1.0,
+                'start': 0.1, 'end': 0.9, 'raw_start': 0.0, 'raw_end': 1.0,
+                'inner_splits': [], 'chars_bounds': [[0.1, 0.9]]
+            },
+            'b': {
+                'label': '乙', 'snd': MagicMock(), 'macro_start': 1.0, 'macro_end': 2.0,
+                'start': 1.1, 'end': 1.9, 'raw_start': 1.0, 'raw_end': 2.0,
+                'inner_splits': [], 'chars_bounds': [[1.1, 1.9]]
+            }
+        }
+        self.app.active_speaker.items = items
+        self.app.tree_panel.project_groups = ['组']
+        self.app.tree_panel.group_nodes = {'组': 'group'}
+        self.app.tree_panel.tree.get_children.return_value = ('a', 'b')
+        self.app.spectrogram_panel.current_item = None
+        self.app.mark_modified = MagicMock()
+        segments = [
+            {'id': 'a', 'old_id': 'b', 'start': 1.0, 'end': 2.0, 'inner_splits': [], 'is_modified': False},
+            {'id': 'b', 'old_id': 'a', 'start': 0.0, 'end': 1.0, 'inner_splits': [], 'is_modified': False}
+        ]
+
+        with patch('tkinter.messagebox.showinfo'):
+            self.app.on_visual_split_confirm(segments, is_update=True)
+
+        self.assertEqual((items['a']['raw_start'], items['a']['raw_end']), (1.0, 2.0))
+        self.assertEqual((items['b']['raw_start'], items['b']['raw_end']), (0.0, 1.0))
+        self.assertEqual(self.app.manual_segments, [(1.0, 2.0), (0.0, 1.0)])
+        self.app.mark_modified.assert_called_once()
+
+    def test_visual_split_confirm_rejects_cross_speaker_write(self):
+        """编辑器打开后若切换发音人，确认操作不得写入当前发音人的数据"""
+        self.app.mark_modified = MagicMock()
+
+        with patch('tkinter.messagebox.showwarning') as warning:
+            self.app.on_visual_split_confirm([], is_update=True, speaker_id='另一个发音人')
+
+        warning.assert_called_once()
+        self.app.mark_modified.assert_not_called()
 
     def test_spectrogram_panel_eraser_blitting_and_warning_fix(self):
         """Test that the eraser circle is created without warnings and uses blitting for high performance"""
@@ -666,21 +799,6 @@ class TestUISyncBugs(unittest.TestCase):
             panel.canvas.restore_region.assert_called_once_with("background")
             panel.ax.draw_artist.assert_any_call(panel.cursor_line)
             panel.ax.draw_artist.assert_any_call(panel.cursor_text)
-
-    def test_engine_switch_only_recalculates_current_item(self):
-        """Switching to REAPER should not immediately launch full-project recomputation"""
-        self.app.engine_button = MagicMock()
-        self.app.engine_button.get.return_value = "reaper"
-        self.app.engine_button._buttons_dict = {}
-        self.app.audio_cache = {}
-        self.app.recalculate_current_item = MagicMock()
-        self.app.recalculate_all_audio = MagicMock()
-
-        self.app.on_engine_change("reaper")
-
-        self.assertEqual(self.app.last_params['f0_engine'], "reaper")
-        self.app.recalculate_current_item.assert_called_once_with(recompute_pitch=True)
-        self.app.recalculate_all_audio.assert_not_called()
 
 if __name__ == '__main__':
     unittest.main()

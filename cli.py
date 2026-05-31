@@ -370,7 +370,7 @@ Type 'help' or '?' to list commands. Use 'agent_guide' for AI operating rules.
         """
         Set analysis parameters.
         Usage: set_params key=value [key=value ...]
-        Valid keys: pts, db, skip_front, pitch_floor, pitch_ceiling, voicing_threshold, trim_silence, f0_engine, analysis_mode, formant_max_hz, formant_count, formant_window_length, formant_pre_emphasis, formant_sample_strategy
+        Valid keys: pts, db, skip_front, pitch_floor, pitch_ceiling, voicing_threshold, trim_silence, analysis_mode, formant_max_hz, formant_count, formant_window_length, formant_pre_emphasis, formant_sample_strategy
         Example: set_params db=50.0 trim_silence=False analysis_mode=formant formant_max_hz=5500
         """
         args = shlex.split(arg)
@@ -388,7 +388,7 @@ Type 'help' or '?' to list commands. Use 'agent_guide' for AI operating rules.
                             self.params[k] = v.lower() in ('true', '1', 'yes')
                         elif k in ('pts', 'pitch_floor', 'pitch_ceiling', 'formant_count'):
                             self.params[k] = int(v)
-                        elif k in ('f0_engine', 'analysis_mode', 'formant_sample_strategy'):
+                        elif k in ('analysis_mode', 'formant_sample_strategy'):
                             self.params[k] = str(v)
                         elif k in ('formant_max_hz', 'formant_window_length', 'formant_pre_emphasis'):
                             self.params[k] = float(v)
@@ -927,7 +927,6 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                     res['pitch_floor'] = self.params['pitch_floor']
                     res['pitch_ceiling'] = self.params['pitch_ceiling']
                     res['voicing_threshold'] = self.params.get('voicing_threshold', 0.25)
-                    res['f0_engine'] = self.params.get('f0_engine', 'praat')
 
                     preview_times = np.linspace(res['start'], res['end'], 11)
                     preview_f0 = np.interp(preview_times, pitch_xs, pitch_freqs).tolist()
@@ -960,7 +959,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
     def _process_long_wordlist(self, groups, flat_words):
         try:
             pitch_data = extract_f0(self.long_snd, self.params)
-            macro_segments = macroscopic_vad(self.long_snd)
+            macro_segments = macroscopic_vad(self.long_snd, expected_count=len(flat_words))
 
             pitch_xs = pitch_data['xs']
             pitch_freqs = pitch_data['freqs']
@@ -1016,7 +1015,6 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                             'pitch_floor': self.params['pitch_floor'],
                             'pitch_ceiling': self.params['pitch_ceiling'],
                             'voicing_threshold': self.params.get('voicing_threshold', 0.25),
-                            'f0_engine': self.params.get('f0_engine', 'praat')
                         }
                     else:
                         self.items[iid] = {
@@ -1107,7 +1105,6 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                     res['pitch_floor'] = self.params['pitch_floor']
                     res['pitch_ceiling'] = self.params['pitch_ceiling']
                     res['voicing_threshold'] = self.params.get('voicing_threshold', 0.25)
-                    res['f0_engine'] = self.params.get('f0_engine', 'praat')
                 except Exception:
                     pass
             res['id'] = iid
@@ -1260,18 +1257,15 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
             item['pitch_floor'] = self.params['pitch_floor']
             item['pitch_ceiling'] = self.params['pitch_ceiling']
             item['voicing_threshold'] = self.params.get('voicing_threshold', 0.25)
-            item['f0_engine'] = self.params.get('f0_engine', 'praat')
 
         updated = False
         for kv in args[1:]:
             if '=' in kv:
                 k, v = kv.split('=', 1)
-                if k in ('pitch_floor', 'pitch_ceiling', 'voicing_threshold', 'f0_engine'):
+                if k in ('pitch_floor', 'pitch_ceiling', 'voicing_threshold'):
                     try:
                         if k in ('pitch_floor', 'pitch_ceiling'):
                             item[k] = int(v)
-                        elif k == 'f0_engine':
-                            item[k] = str(v)
                         else:
                             item[k] = float(v)
                         updated = True
@@ -1283,7 +1277,6 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
             # Recompute pitch for this item
             try:
                 item['pitch_data'] = extract_f0(item['snd'], {
-                    'f0_engine': item.get('f0_engine', self.params.get('f0_engine', 'praat')),
                     'pitch_floor': item['pitch_floor'],
                     'pitch_ceiling': item['pitch_ceiling'],
                     'voicing_threshold': item['voicing_threshold']
@@ -1332,7 +1325,6 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                 "pitch_floor": item.get('pitch_floor'),
                 "pitch_ceiling": item.get('pitch_ceiling'),
                 "voicing_threshold": item.get('voicing_threshold'),
-                "f0_engine": item.get('f0_engine')
             },
             "warning": item.get('has_empty_data', False),
             "split_warnings": item.get('split_warnings', []),
@@ -1359,7 +1351,6 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                 item['pitch_floor'] = self.params['pitch_floor']
                 item['pitch_ceiling'] = self.params['pitch_ceiling']
                 item['voicing_threshold'] = self.params.get('voicing_threshold', 0.25)
-                item['f0_engine'] = self.params.get('f0_engine', 'praat')
 
                 mic_s, mic_e, raw_s, raw_e = core_microscopic_vowel_nucleus(
                     item['snd'], item['pitch_data'], item['macro_start'], item['macro_end'],
@@ -1446,7 +1437,6 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                     item['pitch_floor'] = self.params['pitch_floor']
                     item['pitch_ceiling'] = self.params['pitch_ceiling']
                     item['voicing_threshold'] = self.params.get('voicing_threshold', 0.25)
-                    item['f0_engine'] = self.params.get('f0_engine', 'praat')
                 except Exception:
                     pass
 
@@ -1478,7 +1468,6 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                 item['pitch_floor'] = self.params['pitch_floor']
                 item['pitch_ceiling'] = self.params['pitch_ceiling']
                 item['voicing_threshold'] = self.params.get('voicing_threshold', 0.25)
-                item['f0_engine'] = self.params.get('f0_engine', 'praat')
 
                 start = item.get('start')
                 end = item.get('end')
@@ -1528,7 +1517,6 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                 item['pitch_floor'] = self.params['pitch_floor']
                 item['pitch_ceiling'] = self.params['pitch_ceiling']
                 item['voicing_threshold'] = self.params.get('voicing_threshold', 0.25)
-                item['f0_engine'] = self.params.get('f0_engine', 'praat')
 
                 start = item.get('start')
                 end = item.get('end')
@@ -1633,7 +1621,6 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
 
         # We need to compute stable F0 using 50-700 Hz temporary range
         params_temp = {
-            'f0_engine': self.params.get('f0_engine', 'praat'),
             'pitch_floor': 50,
             'pitch_ceiling': 700,
             'voicing_threshold': self.params.get('voicing_threshold', 0.25)
@@ -2130,12 +2117,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                 pf = item.get('pitch_floor', self.params.get('pitch_floor', 75))
                 pc = item.get('pitch_ceiling', self.params.get('pitch_ceiling', 600))
                 vt = item.get('voicing_threshold', self.params.get('voicing_threshold', 0.25))
-                engine = item.get('f0_engine', self.params.get('f0_engine', 'praat'))
-
-                if engine == 'praat':
-                    item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=pf, pitch_ceiling=pc, voicing_threshold=vt, very_accurate=True, octave_jump_cost=0.9)
-                else:
-                    item['pitch_data'] = extract_f0(item['snd'], self.params)
+                item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=pf, pitch_ceiling=pc, voicing_threshold=vt, very_accurate=True, octave_jump_cost=0.9)
             except Exception:
                 pass
 

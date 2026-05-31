@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from modules.project_manager import ProjectManager, read_project_metadata_from_archive
+from modules.project_manager import ProjectManager, migrate_removed_f0_engine, read_project_metadata_from_archive
 
 
 def _make_project_manager(app, workspace_dir):
@@ -436,4 +436,26 @@ def test_project_preview_rejects_unsupported_version():
             raise AssertionError("未知版本工程应被拒绝")
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_removed_f0_engine_is_migrated_without_touching_cached_results():
+    state = {
+        "speakers": {
+            "sp1": {
+                "last_params": {"f0_engine": "reaper", "pitch_floor": 75},
+                "items": {
+                    "item1": {
+                        "f0_engine": "reaper",
+                        "preview_f0": [100.0, 110.0],
+                    }
+                },
+            }
+        }
+    }
+
+    migrated = migrate_removed_f0_engine(state)
+
+    assert "f0_engine" not in migrated["speakers"]["sp1"]["last_params"]
+    assert "f0_engine" not in migrated["speakers"]["sp1"]["items"]["item1"]
+    assert migrated["speakers"]["sp1"]["items"]["item1"]["preview_f0"] == [100.0, 110.0]
 

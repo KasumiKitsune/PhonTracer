@@ -1915,12 +1915,7 @@ class ProjectTreePanel:
                     pf = item.get('pitch_floor', self.app_state_params.get('pitch_floor', 75))
                     pc = item.get('pitch_ceiling', self.app_state_params.get('pitch_ceiling', 600))
                     vt = item.get('voicing_threshold', self.app_state_params.get('voicing_threshold', 0.25))
-                    engine = item.get('f0_engine', self.app_state_params.get('f0_engine', 'praat'))
-
-                    if engine == 'praat':
-                        item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=pf, pitch_ceiling=pc, voicing_threshold=vt, very_accurate=True, octave_jump_cost=0.9)
-                    else:
-                        item['pitch_data'] = extract_f0(item['snd'], {'f0_engine': engine, 'pitch_floor': pf, 'pitch_ceiling': pc, 'voicing_threshold': vt})
+                    item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=pf, pitch_ceiling=pc, voicing_threshold=vt, very_accurate=True, octave_jump_cost=0.9)
             except Exception as e:
                 logger.error(f"Error lazy loading sound/pitch for {item.get('path')}: {e}", exc_info=True)
 

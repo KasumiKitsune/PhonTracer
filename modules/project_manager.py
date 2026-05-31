@@ -100,6 +100,17 @@ def to_json_serializable(val):
         except TypeError:
             return str(val)
 
+def migrate_removed_f0_engine(state):
+    """清理历史工程中已移除的 F0 引擎选项，同时保留已有分析缓存。"""
+    for spk_data in state.get("speakers", {}).values():
+        last_params = spk_data.get("last_params")
+        if isinstance(last_params, dict):
+            last_params.pop("f0_engine", None)
+        for item in spk_data.get("items", {}).values():
+            if isinstance(item, dict):
+                item.pop("f0_engine", None)
+    return state
+
 class ProjectManager:
     def __init__(self, app):
         self.app = app
@@ -467,7 +478,7 @@ class ProjectManager:
                 state["speakers"][spk_id] = spk_data
                 
             project_json = os.path.join(self.workspace_dir, "project.json")
-            serializable_state = to_json_serializable(state)
+            serializable_state = migrate_removed_f0_engine(to_json_serializable(state))
             tmp_json = project_json + ".tmp"
             with open(tmp_json, "w", encoding="utf-8") as f:
                 json.dump(serializable_state, f, ensure_ascii=False, indent=2)
@@ -808,6 +819,7 @@ class ProjectManager:
         import parselmouth
         from .speaker_manager import SpeakerState
 
+        state = migrate_removed_f0_engine(copy.deepcopy(state))
         workspace_dir = workspace_dir or self.workspace_dir
         restored = {}
         id_mapping = {}

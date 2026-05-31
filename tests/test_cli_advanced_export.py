@@ -56,7 +56,6 @@ class TestCliAdvancedExport(unittest.TestCase):
             'pitch_floor': 75.0,
             'pitch_ceiling': 600.0,
             'voicing_threshold': 0.25,
-            'f0_engine': 'praat'
         }
         self.speaker.cli_groups = ['T1', 'T2']
 

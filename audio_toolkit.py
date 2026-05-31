@@ -103,7 +103,21 @@ class CTkReleaseButton(ctk.CTkButton):
 # 核心音频处理算法
 # ==========================================
 
-def macroscopic_vad(snd: parselmouth.Sound, min_dur=0.1, merge_thresh=0.25):
+def _fit_vad_segments_to_expected_count(segs, expected_count):
+    """按停顿长度保留最可信的边界，使切分段数量尽量贴合字表。"""
+    expected_count = max(1, int(expected_count))
+    fitted = [list(seg) for seg in segs]
+    while len(fitted) > expected_count:
+        merge_idx = min(
+            range(len(fitted) - 1),
+            key=lambda idx: fitted[idx + 1][0] - fitted[idx][1]
+        )
+        fitted[merge_idx][1] = fitted[merge_idx + 1][1]
+        fitted.pop(merge_idx + 1)
+    return fitted
+
+
+def macroscopic_vad(snd: parselmouth.Sound, min_dur=0.1, merge_thresh=0.12, expected_count=None):
     """VAD 静音检测：用于拆分音频时自动识别有效发音段"""
     intensity = snd.to_intensity(time_step=0.01)
     vals = intensity.values[0]
@@ -126,12 +140,16 @@ def macroscopic_vad(snd: parselmouth.Sound, min_dur=0.1, merge_thresh=0.25):
         if s_idx < len(xs) and e_idx < len(xs):
             segs.append([xs[s_idx], xs[e_idx]])
     
-    merged = []
-    for s in segs:
-        if not merged: merged.append(s)
-        else:
-            if s[0] - merged[-1][1] < merge_thresh: merged[-1][1] = s[1]
-            else: merged.append(s)
+    usable_segs = [s for s in segs if s[1] - s[0] > 0.02]
+    if expected_count:
+        merged = _fit_vad_segments_to_expected_count(usable_segs, expected_count)
+    else:
+        merged = []
+        for s in usable_segs:
+            if not merged or s[0] - merged[-1][1] >= merge_thresh:
+                merged.append(s)
+            else:
+                merged[-1][1] = s[1]
             
     return [s for s in merged if s[1]-s[0] > min_dur]
 
@@ -174,7 +192,11 @@ class VisualSplitter(ctk.CTkToplevel):
         
         if existing_items:
             self.mode = 'edit'
-            self.segments = existing_items
+            self.segments = []
+            for source_seg in existing_items:
+                seg = dict(source_seg)
+                seg['inner_splits'] = list(source_seg.get('inner_splits', []))
+                self.segments.append(seg)
             for i, seg in enumerate(self.segments):
                 seg['orig_start'] = seg['start']
                 seg['orig_end'] = seg['end']
@@ -630,13 +652,14 @@ class VisualSplitter(ctk.CTkToplevel):
             self.callback(kept_segments, False)
         else:
             kept_segments = []
-            for seg in self.segments:
-                if seg.get('dyn_id') is not None:
-                    kept_segments.append({
-                        'id': seg['dyn_id'],
-                        'start': seg['start'],
-                        'end': seg['end']
-                    })
+            for idx, seg in enumerate(self.segments):
+                if idx in self.deleted_indices:
+                    continue
+                kept_segments.append({
+                    'id': seg.get('dyn_id'),
+                    'start': seg['start'],
+                    'end': seg['end']
+                })
             self.destroy()
             self.callback(kept_segments, True, len(self.deleted_indices))
 
@@ -1457,7 +1480,7 @@ class AudioToolkitApp(ctk.CTk):
                     existing_items = [{'id': i, 'label': f'#{i+1}', 'start': s, 'end': e} for i, (s, e) in enumerate(self.custom_segments)]
                     self.after(0, lambda: VisualSplitter(self, snd, {}, self.on_visual_split_confirm, existing_items=existing_items, wordlist=self.wordlist))
                 else:
-                    vad_segs = macroscopic_vad(snd)
+                    vad_segs = macroscopic_vad(snd, expected_count=len(self.wordlist) or None)
                     self.after(0, lambda: VisualSplitter(self, snd, {}, self.on_visual_split_confirm, vad_segments=vad_segs, wordlist=self.wordlist))
             except Exception as e:
                 self.after(0, lambda: messagebox.showerror("错误", f"加载失败: {e}"))
@@ -1546,7 +1569,7 @@ class AudioToolkitApp(ctk.CTk):
                 if self.custom_segments:
                     segs = self.custom_segments
                 else:
-                    segs = macroscopic_vad(snd)
+                    segs = macroscopic_vad(snd, expected_count=len(wordlist))
                 
                 if not segs:
                     self.after(0, lambda: messagebox.showwarning("警告", "未能在音频中检测到任何有效发音段！"))

@@ -52,12 +52,10 @@ scratch/
 upx.exe
 upx.zip
 upx-*/
-PhonTracer_reaper/
 
 # 8. 绝对排除实验文件夹
 Test/
 
 # 9. 本地打包与测试输出文件夹
-PhonTracer_reaper/
 Cli_test/
 !modules/formant_optimizer.py
