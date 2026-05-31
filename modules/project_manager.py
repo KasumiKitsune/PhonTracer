@@ -168,6 +168,27 @@ class ProjectManager:
             pass
         return None
 
+    def _find_relocated_workspace_resource(self, src_path, subdir):
+        if not self._workspace_relpath(src_path):
+            return None
+
+        target_dir = os.path.join(self.workspace_dir, subdir)
+        if not os.path.isdir(target_dir):
+            return None
+
+        base_name = os.path.basename(src_path)
+        candidates = []
+        for name in os.listdir(target_dir):
+            path = os.path.join(target_dir, name)
+            if os.path.isfile(path) and (name == base_name or name.endswith(f"_{base_name}")):
+                candidates.append(path)
+
+        if len(candidates) == 1:
+            return candidates[0]
+        if len(candidates) > 1:
+            raise FileNotFoundError(f"工程资源路径失效且存在多个候选资源，无法安全恢复：{src_path}")
+        return None
+
     def _copy_to_workspace(self, src_path, subdir, token, copy_cache=None):
         if not src_path:
             return src_path
@@ -188,6 +209,12 @@ class ProjectManager:
             return existing_rel
 
         if not os.path.exists(src_path):
+            relocated_path = self._find_relocated_workspace_resource(src_path, subdir)
+            if relocated_path:
+                relocated_rel = self._workspace_relpath(relocated_path)
+                if copy_cache is not None and cache_key is not None:
+                    copy_cache[cache_key] = relocated_rel
+                return relocated_rel
             raise FileNotFoundError(f"工程资源不存在：{src_path}")
 
         target_dir = self._get_audio_dir() if subdir == "audio" else self._get_data_dir()
@@ -416,6 +443,8 @@ class ProjectManager:
             data_dir = self._get_data_dir()
             audio_dir = self._get_audio_dir()
             copy_cache = {}
+            runtime_attr_updates = []
+            runtime_item_path_updates = []
             
             for spk_id, spk in self.app.speaker_manager.speakers.items():
                 spk_data = {
@@ -438,12 +467,22 @@ class ProjectManager:
                     f"{spk_id}_long",
                     copy_cache
                 )
-                
+                runtime_attr_updates.append((
+                    spk,
+                    "long_audio_path",
+                    self._resolve_project_path(spk_data["long_audio_path"])
+                ))
+
                 # Copy batch audios to workspace
                 new_batch = []
                 for idx, p in enumerate(spk_data["pending_batch_paths"]):
                     new_batch.append(self._copy_to_workspace(p, "audio", f"{spk_id}_batch_{idx}", copy_cache))
                 spk_data["pending_batch_paths"] = new_batch
+                runtime_attr_updates.append((
+                    spk,
+                    "pending_batch_paths",
+                    [self._resolve_project_path(path) for path in new_batch]
+                ))
                 
                 for item_id, item in spk.items.items():
                     item_dict = {}
@@ -471,6 +510,11 @@ class ProjectManager:
                                 item_dict[k] = v
                         elif k == 'path':
                             item_dict['path'] = self._copy_to_workspace(v, "audio", f"{spk_id}_{item_id}", copy_cache)
+                            runtime_item_path_updates.append((
+                                item,
+                                'path',
+                                self._resolve_project_path(item_dict['path'])
+                            ))
                         else:
                             item_dict[k] = v
                     spk_data["items"][item_id] = item_dict
@@ -498,6 +542,10 @@ class ProjectManager:
                 print(f"Failed to write autosave meta: {e}")
 
             self._prune_unused_workspace_files(self._collect_project_file_refs(serializable_state))
+            for obj, attr_name, value in runtime_attr_updates:
+                setattr(obj, attr_name, value)
+            for item, key, value in runtime_item_path_updates:
+                item[key] = value
             return True
 
     def _create_backup(self):

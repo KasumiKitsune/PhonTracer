@@ -92,6 +92,9 @@ def test_project_archive_prunes_unreferenced_audio_and_data():
         saved_speaker = saved_state["speakers"]["sp1"]
         saved_item = saved_speaker["items"]["item1"]
         assert saved_item["path"] == saved_speaker["pending_batch_paths"][0]
+        expected_runtime_path = manager._resolve_project_path(saved_item["path"])
+        assert speaker.pending_batch_paths == [expected_runtime_path]
+        assert speaker.items["item1"]["path"] == expected_runtime_path
 
         extra_root_file = os.path.join(workspace_dir, "debug.txt")
         with open(extra_root_file, "w", encoding="utf-8") as f:
@@ -242,6 +245,81 @@ def test_export_rejects_missing_audio_resource():
 
         assert manager.export_project(archive_path) is False
         assert not os.path.exists(archive_path)
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_save_repairs_relocated_overlay_long_audio_reference():
+    temp_dir = tempfile.mkdtemp()
+    try:
+        workspace_dir = os.path.join(temp_dir, "workspace")
+        audio_dir = os.path.join(workspace_dir, "audio")
+        os.makedirs(audio_dir, exist_ok=True)
+
+        stale_name = "sp1_long_男.wav"
+        stale_path = os.path.join(audio_dir, stale_name)
+        relocated_path = os.path.join(audio_dir, f"import_abc123_{stale_name}")
+        _write_test_wav(relocated_path)
+
+        speaker = SimpleNamespace(
+            id="sp1",
+            name="男",
+            last_params={},
+            tab_mode="单条长音频",
+            long_audio_path=stale_path,
+            pending_batch_paths=[],
+            current_macro_segments=[],
+            manual_segments=None,
+            items={},
+        )
+        app = SimpleNamespace(
+            root=None,
+            speaker_manager=SimpleNamespace(active_speaker_id="sp1", speakers={"sp1": speaker}),
+        )
+        manager = _make_project_manager(app, workspace_dir)
+
+        assert manager.save_to_workspace() is True
+        assert speaker.long_audio_path == relocated_path
+
+        with open(os.path.join(workspace_dir, "project.json"), "r", encoding="utf-8") as f:
+            saved_state = json.load(f)
+        assert saved_state["speakers"]["sp1"]["long_audio_path"] == f"audio/import_abc123_{stale_name}"
+
+        archive_path = os.path.join(temp_dir, "repaired.teproj")
+        assert manager.export_project(archive_path) is True
+        with zipfile.ZipFile(archive_path) as zip_file:
+            assert f"audio/import_abc123_{stale_name}" in zip_file.namelist()
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_save_canonicalizes_external_long_audio_reference():
+    temp_dir = tempfile.mkdtemp()
+    try:
+        workspace_dir = os.path.join(temp_dir, "workspace")
+        source_path = os.path.join(temp_dir, "source.wav")
+        _write_test_wav(source_path)
+
+        speaker = SimpleNamespace(
+            id="sp1",
+            name="发音人",
+            last_params={},
+            tab_mode="单条长音频",
+            long_audio_path=source_path,
+            pending_batch_paths=[],
+            current_macro_segments=[],
+            manual_segments=None,
+            items={},
+        )
+        app = SimpleNamespace(
+            root=None,
+            speaker_manager=SimpleNamespace(active_speaker_id="sp1", speakers={"sp1": speaker}),
+        )
+        manager = _make_project_manager(app, workspace_dir)
+
+        assert manager.save_to_workspace() is True
+        assert speaker.long_audio_path == os.path.join(workspace_dir, "audio", "sp1_long_source.wav")
+        assert os.path.exists(speaker.long_audio_path)
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
