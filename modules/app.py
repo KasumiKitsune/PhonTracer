@@ -1528,102 +1528,123 @@ class PhoneticsApp:
                 self.root.after(50, self.recalculate_all_formants)
                 return
 
-    def on_param_change(self, event=None, recalculate_current=True):
+
+
+    def _check_general_params(self):
+        changed_algo = False
+        new_pts = None
         try:
             new_db = float(self.var_drop_db.get())
             new_skip = float(self.var_min_dur.get())
-            new_pts = int(self.entry_points.get())
-            changed_algo = False
+            new_pts_val = int(self.entry_points.get())
 
             if new_db != self.last_params['db']:
                 self.last_params['db'] = new_db
                 changed_algo = True
+
             if new_skip != self.last_params['skip_front']:
                 self.last_params['skip_front'] = new_skip
                 changed_algo = True
 
-            recompute_pitch = False
-            
-            # F0 specific params check
-            if hasattr(self, 'entry_pitch_floor') and self.entry_pitch_floor:
-                try:
-                    new_floor = int(self.entry_pitch_floor.get())
-                    new_ceiling = int(self.entry_pitch_ceiling.get())
-                    new_voicing = float(self.entry_voicing_threshold.get())
-                    
-                    if new_floor != self.last_params.get('pitch_floor', 75):
-                        self.last_params['pitch_floor'] = new_floor
-                        recompute_pitch = True
-                    if new_ceiling != self.last_params.get('pitch_ceiling', 600):
-                        self.last_params['pitch_ceiling'] = new_ceiling
-                        recompute_pitch = True
-                    if new_voicing != self.last_params.get('voicing_threshold', 0.25):
-                        self.last_params['voicing_threshold'] = new_voicing
-                        recompute_pitch = True
-                except ValueError: pass
+            new_pts = new_pts_val
+        except ValueError:
+            pass
+        return changed_algo, new_pts
 
-            # Formant specific params check
-            recompute_formant = False
-            if hasattr(self, 'entry_formant_max_hz') and self.entry_formant_max_hz:
-                try:
-                    new_formant_max = float(self.entry_formant_max_hz.get())
-                    if new_formant_max != self.last_params.get('formant_max_hz', 5500.0):
-                        self.last_params['formant_max_hz'] = new_formant_max
-                        recompute_formant = True
-                except ValueError: pass
-                
-                try:
-                    new_formant_count = int(self.entry_formant_count.get())
-                    if new_formant_count != self.last_params.get('formant_count', 5):
-                        self.last_params['formant_count'] = new_formant_count
-                        recompute_formant = True
-                except ValueError: pass
-                
-                try:
-                    new_formant_window = float(self.entry_formant_window_length.get())
-                    if new_formant_window != self.last_params.get('formant_window_length', 0.025):
-                        self.last_params['formant_window_length'] = new_formant_window
-                        recompute_formant = True
-                except ValueError: pass
-                
-                try:
-                    new_formant_pre = float(self.entry_formant_pre_emphasis.get())
-                    if new_formant_pre != self.last_params.get('formant_pre_emphasis', 50.0):
-                        self.last_params['formant_pre_emphasis'] = new_formant_pre
-                        recompute_formant = True
-                except ValueError: pass
+    def _check_f0_params(self, curr_item):
+        recompute_pitch = False
+        if not (hasattr(self, 'entry_pitch_floor') and self.entry_pitch_floor):
+            return recompute_pitch
 
-            # 即使全局 last_params 没变，只要当前输入框的值与“当前选中项的专属参数”不同，也要强制重算当前项
-            curr_item = getattr(self, 'spectrogram_panel', None) and self.spectrogram_panel.current_item
-            if curr_item:
-                if hasattr(self, 'entry_pitch_floor') and self.entry_pitch_floor:
-                    try:
-                        if int(self.entry_pitch_floor.get()) != curr_item.get('pitch_floor', self.last_params.get('pitch_floor', 75)): recompute_pitch = True
-                        if int(self.entry_pitch_ceiling.get()) != curr_item.get('pitch_ceiling', self.last_params.get('pitch_ceiling', 600)): recompute_pitch = True
-                        if float(self.entry_voicing_threshold.get()) != curr_item.get('voicing_threshold', self.last_params.get('voicing_threshold', 0.25)): recompute_pitch = True
-                    except ValueError: pass
-                    
-                if hasattr(self, 'entry_formant_max_hz') and self.entry_formant_max_hz:
-                    try:
-                        if float(self.entry_formant_max_hz.get()) != curr_item.get('formant_max_hz', self.last_params.get('formant_max_hz', 5500.0)): recompute_formant = True
-                        if int(self.entry_formant_count.get()) != curr_item.get('formant_count', self.last_params.get('formant_count', 5)): recompute_formant = True
-                        if float(self.entry_formant_window_length.get()) != curr_item.get('formant_window_length', self.last_params.get('formant_window_length', 0.025)): recompute_formant = True
-                        if float(self.entry_formant_pre_emphasis.get()) != curr_item.get('formant_pre_emphasis', self.last_params.get('formant_pre_emphasis', 50.0)): recompute_formant = True
-                    except ValueError: pass
+        try:
+            new_floor = int(self.entry_pitch_floor.get())
+            if new_floor != self.last_params.get('pitch_floor', 75):
+                self.last_params['pitch_floor'] = new_floor
+                recompute_pitch = True
+            elif curr_item and new_floor != curr_item.get('pitch_floor', self.last_params.get('pitch_floor', 75)):
+                recompute_pitch = True
 
-            need_recompute = (changed_algo or recompute_pitch or recompute_formant)
-            if recalculate_current and need_recompute:
-                if recompute_formant and not recompute_pitch and not changed_algo:
-                    self.recalculate_current_item(recompute_formant_only=True)
-                else:
-                    self.recalculate_current_item(recompute_pitch=True)
-                
-            if new_pts != self.last_params['pts']:
-                self.last_params['pts'] = new_pts
-                for iid in list(self.items.keys()):
-                    self.tree_panel.update_item_icon(iid)
-                self.tree_panel.update_preview()
+            new_ceiling = int(self.entry_pitch_ceiling.get())
+            if new_ceiling != self.last_params.get('pitch_ceiling', 600):
+                self.last_params['pitch_ceiling'] = new_ceiling
+                recompute_pitch = True
+            elif curr_item and new_ceiling != curr_item.get('pitch_ceiling', self.last_params.get('pitch_ceiling', 600)):
+                recompute_pitch = True
+
+            new_voicing = float(self.entry_voicing_threshold.get())
+            if new_voicing != self.last_params.get('voicing_threshold', 0.25):
+                self.last_params['voicing_threshold'] = new_voicing
+                recompute_pitch = True
+            elif curr_item and new_voicing != curr_item.get('voicing_threshold', self.last_params.get('voicing_threshold', 0.25)):
+                recompute_pitch = True
+        except ValueError:
+            pass
+
+        return recompute_pitch
+
+    def _check_formant_params(self, curr_item):
+        recompute_formant = False
+        if not (hasattr(self, 'entry_formant_max_hz') and self.entry_formant_max_hz):
+            return recompute_formant
+
+        try:
+            new_formant_max = float(self.entry_formant_max_hz.get())
+            if new_formant_max != self.last_params.get('formant_max_hz', 5500.0):
+                self.last_params['formant_max_hz'] = new_formant_max
+                recompute_formant = True
+            elif curr_item and new_formant_max != curr_item.get('formant_max_hz', self.last_params.get('formant_max_hz', 5500.0)):
+                recompute_formant = True
         except ValueError: pass
+
+        try:
+            new_formant_count = int(self.entry_formant_count.get())
+            if new_formant_count != self.last_params.get('formant_count', 5):
+                self.last_params['formant_count'] = new_formant_count
+                recompute_formant = True
+            elif curr_item and new_formant_count != curr_item.get('formant_count', self.last_params.get('formant_count', 5)):
+                recompute_formant = True
+        except ValueError: pass
+
+        try:
+            new_formant_window = float(self.entry_formant_window_length.get())
+            if new_formant_window != self.last_params.get('formant_window_length', 0.025):
+                self.last_params['formant_window_length'] = new_formant_window
+                recompute_formant = True
+            elif curr_item and new_formant_window != curr_item.get('formant_window_length', self.last_params.get('formant_window_length', 0.025)):
+                recompute_formant = True
+        except ValueError: pass
+
+        try:
+            new_formant_pre = float(self.entry_formant_pre_emphasis.get())
+            if new_formant_pre != self.last_params.get('formant_pre_emphasis', 50.0):
+                self.last_params['formant_pre_emphasis'] = new_formant_pre
+                recompute_formant = True
+            elif curr_item and new_formant_pre != curr_item.get('formant_pre_emphasis', self.last_params.get('formant_pre_emphasis', 50.0)):
+                recompute_formant = True
+        except ValueError: pass
+
+        return recompute_formant
+
+    def on_param_change(self, event=None, recalculate_current=True):
+        changed_algo, new_pts = self._check_general_params()
+
+        curr_item = getattr(self, 'spectrogram_panel', None) and self.spectrogram_panel.current_item
+
+        recompute_pitch = self._check_f0_params(curr_item)
+        recompute_formant = self._check_formant_params(curr_item)
+
+        need_recompute = (changed_algo or recompute_pitch or recompute_formant)
+        if recalculate_current and need_recompute:
+            if recompute_formant and not recompute_pitch and not changed_algo:
+                self.recalculate_current_item(recompute_formant_only=True)
+            else:
+                self.recalculate_current_item(recompute_pitch=True)
+
+        if new_pts is not None and new_pts != self.last_params.get('pts', -1):
+            self.last_params['pts'] = new_pts
+            for iid in list(self.items.keys()):
+                self.tree_panel.update_item_icon(iid)
+            self.tree_panel.update_preview()
 
     def on_trim_silence_toggle(self):
         self.recalculate_current_item(only_trim_silence=True)
