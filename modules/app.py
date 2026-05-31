@@ -206,7 +206,8 @@ class PhoneticsApp:
                     from urllib.parse import unquote, urlparse
                     parsed = urlparse(s)
                     s = unquote(parsed.path or "")
-                    if os.name == "nt" and re.match(r"^/[A-Za-z]:", s):
+                    # Support windows drive letter formatting on linux for tests
+                    if re.match(r"^/[A-Za-z]:", s):
                         s = s[1:]
                 except Exception:
                     pass
