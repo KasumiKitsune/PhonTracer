@@ -350,10 +350,9 @@ class PhoneticsApp:
         self.active_chart_dialog = None
         return False
 
-    def _process_dlg_dropped_files(self, files):
-        if not getattr(self, 'active_import_dlg', None) or not self.active_import_dlg.winfo_exists():
-            return
 
+    @staticmethod
+    def _decode_dropped_paths(files):
         decoded_paths = []
         for f in files:
             if isinstance(f, bytes):
@@ -364,124 +363,143 @@ class PhoneticsApp:
             path_str = path_str.strip().strip('"\'')
             if path_str:
                 decoded_paths.append(path_str)
+        return decoded_paths
 
+    def _handle_dlg_dropped_textgrid_batch(self, tg_files):
+        if len(tg_files) > 1 or len(self.pending_batch_paths) == 1:
+            dlg = self.active_import_dlg
+            dlg.destroy()
+            self.process_batch_with_textgrid(tg_files)
+        else:
+            path = tg_files[0]
+            try:
+                from modules.data_utils import extract_wordlist_from_textgrid
+                import tkinter as tk
+                text = extract_wordlist_from_textgrid(path)
+                self.active_import_textbox.delete("1.0", tk.END)
+                self.active_import_textbox.insert("1.0", text)
+                self.active_import_update_stats()
+            except Exception as e:
+                from tkinter import messagebox
+                messagebox.showerror("错误", f"解析 TextGrid 失败: {e}", parent=self.active_import_dlg)
+
+    def _handle_dlg_dropped_textgrid_long(self, path):
+        if self.active_import_mode != 'long':
+            from tkinter import messagebox
+            messagebox.showwarning("提示", "目前仅在“单条长音频”模式下支持导入 TextGrid 词表。", parent=self.active_import_dlg)
+            return
+        try:
+            import textgrid
+            from tkinter import messagebox
+            import numpy as np
+            from modules.data_utils import split_into_syllables
+            tg = textgrid.TextGrid.fromFile(path)
+            words_tier = None
+            groups_tier = None
+            chars_tier = None
+            for t in tg.tiers:
+                name_lower = t.name.strip().lower()
+                if name_lower in ["words", "word"] and words_tier is None: words_tier = t
+                elif name_lower in ["chars", "char"] and chars_tier is None: chars_tier = t
+                elif name_lower in ["groups", "group"] and groups_tier is None: groups_tier = t
+            if not words_tier:
+                for t in tg.tiers:
+                    if isinstance(t, textgrid.IntervalTier):
+                        words_tier = t
+                        break
+            if not words_tier:
+                messagebox.showerror("错误", "TextGrid 中没有找到 IntervalTier", parent=self.active_import_dlg)
+                return
+
+            tg_intervals = []
+            for interval in words_tier:
+                lbl = interval.mark.strip()
+                if lbl:
+                    grp_name = "导入内容"
+                    if groups_tier:
+                        center = (interval.minTime + interval.maxTime) / 2.0
+                        for g_interval in groups_tier:
+                            if g_interval.minTime <= center <= g_interval.maxTime:
+                                g_lbl = g_interval.mark.strip()
+                                if g_lbl:
+                                    grp_name = g_lbl
+                                    break
+                    chars_bounds = []
+                    inner_splits = []
+                    if chars_tier:
+                        overlapping_chars = []
+                        for c_interval in chars_tier:
+                            c_lbl = c_interval.mark.strip()
+                            if c_lbl:
+                                center = (c_interval.minTime + c_interval.maxTime) / 2.0
+                                if interval.minTime <= center <= interval.maxTime:
+                                    overlapping_chars.append(c_interval)
+                        overlapping_chars.sort(key=lambda c: c.minTime)
+                        if overlapping_chars:
+                            for c in overlapping_chars:
+                                chars_bounds.append([c.minTime, c.maxTime])
+                            for j in range(len(overlapping_chars) - 1):
+                                inner_splits.append(overlapping_chars[j].maxTime)
+                    if not chars_bounds:
+                        syls = split_into_syllables(lbl)
+                        w_len = len(syls)
+                        if w_len > 1:
+                            splits = np.linspace(interval.minTime, interval.maxTime, w_len + 1).tolist()
+                            chars_bounds = [[splits[j], splits[j+1]] for j in range(w_len)]
+                            inner_splits = splits[1:-1]
+                        else:
+                            chars_bounds = [[interval.minTime, interval.maxTime]]
+                            inner_splits = []
+                    tg_intervals.append({
+                        'start': interval.minTime,
+                        'end': interval.maxTime,
+                        'label': lbl,
+                        'group': grp_name,
+                        'inner_splits': inner_splits,
+                        'chars_bounds': chars_bounds
+                    })
+            if not tg_intervals:
+                messagebox.showerror("错误", "TextGrid 中没有非空标签的区间", parent=self.active_import_dlg)
+                return
+
+            dlg = self.active_import_dlg
+            dlg.destroy()
+            self.process_long_with_textgrid(tg_intervals)
+        except Exception as e:
+            from tkinter import messagebox
+            messagebox.showerror("错误", f"解析 TextGrid 失败: {e}", parent=self.active_import_dlg)
+
+    def _handle_dlg_dropped_text(self, path):
+        try:
+            try:
+                with open(path, 'r', encoding='utf-8') as f: text = f.read()
+            except UnicodeDecodeError:
+                with open(path, 'r', encoding='gbk') as f: text = f.read()
+            import tkinter as tk
+            self.active_import_textbox.delete("1.0", tk.END)
+            self.active_import_textbox.insert("1.0", text)
+            self.active_import_update_stats()
+        except Exception as e:
+            from tkinter import messagebox
+            messagebox.showerror("错误", f"读取文件失败: {e}", parent=self.active_import_dlg)
+
+    def _process_dlg_dropped_files(self, files):
+        if not getattr(self, 'active_import_dlg', None) or not self.active_import_dlg.winfo_exists():
+            return
+
+        decoded_paths = self._decode_dropped_paths(files)
         txt_files = [p for p in decoded_paths if p.lower().endswith(('.txt', '.csv'))]
         tg_files = [p for p in decoded_paths if p.lower().endswith('.textgrid')]
 
         if tg_files:
             if self.active_import_mode == 'batch':
-                if len(tg_files) > 1 or len(self.pending_batch_paths) == 1:
-                    dlg = self.active_import_dlg
-                    dlg.destroy()
-                    self.process_batch_with_textgrid(tg_files)
-                    return
-                else:
-                    path = tg_files[0]
-                    try:
-                        from modules.data_utils import extract_wordlist_from_textgrid
-                        text = extract_wordlist_from_textgrid(path)
-                        self.active_import_textbox.delete("1.0", tk.END)
-                        self.active_import_textbox.insert("1.0", text)
-                        self.active_import_update_stats()
-                    except Exception as e:
-                        messagebox.showerror("错误", f"解析 TextGrid 失败: {e}", parent=self.active_import_dlg)
-                    return
-            path = tg_files[0]
-            if self.active_import_mode != 'long':
-                messagebox.showwarning("提示", "目前仅在“单条长音频”模式下支持导入 TextGrid 词表。", parent=self.active_import_dlg)
-                return
-            try:
-                import textgrid
-                tg = textgrid.TextGrid.fromFile(path)
-                words_tier = None
-                groups_tier = None
-                chars_tier = None
-                for t in tg.tiers:
-                    name_lower = t.name.strip().lower()
-                    if name_lower in ["words", "word"] and words_tier is None: words_tier = t
-                    elif name_lower in ["chars", "char"] and chars_tier is None: chars_tier = t
-                    elif name_lower in ["groups", "group"] and groups_tier is None: groups_tier = t
-                if not words_tier:
-                    for t in tg.tiers:
-                        if isinstance(t, textgrid.IntervalTier):
-                            words_tier = t
-                            break
-                if not words_tier:
-                    messagebox.showerror("错误", "TextGrid 中没有找到 IntervalTier", parent=self.active_import_dlg)
-                    return
-
-                tg_intervals = []
-                import numpy as np
-                for interval in words_tier:
-                    lbl = interval.mark.strip()
-                    if lbl:
-                        grp_name = "导入内容"
-                        if groups_tier:
-                            center = (interval.minTime + interval.maxTime) / 2.0
-                            for g_interval in groups_tier:
-                                if g_interval.minTime <= center <= g_interval.maxTime:
-                                    g_lbl = g_interval.mark.strip()
-                                    if g_lbl:
-                                        grp_name = g_lbl
-                                        break
-                        chars_bounds = []
-                        inner_splits = []
-                        if chars_tier:
-                            overlapping_chars = []
-                            for c_interval in chars_tier:
-                                c_lbl = c_interval.mark.strip()
-                                if c_lbl:
-                                    center = (c_interval.minTime + c_interval.maxTime) / 2.0
-                                    if interval.minTime <= center <= interval.maxTime:
-                                        overlapping_chars.append(c_interval)
-                            overlapping_chars.sort(key=lambda c: c.minTime)
-                            if overlapping_chars:
-                                for c in overlapping_chars:
-                                    chars_bounds.append([c.minTime, c.maxTime])
-                                for j in range(len(overlapping_chars) - 1):
-                                    inner_splits.append(overlapping_chars[j].maxTime)
-                        if not chars_bounds:
-                            syls = split_into_syllables(lbl)
-                            w_len = len(syls)
-                            if w_len > 1:
-                                splits = np.linspace(interval.minTime, interval.maxTime, w_len + 1).tolist()
-                                chars_bounds = [[splits[j], splits[j+1]] for j in range(w_len)]
-                                inner_splits = splits[1:-1]
-                            else:
-                                chars_bounds = [[interval.minTime, interval.maxTime]]
-                                inner_splits = []
-                        tg_intervals.append({
-                            'start': interval.minTime,
-                            'end': interval.maxTime,
-                            'label': lbl,
-                            'group': grp_name,
-                            'inner_splits': inner_splits,
-                            'chars_bounds': chars_bounds
-                        })
-                if not tg_intervals:
-                    messagebox.showerror("错误", "TextGrid 中没有非空标签的区间", parent=self.active_import_dlg)
-                    return
-
-                dlg = self.active_import_dlg
-                dlg.destroy()
-                self.process_long_with_textgrid(tg_intervals)
-            except Exception as e:
-                messagebox.showerror("错误", f"解析 TextGrid 失败: {e}", parent=self.active_import_dlg)
-
+                self._handle_dlg_dropped_textgrid_batch(tg_files)
+            else:
+                self._handle_dlg_dropped_textgrid_long(tg_files[0])
         elif txt_files:
-            path = txt_files[0]
-            try:
-                try:
-                    with open(path, 'r', encoding='utf-8') as f: text = f.read()
-                except UnicodeDecodeError:
-                    with open(path, 'r', encoding='gbk') as f: text = f.read()
-
-                self.active_import_textbox.delete("1.0", tk.END)
-                self.active_import_textbox.insert("1.0", text)
-                self.active_import_update_stats()
-            except Exception as e:
-                messagebox.showerror("错误", f"读取文件失败: {e}", parent=self.active_import_dlg)
+            self._handle_dlg_dropped_text(txt_files[0])
         else:
+            from tkinter import messagebox
             messagebox.showwarning("提示", "拖入的文件类型不支持，请拖入 .txt 或 .TextGrid 文件。", parent=self.active_import_dlg)
 
     def on_files_dropped(self, files):
@@ -490,18 +508,10 @@ class PhoneticsApp:
 
     def _process_dropped_files(self, files):
         if self._has_active_chart_dialog():
+            from tkinter import messagebox
             messagebox.showwarning("提示", "图表编辑器已打开，修改图表期间禁止通过拖入文件进行导入/更改操作。")
             return
-        decoded_paths = []
-        for f in files:
-            if isinstance(f, bytes):
-                try: path_str = f.decode('gbk')
-                except UnicodeDecodeError: path_str = f.decode('utf-8')
-            else:
-                path_str = str(f)
-            path_str = path_str.strip().strip('"\'')
-            if path_str:
-                decoded_paths.append(path_str)
+        decoded_paths = self._decode_dropped_paths(files)
 
         # Check for project files (.teproj, .zip)
         teproj_files = [p for p in decoded_paths if p.lower().endswith(('.teproj', '.zip'))]
@@ -526,6 +536,7 @@ class PhoneticsApp:
                 err_msg = "请先选择独立音频后，再拖入字表文件！"
 
             if not has_audio:
+                from tkinter import messagebox
                 messagebox.showwarning("提示", err_msg)
                 return
 
