@@ -2051,6 +2051,141 @@ class PhoneticsApp:
             self.root.after(0, finalize)
         threading.Thread(target=run, daemon=True).start()
 
+    def _get_segmented_f0(self, item, snd, last_params):
+        total_dur = snd.get_total_duration()
+        if 'macro_start' in item and 'macro_end' in item and total_dur > 15.0:
+            padding = 1.0
+            seg_start = max(0.0, item['macro_start'] - padding)
+            seg_end = min(total_dur, item['macro_end'] + padding)
+            part_snd = snd.extract_part(from_time=seg_start, to_time=seg_end)
+            part_pitch_data = extract_f0(part_snd, last_params)
+            part_pitch_data['xs'] = part_pitch_data['xs'] + seg_start
+            return part_pitch_data
+        else:
+            return extract_f0(snd, last_params)
+
+    def _get_segmented_formant(self, item, snd, last_params):
+        from modules.audio_core import extract_formants
+        total_dur = snd.get_total_duration()
+        if 'macro_start' in item and 'macro_end' in item and total_dur > 15.0:
+            padding = 1.0
+            seg_start = max(0.0, item['macro_start'] - padding)
+            seg_end = min(total_dur, item['macro_end'] + padding)
+            part_snd = snd.extract_part(from_time=seg_start, to_time=seg_end)
+            part_formant_data = extract_formants(part_snd, last_params)
+            part_formant_data['xs'] = part_formant_data['xs'] + seg_start
+            return part_formant_data
+        else:
+            return extract_formants(snd, last_params)
+
+    def _update_item_pitch_data(self, item):
+        item['pitch_data'] = self._get_segmented_f0(item, item['snd'], self.last_params)
+        if 'pitch' in item:
+            del item['pitch']
+        item['pitch_floor'] = self.last_params['pitch_floor']
+        item['pitch_ceiling'] = self.last_params['pitch_ceiling']
+        item['voicing_threshold'] = self.last_params.get('voicing_threshold', 0.25)
+        item['f0_engine'] = self.last_params.get('f0_engine', 'praat')
+
+    def _update_item_formant_data(self, item):
+        item['formant_data'] = self._get_segmented_formant(item, item['snd'], self.last_params)
+
+    def _recalculate_item_data(self, item, recompute_pitch, recompute_formant_only):
+        # 如果是独立音频模式且没有加载 Sound 对象
+        if not item.get('snd') and item.get('path'):
+            item['snd'] = parselmouth.Sound(item['path'])
+            # 独立音频的宏观边界就是全文
+            item['macro_start'] = 0.0
+            item['macro_end'] = item['snd'].get_total_duration()
+
+            if not recompute_formant_only:
+                self._update_item_pitch_data(item)
+            self._update_item_formant_data(item)
+            return
+
+        # 如果是仅重新计算共振峰且 Sound 对象已存在
+        if recompute_formant_only and item.get('snd'):
+            self._update_item_formant_data(item)
+        # 如果修改了 Pitch Floor/Ceiling 或 Formant 参数，且非仅重算共振峰，重新计算该项
+        elif recompute_pitch and item.get('snd'):
+            self._update_item_pitch_data(item)
+            self._update_item_formant_data(item)
+
+    def _recalculate_item_bounds(self, item, only_trim_silence):
+        if not (item.get('snd') and 'macro_start' in item and 'macro_end' in item):
+            return
+
+        current_pitch = item.get('pitch_data', item.get('pitch'))
+        if only_trim_silence:
+            mic_s, mic_e = recalculate_bounds_fast(
+                item['snd'], current_pitch, item['raw_start'], item['raw_end'], self.switch_trim_silence.get()
+            )
+            # 等比例缩放内部蓝线
+            old_s, old_e = item.get('start', mic_s), item.get('end', mic_e)
+            if 'inner_splits' in item and item['inner_splits'] and old_e > old_s:
+                ratio = (mic_e - mic_s) / (old_e - old_s)
+                item['inner_splits'] = [mic_s + (s - old_s) * ratio for s in item['inner_splits']]
+                if 'chars_bounds' in item and item['chars_bounds']:
+                    item['chars_bounds'] = [[mic_s + (c[0] - old_s) * ratio, mic_s + (c[1] - old_s) * ratio] for c in item['chars_bounds']]
+            item['start'], item['end'] = mic_s, mic_e
+        else:
+            mic_s, mic_e, raw_s, raw_e = self._microscopic_vowel_nucleus(
+                item['snd'], current_pitch, item['macro_start'], item['macro_end']
+            )
+            item['start'], item['end'] = mic_s, mic_e
+            item['raw_start'], item['raw_end'] = raw_s, raw_e
+
+            label = item['label'].replace(" (缺失)", "")
+            syls = split_into_syllables(label)
+            split_warnings = []
+            split_confidence = 1.0
+            if len(syls) > 1:
+                meta = {}
+                item['inner_splits'] = auto_split_inner_word(item['snd'], raw_s, raw_e, len(syls), pitch_data=current_pitch, output_meta=meta)
+                split_warnings = meta.get('split_warnings', [])
+                split_confidence = meta.get('split_confidence', 1.0)
+                from modules.audio_core import auto_split_to_chars_bounds
+                item['chars_bounds'] = auto_split_to_chars_bounds(item['snd'], raw_s, raw_e, item['inner_splits'], len(syls), self.last_params)
+                if item['chars_bounds']:
+                    item['start'] = item['chars_bounds'][0][0]
+                    item['end'] = item['chars_bounds'][-1][1]
+            else:
+                item['inner_splits'] = []
+                item['chars_bounds'] = [[item['start'], item['end']]]
+            item['split_warnings'] = split_warnings
+            item['split_confidence'] = split_confidence
+            item['has_empty_data'] = item.get('has_empty_data', False) or len(split_warnings) > 0
+
+    def _recalculate_item_previews(self, item):
+        # 重新生成 11 点预览数据用于警告图标状态更新
+        if item.get('snd') and (item.get('pitch_data') or item.get('pitch')):
+            preview_times = np.linspace(item['start'], item['end'], 11)
+            if item.get('pitch_data'):
+                p_xs = item['pitch_data']['xs']
+                p_freqs = item['pitch_data']['freqs']
+                preview_f0 = np.interp(preview_times, p_xs, p_freqs).tolist()
+                for j, t in enumerate(preview_times):
+                    valid_indices = np.where(p_freqs > 0)[0]
+                    if len(valid_indices) == 0:
+                        preview_f0[j] = 0.0
+                        continue
+                    valid_xs = p_xs[valid_indices]
+                    if np.min(np.abs(valid_xs - t)) > 0.025:
+                        preview_f0[j] = 0.0
+            else:
+                preview_f0 = [item['pitch'].get_value_at_time(t) for t in preview_times]
+                preview_f0 = [0.0 if (np.isnan(hz) or hz <= 0) else hz for hz in preview_f0]
+            item['preview_f0'] = preview_f0
+            # 清除缓存标记，让后续 update_item_icon 通过 _check_item_has_empty_data 精准重算
+            item.pop('has_empty_data', None)
+
+        # 同时重新生成 preview_formants
+        if item.get('snd') and item.get('formant_data'):
+            pts = int(self.last_params.get('pts', 11))
+            strategy = self.last_params.get('formant_sample_strategy', '整段11点')
+            _, preview_f1, preview_f2 = self.sample_formant_points(item, pts, strategy)
+            item['preview_formants'] = {"f1": preview_f1, "f2": preview_f2}
+
     def recalculate_current_item(self, only_trim_silence=False, recompute_pitch=False, recompute_formant_only=False):
         """仅针对当前正在编辑的项重新计算参数（暂不影响全局）"""
         item = self.spectrogram_panel.current_item
@@ -2060,140 +2195,13 @@ class PhoneticsApp:
             try:
                 self.root.after(0, lambda: self.set_status("正在更新当前项...", "#3B82F6", "status_loading"))
 
-                def get_segmented_f0(snd, last_params):
-                    total_dur = snd.get_total_duration()
-                    if 'macro_start' in item and 'macro_end' in item and total_dur > 15.0:
-                        padding = 1.0
-                        seg_start = max(0.0, item['macro_start'] - padding)
-                        seg_end = min(total_dur, item['macro_end'] + padding)
-                        part_snd = snd.extract_part(from_time=seg_start, to_time=seg_end)
-                        part_pitch_data = extract_f0(part_snd, last_params)
-                        part_pitch_data['xs'] = part_pitch_data['xs'] + seg_start
-                        return part_pitch_data
-                    else:
-                        return extract_f0(snd, last_params)
-
-                def get_segmented_formant(snd, last_params):
-                    from modules.audio_core import extract_formants
-                    total_dur = snd.get_total_duration()
-                    if 'macro_start' in item and 'macro_end' in item and total_dur > 15.0:
-                        padding = 1.0
-                        seg_start = max(0.0, item['macro_start'] - padding)
-                        seg_end = min(total_dur, item['macro_end'] + padding)
-                        part_snd = snd.extract_part(from_time=seg_start, to_time=seg_end)
-                        part_formant_data = extract_formants(part_snd, last_params)
-                        part_formant_data['xs'] = part_formant_data['xs'] + seg_start
-                        return part_formant_data
-                    else:
-                        return extract_formants(snd, last_params)
-
-                # 如果是独立音频模式且没有加载 Sound 对象
-                if not item.get('snd') and item.get('path'):
-                    item['snd'] = parselmouth.Sound(item['path'])
-                    # 总是为单项重新生成 pitch 确保准确性
-                    if not recompute_formant_only:
-                        item['pitch_data'] = get_segmented_f0(item['snd'], self.last_params)
-                        if 'pitch' in item:
-                            del item['pitch']
-                        item['pitch_floor'] = self.last_params['pitch_floor']
-                        item['pitch_ceiling'] = self.last_params['pitch_ceiling']
-                        item['voicing_threshold'] = self.last_params.get('voicing_threshold', 0.25)
-                        item['f0_engine'] = self.last_params.get('f0_engine', 'praat')
-                    
-                    # 总是为单项重新生成 formant
-                    item['formant_data'] = get_segmented_formant(item['snd'], self.last_params)
-                    
-                    # 独立音频的宏观边界就是全文
-                    item['macro_start'] = 0.0
-                    item['macro_end'] = item['snd'].get_total_duration()
-
-                # 如果是仅重新计算共振峰且 Sound 对象已存在
-                if recompute_formant_only and item.get('snd'):
-                    item['formant_data'] = get_segmented_formant(item['snd'], self.last_params)
-                # 如果修改了 Pitch Floor/Ceiling 或 Formant 参数，且非仅重算共振峰，重新计算该项
-                elif recompute_pitch and item.get('snd'):
-                    item['pitch_data'] = get_segmented_f0(item['snd'], self.last_params)
-                    if 'pitch' in item:
-                        del item['pitch']
-                    item['pitch_floor'] = self.last_params['pitch_floor']
-                    item['pitch_ceiling'] = self.last_params['pitch_ceiling']
-                    item['voicing_threshold'] = self.last_params.get('voicing_threshold', 0.25)
-                    item['f0_engine'] = self.last_params.get('f0_engine', 'praat')
-                    
-                    # 重新生成 formant
-                    item['formant_data'] = get_segmented_formant(item['snd'], self.last_params)
+                self._recalculate_item_data(item, recompute_pitch, recompute_formant_only)
 
                 # 仅在非 recompute_formant_only 时才重新计算/定位边界，从而完美保护手动边界修改
-                if not recompute_formant_only and item.get('snd') and 'macro_start' in item and 'macro_end' in item:
-                    current_pitch = item.get('pitch_data', item.get('pitch'))
-                    if only_trim_silence:
-                        mic_s, mic_e = recalculate_bounds_fast(
-                            item['snd'], current_pitch, item['raw_start'], item['raw_end'], self.switch_trim_silence.get()
-                        )
-                        # 等比例缩放内部蓝线
-                        old_s, old_e = item.get('start', mic_s), item.get('end', mic_e)
-                        if 'inner_splits' in item and item['inner_splits'] and old_e > old_s:
-                            ratio = (mic_e - mic_s) / (old_e - old_s)
-                            item['inner_splits'] = [mic_s + (s - old_s) * ratio for s in item['inner_splits']]
-                            if 'chars_bounds' in item and item['chars_bounds']:
-                                item['chars_bounds'] = [[mic_s + (c[0] - old_s) * ratio, mic_s + (c[1] - old_s) * ratio] for c in item['chars_bounds']]
-                        item['start'], item['end'] = mic_s, mic_e
-                    else:
-                        mic_s, mic_e, raw_s, raw_e = self._microscopic_vowel_nucleus(
-                            item['snd'], current_pitch, item['macro_start'], item['macro_end']
-                        )
-                        item['start'], item['end'] = mic_s, mic_e
-                        item['raw_start'], item['raw_end'] = raw_s, raw_e
+                if not recompute_formant_only:
+                    self._recalculate_item_bounds(item, only_trim_silence)
 
-                        label = item['label'].replace(" (缺失)", "")
-                        syls = split_into_syllables(label)
-                        split_warnings = []
-                        split_confidence = 1.0
-                        if len(syls) > 1:
-                            meta = {}
-                            item['inner_splits'] = auto_split_inner_word(item['snd'], raw_s, raw_e, len(syls), pitch_data=current_pitch, output_meta=meta)
-                            split_warnings = meta.get('split_warnings', [])
-                            split_confidence = meta.get('split_confidence', 1.0)
-                            from modules.audio_core import auto_split_to_chars_bounds
-                            item['chars_bounds'] = auto_split_to_chars_bounds(item['snd'], raw_s, raw_e, item['inner_splits'], len(syls), self.last_params)
-                            if item['chars_bounds']:
-                                item['start'] = item['chars_bounds'][0][0]
-                                item['end'] = item['chars_bounds'][-1][1]
-                        else:
-                            item['inner_splits'] = []
-                            item['chars_bounds'] = [[item['start'], item['end']]]
-                        item['split_warnings'] = split_warnings
-                        item['split_confidence'] = split_confidence
-                        item['has_empty_data'] = item.get('has_empty_data', False) or len(split_warnings) > 0
-
-                # 重新生成 11 点预览数据用于警告图标状态更新
-                if item.get('snd') and (item.get('pitch_data') or item.get('pitch')):
-                    preview_times = np.linspace(item['start'], item['end'], 11)
-                    if item.get('pitch_data'):
-                        p_xs = item['pitch_data']['xs']
-                        p_freqs = item['pitch_data']['freqs']
-                        preview_f0 = np.interp(preview_times, p_xs, p_freqs).tolist()
-                        for j, t in enumerate(preview_times):
-                            valid_indices = np.where(p_freqs > 0)[0]
-                            if len(valid_indices) == 0:
-                                preview_f0[j] = 0.0
-                                continue
-                            valid_xs = p_xs[valid_indices]
-                            if np.min(np.abs(valid_xs - t)) > 0.025:
-                                preview_f0[j] = 0.0
-                    else:
-                        preview_f0 = [item['pitch'].get_value_at_time(t) for t in preview_times]
-                        preview_f0 = [0.0 if (np.isnan(hz) or hz <= 0) else hz for hz in preview_f0]
-                    item['preview_f0'] = preview_f0
-                    # 清除缓存标记，让后续 update_item_icon 通过 _check_item_has_empty_data 精准重算
-                    item.pop('has_empty_data', None)
-
-                # 同时重新生成 preview_formants
-                if item.get('snd') and item.get('formant_data'):
-                    pts = int(self.last_params.get('pts', 11))
-                    strategy = self.last_params.get('formant_sample_strategy', '整段11点')
-                    _, preview_f1, preview_f2 = self.sample_formant_points(item, pts, strategy)
-                    item['preview_formants'] = {"f1": preview_f1, "f2": preview_f2}
+                self._recalculate_item_previews(item)
 
                 def finalize():
                     self.spectrogram_panel.plot_item_spectrogram()
