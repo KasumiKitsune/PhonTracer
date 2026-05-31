@@ -657,7 +657,7 @@ class AudioToolkitApp(ctk.CTk):
         except Exception:
             pass
 
-        self.title("PhonTracer - 独立音频处理套件")
+        self.title("PhonTracer Toolkit")
         self.geometry("1000x660")
         self.minsize(900, 600)
 
@@ -977,9 +977,9 @@ class AudioToolkitApp(ctk.CTk):
         self.main_shell.grid_columnconfigure(0, weight=1)
         self.main_shell.grid_rowconfigure(0, weight=1)
 
-        self.tab_merge_name = "合并长音频"
-        self.tab_split_name = "按字表拆分"
-        self.tab_project_name = "工程预览 / 压缩"
+        self.tab_merge_name = "音频合并（独立音频→长音频）"
+        self.tab_split_name = "音频拆分（长音频→独立音频）"
+        self.tab_project_name = "工程预览"
 
         self.tabview = ctk.CTkTabview(
             self.main_shell,
@@ -1004,8 +1004,13 @@ class AudioToolkitApp(ctk.CTk):
         for tab in (self.tab_merge, self.tab_split, self.tab_project):
             tab.configure(fg_color=self.colors["surface"])
 
-        # Patch segmented button to allow different text colors for selected (white) vs unselected (black) tabs
+        # Patch segmented button: left-align, pill-shaped, wider, fix text colors
         sb = self.tabview._segmented_button
+        # Configure overall size, pill shape (corner_radius), and doubled inner border (border_width=6)
+        sb.configure(width=480, height=40, corner_radius=20, border_width=6)
+        # Cleanly left-align the segmented button in the grid without stretching
+        sb.grid_configure(sticky="w", padx=20, pady=(12, 6))
+
         orig_sel = sb._select_button_by_value
         orig_unsel = sb._unselect_button_by_value
         sb._select_button_by_value = lambda v: (orig_sel(v), sb._buttons_dict[v].configure(text_color="#FFFFFF") if v in sb._buttons_dict else None)
@@ -1114,19 +1119,16 @@ class AudioToolkitApp(ctk.CTk):
         source_card.grid_columnconfigure(0, weight=1)
 
         ctk.CTkLabel(source_card, text="音频源", font=self.font_title, text_color=self.colors["text"]).grid(row=0, column=0, padx=20, pady=(16, 6), sticky="w")
-        source_hint = ctk.CTkLabel(source_card, text="先选择长音频，再输入字表并匹配切分。", font=self.font_small, text_color=self.colors["muted"], justify="left")
-        source_hint.grid(row=1, column=0, columnspan=2, padx=20, pady=(0, 14), sticky="ew")
-        self._bind_adaptive_wrap(source_hint, source_card, reserved_width=380, min_wrap=220)
 
         button_row = ctk.CTkFrame(source_card, fg_color="transparent")
-        button_row.grid(row=0, column=2, rowspan=2, padx=20, pady=16, sticky="e")
+        button_row.grid(row=0, column=2, padx=20, pady=16, sticky="e")
         self.btn_sel_source = self._make_button(button_row, "选择长音频", self.select_split_source, image=self.icons.get("audio"), width=142)
         self.btn_sel_source.pack(side=tk.LEFT, padx=(0, 10))
         self.btn_edit_segments = self._make_button(button_row, "段落编辑器", self.open_visual_splitter, tone="warning", image=self.icons.get("eye"), width=142)
         self.btn_edit_segments.pack(side=tk.LEFT)
 
         path_pill = ctk.CTkFrame(source_card, fg_color=self.colors["surface"], corner_radius=999, border_width=1, border_color=self.colors["border"])
-        path_pill.grid(row=2, column=0, columnspan=3, sticky="ew", padx=20, pady=(0, 16))
+        path_pill.grid(row=1, column=0, columnspan=3, sticky="ew", padx=20, pady=(0, 16))
         self.lbl_split_source = ctk.CTkLabel(path_pill, text="未选择音频文件", text_color=self.colors["muted"], font=self.font_small, anchor="w")
         self.lbl_split_source.pack(fill=tk.X, padx=14, pady=8)
 
@@ -1139,10 +1141,7 @@ class AudioToolkitApp(ctk.CTk):
         word_header.grid(row=0, column=0, sticky="ew", padx=20, pady=(18, 12))
         word_header.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(word_header, text="字表文本", font=self.font_title, text_color=self.colors["text"]).grid(row=0, column=0, sticky="w")
-        word_hint = ctk.CTkLabel(word_header, text="支持空格、逗号、顿号、换行分隔；【组别】和 # 开头行会被跳过。", font=self.font_small, text_color=self.colors["muted"], justify="left")
-        word_hint.grid(row=1, column=0, sticky="ew", pady=(4, 0))
-        self._bind_adaptive_wrap(word_hint, word_header, reserved_width=180, min_wrap=220)
-        self._make_button(word_header, "导入字表", self.import_wordlist, tone="primary", image=self.icons.get("import_white"), width=126).grid(row=0, column=1, rowspan=2, sticky="e")
+        self._make_button(word_header, "导入字表", self.import_wordlist, tone="primary", image=self.icons.get("import_white"), width=126).grid(row=0, column=1, sticky="e")
 
         self.txt_wordlist = ctk.CTkTextbox(
             word_card,
