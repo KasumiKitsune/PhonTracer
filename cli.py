@@ -465,7 +465,7 @@ PhonTracer 是一款高精度的声学声调格局分析工具。
 * pitch_ceiling: 音高分析上限（默认：600 Hz） -> 通用甜点区：600
 * voicing_threshold: 浊音阈值（默认：0.25） -> 针对汉语三声等低频“气泡音/嘎裂声”，建议手动调低至 0.15 ~ 0.20
 * trim_silence: 自动切除有效声学边界首尾低于 -50dB 的静音区（默认：True）
-* formant_max_hz: 最大共振峰频率（如 5500 Hz，默认针对不同发音人设置）
+* formant_max_hz: Praat Burg 共振峰分析上限（如 5500 Hz，不是 F2 数值上限）
 * formant_count: 共振峰数量（默认：5）
 * formant_window_length: 共振峰分析窗长（秒，默认：0.025）
 * formant_pre_emphasis: 共振峰预加重系数（Hz，默认：50.0）
@@ -530,7 +530,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
   * pitch_ceiling: Maximum F0 range (default: 600) -> Sweet spot: 600
   * voicing_threshold: Voicing tolerance (default: 0.25) -> Adjust lower (0.15~0.20) for creaky voice
   * trim_silence: Cut prefix/suffix silence under -50dB (default: True)
-  * formant_max_hz: Max formant frequency threshold in Hz (e.g. 5500)
+  * formant_max_hz: Praat Burg formant-analysis ceiling in Hz (e.g. 5500; not the F2 value limit)
   * formant_count: Number of formants to track (default: 5)
   * formant_window_length: Formant analysis window length in seconds (default: 0.025)
   * formant_pre_emphasis: Formant pre-emphasis filter value (default: 50.0)

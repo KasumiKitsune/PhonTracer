@@ -16,7 +16,7 @@ class FormantDetectionDialog(ctk.CTkToplevel):
         self.resizable(False, False)
 
         # 居中显示
-        width, height = 620, 580
+        width, height = 620, 640
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         x = (screen_width - width) // 2
@@ -90,9 +90,9 @@ class FormantDetectionDialog(ctk.CTkToplevel):
         options = [
             {
                 "id": "anti",
-                "name": "抗错位档 (优先避免 F1/F2 swap)",
+                "name": "低上限复核档 (保留低位 F1/F2)",
                 "params": self.anti_params,
-                "desc": "稍长的窗长与偏低上限频率，适合排查/抑制 F1 抢占 F2 问题。",
+                "desc": "稍长窗长与偏低分析上限，适合复核低位 F1/F2 是否被漏掉。",
                 "is_primary": False
             },
             {
@@ -134,7 +134,7 @@ class FormantDetectionDialog(ctk.CTkToplevel):
             )
             lbl_opt_title.pack(anchor="w")
 
-            param_text = f"最大频率: {int(p_max_hz)} Hz | 窗长: {p_win:.3f} s | 预加重: {int(p_pre)} Hz"
+            param_text = f"分析上限: {int(p_max_hz)} Hz | 窗长: {p_win:.3f} s | 预加重: {int(p_pre)} Hz"
             lbl_opt_val = ctk.CTkLabel(
                 info_frame,
                 text=param_text,
@@ -178,6 +178,16 @@ class FormantDetectionDialog(ctk.CTkToplevel):
                 command=lambda h=p_max_hz, c=p_count, w=p_win, p=p_pre: self.apply_and_close(h, c, w, p)
             )
             btn_apply.grid(row=0, column=1, sticky="e", padx=15, pady=15)
+
+        lbl_notice = ctk.CTkLabel(
+            card,
+            text="提示：分析上限是 Praat Burg 的 LPC 搜索上限，不是 F2 的显示上限。调高后轨迹可能换到高阶共振峰，应用后仍需对照声谱图复核。",
+            font=self.font_small,
+            text_color=("#6B7280", "#9CA3AF"),
+            wraplength=540,
+            justify="left"
+        )
+        lbl_notice.pack(fill="x", padx=20, pady=(8, 0))
 
         # 底部取消按钮
         btn_cancel = ctk.CTkButton(

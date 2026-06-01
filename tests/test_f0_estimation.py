@@ -228,3 +228,108 @@ def test_cli_detect_f0():
         # Pitch params should also be synchronized to item-level metadata
         assert speaker.items["item_1"]["pitch_floor"] == cli.params["pitch_floor"]
         assert speaker.items["item_1"]["pitch_ceiling"] == cli.params["pitch_ceiling"]
+
+def test_crop_formant_snippets_keeps_broader_sample_coverage():
+    class DummySound:
+        def __init__(self, index):
+            self.index = index
+
+        def get_total_duration(self):
+            return 0.1
+
+    snippets = [DummySound(index) for index in range(30)]
+    cropped = PhoneticsApp._crop_snippets_for_formant_analysis(DummyApp(), snippets)
+
+    assert len(cropped) == 24
+    assert cropped[0].index == 0
+    assert cropped[-1].index == 29
+
+def test_search_best_formant_config_includes_8000_hz_ceiling():
+    from unittest.mock import MagicMock
+
+    app = DummyApp()
+    app.root = MagicMock()
+    app.set_progress = MagicMock()
+    evaluated_batches = []
+
+    def evaluate_configs(snippets, configs):
+        evaluated_batches.append(configs)
+        return {
+            cfg: (
+                1.0 - abs(cfg[0] - 8000) / 10000.0,
+                0.9,
+                500.0,
+                1500.0
+            )
+            for cfg in configs
+        }
+
+    app._evaluate_configs_parallel = evaluate_configs
+    best_score, best_config, _ = PhoneticsApp._search_best_formant_config(app, [])
+
+    assert any(cfg[0] == 8000 for cfg in evaluated_batches[0])
+    assert best_score == 1.0
+    assert best_config[0] == 8000
+
+def test_recalculate_current_formant_stamps_item_level_params():
+    from unittest.mock import MagicMock, patch
+
+    class ImmediateThread:
+        def __init__(self, target, **kwargs):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    item = {
+        'snd': MagicMock(),
+        'start': 0.1,
+        'end': 0.4,
+        'pitch_data': {
+            'xs': np.array([0.1, 0.4]),
+            'freqs': np.array([150.0, 150.0])
+        },
+        'formant_max_hz': 4500.0
+    }
+    item['snd'].get_total_duration.return_value = 0.5
+
+    app = DummyApp()
+    app.items = {'item1': item}
+    app.last_params = {
+        'db': 60.0,
+        'skip_front': 0.0,
+        'pitch_floor': 75,
+        'pitch_ceiling': 600,
+        'voicing_threshold': 0.25,
+        'analysis_mode': 'formant',
+        'pts': 11,
+        'formant_max_hz': 8000.0,
+        'formant_count': 5,
+        'formant_window_length': 0.035,
+        'formant_pre_emphasis': 50.0,
+        'formant_sample_strategy': '整段11点'
+    }
+    app.root = MagicMock()
+    app.root.after.side_effect = lambda delay, callback: callback()
+    app.spectrogram_panel = MagicMock()
+    app.spectrogram_panel.current_item = item
+    app.tree_panel = MagicMock()
+    app.set_status = MagicMock()
+    app.mark_modified = MagicMock()
+    app.sample_formant_points = MagicMock(return_value=([], [], []))
+    app._build_worker_params = PhoneticsApp._build_worker_params.__get__(app, DummyApp)
+    app._stamp_formant_params_on_item = PhoneticsApp._stamp_formant_params_on_item.__get__(app, DummyApp)
+
+    formant_data = {
+        'xs': np.array([0.2]),
+        'f1': np.array([500.0]),
+        'f2': np.array([3000.0]),
+        'f3': np.array([4500.0])
+    }
+    with patch('threading.Thread', ImmediateThread), \
+         patch('modules.audio_core.extract_formants', return_value=formant_data):
+        PhoneticsApp.recalculate_current_item(app, recompute_formant_only=True)
+
+    assert item['formant_max_hz'] == 8000.0
+    assert item['formant_window_length'] == 0.035
+    assert item['analysis_mode'] == 'formant'

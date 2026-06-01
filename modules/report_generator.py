@@ -534,7 +534,7 @@ def generate_natural_language_summary(state: Dict[str, Any]) -> str:
         if spk_has_f0:
             desc_parts.append(f"声调分析采用 {p_floor:.0f}–{p_ceiling:.0f} Hz 的基频搜索范围，清浊判断阈值为 {v_thresh:.2f}")
         if spk_has_formant:
-            desc_parts.append(f"共振峰分析采用最大频率 {params.get('formant_max_hz', 5500.0):.0f} Hz，共振峰追踪个数 {params.get('formant_count', 5)}，分析窗长 {params.get('formant_window_length', 0.025):.3f} s，采样策略为 {params.get('formant_sample_strategy', '整段11点')}")
+            desc_parts.append(f"共振峰分析采用 Burg 分析上限 {params.get('formant_max_hz', 5500.0):.0f} Hz，共振峰追踪个数 {params.get('formant_count', 5)}，分析窗长 {params.get('formant_window_length', 0.025):.3f} s，采样策略为 {params.get('formant_sample_strategy', '整段11点')}")
             
         mode_desc = "与".join(desc_parts)
         spk_desc = f"{disp_name} 的{mode_desc}，时序分析等分点数为 {pts} 点"
@@ -794,7 +794,7 @@ def generate_markdown_report(teproj_path: str, state: Dict[str, Any], zip_ref: z
             lines.append(f"- **共振峰配置**:")
             if not spk_has_f0:
                 lines.append(f"  - 采样等分点数 (Pts): {params.get('pts', 11)}")
-            lines.append(f"  - 最大共振峰频率 (Max Formant Hz): {params.get('formant_max_hz', 5500.0):.1f} Hz")
+            lines.append(f"  - 共振峰分析上限 (Formant Ceiling): {params.get('formant_max_hz', 5500.0):.1f} Hz")
             lines.append(f"  - 共振峰追踪个数 (Formant Count): {params.get('formant_count', 5)}")
             lines.append(f"  - 采样窗长 (Window Length): {params.get('formant_window_length', 0.025):.3f} s")
             lines.append(f"  - 预加重高通截止频率 (Pre-emphasis Hz): {params.get('formant_pre_emphasis', 50.0):.1f} Hz")
@@ -844,7 +844,7 @@ def generate_markdown_report(teproj_path: str, state: Dict[str, Any], zip_ref: z
             item_f_strat = item.get("formant_sample_strategy", f_strat)
             
             if item_f_max != f_max:
-                diffs.append(f"最大共振峰频率: {item_f_max:.0f} Hz (多数值 {f_max:.0f} Hz)")
+                diffs.append(f"共振峰分析上限: {item_f_max:.0f} Hz (多数值 {f_max:.0f} Hz)")
             if item_f_count != f_count:
                 diffs.append(f"共振峰追踪个数: {item_f_count} (多数值 {f_count})")
             if item_f_win != f_win:
@@ -1028,7 +1028,7 @@ def write_excel_archive(teproj_path: str, state: Dict[str, Any], output_xlsx_pat
                 if item_floor != majority_floor: diffs.append(f"基频下限: {item_floor:.0f}Hz (多数值: {majority_floor:.0f}Hz)")
                 if item_ceiling != majority_ceiling: diffs.append(f"基频上限: {item_ceiling:.0f}Hz (多数值: {majority_ceiling:.0f}Hz)")
                 if item_thresh != majority_thresh: diffs.append(f"清浊阈值: {item_thresh:.2f} (多数值: {majority_thresh:.2f})")
-                if item_f_max != majority_f_max: diffs.append(f"最大共振峰频率: {item_f_max:.0f}Hz (多数值: {majority_f_max:.0f}Hz)")
+                if item_f_max != majority_f_max: diffs.append(f"共振峰分析上限: {item_f_max:.0f}Hz (多数值: {majority_f_max:.0f}Hz)")
                 if item_f_count != majority_f_count: diffs.append(f"共振峰追踪个数: {item_f_count} (多数值: {majority_f_count})")
                 if item_f_win != majority_f_win: diffs.append(f"共振峰窗长: {item_f_win:.3f}s (多数值: {majority_f_win:.3f}s)")
                 if item_f_pre != majority_f_pre: diffs.append(f"共振峰预加重: {item_f_pre:.1f}Hz (多数值: {majority_f_pre:.1f}Hz)")
@@ -1123,7 +1123,7 @@ def write_excel_archive(teproj_path: str, state: Dict[str, Any], output_xlsx_pat
     ws_summary = wb.add_worksheet("论文方法摘要")
     ws_summary.merge_range("A4:H10", generate_natural_language_summary(state), wb.add_format({'border': 1, 'bg_color': '#EFF6FF', 'text_wrap': True}))
     write_sheet("工程概览", ["概览指标", "指标取值"], overview_rows)
-    write_sheet("发音人参数", ["发音人姓名", "分析模式", "时序点数", "F0下限", "F0上限", "清浊阈值", "声能跌落", "排除声母", "最大共振峰", "追踪个数", "窗长", "预加重", "策略"], speaker_params_rows)
+    write_sheet("发音人参数", ["发音人姓名", "分析模式", "时序点数", "F0下限", "F0上限", "清浊阈值", "声能跌落", "排除声母", "共振峰分析上限", "追踪个数", "窗长", "预加重", "策略"], speaker_params_rows)
     write_sheet("条目明细", ["发音人", "组别", "条目ID", "标签", "路径", "模式", "是否排除", "定制下限", "定制上限", "定制阈值"], item_detail_rows)
     write_sheet("词级边界", ["发音人", "组别", "ID", "标签", "是否排除", "宏起点", "宏终点", "自起点", "自终点", "采样起点", "采样终点", "时长"], word_boundary_rows)
     write_sheet("字级边界", ["发音人", "组别", "ID", "标签", "是否排除", "序号", "音节", "字起点", "字终点", "切分点"], char_boundary_rows)

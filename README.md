@@ -119,7 +119,7 @@ flowchart LR
 
 | 参数 | 内部字段 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| 最大共振峰频率 | `formant_max_hz` | `5500` | 控制共振峰搜索范围 |
+| 共振峰分析上限 | `formant_max_hz` | `5500` | 控制 Praat Burg 搜索范围，并非 F2 数值上限 |
 | 共振峰数量 | `formant_count` | `5` | Praat Burg 分析参数 |
 | 窗长 | `formant_window_length` | `0.025` | 单位为秒 |
 | 预加重 | `formant_pre_emphasis` | `50` | 单位为赫兹 |

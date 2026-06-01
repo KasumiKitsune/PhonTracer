@@ -990,10 +990,10 @@ class PhoneticsApp:
         self.entry_formant_count.pack(side=tk.RIGHT)
         self.setup_entry_behavior(self.entry_formant_count, 'formant_count')
 
-        # 共振峰参数 row 2: Max Formant Hz (5500)
+        # 共振峰参数 row 2: Praat Burg 分析上限 (5500)
         row_formant_max = ctk.CTkFrame(self.formant_params_container, fg_color="transparent")
         row_formant_max.pack(fill=tk.X, padx=15, pady=4)
-        ctk.CTkLabel(row_formant_max, text=" 最大频率 (Hz):", image=self.icons.get("points"), compound="left", text_color="#374151", font=self.font_main).pack(side=tk.LEFT)
+        ctk.CTkLabel(row_formant_max, text=" 分析上限 (Hz):", image=self.icons.get("points"), compound="left", text_color="#374151", font=self.font_main).pack(side=tk.LEFT)
         self.btn_detect_formant = CTkReleaseButton(
             row_formant_max,
             text="检测",
@@ -1203,6 +1203,7 @@ class PhoneticsApp:
             pass
         try:
             item['formant_data'] = extract_formants(snd, self.last_params)
+            self._stamp_formant_params_on_item(item)
         except Exception:
             pass
         item.pop('preview_f0', None)
@@ -2032,6 +2033,7 @@ class PhoneticsApp:
                                         target_item['preview_f0'] = res.get('preview_f0', [])
                                         if 'formant_data' in res:
                                             target_item['formant_data'] = res['formant_data']
+                                            self._stamp_formant_params_on_item(target_item)
                                         if 'preview_formants' in res:
                                             target_item['preview_formants'] = res['preview_formants']
                                         # 如果是独立音频，还需要把 Cache 也更新了，防止下次加载又是旧的
@@ -2052,6 +2054,7 @@ class PhoneticsApp:
                                         target_item['preview_f0'] = res.get('preview_f0', [])
                                         if 'formant_data' in res:
                                             target_item['formant_data'] = res['formant_data']
+                                            self._stamp_formant_params_on_item(target_item)
                                         if 'preview_formants' in res:
                                             target_item['preview_formants'] = res['preview_formants']
                             except Exception: pass
@@ -2147,6 +2150,9 @@ class PhoneticsApp:
 
                     # 重新生成 formant
                     item['formant_data'] = get_segmented_formant(item['snd'], self.last_params)
+
+                if item.get('formant_data'):
+                    self._stamp_formant_params_on_item(item)
 
                 # 仅在非 recompute_formant_only 时才重新计算/定位边界，从而完美保护手动边界修改
                 if not recompute_formant_only and item.get('snd') and 'macro_start' in item and 'macro_end' in item:
@@ -4083,8 +4089,9 @@ class PhoneticsApp:
 
     def _crop_snippets_for_formant_analysis(self, snippets):
         import numpy as np
-        if len(snippets) > 10:
-            indices = np.linspace(0, len(snippets) - 1, 10, dtype=int)
+        # 共振峰上限对元音类型敏感；保留更多分散样本，避免少量抽样漏掉极端元音。
+        if len(snippets) > 24:
+            indices = np.linspace(0, len(snippets) - 1, 24, dtype=int)
             snippets = [snippets[idx] for idx in indices]
 
         cropped_snippets = []
@@ -4123,7 +4130,8 @@ class PhoneticsApp:
         import numpy as np
 
         # 3. Coarse search (并行计算)
-        coarse_candidates = [3500, 4000, 4500, 5000, 5500, 6000, 6500]
+        # Praat 官方说明儿童或较短声道发音人可能需要约 8000 Hz 的上限。
+        coarse_candidates = [3500, 4000, 4500, 5000, 5500, 6000, 6500, 7000, 7500, 8000, 8500]
         coarse_configs = [(h, 0.025, 50) for h in coarse_candidates]
         coarse_eval_results = self._evaluate_configs_parallel(snippets, coarse_configs)
 
@@ -4172,7 +4180,7 @@ class PhoneticsApp:
             best_coarse_h + 250,
             best_coarse_h + 500
         ]
-        fine_h_candidates = [h for h in fine_h_candidates if 3000 <= h <= 7000]
+        fine_h_candidates = [h for h in fine_h_candidates if 3000 <= h <= 9000]
 
         win_candidates = [0.020, 0.025, 0.030, 0.035]
         pre_candidates = [50, 80, 100]

@@ -483,7 +483,7 @@
                                     <ul class="space-y-2.5 text-xs text-slate-500 list-disc list-inside">
                                         <li><strong class="text-slate-700">发音人管理：</strong> 支持添加、切换与隔离多发音人工作区。开启“统一字表”后一次导入全局应用，避免多受试者实验的重复劳动。</li>
                                         <li><strong class="text-slate-700">分析模式切换 (核心功能)：</strong> 新增“声调/F0”与“共振峰/F1-F2”一键分析模式控件。切换模式时，系统会自动在后台独立缓存对应模式下的所有边界状态，确保已修剪的数据绝对不会丢失。</li>
-                                        <li><strong class="text-slate-700">全局参数折叠面板：</strong> 涵盖基频最低/最高限值、清浊阈值、共振峰最大频率及采样策略等算法控制项，一处修改，全局生效。</li>
+                                        <li><strong class="text-slate-700">全局参数折叠面板：</strong> 涵盖基频最低/最高限值、清浊阈值、共振峰分析上限及采样策略等算法控制项，一处修改，全局生效。</li>
                                     </ul>
                                 </div>
                             </div>
@@ -497,7 +497,7 @@
                                     <h3 class="font-bold text-slate-900 mb-1">中间面板：可视化精修车间</h3>
                                     <p class="text-sm text-slate-600 mb-3">显示被选中词项的声谱图、波形图及实时计算线条，提供超高精度的声学修正能力。</p>
                                     <ul class="space-y-2.5 text-xs text-slate-500 list-disc list-inside">
-                                        <li><strong class="text-slate-700">声谱叠加线：</strong> F0 模式下，声谱图叠加蓝色 F0 曲线；切换为共振峰模式后，纵轴频率自适应最大共振峰限制，并在图上高亮强调橘色 (F1) 和绿色 (F2) 的共振峰轨迹散点，自动隐藏基频纵轴。</li>
+                                        <li><strong class="text-slate-700">声谱叠加线：</strong> F0 模式下，声谱图叠加蓝色 F0 曲线；切换为共振峰模式后，纵轴频率自适应共振峰分析上限，并在图上高亮强调橘色 (F1) 和绿色 (F2) 的共振峰轨迹散点，自动隐藏基频纵轴。</li>
                                         <li><strong class="text-slate-700">起止红线与分节蓝线：</strong> 红色线条表示词项边界，蓝色虚线表示内部音节交界。可通过鼠标左右无障碍拖拽进行物理精细调整。</li>
                                         <li><strong class="text-slate-700">橡皮擦与高精度剔除点 (滚轮调节)：</strong>
                                             <ul class="list-decimal list-inside pl-4 mt-1 space-y-1 text-slate-500">
@@ -866,7 +866,7 @@ sys/tem</pre>
                                     PhonTracer 采用经典的 <strong>Praat Burg 法</strong> (<code>praat_burg</code> 引擎) 进行共振峰时序散点定位。精细分析需配置以下四个底层核心控制参数：
                                 </p>
                                 <ul class="list-disc list-inside space-y-1 text-slate-500 pl-2">
-                                    <li><strong class="text-slate-700">追踪共振峰数量与最大频率 (formant_max_hz)：</strong> 默认追踪 5 个。由于男声道长（约 17cm），共振频率间隔紧凑，上限推荐 <strong>5000 Hz</strong>；女声道短，共振频带宽，上限推荐 <strong>5500 Hz</strong>。设错会导致散点严重跑飞。</li>
+                                    <li><strong class="text-slate-700">追踪共振峰数量与分析上限 (formant_max_hz)：</strong> 默认追踪 5 个。该值是 Praat Burg 的搜索上限，不是 F2 数值上限。成年男性通常可从 <strong>5000 Hz</strong> 附近起步；成年女性通常可从 <strong>5500 Hz</strong> 附近起步；儿童或较短声道发音人可能需要 <strong>8000 Hz</strong> 左右。设错会改变 LPC 极点分配，使 F1/F2 换轨或误跟到高阶共振峰。</li>
                                     <li><strong class="text-slate-700">分析窗长 (formant_window_length)：</strong> 默认 0.025s (25毫秒)，在时间与频率分辨率间取得折中。</li>
                                     <li><strong class="text-slate-700">预加重起始频率 (formant_pre_emphasis)：</strong> 默认 50 Hz。对随频程高阻衰减 (每倍频程-6dB) 的高阶共振峰信号进行能量补偿，提升寻峰精度。</li>
                                     <li><strong class="text-slate-700">共振峰采样策略 (formant_sample_strategy)：</strong>
@@ -881,7 +881,7 @@ sys/tem</pre>
                                     紧元音（如 /i/）因舌位高且前，声学能量易堆积混淆，致使 F2 错误下跌跌入 F1。PhonTracer 估计工具提供多档参数方案：
                                     <ul class="list-decimal list-inside mt-1 pl-1 text-[11px] text-slate-700 space-y-0.5">
                                         <li><strong>系统推荐档：</strong> 均衡平顺，通用性高。</li>
-                                        <li><strong>抗错位档：</strong> 采用较长的分析窗长与偏低的最大频率限制，拉宽频率间隔阻隔，倾向平滑度，杜绝交叠错位。</li>
+                                        <li><strong>低上限复核档：</strong> 采用较长的分析窗长与偏低的分析上限，用于复核高上限是否漏掉低位 F1/F2。它不是对所有错位问题都更优，仍需结合声谱图判断。</li>
                                         <li><strong>高分辨率档：</strong> 使用极短的采样窗长，原汁原味还原母音内部的频率瞬态起伏。</li>
                                     </ul>
                                 </div>
@@ -1457,7 +1457,7 @@ exit
                                 <i data-lucide="chevron-down" class="w-4 h-4 text-slate-400 transform transition-transform" id="faq9-icon"></i>
                             </button>
                             <div class="p-5 pt-0 text-xs text-slate-600 leading-relaxed border-t border-slate-50 hidden" id="faq9">
-                                <strong>急救：</strong> 共振峰高度敏感于发音人和录音质量。请尝试点击参数面板上的“估计”按钮，优先应用“抗错位档”。此外，对于成年男性，建议将最大共振峰频率限制在 5000 Hz 左右，分析窗长设为 0.025-0.030 秒，并适当提高清浊判定阈值；对于女性和儿童则设为 5500 Hz 甚至更高。如果仅有个别跑飞的点，使用“剔除点”工具单点清除即可。
+                                <strong>急救：</strong> 共振峰高度敏感于发音人、元音类型和录音质量。请先点击参数面板上的“估计”按钮，把“系统推荐档”和“低上限复核档”都与声谱图共鸣带对照。成年男性通常可从 5000 Hz 左右起步，女性通常可从 5500 Hz 左右起步，儿童或较短声道发音人可能需要 8000 Hz 左右。分析上限过高或过低都可能导致 F1/F2 换轨；如果仅有个别跑飞点，再使用“剔除点”工具单点清除。
                             </div>
                         </div>
 
