@@ -20,6 +20,114 @@ from PIL import Image, ImageDraw, ImageTk
 
 logger = logging.getLogger(__name__)
 
+EXCLUSION_REASON_DETAIL_PLACEHOLDER = "可选：选择具体原因（默认使用大类）"
+EXCLUSION_REASON_CATEGORY_PLACEHOLDER = "请先选择上方原因分类"
+EXCLUSION_REASON_CUSTOM_CATEGORY = "其他原因"
+EXCLUSION_REASON_CATEGORIES = {
+    "录音质量问题": [
+        "录音中断或不完整",
+        "背景噪声过强",
+        "爆音、削波或音量失真",
+        "音量过低、信噪比不足",
+        "混入他人声音",
+        "串音、回声或设备异常",
+    ],
+    "发音内容问题": [
+        "发音错误",
+        "漏读、错读或多读",
+        "重复发音",
+        "目标音节不完整",
+        "口误、犹豫或自我修正",
+        "未按实验要求发音",
+    ],
+    "语音现象干扰": [
+        "咳嗽、笑声、吸气或清嗓",
+        "目标词与前后语音严重粘连",
+        "意外停顿过长",
+        "明显强调、拖长或唱读",
+        "沙哑、气声或耳语",
+    ],
+    "声学分析困难": [
+        "F0 无法可靠提取",
+        "倍频、半频或跳点过多",
+        "清浊判断异常",
+        "共振峰轨迹无法可靠识别",
+        "边界无法可靠确定",
+        "多音节内部切分不明确",
+        "有效分析区间过短",
+    ],
+    "实验与数据管理": [
+        "重复条目，仅保留其中一次",
+        "试读、练习或测试录音",
+        "发音人主动重录，旧版本作废",
+        "文件损坏或音频缺失",
+        "标签、分组或录音对象不匹配",
+    ],
+}
+EXCLUSION_REASON_LEGACY_ALIASES = {
+    "录音中断": ("录音质量问题", "录音中断或不完整"),
+    "背景噪声过强": ("录音质量问题", "背景噪声过强"),
+    "发音错误": ("发音内容问题", "发音错误"),
+}
+
+
+def format_exclusion_reason(category, detail="", custom_reason=""):
+    """将界面选择转换为可读、可回填的忽略原因文本。"""
+    if category == EXCLUSION_REASON_CUSTOM_CATEGORY:
+        return custom_reason.strip()
+    if category not in EXCLUSION_REASON_CATEGORIES:
+        return ""
+    detail = detail.strip()
+    if detail and detail != EXCLUSION_REASON_DETAIL_PLACEHOLDER:
+        return f"{category}：{detail}"
+    return category
+
+
+def parse_exclusion_reason(reason):
+    """从新旧版本的原因文本中恢复大类、二级原因和自定义文本。"""
+    reason = (reason or "").strip()
+    if not reason:
+        return "", EXCLUSION_REASON_DETAIL_PLACEHOLDER, ""
+    if reason in EXCLUSION_REASON_CATEGORIES:
+        return reason, EXCLUSION_REASON_DETAIL_PLACEHOLDER, ""
+    if reason in EXCLUSION_REASON_LEGACY_ALIASES:
+        category, detail = EXCLUSION_REASON_LEGACY_ALIASES[reason]
+        return category, detail, ""
+    for category, details in EXCLUSION_REASON_CATEGORIES.items():
+        for separator in ("：", ":"):
+            prefix = f"{category}{separator}"
+            if reason.startswith(prefix):
+                detail = reason[len(prefix):].strip()
+                if detail in details:
+                    return category, detail, ""
+        if reason in details:
+            return category, reason, ""
+    return EXCLUSION_REASON_CUSTOM_CATEGORY, EXCLUSION_REASON_DETAIL_PLACEHOLDER, reason
+
+
+def apply_custom_dropdown_arrow(dropdown):
+    """复用发音人列表的 Windows 高分屏下拉箭头修复。"""
+    try:
+        orig_draw_arrow = dropdown._draw_engine.draw_dropdown_arrow
+
+        def custom_draw_arrow(*args, **kwargs):
+            old_method = dropdown._draw_engine.preferred_drawing_method
+            dropdown._draw_engine.preferred_drawing_method = "polygon_shapes"
+            try:
+                result = orig_draw_arrow(*args, **kwargs)
+            finally:
+                dropdown._draw_engine.preferred_drawing_method = old_method
+            try:
+                dropdown._canvas.itemconfigure("dropdown_arrow", width=2)
+            except Exception:
+                pass
+            return result
+
+        dropdown._draw_engine.draw_dropdown_arrow = custom_draw_arrow
+        dropdown._canvas.delete("dropdown_arrow")
+    except Exception:
+        pass
+
 
 class CanvasButton(tk.Canvas):
     def __init__(self, parent, size=36, image=None, bg_color="white", active_bg="#3B82F6", hover_bg="#F3F4F6", active_hover="#2563EB", border_color="#E5E7EB", is_active=False, command=None):
@@ -231,7 +339,7 @@ class ExclusionReasonDialog(ctk.CTkToplevel):
     def __init__(self, parent, current_reason, font_title=None, font_main=None):
         super().__init__(parent)
         self.title("填写忽略原因")
-        self.geometry("400x250")
+        self.geometry("520x300")
         self.resizable(False, False)
         self.configure(fg_color=("#F9FAFB", "#1A1D24"))
         self.transient(parent)
@@ -242,8 +350,8 @@ class ExclusionReasonDialog(ctk.CTkToplevel):
         # Center the window
         self.update_idletasks()
         main_win = parent.winfo_toplevel()
-        x = main_win.winfo_rootx() + (main_win.winfo_width() - 400) // 2
-        y = main_win.winfo_rooty() + (main_win.winfo_height() - 250) // 2
+        x = main_win.winfo_rootx() + (main_win.winfo_width() - 520) // 2
+        y = main_win.winfo_rooty() + (main_win.winfo_height() - 300) // 2
         self.geometry(f"+{x}+{y}")
 
         self.font_title = font_title or ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold")
@@ -255,14 +363,19 @@ class ExclusionReasonDialog(ctk.CTkToplevel):
 
         # Title
         ctk.CTkLabel(
-            self, text="请选择或输入忽略该条目的原因：",
+            self, text="请选择忽略原因分类，并可补充具体原因：",
             font=self.font_title, text_color=("#111827", "#F9FAFB")
-        ).pack(anchor="w", padx=24, pady=(14, 10))
+        ).pack(anchor="w", padx=24, pady=(14, 4))
+        ctk.CTkLabel(
+            self, text="二级原因可以不选；未选择时将直接使用上方分类名称。",
+            font=self.font_main, text_color=("#6B7280", "#9CA3AF")
+        ).pack(anchor="w", padx=24, pady=(0, 8))
 
         self.reason_var = ctk.StringVar(value="")
-        common_reasons = ["录音中断", "发音错误", "背景噪声过强"]
+        self.detail_var = ctk.StringVar(value=EXCLUSION_REASON_DETAIL_PLACEHOLDER)
+        common_reasons = list(EXCLUSION_REASON_CATEGORIES) + [EXCLUSION_REASON_CUSTOM_CATEGORY]
 
-        # 2×2 radio button grid
+        # 2×3 radio button grid
         radio_outer = ctk.CTkFrame(self, fg_color="transparent")
         radio_outer.pack(fill=tk.X, padx=24, pady=(0, 8))
         radio_outer.columnconfigure(0, weight=1)
@@ -279,14 +392,26 @@ class ExclusionReasonDialog(ctk.CTkToplevel):
                 radio_outer, text=reason, value=reason, **rb_kwargs
             ).grid(row=row, column=col, sticky="w", padx=8, pady=5)
 
-        # "其他原因" radio — bottom-right cell of the 2×2 grid
-        ctk.CTkRadioButton(
-            radio_outer, text="其他原因：", value="custom", **rb_kwargs
-        ).grid(row=1, column=1, sticky="w", padx=8, pady=5)
-
-        # Custom entry (pill-shaped)
+        reason_input_frame = ctk.CTkFrame(self, fg_color="transparent")
+        reason_input_frame.pack(fill=tk.X, padx=24, pady=(0, 14))
+        self.detail_menu = ctk.CTkOptionMenu(
+            reason_input_frame,
+            values=[EXCLUSION_REASON_CATEGORY_PLACEHOLDER],
+            variable=self.detail_var,
+            font=self.font_main,
+            height=36,
+            corner_radius=18,
+            fg_color=("#F3F4F6", "#262930"),
+            button_color=("#F3F4F6", "#262930"),
+            button_hover_color=("#E5E7EB", "#374151"),
+            text_color=("#111827", "#F9FAFB"),
+            dropdown_fg_color=("#FFFFFF", "#262930"),
+            dropdown_text_color=("#111827", "#F9FAFB"),
+            dropdown_hover_color=("#EFF6FF", "#374151"),
+        )
+        apply_custom_dropdown_arrow(self.detail_menu)
         self.entry_custom = ctk.CTkEntry(
-            self,
+            reason_input_frame,
             font=self.font_main,
             height=36,
             corner_radius=18,
@@ -295,25 +420,44 @@ class ExclusionReasonDialog(ctk.CTkToplevel):
             border_color=("#D1D5DB", "#374151"),
             text_color=("#111827", "#F9FAFB"),
         )
-        self.entry_custom.pack(fill=tk.X, padx=24, pady=(0, 16))
 
-        # Set initial value
-        if current_reason in common_reasons:
-            self.reason_var.set(current_reason)
-        elif current_reason:
-            self.reason_var.set("custom")
-            self.entry_custom.insert(0, current_reason)
+        def update_reason_input(*_):
+            category = self.reason_var.get()
+            if category == EXCLUSION_REASON_CUSTOM_CATEGORY:
+                self.detail_menu.pack_forget()
+                self.entry_custom.pack(fill=tk.X)
+                return
+            self.entry_custom.pack_forget()
+            self.detail_menu.pack(fill=tk.X)
+            if category in EXCLUSION_REASON_CATEGORIES:
+                values = [EXCLUSION_REASON_DETAIL_PLACEHOLDER] + EXCLUSION_REASON_CATEGORIES[category]
+                self.detail_menu.configure(values=values, state="normal")
+                if self.detail_var.get() not in values:
+                    self.detail_var.set(EXCLUSION_REASON_DETAIL_PLACEHOLDER)
+            else:
+                self.detail_menu.configure(values=[EXCLUSION_REASON_CATEGORY_PLACEHOLDER], state="disabled")
+                self.detail_var.set(EXCLUSION_REASON_CATEGORY_PLACEHOLDER)
+
+        self.reason_var.trace_add("write", update_reason_input)
+        initial_category, initial_detail, initial_custom = parse_exclusion_reason(current_reason)
+        self.reason_var.set(initial_category)
+        if initial_category in EXCLUSION_REASON_CATEGORIES:
+            self.detail_var.set(initial_detail)
+        elif initial_category == EXCLUSION_REASON_CUSTOM_CATEGORY:
+            self.entry_custom.insert(0, initial_custom)
+        else:
+            update_reason_input()
 
         # Buttons row  (cancel left, confirm right — both pill, both blue)
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
-        btn_frame.pack(fill=tk.X, side=tk.BOTTOM, padx=24, pady=(0, 20))
+        btn_frame.pack(fill=tk.X, padx=24, pady=(4, 20))
 
         def on_confirm():
-            sel = self.reason_var.get()
-            if sel == "custom":
-                self.result = self.entry_custom.get().strip()
-            else:
-                self.result = sel
+            self.result = format_exclusion_reason(
+                self.reason_var.get(),
+                self.detail_var.get(),
+                self.entry_custom.get(),
+            )
             self.destroy()
 
         def on_cancel():

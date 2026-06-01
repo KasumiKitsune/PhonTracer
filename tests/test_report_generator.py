@@ -179,3 +179,101 @@ def test_local_param_differences_use_majority_included_items():
         assert "基频下限: 999Hz" not in shared_strings
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_excel_archive_contains_dashboard_status_columns_and_highlight_rules():
+    state = {
+        "version": "1.0",
+        "software_version": "1.2.0",
+        "speakers": {
+            "sp1": {
+                "name": "测试者",
+                "last_params": {
+                    "analysis_mode": "f0",
+                    "pitch_floor": 75,
+                    "pitch_ceiling": 300,
+                    "voicing_threshold": 0.25,
+                },
+                "items": {
+                    "common_1": {
+                        "label": "甲",
+                        "group": "测试组",
+                        "pitch_floor": 75,
+                        "pitch_ceiling": 300,
+                        "voicing_threshold": 0.25,
+                        "raw_start": 0.1,
+                        "raw_end": 0.4,
+                        "start": 0.1,
+                        "end": 0.4,
+                    },
+                    "common_2": {
+                        "label": "乙",
+                        "group": "测试组",
+                        "pitch_floor": 75,
+                        "pitch_ceiling": 300,
+                        "voicing_threshold": 0.25,
+                        "raw_start": 0.5,
+                        "raw_end": 0.8,
+                        "start": 0.5,
+                        "end": 0.8,
+                    },
+                    "special": {
+                        "label": "丙丁",
+                        "group": "测试组",
+                        "pitch_floor": 120,
+                        "pitch_ceiling": 300,
+                        "voicing_threshold": 0.25,
+                        "raw_start": 0.9,
+                        "raw_end": 1.3,
+                        "start": 0.95,
+                        "end": 1.3,
+                        "inner_splits": [1.1],
+                        "chars_bounds": [[0.95, 1.1], [1.1, 1.3]],
+                        "is_manual_edited": True,
+                        "split_confidence": 0.4,
+                        "split_warnings": ["no_clear_valley"],
+                    },
+                    "excluded": {
+                        "label": "戊",
+                        "group": "测试组",
+                        "start": 1.4,
+                        "end": 1.7,
+                        "is_excluded": True,
+                        "exclusion_reason": "发音错误",
+                    },
+                },
+            }
+        },
+    }
+
+    temp_dir = tempfile.mkdtemp()
+    try:
+        teproj_path = os.path.join(temp_dir, "dashboard.teproj")
+        with zipfile.ZipFile(teproj_path, "w") as z:
+            z.writestr("project.json", json.dumps(state, ensure_ascii=False))
+
+        xlsx_path = os.path.join(temp_dir, "dashboard.xlsx")
+        write_excel_archive(teproj_path, state, xlsx_path)
+
+        with zipfile.ZipFile(xlsx_path, "r") as z:
+            shared_strings = z.read("xl/sharedStrings.xml").decode("utf-8")
+            summary_sheet = z.read("xl/worksheets/sheet1.xml").decode("utf-8")
+            worksheet_xml = "\n".join(
+                z.read(name).decode("utf-8")
+                for name in z.namelist()
+                if name.startswith("xl/worksheets/sheet") and name.endswith(".xml")
+            )
+
+        assert "PhonTracer 实验方法与数据审计归档" in shared_strings
+        assert "质量审计概览" in shared_strings
+        assert "颜色图例与使用顺序" in shared_strings
+        assert "参数状态" in shared_strings
+        assert "边界状态" in shared_strings
+        assert "切分状态" in shared_strings
+        assert "局部参数偏离" in shared_strings
+        assert "最终边界与原始边界不同；含词内切分点" in shared_strings
+        assert "<drawing" in summary_sheet
+        assert "<hyperlinks>" in summary_sheet
+        assert "<conditionalFormatting" in worksheet_xml
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
