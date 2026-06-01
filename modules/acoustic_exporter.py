@@ -90,7 +90,7 @@ class AcousticChartExporter:
 
     def _ensure_available_groups(self):
         if not hasattr(self, 'available_groups') or not self.available_groups:
-            all_entries = self._extract_active_data(self.all_speakers if self.all_speakers else [self.active_speaker])
+            all_entries = self._extract_active_data(self.all_speakers if self.all_speakers else [self.active_speaker], filter_groups=False)
             group_counts = {}
             for entry in all_entries:
                 g = entry['group']
@@ -264,10 +264,10 @@ class AcousticChartExporter:
         return kwargs
 
     # --- CORE DATA EXTRACTION ENGINE ---
-    def _extract_active_data(self, speakers_list):
+    def _extract_active_data(self, speakers_list, filter_groups=True):
         analysis_mode = self.project_tree.app_state_params.get('analysis_mode', 'f0')
         if analysis_mode == 'formant':
-            return self._extract_active_formant_data(speakers_list)
+            return self._extract_active_formant_data(speakers_list, filter_groups=filter_groups)
         num_points = self.project_tree.app_state_params.get('pts', 11)
         data_entries = []
 
@@ -359,15 +359,16 @@ class AcousticChartExporter:
                 self._speaker_data_cache[speaker] = speaker_data_entries
             data_entries.extend(speaker_data_entries)
 
-        selected_groups = self.get_param('selected_groups', None)
-        if selected_groups is not None:
-            if isinstance(selected_groups, str):
-                selected_groups = [g.strip() for g in selected_groups.split(',') if g.strip()]
-            selected_groups = set(selected_groups)
-            data_entries = [e for e in data_entries if e['group'] in selected_groups]
-        elif hasattr(self, 'group_checkbox_vars') and self.group_checkbox_vars:
-            selected_groups = {g for g, var in self.group_checkbox_vars.items() if var.get()}
-            data_entries = [e for e in data_entries if e['group'] in selected_groups]
+        if filter_groups:
+            selected_groups = self.get_param('selected_groups', None)
+            if selected_groups is not None:
+                if isinstance(selected_groups, str):
+                    selected_groups = [g.strip() for g in selected_groups.split(',') if g.strip()]
+                selected_groups = set(selected_groups)
+                data_entries = [e for e in data_entries if e['group'] in selected_groups]
+            elif hasattr(self, 'group_checkbox_vars') and self.group_checkbox_vars:
+                selected_groups = {g for g, var in self.group_checkbox_vars.items() if var.get()}
+                data_entries = [e for e in data_entries if e['group'] in selected_groups]
 
         return data_entries
 
@@ -2032,7 +2033,7 @@ class AcousticChartExporter:
                 plt.close(fig)
         self._report_export_progress(1.0, "当前任务完成")
 
-    def _extract_active_formant_data(self, speakers_list):
+    def _extract_active_formant_data(self, speakers_list, filter_groups=True):
         num_points = self.project_tree.app_state_params.get('pts', 11)
         data_entries = []
 
@@ -2105,15 +2106,16 @@ class AcousticChartExporter:
                 self._speaker_data_cache[speaker] = speaker_data_entries
             data_entries.extend(speaker_data_entries)
 
-        selected_groups = self.get_param('selected_groups', None)
-        if selected_groups is not None:
-            if isinstance(selected_groups, str):
-                selected_groups = [g.strip() for g in selected_groups.split(',') if g.strip()]
-            selected_groups = set(selected_groups)
-            data_entries = [e for e in data_entries if e['group'] in selected_groups]
-        elif hasattr(self, 'group_checkbox_vars') and self.group_checkbox_vars:
-            selected_groups = {g for g, var in self.group_checkbox_vars.items() if var.get()}
-            data_entries = [e for e in data_entries if e['group'] in selected_groups]
+        if filter_groups:
+            selected_groups = self.get_param('selected_groups', None)
+            if selected_groups is not None:
+                if isinstance(selected_groups, str):
+                    selected_groups = [g.strip() for g in selected_groups.split(',') if g.strip()]
+                selected_groups = set(selected_groups)
+                data_entries = [e for e in data_entries if e['group'] in selected_groups]
+            elif hasattr(self, 'group_checkbox_vars') and self.group_checkbox_vars:
+                selected_groups = {g for g, var in self.group_checkbox_vars.items() if var.get()}
+                data_entries = [e for e in data_entries if e['group'] in selected_groups]
 
         return data_entries
 
@@ -3300,7 +3302,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
 
     def _init_group_filters(self):
         # Extract all unique group names across all speakers
-        all_entries = self._extract_active_data(self.all_speakers if self.all_speakers else [self.active_speaker])
+        all_entries = self._extract_active_data(self.all_speakers if self.all_speakers else [self.active_speaker], filter_groups=False)
         self.group_counts = {}
         for entry in all_entries:
             g = entry['group']
@@ -4611,7 +4613,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             self._force_live_extract = False
 
     def _update_group_filters(self):
-        all_entries = self._extract_active_data(self.all_speakers if self.all_speakers else [self.active_speaker])
+        all_entries = self._extract_active_data(self.all_speakers if self.all_speakers else [self.active_speaker], filter_groups=False)
         new_group_counts = {}
         for entry in all_entries:
             g = entry['group']

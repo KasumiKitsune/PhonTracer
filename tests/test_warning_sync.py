@@ -244,7 +244,8 @@ class TestWarningSync(unittest.TestCase):
 
         # Select the shadow item and perform soft exclusion via Backspace
         self.tree_selection = [shadow_iid]
-        self.panel.on_tree_backspace(None)
+        with patch.object(self.panel, 'prompt_exclusion_reason_dialog'):
+            self.panel.on_tree_backspace(None)
 
         # Under the new soft-exclusion logic, the item should be excluded, not physically deleted
         self.assertTrue(self.items_dict[item_id].get('is_excluded'))
@@ -284,6 +285,39 @@ class TestWarningSync(unittest.TestCase):
         # falls back and returns a valid 1-based index based on items_dict insertion order.
         idx = self.panel._get_item_index(item_id)
         self.assertEqual(idx, 1)
+
+    def test_exclusion_dialog_auto_popup(self):
+        """Test that on_tree_backspace automatically prompts for exclusion reason when ignoring items"""
+        item_id = "test_item_3"
+        self.items_dict[item_id] = {
+            'label': 'TestWord3',
+            'group': 'GroupC',
+            'start': 0.1,
+            'end': 0.9,
+            'is_excluded': False
+        }
+        self.panel.project_groups.append('GroupC')
+        self.panel.group_nodes['GroupC'] = 'node_group_c'
+        self.tree_nodes['node_group_c'] = {
+            'parent': '',
+            'text': 'GroupC',
+            'tags': ('group',),
+            'children': [item_id]
+        }
+        self.tree_nodes[item_id] = {
+            'parent': 'node_group_c',
+            'text': 'TestWord3',
+            'tags': ('item',),
+            'children': []
+        }
+
+        # Select the item
+        self.tree_selection = [item_id]
+
+        # Call on_tree_backspace, and mock prompt_exclusion_reason_dialog to make sure it gets called
+        with patch.object(self.panel, 'prompt_exclusion_reason_dialog') as mock_prompt:
+            self.panel.on_tree_backspace(None)
+            mock_prompt.assert_called_once_with([item_id], "")
 
 if __name__ == '__main__':
     unittest.main()

@@ -231,8 +231,9 @@ class ExclusionReasonDialog(ctk.CTkToplevel):
     def __init__(self, parent, current_reason, font_title=None, font_main=None):
         super().__init__(parent)
         self.title("填写忽略原因")
-        self.geometry("380x300")
+        self.geometry("400x250")
         self.resizable(False, False)
+        self.configure(fg_color=("#F9FAFB", "#1A1D24"))
         self.transient(parent)
         self.grab_set()
 
@@ -241,29 +242,60 @@ class ExclusionReasonDialog(ctk.CTkToplevel):
         # Center the window
         self.update_idletasks()
         main_win = parent.winfo_toplevel()
-        x = main_win.winfo_rootx() + (main_win.winfo_width() - 380) // 2
-        y = main_win.winfo_rooty() + (main_win.winfo_height() - 300) // 2
+        x = main_win.winfo_rootx() + (main_win.winfo_width() - 400) // 2
+        y = main_win.winfo_rooty() + (main_win.winfo_height() - 250) // 2
         self.geometry(f"+{x}+{y}")
 
         self.font_title = font_title or ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold")
         self.font_main = font_main or ctk.CTkFont(family="Microsoft YaHei", size=12)
 
-        ctk.CTkLabel(self, text="请选择或输入忽略该条目的原因：", font=self.font_title).pack(anchor="w", padx=20, pady=(15, 10))
+        # Top accent stripe
+        accent = ctk.CTkFrame(self, height=4, corner_radius=0, fg_color="#3B82F6")
+        accent.pack(fill=tk.X, side=tk.TOP)
+
+        # Title
+        ctk.CTkLabel(
+            self, text="请选择或输入忽略该条目的原因：",
+            font=self.font_title, text_color=("#111827", "#F9FAFB")
+        ).pack(anchor="w", padx=24, pady=(14, 10))
 
         self.reason_var = ctk.StringVar(value="")
         common_reasons = ["录音中断", "发音错误", "背景噪声过强"]
 
-        # Radio buttons for common reasons
-        for reason in common_reasons:
-            rb = ctk.CTkRadioButton(self, text=reason, variable=self.reason_var, value=reason, font=self.font_main)
-            rb.pack(anchor="w", padx=30, pady=5)
+        # 2×2 radio button grid
+        radio_outer = ctk.CTkFrame(self, fg_color="transparent")
+        radio_outer.pack(fill=tk.X, padx=24, pady=(0, 8))
+        radio_outer.columnconfigure(0, weight=1)
+        radio_outer.columnconfigure(1, weight=1)
 
-        # Custom input option
-        custom_rb = ctk.CTkRadioButton(self, text="其他原因：", variable=self.reason_var, value="custom", font=self.font_main)
-        custom_rb.pack(anchor="w", padx=30, pady=5)
+        rb_kwargs = dict(
+            variable=self.reason_var,
+            font=self.font_main,
+            text_color=("#374151", "#D1D5DB"),
+        )
+        for idx, reason in enumerate(common_reasons):
+            row, col = divmod(idx, 2)
+            ctk.CTkRadioButton(
+                radio_outer, text=reason, value=reason, **rb_kwargs
+            ).grid(row=row, column=col, sticky="w", padx=8, pady=5)
 
-        self.entry_custom = ctk.CTkEntry(self, font=self.font_main, width=280, placeholder_text="请输入自定义原因...")
-        self.entry_custom.pack(anchor="w", padx=55, pady=5)
+        # "其他原因" radio — bottom-right cell of the 2×2 grid
+        ctk.CTkRadioButton(
+            radio_outer, text="其他原因：", value="custom", **rb_kwargs
+        ).grid(row=1, column=1, sticky="w", padx=8, pady=5)
+
+        # Custom entry (pill-shaped)
+        self.entry_custom = ctk.CTkEntry(
+            self,
+            font=self.font_main,
+            height=36,
+            corner_radius=18,
+            placeholder_text="请输入自定义原因...",
+            fg_color=("#FFFFFF", "#262930"),
+            border_color=("#D1D5DB", "#374151"),
+            text_color=("#111827", "#F9FAFB"),
+        )
+        self.entry_custom.pack(fill=tk.X, padx=24, pady=(0, 16))
 
         # Set initial value
         if current_reason in common_reasons:
@@ -272,8 +304,9 @@ class ExclusionReasonDialog(ctk.CTkToplevel):
             self.reason_var.set("custom")
             self.entry_custom.insert(0, current_reason)
 
+        # Buttons row  (cancel left, confirm right — both pill, both blue)
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
-        btn_frame.pack(fill=tk.X, side=tk.BOTTOM, padx=20, pady=15)
+        btn_frame.pack(fill=tk.X, side=tk.BOTTOM, padx=24, pady=(0, 20))
 
         def on_confirm():
             sel = self.reason_var.get()
@@ -287,8 +320,23 @@ class ExclusionReasonDialog(ctk.CTkToplevel):
             self.result = None
             self.destroy()
 
-        ctk.CTkButton(btn_frame, text="取消", width=80, command=on_cancel).pack(side=tk.LEFT)
-        ctk.CTkButton(btn_frame, text="确定", width=80, command=on_confirm).pack(side=tk.RIGHT)
+        _btn_kw = dict(
+            height=38, corner_radius=19, font=self.font_main,
+            fg_color=("#EFF6FF", "#1E3A5F"),
+            text_color=("#1D4ED8", "#93C5FD"),
+            hover_color=("#DBEAFE", "#1E3A8A"),
+            border_width=1.5, border_color=("#3B82F6", "#2563EB"),
+        )
+        ctk.CTkButton(
+            btn_frame, text="取消", width=100, command=on_cancel, **_btn_kw
+        ).pack(side=tk.LEFT)
+        ctk.CTkButton(
+            btn_frame, text="确定", width=100, command=on_confirm,
+            height=38, corner_radius=19, font=self.font_main,
+            fg_color=("#3B82F6", "#2563EB"),
+            text_color="#FFFFFF",
+            hover_color=("#2563EB", "#1D4ED8"),
+        ).pack(side=tk.RIGHT)
 
 
 class ProjectTreePanel:
@@ -333,10 +381,10 @@ class ProjectTreePanel:
         right_sidebar.pack(side=tk.RIGHT, fill=tk.Y, padx=10, pady=10)
         right_sidebar.pack_propagate(False)
 
-        style = ttk.Style()
-        style.theme_use("default")
-        style.configure("Treeview", background="white", foreground="#374151", rowheight=34, fieldbackground="white", borderwidth=0, font=("Microsoft YaHei", 14))
-        style.map('Treeview', background=[('selected', '#DBEAFE')], foreground=[('selected', '#1E3A8A')])
+        self._tree_style = ttk.Style()
+        self._tree_style.theme_use("default")
+        self._tree_style.configure("Treeview", background="white", foreground="#374151", rowheight=34, fieldbackground="white", borderwidth=0, font=("Microsoft YaHei", 14))
+        self._tree_style.map('Treeview', background=[('selected', '#DBEAFE')], foreground=[('selected', '#1E3A8A')])
 
         frame_list = ctk.CTkFrame(right_sidebar, fg_color="white", corner_radius=10)
         frame_list.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(0, 5))
@@ -422,6 +470,8 @@ class ProjectTreePanel:
         self.tree.tag_configure('drag_target', background='#DBEAFE')
         self.tree.tag_configure('group', background='#F3F4F6')
         self.tree.tag_configure('excluded', foreground='#9CA3AF')
+        # Bind selection event to keep excluded items gray even when selected
+        self.tree.bind('<<TreeviewSelect>>', self._on_tree_select_style, add='+')
 
         self.tree.bind('<Double-1>', self.on_tree_double_click)
         self.tree.bind('<BackSpace>', self.on_tree_backspace)
@@ -533,7 +583,11 @@ class ProjectTreePanel:
         bbox = self.tree.bbox(iid, "#0")
         if not bbox: return
         x, y, w, h = bbox
-        old_name = self.tree.item(iid, 'text')
+        is_group = 'group' in self.tree.item(iid, 'tags')
+        if is_group:
+            old_name = iid[11:]
+        else:
+            old_name = self.tree.item(iid, 'text')
 
         edit_entry = tk.Entry(self.tree, font=("Microsoft YaHei", 12), borderwidth=1, relief="solid")
         edit_entry.insert(0, old_name)
@@ -549,7 +603,9 @@ class ProjectTreePanel:
                 edit_entry.destroy()
                 return
 
-            if 'group' in self.tree.item(iid, 'tags'):
+            was_selected = (iid in self.tree.selection())
+
+            if is_group:
                 if new_name in self.project_groups:
                     messagebox.showwarning("错误", "组名已存在")
                     edit_entry.destroy()
@@ -560,7 +616,7 @@ class ProjectTreePanel:
                 self.tree.item(iid, text=new_name)
                 for child in self.tree.get_children(iid):
                     if child in self.items: self.items[child]['group'] = new_name
-            elif 'item' in self.tree.item(iid, 'tags'):
+            else:
                 real_iid = iid[8:] if str(iid).startswith('warning_') else iid
                 w_iid = f"warning_{real_iid}"
                 if self.tree.exists(real_iid):
@@ -571,6 +627,12 @@ class ProjectTreePanel:
 
             if self.app:
                 self.app.mark_modified()
+            self.rebuild_tree()
+            if was_selected:
+                new_gid = f"group_node_{new_name}" if is_group else iid
+                if self.tree.exists(new_gid):
+                    self.tree.selection_set(new_gid)
+                    self.tree.see(new_gid)
             self.update_preview()
             self._debounce_zebra_stripes()
             edit_entry.destroy()
@@ -591,6 +653,27 @@ class ProjectTreePanel:
                         pass
         if self.on_clear_canvas:
             self.on_clear_canvas()
+
+    def _on_tree_select_style(self, event=None):
+        """Adjust selection foreground so excluded items remain gray when highlighted."""
+        selection = self.tree.selection()
+        has_excluded = any(
+            'excluded' in self.tree.item(s, 'tags') for s in selection if self.tree.exists(s)
+        )
+        if has_excluded:
+            # Mixed or all-excluded selection: use gray foreground for selected state
+            self._tree_style.map(
+                'Treeview',
+                background=[('selected', '#E5E7EB')],
+                foreground=[('selected', '#6B7280')]
+            )
+        else:
+            # Normal selection: restore blue foreground
+            self._tree_style.map(
+                'Treeview',
+                background=[('selected', '#DBEAFE')],
+                foreground=[('selected', '#1E3A8A')]
+            )
 
     def on_tree_select(self, event):
         selection = self.tree.selection()
@@ -644,16 +727,24 @@ class ProjectTreePanel:
             self.rebuild_tree()
             self.update_preview()
 
+            if target_excluded:
+                first_iid = items_to_toggle[0]
+                current_reason = self.items[first_iid].get('exclusion_reason', "")
+                self.prompt_exclusion_reason_dialog(items_to_toggle, current_reason)
+
     def prompt_exclusion_reason(self, real_iid):
         if real_iid not in self.items: return
         item = self.items[real_iid]
         current_reason = item.get('exclusion_reason', "")
+        self.prompt_exclusion_reason_dialog([real_iid], current_reason)
 
+    def prompt_exclusion_reason_dialog(self, items_to_toggle, current_reason):
         dialog = ExclusionReasonDialog(self.parent, current_reason, font_title=self.font_title, font_main=self.font_main)
         self.parent.wait_window(dialog)
 
         if dialog.result is not None:
-            item['exclusion_reason'] = dialog.result
+            for iid in items_to_toggle:
+                self.items[iid]['exclusion_reason'] = dialog.result
             if self.app:
                 self.app.mark_modified()
                 self.app.project_manager.trigger_auto_save()
@@ -691,7 +782,7 @@ class ProjectTreePanel:
         if groups_to_del:
             if messagebox.askyesno("确认彻底删除组", f"确定要从工程中彻底删除选中的 {len(groups_to_del)} 个组别及其所有音频/数据吗？\n此操作不可逆！"):
                 for gid in groups_to_del:
-                    group_name = self.tree.item(gid, 'text').split(' (')[0]
+                    group_name = gid[11:]
                     for child in self.tree.get_children(gid):
                         real_child = child[8:] if str(child).startswith('warning_') else child
                         self.items.pop(real_child, None)
@@ -810,12 +901,13 @@ class ProjectTreePanel:
                 parent_grp = None
 
             if parent_grp and parent_grp != self.warning_group_id:
-                group_name = self.tree.item(parent_grp, 'text')
+                group_name = parent_grp[11:]
                 for drag_item in reversed(self.tree_drag_items):
                     self.tree.move(drag_item, parent_grp, target_idx)
                     self.items[drag_item]['group'] = group_name
                 if self.app:
                     self.app.mark_modified()
+                self.rebuild_tree()
                 self.update_preview()
                 self._debounce_zebra_stripes()
         self.tree_drag_items = None
@@ -1229,7 +1321,7 @@ class ProjectTreePanel:
                     adv_menu.add_command(label="彻底删除此项...", command=lambda: self.permanently_delete_selected_items())
                     menu.add_cascade(label="高级操作", menu=adv_menu)
             elif 'group' in tags and iid != self.warning_group_id:
-                group_name = self.tree.item(iid, 'text').split(' (')[0]
+                group_name = iid[11:]
                 menu.add_command(label="忽略整组 (不参与导出)", command=lambda: self.toggle_group_exclusion(group_name, True))
                 menu.add_command(label="恢复整组 (参与导出)", command=lambda: self.toggle_group_exclusion(group_name, False))
                 menu.add_separator()
@@ -1256,7 +1348,7 @@ class ProjectTreePanel:
 
     def clear_group_items(self, gid):
         if not self.tree.exists(gid): return
-        group_name = self.tree.item(gid, 'text').split(' (')[0]
+        group_name = gid[11:]
         if messagebox.askyesno("清空确认", f"确定要清空组【{group_name}】中的所有音频和数据吗？"):
             iids_to_del = [iid for iid, item in list(self.items.items()) if item.get('group') == group_name]
             for iid in iids_to_del:
@@ -1265,13 +1357,17 @@ class ProjectTreePanel:
                     self.current_iid = None
                     if self.on_clear_canvas: self.on_clear_canvas()
 
+            if self.app:
+                self.app.mark_modified()
+                self.app.project_manager.trigger_auto_save()
+
             messagebox.showinfo("成功", f"组【{group_name}】中的 {len(iids_to_del)} 个项已清空。")
             self.rebuild_tree()
             self.update_preview()
 
     def delete_group_and_items(self, gid):
         if not self.tree.exists(gid): return
-        group_name = self.tree.item(gid, 'text').split(' (')[0]
+        group_name = gid[11:]
         if messagebox.askyesno("删除确认", f"确定要彻底删除组【{group_name}】及其中的所有音频和数据吗？"):
             iids_to_del = [iid for iid, item in list(self.items.items()) if item.get('group') == group_name]
             for iid in iids_to_del:
@@ -1283,6 +1379,10 @@ class ProjectTreePanel:
             if group_name in self.project_groups:
                 self.project_groups.remove(group_name)
             self.group_nodes.pop(group_name, None)
+
+            if self.app:
+                self.app.mark_modified()
+                self.app.project_manager.trigger_auto_save()
 
             self.rebuild_tree()
             self.update_preview()
@@ -3731,6 +3831,8 @@ class ProjectTreePanel:
 
             groups = {}
             for item_id, item in spk.items.items():
+                if item.get('is_excluded', False):
+                    continue
                 g = item.get('group', '导入内容')
                 if g not in groups:
                     groups[g] = []
@@ -3880,6 +3982,8 @@ class ProjectTreePanel:
 
                 groups = {}
                 for item_id, item in spk.items.items():
+                    if item.get('is_excluded', False):
+                        continue
                     g = item.get('group', '导入内容')
                     if g not in groups:
                         groups[g] = []

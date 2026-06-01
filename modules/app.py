@@ -1744,6 +1744,8 @@ class PhoneticsApp:
             return
         self.last_params['analysis_mode'] = mode
         for item in self.items.values():
+            if item.get('is_excluded', False):
+                continue
             self._save_item_mode_state(item, old_mode)
             # Switching mode should start from a clean boundary state in that mode.
             self._reset_item_mode_boundaries(item, mode)
@@ -4379,6 +4381,8 @@ class PhoneticsApp:
             }
 
             for i, (iid, item) in enumerate(items_snapshot):
+                if item.get('is_excluded', False):
+                    continue
                 snd = item.get('snd')
                 if not snd and item.get('path') and os.path.exists(item['path']):
                     try:

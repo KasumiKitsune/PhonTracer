@@ -1490,6 +1490,9 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
             pitch_freqs = pitch_data['freqs']
 
             for item in self.items.values():
+                if item.get('is_excluded', False):
+                    skipped += 1
+                    continue
                 if item.get('missing') or not item.get('success', True):
                     skipped += 1
                     continue
@@ -1525,6 +1528,9 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                 updated += 1
         else:
             for item in self.items.values():
+                if item.get('is_excluded', False):
+                    skipped += 1
+                    continue
                 if item.get('missing') or not item.get('success', True):
                     skipped += 1
                     continue
@@ -1681,7 +1687,9 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
             for item in self.items.values():
                 macro_start = item.get('macro_start')
                 macro_end = item.get('macro_end')
-                # Ignore placeholder/missing items
+                # Ignore excluded and placeholder/missing items
+                if item.get('is_excluded', False):
+                    continue
                 if macro_start is None or macro_end is None:
                     continue
                 mask = (times >= macro_start) & (times <= macro_end)
@@ -1691,7 +1699,9 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                 all_stable_f0.extend(stable_f0)
 
         else: # batch mode
-            valid_items = [it for it in self.items.values() if it.get('snd') or (it.get('path') and os.path.exists(it['path']))]
+            valid_items = [it for it in self.items.values()
+                           if not it.get('is_excluded', False)
+                           and (it.get('snd') or (it.get('path') and os.path.exists(it['path'])))]
             if not valid_items:
                 print(json.dumps({"success": False, "error": "No valid independent audio files found in project"}))
                 return

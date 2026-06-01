@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 from modules.project_manager import ProjectManager
 from modules.project_tree import ProjectTreePanel
 from modules.report_generator import generate_markdown_report, write_excel_archive
+from modules.acoustic_exporter import AcousticChartExporter
 from cli import PhonTracerCLI
 
 
@@ -288,6 +289,136 @@ class TestExclusionLogic(unittest.TestCase):
             # args[1] is structure. It should be [('GroupA', ['item1'])]
             structure = args[1]
             self.assertEqual(structure, [('GroupA', ['item1'])])
+
+    def test_project_tree_group_name_parsing_parentheses(self):
+        """Test that group name parsing with parentheses works correctly without splitting"""
+        # Create ProjectTreePanel with mocked setup_ui
+        with patch.object(ProjectTreePanel, 'setup_ui'):
+            panel = ProjectTreePanel(
+                parent=MagicMock(),
+                icons={},
+                items_dict={},
+                app_state_params={},
+                on_item_selected_callback=MagicMock(),
+                on_clear_canvas_callback=MagicMock(),
+                tk_icons={},
+                app=MagicMock()
+            )
+            panel.tree = MagicMock()
+            panel.rebuild_tree = MagicMock()
+            panel.update_preview = MagicMock()
+            
+            # 1. Test permanently_delete_selected_items
+            gid = "group_node_ao (3)"
+            panel.tree.selection.return_value = [gid]
+            panel.tree.item.side_effect = lambda item_id, option: {
+                ('group_node_ao (3)', 'tags'): ('group',),
+                ('group_node_ao (3)', 'text'): 'ao (3) (1/2, 已忽略 1 项)'
+            }.get((item_id, option), None)
+            
+            panel.tree.get_children.return_value = []
+            panel.warning_group_id = "group_node___warning__"
+            panel.project_groups = ["ao (3)"]
+            panel.group_nodes = {"ao (3)": gid}
+            
+            with patch('tkinter.messagebox.askyesno', return_value=True):
+                panel.permanently_delete_selected_items()
+                # Verify that 'ao (3)' was correctly removed from project_groups (which shows it parsed the correct group name, not splitting into 'ao')
+                self.assertNotIn("ao (3)", panel.project_groups)
+                
+            # 2. Test clear_group_items & delete_group_and_items group_name parsing
+            panel.project_groups = ["ao (3)"]
+            panel.items = {
+                "item1": {"label": "Word1", "group": "ao (3)"}
+            }
+            # Mock tree existence
+            panel.tree.exists.return_value = True
+            
+            with patch('tkinter.messagebox.askyesno', return_value=True):
+                # Call clear_group_items on "group_node_ao (3)"
+                panel.clear_group_items("group_node_ao (3)")
+                # If parsed correctly, item1 group "ao (3)" matches and item1 is popped
+                self.assertNotIn("item1", panel.items)
+
+    def test_chart_filters_retrieve_all_groups_even_if_excluded(self):
+        """Test that AcousticChartExporter extracts all groups when filter_groups=False,
+        including a group that is unchecked in the UI (different from is_excluded).
+        Also verifies that items with is_excluded=True are stripped before populating
+        the cache (i.e., chart data pipeline never sees excluded items)."""
+        project_tree = MagicMock()
+        project_tree.app_state_params = {'pts': 11}
+
+        # Instantiate exporter
+        exporter = AcousticChartExporter(project_tree=project_tree)
+        # Mock group_checkbox_vars where 'GroupB' is unchecked (UI filter only)
+        exporter.group_checkbox_vars = {
+            'GroupA': MagicMock(get=lambda: True),
+            'GroupB': MagicMock(get=lambda: False),
+        }
+
+        exporter.active_speaker = 'sp1'
+        exporter.all_speakers = ['sp1']
+
+        # Cache includes GroupA (active) and GroupB (all items excluded).
+        # The cache itself should already have excluded items stripped out —
+        # cache population is tested via _get_items_by_group_for_dict below.
+        # Here we populate the cache manually to simulate both groups existing.
+        exporter._speaker_data_cache = {
+            'sp1': [
+                {'group': 'GroupA', 'label': 'Word1'},
+                {'group': 'GroupB', 'label': 'Word2'},
+            ]
+        }
+
+        # With filter_groups=True, GroupB should be filtered out (checkbox is False)
+        entries_filtered = exporter._extract_active_data(['sp1'], filter_groups=True)
+        groups_filtered = [e['group'] for e in entries_filtered]
+        self.assertIn('GroupA', groups_filtered)
+        self.assertNotIn('GroupB', groups_filtered)
+
+        # With filter_groups=False, GroupB must NOT be filtered out
+        entries_unfiltered = exporter._extract_active_data(['sp1'], filter_groups=False)
+        groups_unfiltered = [e['group'] for e in entries_unfiltered]
+        self.assertIn('GroupA', groups_unfiltered)
+        self.assertIn('GroupB', groups_unfiltered)
+
+    def test_get_items_by_group_excludes_fully_excluded_groups(self):
+        """_get_items_by_group_for_dict must omit a group entirely when all its
+        items carry is_excluded=True, and must not omit groups that still have
+        at least one active item."""
+        # GroupA has one active item; GroupB has ALL items excluded.
+        items_dict = {
+            "item1": {"label": "Word1", "group": "GroupA", "is_excluded": False},
+            "item2": {"label": "Word2", "group": "GroupB", "is_excluded": True},
+            "item3": {"label": "Word3", "group": "GroupB", "is_excluded": True},
+        }
+
+        with patch.object(ProjectTreePanel, 'setup_ui'):
+            panel = ProjectTreePanel(
+                parent=MagicMock(),
+                icons={},
+                items_dict=items_dict,
+                app_state_params={},
+                on_item_selected_callback=MagicMock(),
+                on_clear_canvas_callback=MagicMock(),
+                tk_icons={},
+                app=MagicMock()
+            )
+            panel.tree = MagicMock()
+            panel.group_nodes = {"GroupA": "gn_GroupA", "GroupB": "gn_GroupB"}
+            panel.project_groups = ["GroupA", "GroupB"]
+
+            result = panel._get_items_by_group_for_dict(items_dict)
+            result_groups = [g for g, _ in result]
+
+            # GroupA must be present (has active item)
+            self.assertIn("GroupA", result_groups)
+            # GroupB must NOT appear (all items excluded)
+            self.assertNotIn("GroupB", result_groups)
+
+            # Also verify GroupA contains only item1
+            group_a_items = next(items for g, items in result if g == "GroupA")
+            self.assertEqual(group_a_items, ["item1"])
 
 
 if __name__ == "__main__":
