@@ -1172,12 +1172,28 @@ class ToolkitApp(ctk.CTk):
         for tab in (self.tab_merge, self.tab_split, self.tab_project):
             tab.configure(fg_color=self.colors["surface"])
 
-        # Patch segmented button: left-align, pill-shaped, wider, fix text colors
+        # Add the toolkit icon/logo and title in the top-left corner
+        self.logo_header = ctk.CTkFrame(self.tabview, fg_color="transparent")
+        self.logo_header.grid(row=0, column=0, sticky="w", padx=20, pady=(12, 6))
+        
+        if self.icons.get("logo"):
+            self.logo_img_label = ctk.CTkLabel(self.logo_header, text="", image=self.icons["logo"])
+            self.logo_img_label.pack(side=tk.LEFT)
+            
+        self.logo_title_label = ctk.CTkLabel(
+            self.logo_header, 
+            text="PhonTracer Toolkit", 
+            font=ctk.CTkFont(family=self.font_family, size=16, weight="bold"),
+            text_color=self.colors["text"]
+        )
+        self.logo_title_label.pack(side=tk.LEFT, padx=(10, 0))
+
+        # Patch segmented button: right-align, pill-shaped, wider, fix text colors
         sb = self.tabview._segmented_button
         # Configure overall size, pill shape (corner_radius), and doubled inner border (border_width=6)
         sb.configure(width=480, height=40, corner_radius=20, border_width=6)
-        # Cleanly left-align the segmented button in the grid without stretching
-        sb.grid_configure(sticky="w", padx=20, pady=(12, 6))
+        # Cleanly right-align the segmented button in the grid without stretching
+        sb.grid_configure(sticky="e", padx=20, pady=(12, 6))
 
         orig_sel = sb._select_button_by_value
         orig_unsel = sb._unselect_button_by_value
