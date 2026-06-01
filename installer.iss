@@ -9,7 +9,7 @@
 #define MyAppPublisher "KasumiKitsune"
 #define MyAppURL "https://github.com/KasumiKitsune/PhonTracer"
 #define MyAppExeName "PhonTracer.exe"
-#define ToolkitExeName "AudioToolkit.exe"
+#define ToolkitExeName "Toolkit.exe"
 #define MyAppAssocName "PhonTracer Project"
 #define MyAppAssocExt ".teproj"
 #define MyAppAssocKey "PhonTracer.Document"
@@ -58,7 +58,7 @@ Root: HKA; Subkey: "Software\Classes\Applications\{#MyAppExeName}\SupportedTypes
 [Icons]
 ; 在开始菜单中创建快捷方式
 Name: "{autoprograms}\{#MyAppName}\{#MyAppName} 声调提取分析器"; Filename: "{app}\{#MyAppExeName}"
-Name: "{autoprograms}\{#MyAppName}\AudioToolkit 音频工具箱"; Filename: "{app}\{#ToolkitExeName}"
+Name: "{autoprograms}\{#MyAppName}\Toolkit 工具箱"; Filename: "{app}\{#ToolkitExeName}"
 Name: "{autoprograms}\{#MyAppName}\PhonTracerCLI 命令行界面"; Filename: "{app}\PhonTracerCLI.exe"
 ; 在桌面上创建快捷方式
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon

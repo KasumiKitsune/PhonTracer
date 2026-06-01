@@ -34,15 +34,19 @@ def test_report_generation_from_sample():
     # Create temp directory for output
     temp_dir = tempfile.mkdtemp()
     try:
+        progress_updates = []
         files, base_name = export_reports_from_teproj(
             teproj_path,
             temp_dir,
             export_markdown=True,
             export_excel=True,
-            include_cache_details=True
+            include_cache_details=True,
+            progress_callback=lambda value, message: progress_updates.append((value, message)),
         )
         
         assert len(files) == 2
+        assert progress_updates[0] == (0.08, "正在读取工程元数据...")
+        assert progress_updates[-1] == (1.0, "报告导出完成")
         md_file = files[0] if files[0].endswith(".md") else files[1]
         xlsx_file = files[1] if files[1].endswith(".xlsx") else files[0]
         

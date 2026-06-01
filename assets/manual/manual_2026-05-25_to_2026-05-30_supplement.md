@@ -15,7 +15,7 @@
 - `modules/formant_detection_dialog.py`：共振峰参数估计结果弹窗。
 - `modules/project_import_dialog.py`：工程导入预览与覆盖/叠加选择。
 - `cli.py`：CLI 新命令、共振峰导出、AI 操作提示、直接命令启动、Windows 多进程兼容。
-- `audio_toolkit.py`：独立音频工具箱 UI、合并/拆分/工程预览、稳定性处理。
+- `toolkit.py`：独立工具箱 UI、合并/拆分/工程预览、稳定性处理。
 - `installer.iss` 与 `.github/workflows/package.yml`：Windows 安装包、`.teproj` 文件关联、GitHub Actions 打包产物。
 
 ## 一、建议插入现有手册的位置
@@ -27,7 +27,7 @@
 3. 现有第 5 章“算法揭秘与参数调优”应补充 F0 自动估计、共振峰参数、共振峰参数自动推荐。
 4. 现有第 6 章“数据导出与实验记录”应补充项目导入预览、覆盖/叠加导入、自动保存恢复细节、TextGrid 命名改进。
 5. 现有第 7 章“声学科学可视化工具箱”应大幅补充共振峰图表、浮动模式、分页预览、图像比例和像素设置。
-6. 现有第 8 章“AudioToolkit”应补充新版工具箱的工程预览、拖拽稳定性说明、段落编辑器细节。
+6. 现有第 8 章“Toolkit”应补充新版工具箱的工程预览、拖拽稳定性说明、段落编辑器细节。
 7. 现有第 9 章“CLI 命令行完全指南”应补充新增 CLI 命令、共振峰导出、`detect_f0` 预设应用、`import_batch_and_export` 批量导入。
 8. 现有第 10 章“疑难杂症”应补充自动保存恢复、共振峰 F1/F2 异常、图表预览卡顿、安装包和文件关联相关问题。
 
@@ -39,7 +39,7 @@
 2. 共振峰分析成为正式工作流：主界面增加“声调/F0”和“共振峰/F1-F2”模式切换；共振峰模式有独立参数、自动推荐、声谱图叠加显示、异常检查、表格导出和图表导出。
 3. 科学图表编辑器变成更接近“图表工作台”的工具：支持异步预览、取消预览、手动刷新、浮动模式、方向键翻页、图片比例控制、PNG 最小边像素控制、分页图册和更多共振峰图表。
 4. 工程文件更加可靠：`.teproj` 保存音频副本、F0 缓存和共振峰缓存；导入工程前会显示预览；当前工程非空时可选择覆盖或叠加导入；自动保存恢复逻辑也更谨慎。
-5. CLI 更适合 AI 和批处理：命令帮助改成 AI 友好的结构化说明，新增完整工程导入导出、自动保存、音频工具箱命令、F0 自动估计和共振峰导出。
+5. CLI 更适合 AI 和批处理：命令帮助改成 AI 友好的结构化说明，新增完整工程导入导出、自动保存、工具箱命令、F0 自动估计和共振峰导出。
 6. 打包分发更完整：Windows 安装包支持开始菜单快捷方式、可选桌面图标、`.teproj` 文件关联，以及中文安装界面资源。
 
 ## 三、安装包、启动方式和套件入口
@@ -49,13 +49,13 @@
 近期新增了 `installer.iss`，用于生成 Windows 安装包。安装包面向“套件”而不只是单个主程序，安装后包含：
 
 - `PhonTracer.exe`：主程序。
-- `AudioToolkit.exe`：独立音频工具箱。
+- `Toolkit.exe`：独立工具箱。
 - `PhonTracerCLI.exe`：命令行界面。
 
 安装包会在开始菜单中创建三个入口：
 
 - `PhonTracer 声调提取分析器`
-- `AudioToolkit 音频工具箱`
+- `Toolkit 工具箱`
 - `PhonTracerCLI 命令行界面`
 
 安装包还支持一个可选任务：创建桌面图标。这个选项默认不勾选，用户可以在安装过程中自行选择。
@@ -81,23 +81,23 @@
 
 `modules/about_dialog.py` 的关于窗口现在不仅能打开使用手册、GitHub 和检查更新，还提供两个快速启动入口：
 
-- “启动音频工具箱”
+- “启动工具箱”
 - “启动命令行界面”
 
 源码运行时：
 
-- 音频工具箱会通过当前 Python 解释器启动 `audio_toolkit.py`。
+- 工具箱会通过当前 Python 解释器启动 `toolkit.py`。
 - CLI 会启动 `cli.py`。如果当前解释器是 `pythonw.exe`，会自动替换为 `python.exe`，以便 CLI 有控制台窗口。
 
 打包运行时：
 
-- 音频工具箱会查找同目录下的 `AudioToolkit.exe`。
+- 工具箱会查找同目录下的 `Toolkit.exe`。
 - CLI 会查找同目录下的 `PhonTracerCLI.exe`。
 - Windows 下启动 CLI 时会创建新的控制台窗口。
 
 手册建议写法：
 
-> 如果你已经在主程序里，可以点击“关于”窗口中的“启动音频工具箱”或“启动命令行界面”，不必再去安装目录手动寻找对应程序。
+> 如果你已经在主程序里，可以点击“关于”窗口中的“启动工具箱”或“启动命令行界面”，不必再去安装目录手动寻找对应程序。
 
 ### 3.4 GitHub Actions 打包产物变化
 
@@ -761,7 +761,7 @@ PNG 最小边像素可选：
 
 > 如果字表来自 Excel、记事本或其他软件，文件开头可能带有不可见的 BOM。新版会自动忽略这个字符，避免第一个组名或第一个词识别失败。
 
-同样的处理也加入了 `audio_toolkit.py` 的字表解析。
+同样的处理也加入了 `toolkit.py` 的字表解析。
 
 ### 10.2 TextGrid 导出文件名更干净
 
@@ -883,17 +883,17 @@ PNG 最小边像素可选：
 - F0 模式显示“橡皮擦”。
 - 共振峰模式显示“剔除点”。
 
-## 十三、AudioToolkit 独立音频工具箱变化
+## 十三、Toolkit 独立工具箱变化
 
 ### 13.1 工具箱入口和定位
 
-`audio_toolkit.py` 继续作为独立音频前处理套件，近期 UI 和稳定性都有改动。它适合在进入主程序前完成：
+`toolkit.py` 继续作为独立音频前处理套件，近期 UI 和稳定性都有改动。它适合在进入主程序前完成：
 
 - 多个短音频合并成长音频。
 - 长音频按字表拆分成多个短音频。
 - 对 `.teproj` 工程文件做结构预览和另存。
 
-安装包和关于窗口都能启动 AudioToolkit。
+安装包和关于窗口都能启动 Toolkit。
 
 ### 13.2 合并长音频
 
@@ -937,7 +937,7 @@ PNG 最小边像素可选：
 
 ### 13.4 工程操作页
 
-AudioToolkit 新增或强化 `.teproj` 工程操作页：
+Toolkit 新增或强化 `.teproj` 工程操作页：
 
 - 选择工程文件。
 - 预览工程结构。
@@ -946,11 +946,11 @@ AudioToolkit 新增或强化 `.teproj` 工程操作页：
 
 手册建议：
 
-> 如果你只是想快速查看一个 `.teproj` 里到底包含哪些发音人和音频，而不想导入主程序，可以先用 AudioToolkit 的工程操作页预览。
+> 如果你只是想快速查看一个 `.teproj` 里到底包含哪些发音人和音频，而不想导入主程序，可以先用 Toolkit 的工程操作页预览。
 
 ### 13.5 拖拽导入稳定性说明
 
-近期代码中关闭了 AudioToolkit 的窗口级 `windnd` 拖拽入口，原因是 Windows + Tk 场景下曾出现 GIL 相关崩溃。当前代码保留内部列表拖动排序，但窗口级文件拖拽被标记为关闭。
+近期代码中关闭了 Toolkit 的窗口级 `windnd` 拖拽入口，原因是 Windows + Tk 场景下曾出现 GIL 相关崩溃。当前代码保留内部列表拖动排序，但窗口级文件拖拽被标记为关闭。
 
 手册建议谨慎表述：
 
@@ -1028,7 +1028,7 @@ autosave
 
 > `project_save` 不是交付命令。给别人、换电脑或归档时必须用 `project_export`。
 
-### 14.4 AudioToolkit 类 CLI 命令
+### 14.4 Toolkit 类 CLI 命令
 
 CLI 中新增：
 
@@ -1357,7 +1357,7 @@ project_export "D:/out/corpus_checked.teproj"
 
 答：图表编辑器会缓存当前项目数据。导入工程会替换底层数据，可能导致图表引用过期。请先关闭图表编辑器，再导入或叠加导入工程。
 
-### Q：AudioToolkit 拖不进文件怎么办？
+### Q：Toolkit 拖不进文件怎么办？
 
 答：请使用“添加音频”“选择长音频”或“选择工程文件”按钮。为了避免 Windows + Tk 下偶发崩溃，部分窗口级拖拽入口被关闭或不作为推荐路径。列表内部拖动排序仍可使用。
 
@@ -1379,7 +1379,7 @@ project_export "D:/out/corpus_checked.teproj"
 | `modules/data_utils.py` | 字表解析、TextGrid 命名、F0/共振峰导出文本和 Excel 公式辅助。 |
 | `modules/audio_core.py` | Praat F0、VAD、元音核、共振峰 Burg 提取。 |
 | `modules/spectrogram_panel.py` | 声谱图交互、播放、选区、F0 橡皮擦、共振峰剔除点。 |
-| `audio_toolkit.py` | 独立音频工具箱，合并、拆分、工程预览。 |
+| `toolkit.py` | 独立工具箱，合并、拆分、工程预览。 |
 | `installer.iss` | Windows 安装包、开始菜单入口、`.teproj` 文件关联。 |
 
 ## 二十、这次补充中需要谨慎润色的点
@@ -1392,7 +1392,7 @@ project_export "D:/out/corpus_checked.teproj"
 4. 共振峰异常警告是质量提示，不等同于统计学上的剔除标准。
 5. KDE 密度图适合样本量较大时使用，小样本下不要过度解释。
 6. `.teproj` 双击打开依赖 Windows 安装包注册文件关联；免安装 zip 版本可能没有系统级关联。
-7. AudioToolkit 窗口级拖拽不应作为稳定承诺，按钮导入才是推荐路径。
+7. Toolkit 窗口级拖拽不应作为稳定承诺，按钮导入才是推荐路径。
 8. `installer.iss` 默认版本号和应用内部版本号可能不同，最终文档应以发布 tag 或关于窗口为准。
 
 ## 二十一、按日期整理的变更摘要
@@ -1437,7 +1437,7 @@ project_export "D:/out/corpus_checked.teproj"
 
 - 优化筛选按钮对齐，移除部分取消按钮。
 - 优化 KDE 渲染速度。
-- 优化 AudioToolkit UI，并处理 Python 3.12 GIL 多线程崩溃问题。
+- 优化 Toolkit UI，并处理 Python 3.12 GIL 多线程崩溃问题。
 - `modules/acoustic_exporter.py` 大幅性能优化，使用 NumPy 向量化和批量拼接，减少图表生成时主线程卡顿。
 
 ### 2026-05-29
@@ -1462,7 +1462,7 @@ project_export "D:/out/corpus_checked.teproj"
 
 - 自动保存性能优化和安全崩溃恢复。
 - 添加 Inno Setup 配置，并更新 GitHub Actions 生成 Windows setup 安装包。
-- 关于窗口新增 AudioToolkit 和 CLI 快速启动按钮。
+- 关于窗口新增 Toolkit 和 CLI 快速启动按钮。
 - GitHub Actions Windows runner 使用绝对路径调用 Inno Setup，并对缺失文件通配做宽容处理。
 - 加入本地简体中文 Inno Setup 资源。
 - 实现四项优化和细节改进。
@@ -1504,4 +1504,4 @@ project_export "D:/out/corpus_checked.teproj"
 - `agent_guide`。
 - `import_batch_and_export`。
 - `project_export` 优先于 `project_save`。
-- AudioToolkit 按钮导入是稳定路径。
+- Toolkit 按钮导入是稳定路径。

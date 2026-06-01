@@ -294,8 +294,8 @@ def test_parse_wordlist_bom():
     assert groups[0]["group"] == "第一组"
     assert groups[0]["items"] == ["字1", "字2"]
     
-    # Also test parse_wordlist in audio_toolkit
-    from audio_toolkit import parse_wordlist as parse_wordlist_tk
+    # Also test parse_wordlist in toolkit
+    from toolkit import parse_wordlist as parse_wordlist_tk
     flat_words_tk = parse_wordlist_tk(raw_text)
     assert flat_words_tk == ["字1", "字2"]
 

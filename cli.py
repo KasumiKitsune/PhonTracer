@@ -3272,7 +3272,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
 
     def do_tool_merge(self, arg):
         """
-        Merge short audio files into a single WAV, like audio_toolkit's merge tab.
+        Merge short audio files into a single WAV, like toolkit's merge tab.
         Usage: tool_merge <output.wav> <gap_sec> <audio1> <audio2> ...
         """
         args = shlex.split(arg)
@@ -3314,7 +3314,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
 
     def do_tool_sort_batch(self, arg):
         """
-        Fuzzy-sort batch audio paths according to a wordlist, like audio_toolkit's auto-sort.
+        Fuzzy-sort batch audio paths according to a wordlist, like toolkit's auto-sort.
         Usage: tool_sort_batch <wordlist.txt> [audio1 audio2 ...]
         If audio paths are omitted, the current loaded batch paths are used.
         """
@@ -3355,7 +3355,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
 
     def do_tool_split(self, arg):
         """
-        Split a long audio into short WAV files by a wordlist, like audio_toolkit's split tab.
+        Split a long audio into short WAV files by a wordlist, like toolkit's split tab.
         Usage: tool_split <long_audio> <wordlist.txt> <output_dir> [buffer_sec] [trim]
         trim accepts true/false and defaults to true.
         """

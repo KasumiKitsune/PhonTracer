@@ -118,7 +118,7 @@ class AboutDialog(ctk.CTkToplevel):
         
         btn_toolkit = ctk.CTkButton(
             suite_frame,
-            text="🛠️ 启动音频工具箱",
+            text="🛠️ 启动工具箱",
             height=32,
             corner_radius=16,
             fg_color=("#F3F4F6", "#374151"),
@@ -222,18 +222,18 @@ class AboutDialog(ctk.CTkToplevel):
         # 检查是否是在打包后的环境中运行
         if getattr(sys, 'frozen', False):
             base_dir = os.path.dirname(sys.executable)
-            exe_path = os.path.join(base_dir, "AudioToolkit.exe")
+            exe_path = os.path.join(base_dir, "Toolkit.exe")
             if os.path.exists(exe_path):
                 subprocess.Popen([exe_path])
             else:
-                tk.messagebox.showerror("错误", f"未找到音频工具箱可执行程序：{exe_path}", parent=self)
+                tk.messagebox.showerror("错误", f"未找到工具箱可执行程序：{exe_path}", parent=self)
         else:
             base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            script_path = os.path.join(base_dir, "audio_toolkit.py")
+            script_path = os.path.join(base_dir, "toolkit.py")
             if os.path.exists(script_path):
                 subprocess.Popen([sys.executable, script_path])
             else:
-                tk.messagebox.showerror("错误", f"未找到音频工具箱脚本：{script_path}", parent=self)
+                tk.messagebox.showerror("错误", f"未找到工具箱脚本：{script_path}", parent=self)
 
     def launch_cli(self):
         import subprocess

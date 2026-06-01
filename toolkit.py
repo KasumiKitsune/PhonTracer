@@ -813,7 +813,7 @@ class ExportReportDialog(ctk.CTkToplevel):
 # 主程序 App
 # ==========================================
 
-class AudioToolkitApp(ctk.CTk):
+class ToolkitApp(ctk.CTk):
     def __init__(self):
         self._ui_thread_id = threading.get_ident()
         self.gui_queue = queue.Queue()
@@ -1576,25 +1576,46 @@ class AudioToolkitApp(ctk.CTk):
         
         start_safe_thread(run)
 
-    def set_loading(self, state, msg=""):
+    def set_loading(self, state, msg="", indeterminate=False):
         if getattr(self, "_ui_thread_id", None) is not None and threading.get_ident() != self._ui_thread_id:
-            self.after(0, lambda: self.set_loading(state, msg))
+            self.after(0, lambda: self.set_loading(state, msg, indeterminate))
             return
 
         if state:
             if hasattr(self, 'lbl_status'):
                 self.lbl_status.configure(text=msg or "处理中...", text_color="#1D4ED8")
             self.progress.grid()
-            self.progress.set(0.06)
+            self.progress.stop()
+            self.progress.configure(mode="indeterminate" if indeterminate else "determinate")
+            if indeterminate:
+                self.progress.start()
+            else:
+                self.progress.set(0.06)
             self.update_idletasks()
         else:
             if hasattr(self, 'lbl_status'):
                 self.lbl_status.configure(text="就绪" if not msg else msg, text_color="#047857")
+            self.progress.stop()
+            self.progress.configure(mode="determinate")
             self.progress.set(0)
             self.progress.grid_remove()
 
-    def update_progress(self, val):
-        self.after(0, lambda: self.progress.set(val))
+    def update_progress(self, val, msg=None):
+        def apply_update():
+            if msg and hasattr(self, 'lbl_status'):
+                self.lbl_status.configure(text=msg, text_color="#1D4ED8")
+            self.progress.stop()
+            self.progress.configure(mode="determinate")
+            self.progress.set(val)
+
+        self.after(0, apply_update)
+
+    def update_report_progress(self, _val, msg):
+        def apply_update():
+            if hasattr(self, 'lbl_status'):
+                self.lbl_status.configure(text=msg, text_color="#1D4ED8")
+
+        self.after(0, apply_update)
 
     def _send_files_to_main_app(self, files):
         target = "main.py"
@@ -2255,7 +2276,7 @@ class AudioToolkitApp(ctk.CTk):
         from modules.report_generator import export_reports_from_teproj
         
         def run():
-            self.set_loading(True, "正在生成研究报告与数据档案...")
+            self.set_loading(True, "正在生成研究报告与数据档案...", indeterminate=True)
             try:
                 export_markdown = (export_format in ("both", "md"))
                 export_excel = (export_format in ("both", "excel"))
@@ -2265,7 +2286,8 @@ class AudioToolkitApp(ctk.CTk):
                     output_dir,
                     export_markdown=export_markdown,
                     export_excel=export_excel,
-                    include_cache_details=include_cache
+                    include_cache_details=include_cache,
+                    progress_callback=self.update_report_progress,
                 )
                 
                 filenames = [os.path.basename(f) for f in exported_files]
@@ -2282,5 +2304,5 @@ class AudioToolkitApp(ctk.CTk):
         start_safe_thread(run)
 
 if __name__ == "__main__":
-    app = AudioToolkitApp()
+    app = ToolkitApp()
     app.mainloop()

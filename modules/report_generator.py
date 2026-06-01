@@ -5,7 +5,7 @@ import time
 import zipfile
 import hashlib
 import numpy as np
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, Callable, List, Optional, Tuple
 from collections import Counter
 
 # Field Interpretation Layer
@@ -1142,12 +1142,24 @@ def write_excel_archive(teproj_path: str, state: Dict[str, Any], output_xlsx_pat
     wb.close()
 
 
-def export_reports_from_teproj(teproj_path: str, output_dir: str, export_markdown: bool = True, export_excel: bool = True, include_cache_details: bool = False) -> Tuple[List[str], str]:
+def export_reports_from_teproj(
+    teproj_path: str,
+    output_dir: str,
+    export_markdown: bool = True,
+    export_excel: bool = True,
+    include_cache_details: bool = False,
+    progress_callback: Optional[Callable[[float, str], None]] = None,
+) -> Tuple[List[str], str]:
+    def report_progress(value: float, message: str) -> None:
+        if progress_callback:
+            progress_callback(value, message)
+
     if not os.path.exists(teproj_path):
         raise FileNotFoundError(f"工程文件不存在：{teproj_path}")
         
     os.makedirs(output_dir, exist_ok=True)
     
+    report_progress(0.08, "正在读取工程元数据...")
     from modules.project_manager import read_project_metadata_from_archive
     state, namelist = read_project_metadata_from_archive(teproj_path)
     
@@ -1156,6 +1168,7 @@ def export_reports_from_teproj(teproj_path: str, output_dir: str, export_markdow
     
     with zipfile.ZipFile(teproj_path, "r") as z:
         if export_markdown:
+            report_progress(0.18, "正在生成 Markdown 研究方法报告...")
             md_content = generate_markdown_report(teproj_path, state, z)
             md_path = os.path.join(output_dir, f"{base_name}_研究方法报告.md")
             with open(md_path, "w", encoding="utf-8") as f:
@@ -1163,8 +1176,10 @@ def export_reports_from_teproj(teproj_path: str, output_dir: str, export_markdow
             exported_files.append(md_path)
             
         if export_excel:
+            report_progress(0.58 if export_markdown else 0.22, "正在生成 Excel 数据档案...")
             xlsx_path = os.path.join(output_dir, f"{base_name}_研究档案.xlsx")
             write_excel_archive(teproj_path, state, xlsx_path, include_cache_details)
             exported_files.append(xlsx_path)
             
+    report_progress(1.0, "报告导出完成")
     return exported_files, base_name

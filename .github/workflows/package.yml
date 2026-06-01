@@ -57,7 +57,7 @@ jobs:
         mkdir -p PhonTracer_Suite
         ls -la
         mv PhonTracer.app PhonTracer_Suite/
-        mv AudioToolkit.app PhonTracer_Suite/
+        mv Toolkit.app PhonTracer_Suite/
         # Create a DMG file for macOS distribution
         for attempt in 1 2 3; do
           hdiutil detach "/Volumes/PhonTracer_Suite" -force 2>/dev/null || true

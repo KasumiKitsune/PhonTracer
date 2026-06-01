@@ -5,9 +5,9 @@ import json
 import zipfile
 import tempfile
 import shutil
-from audio_toolkit import AudioToolkitApp
+from toolkit import ToolkitApp
 
-class TestAudioToolkitTeprojTab(unittest.TestCase):
+class TestToolkitTeprojTab(unittest.TestCase):
     def setUp(self):
         # Create a mock temporary project file (.teproj)
         self.temp_dir = tempfile.mkdtemp()
@@ -50,10 +50,10 @@ class TestAudioToolkitTeprojTab(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.temp_dir)
 
-    @patch('audio_toolkit.ctk.CTk')
+    @patch('toolkit.ctk.CTk')
     def test_format_project_preview(self, mock_ctk):
         # Initialize app with mocked Tkinter to avoid starting GUI window
-        app = MagicMock(spec=AudioToolkitApp)
+        app = MagicMock(spec=ToolkitApp)
         app.font_title = MagicMock()
         app.font_main = MagicMock()
         
@@ -61,7 +61,7 @@ class TestAudioToolkitTeprojTab(unittest.TestCase):
         with zipfile.ZipFile(self.teproj_path, 'r') as zf:
             namelist = zf.namelist()
             
-        preview_text = AudioToolkitApp.format_project_preview(app, self.project_data, namelist)
+        preview_text = ToolkitApp.format_project_preview(app, self.project_data, namelist)
         
         self.assertIn("PHONTRACER", preview_text)
         self.assertIn(".teproj", preview_text)
@@ -73,19 +73,19 @@ class TestAudioToolkitTeprojTab(unittest.TestCase):
         self.assertIn("audio/", preview_text)
         self.assertIn("data/", preview_text)
 
-    @patch('audio_toolkit.ctk.CTk')
-    @patch('audio_toolkit.messagebox')
-    @patch('audio_toolkit.filedialog')
+    @patch('toolkit.ctk.CTk')
+    @patch('toolkit.messagebox')
+    @patch('toolkit.filedialog')
     def test_convert_project_to_zip(self, mock_dialog, mock_msgbox, mock_ctk):
         # Mock dialogs
         zip_output_path = os.path.join(self.temp_dir, "output.zip")
         mock_dialog.asksaveasfilename.return_value = zip_output_path
         
-        app = MagicMock(spec=AudioToolkitApp)
+        app = MagicMock(spec=ToolkitApp)
         app.loaded_teproj_path = self.teproj_path
         
         # Call convert_project_to_zip
-        AudioToolkitApp.convert_project_to_zip(app)
+        ToolkitApp.convert_project_to_zip(app)
         
         # Verify file copied to zip path
         self.assertTrue(os.path.exists(zip_output_path))

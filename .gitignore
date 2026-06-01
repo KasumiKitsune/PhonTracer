@@ -15,7 +15,7 @@
 !requirements.txt
 !main.py
 !cli.py
-!audio_toolkit.py
+!toolkit.py
 !ToneExtractor.spec
 !ToneExtractor_Suite.spec
 !installer.iss

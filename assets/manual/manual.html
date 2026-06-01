@@ -105,7 +105,7 @@
                 <a href="#algorithms" class="hover:text-brand-600 transition">算法参数</a>
                 <a href="#export" class="hover:text-brand-600 transition">数据导出</a>
                 <a href="#visualization" class="hover:text-brand-600 transition">可视化</a>
-                <a href="#audiotoolkit" class="hover:text-brand-600 transition">工具箱</a>
+                <a href="#toolkit" class="hover:text-brand-600 transition">工具箱</a>
                 <a href="#cli" class="hover:text-brand-600 transition">CLI与AI</a>
                 <a href="#faq" class="hover:text-brand-600 transition">疑难解答</a>
             </div>
@@ -216,7 +216,7 @@
                             <li><a href="#algorithms" class="flex items-center space-x-2 hover:text-brand-600 transition"><i data-lucide="sliders" class="w-4 h-4"></i><span>5. 算法与参数调优</span></a></li>
                             <li><a href="#export" class="flex items-center space-x-2 hover:text-brand-600 transition"><i data-lucide="download" class="w-4 h-4"></i><span>6. 数据导出与项目</span></a></li>
                             <li><a href="#visualization" class="flex items-center space-x-2 hover:text-brand-600 transition"><i data-lucide="line-chart" class="w-4 h-4"></i><span>7. 可视化工具箱</span></a></li>
-                            <li><a href="#audiotoolkit" class="flex items-center space-x-2 hover:text-brand-600 transition"><i data-lucide="music" class="w-4 h-4"></i><span>8. AudioToolkit</span></a></li>
+                            <li><a href="#toolkit" class="flex items-center space-x-2 hover:text-brand-600 transition"><i data-lucide="music" class="w-4 h-4"></i><span>8. Toolkit</span></a></li>
                             <li><a href="#cli" class="flex items-center space-x-2 hover:text-brand-600 transition"><i data-lucide="terminal" class="w-4 h-4"></i><span>9. CLI与AI助手</span></a></li>
                             <li><a href="#faq" class="flex items-center space-x-2 hover:text-brand-600 transition"><i data-lucide="help-circle" class="w-4 h-4"></i><span>10. 常见排雷指南</span></a></li>
                         </ul>
@@ -346,7 +346,7 @@
                             </div>
                             <div class="bg-slate-50 border border-slate-200 rounded-xl p-5">
                                 <div class="text-brand-600 mb-3"><i data-lucide="hammer" class="w-8 h-8"></i></div>
-                                <h3 class="font-bold text-slate-900 mb-2">2. 音频工具箱</h3>
+                                <h3 class="font-bold text-slate-900 mb-2">2. 工具箱</h3>
                                 <p class="text-xs text-slate-500">音频前处理套件。在导入核心程序前，用于极长音频切片或零碎音频拼接。</p>
                             </div>
                             <div class="bg-slate-50 border border-slate-200 rounded-xl p-5">
@@ -373,8 +373,8 @@
                                     <span class="text-brand-400">python</span> main.py
                                 </div>
                                 <div>
-                                    <span class="text-slate-500"># 启动音频工具箱</span><br>
-                                    <span class="text-brand-400">python</span> audio_toolkit.py
+                                    <span class="text-slate-500"># 启动工具箱</span><br>
+                                    <span class="text-brand-400">python</span> toolkit.py
                                 </div>
                                 <div>
                                     <span class="text-slate-500"># 启动命令行交互工具</span><br>
@@ -442,16 +442,16 @@
                                     如果你下载的是已打包的 <strong>Windows 安装包 (Setup 版本)</strong>，安装包内置 Inno Setup 引导，为系统关联了以下核心功能：
                                 </p>
                                 <ul class="list-disc list-inside space-y-1.5 text-slate-500 pl-2">
-                                    <li><strong class="text-slate-700">全家桶快捷方式：</strong> 开始菜单自动注册生成“PhonTracer 声调提取分析器”、“AudioToolkit 音频工具箱”和“PhonTracerCLI 命令行界面”三个便捷入口，亦可勾选生成桌面图标。</li>
+                                    <li><strong class="text-slate-700">全家桶快捷方式：</strong> 开始菜单自动注册生成“PhonTracer 声调提取分析器”、“Toolkit 工具箱”和“PhonTracerCLI 命令行界面”三个便捷入口，亦可勾选生成桌面图标。</li>
                                     <li><strong class="text-slate-700">双击秒开工程：</strong> 关联系统 <code>.teproj</code> 文件，后续直接双击实验工程即可瞬间启动并恢复工作区。</li>
                                     <li><strong class="text-slate-700">启动冲突解决：</strong> 若系统存在异常退出备份，双击外部工程时，主程序将采用高优先级工程加载逻辑，直接导入目标文件并自动清理旧备份，杜绝数据交叉污染。</li>
                                 </ul>
                                 <div class="bg-brand-50 border border-brand-100 rounded-xl p-4 text-brand-900">
                                     <strong class="font-semibold block mb-1 text-xs">关于窗口“快速穿梭传送门”机制：</strong>
-                                    在主程序菜单栏点击“关于”窗口，即可一键直接无缝启动 AudioToolkit 音频工具箱或 CLI 命令行。
+                                    在主程序菜单栏点击“关于”窗口，即可一键直接无缝启动 Toolkit 工具箱或 CLI 命令行。
                                     <ul class="list-disc list-inside space-y-1.5 mt-2 pl-1 text-[11px] text-slate-600">
                                         <li><strong>在源码开发环境中：</strong> 系统会自动检测 Python 环境。若后台检测到无终端回显的 <code>pythonw.exe</code> 解释器，在唤起 CLI 时会自动强行替换为标准前台 <code>python.exe</code>，确保终端可交互且回显正常。</li>
-                                        <li><strong>在已打包好的可执行文件环境中：</strong> 自动在同级目录下寻取 <code>AudioToolkit.exe</code> 与 <code>PhonTracerCLI.exe</code> 进程，并为 CLI 强行新建独立的 Windows CMD 控制台交互窗口。</li>
+                                        <li><strong>在已打包好的可执行文件环境中：</strong> 自动在同级目录下寻取 <code>Toolkit.exe</code> 与 <code>PhonTracerCLI.exe</code> 进程，并为 CLI 强行新建独立的 Windows CMD 控制台交互窗口。</li>
                                     </ul>
                                 </div>
                             </div>
@@ -1135,16 +1135,16 @@ sys/tem</pre>
                     </div>
                 </section>
 
-                <!-- Section 8: AudioToolkit -->
-                <section id="audiotoolkit" class="scroll-mt-24">
+                <!-- Section 8: Toolkit -->
+                <section id="toolkit" class="scroll-mt-24">
                     <div class="flex items-center space-x-2 text-slate-400 text-sm font-semibold uppercase mb-3">
                         <span>08 / 独立工具箱</span>
                     </div>
-                    <h2 class="text-3xl font-extrabold text-slate-900 tracking-tight font-serif mb-8 border-b pb-3">8. 进阶：AudioToolkit 音频前处理工具箱</h2>
+                    <h2 class="text-3xl font-extrabold text-slate-900 tracking-tight font-serif mb-8 border-b pb-3">8. 进阶：Toolkit 音频前处理工具箱</h2>
                     
                     <div class="space-y-6">
                         <p class="text-slate-600 leading-relaxed">
-                            当面对混乱无序的实验音频时（如时长一个多小时且语速多变的整轨、或是数百个命名杂乱的碎片文件），建议在载入核心软件前，使用 <code>AudioToolkit</code> 进行批量化的整理。
+                            当面对混乱无序的实验音频时（如时长一个多小时且语速多变的整轨、或是数百个命名杂乱的碎片文件），建议在载入核心软件前，使用 <code>Toolkit</code> 进行批量化的整理。
                         </p>
 
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -1184,7 +1184,7 @@ sys/tem</pre>
                                 </div>
                                 <div class="bg-amber-50 border border-amber-100 text-[10px] text-amber-900 p-3 rounded-xl block leading-relaxed mt-2">
                                     <strong>界面鼠标拖入稳定性保障锁：</strong>
-                                    在 Windows + Tkinter 多线程机制下，系统级鼠标直接拖入（如 <code>windnd</code> 库）极易产生 Python 全局锁 (GIL) 互锁，导致大样本导入时闪退。为绝对保证实验高稳定性，AudioToolkit 关闭了窗口级外部拖入，<strong>统一建议点击“添加音频”或“选择文件”按钮调用资源管理器对话框安全导入</strong>。
+                                    在 Windows + Tkinter 多线程机制下，系统级鼠标直接拖入（如 <code>windnd</code> 库）极易产生 Python 全局锁 (GIL) 互锁，导致大样本导入时闪退。为绝对保证实验高稳定性，Toolkit 关闭了窗口级外部拖入，<strong>统一建议点击“添加音频”或“选择文件”按钮调用资源管理器对话框安全导入</strong>。
                                 </div>
                             </div>
                         </div>
@@ -1413,7 +1413,7 @@ exit
                             </button>
                             <div class="p-5 pt-0 text-xs text-slate-600 leading-relaxed border-t border-slate-50 hidden" id="faq5">
                                 <strong>症状：</strong> 原以为会获得大一统标注，结果切散成许多零星小文件夹或者只有单层信息。<br>
-                                <strong>急救：</strong> 检查您当前运行的工作流模式。在“批量音频”模式下，软件本就不会强行拼接出大 TextGrid，而是会对每个独立的 wav 音频在其目录下生成一个同名的 TextGrid。若需要大整轨 TextGrid，建议首先使用 AudioToolkit 进行音频缝合，进而采用长音频工作流提取。另外注意，在多发音人模式下，无法合并导出同一张 TextGrid 标注层。
+                                <strong>急救：</strong> 检查您当前运行的工作流模式。在“批量音频”模式下，软件本就不会强行拼接出大 TextGrid，而是会对每个独立的 wav 音频在其目录下生成一个同名的 TextGrid。若需要大整轨 TextGrid，建议首先使用 Toolkit 进行音频缝合，进而采用长音频工作流提取。另外注意，在多发音人模式下，无法合并导出同一张 TextGrid 标注层。
                             </div>
                         </div>
 
@@ -1497,7 +1497,7 @@ exit
                         <!-- Accordion 13 -->
                         <div class="bg-white border border-slate-100 rounded-xl shadow-sm overflow-hidden transition">
                             <button class="w-full text-left p-5 flex justify-between items-center font-bold text-slate-900 text-sm hover:bg-slate-50/50" onclick="toggleFaq('faq13')">
-                                <span>Q13：在 Windows 系统下，为什么 AudioToolkit 窗口无法直接拖入文件？</span>
+                                <span>Q13：在 Windows 系统下，为什么 Toolkit 窗口无法直接拖入文件？</span>
                                 <i data-lucide="chevron-down" class="w-4 h-4 text-slate-400 transform transition-transform" id="faq13-icon"></i>
                             </button>
                             <div class="p-5 pt-0 text-xs text-slate-600 leading-relaxed border-t border-slate-50 hidden" id="faq13">
@@ -1528,7 +1528,7 @@ exit
                                     <td class="p-4">应用的主入口。分别对图形程序(GUI)和交互式终端控制台(CLI)进行指令流映射分配，支持单次单命令调用并回显。</td>
                                 </tr>
                                 <tr>
-                                    <td class="p-4 font-semibold text-slate-900">audio_toolkit.py</td>
+                                    <td class="p-4 font-semibold text-slate-900">toolkit.py</td>
                                     <td class="p-4">独立的音频前处理工具箱，掌控音频合并、拆分、列表排序及工程包轻量级版本结构预览。</td>
                                 </tr>
                                 <tr>

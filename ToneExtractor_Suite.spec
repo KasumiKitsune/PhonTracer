@@ -39,9 +39,9 @@ a = Analysis(
     optimize=0,
 )
 
-# --- 2. 分析音频工具箱 ---
+# --- 2. 分析工具箱 ---
 b = Analysis(
-    ['audio_toolkit.py'],
+    ['toolkit.py'],
     pathex=['.'],
     binaries=[],
     datas=[
@@ -105,13 +105,13 @@ exe1 = EXE(
     icon='assets/icon.ico',
 )
 
-# --- 4. 定义音频工具箱 EXE ---
+# --- 4. 定义工具箱 EXE ---
 exe2 = EXE(
     pyz_b,
     b.scripts,
     [],
     exclude_binaries=True,
-    name='AudioToolkit',
+    name='Toolkit',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -185,7 +185,7 @@ else:
         bundle_identifier='com.kasumikitsune.phonetracer',
     )
 
-    # 为 AudioToolkit 准备独立的 COLLECT 和 BUNDLE
+    # 为 Toolkit 准备独立的 COLLECT 和 BUNDLE
     coll2 = COLLECT(
         exe2,
         b.binaries,
@@ -194,11 +194,11 @@ else:
         strip=False,
         upx=False,
         upx_exclude=[],
-        name='AudioToolkit_App',
+        name='Toolkit_App',
     )
     app2 = BUNDLE(
         coll2,
-        name='AudioToolkit.app',
+        name='Toolkit.app',
         icon='assets/tool_icon.icns',
-        bundle_identifier='com.kasumikitsune.audiotoolkit',
+        bundle_identifier='com.kasumikitsune.toolkit',
     )
