@@ -9,6 +9,7 @@ import numpy as np
 import threading
 import traceback
 import time
+from .version import __version__
 
 MAX_ARCHIVE_MEMBERS = 10000
 MAX_ARCHIVE_MEMBER_BYTES = 2 * 1024 * 1024 * 1024
@@ -435,8 +436,12 @@ class ProjectManager:
         with self._save_lock:
             state = {
                 "version": "1.0",
+                "software_version": __version__,
+                "report_format_version": "1.0",
+                "save_time": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
                 "active_speaker_id": self.app.speaker_manager.active_speaker_id,
                 "export_numbering_rule": getattr(self.app, "export_numbering_rule_value", "continuous"),
+                "trim_silence": self.app.switch_trim_silence.get() if hasattr(self.app, "switch_trim_silence") else True,
                 "speakers": {}
             }
 
@@ -988,3 +993,9 @@ class ProjectManager:
     def _restore_app_state(self, state):
         if hasattr(self.app, "export_numbering_rule_value"):
             self.app.export_numbering_rule_value = state.get("export_numbering_rule", "continuous")
+        if hasattr(self.app, "switch_trim_silence") and "trim_silence" in state:
+            trim_val = state.get("trim_silence", True)
+            if trim_val:
+                self.app.switch_trim_silence.select()
+            else:
+                self.app.switch_trim_silence.deselect()

@@ -39,6 +39,7 @@ import parselmouth
 from PIL import Image, ImageTk
 from modules.data_utils import fuzzy_match_word_to_path
 from modules.project_manager import read_project_metadata_from_archive
+from modules.report_generator import get_pitch_floor, get_pitch_ceiling
 
 try:
     import sounddevice as sd
@@ -662,6 +663,150 @@ class VisualSplitter(ctk.CTkToplevel):
                 })
             self.destroy()
             self.callback(kept_segments, True, len(self.deleted_indices))
+
+
+class ExportReportDialog(ctk.CTkToplevel):
+    def __init__(self, parent, callback):
+        super().__init__(parent)
+        self.parent = parent
+        self.callback = callback
+        
+        self.title("导出研究方法报告与数据档案")
+        self.resizable(False, False)
+        
+        # Center the dialog
+        width, height = 450, 320
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        x = (screen_width - width) // 2
+        y = (screen_height - height) // 2
+        self.geometry(f"{width}x{height}+{x}+{y}")
+        
+        self.configure(fg_color=("#FFFFFF", "#1A1D24"))
+        
+        # Modal configuration
+        self.transient(parent)
+        self.grab_set()
+        self.focus_set()
+        
+        # Accent strip
+        accent_strip = ctk.CTkFrame(self, height=4, fg_color="#10B981", corner_radius=0)
+        accent_strip.pack(fill="x", side="top")
+        
+        self.setup_ui()
+        
+    def setup_ui(self):
+        # Card container
+        card = ctk.CTkFrame(self, fg_color=("#FFFFFF", "#262930"), corner_radius=12, border_width=1, border_color=("#E5E7EB", "#374151"))
+        card.pack(fill="both", expand=True, padx=20, pady=(15, 20))
+        
+        # Title label
+        lbl_title = ctk.CTkLabel(
+            card, 
+            text="📑 导出配置", 
+            font=ctk.CTkFont(family="Microsoft YaHei", size=16, weight="bold"),
+            text_color=("#111827", "#F9FAFB")
+        )
+        lbl_title.pack(anchor="w", padx=20, pady=(15, 10))
+        
+        # Radio variable for export format selection
+        self.export_format_var = ctk.StringVar(value="both")
+        
+        # Options frame
+        options_frame = ctk.CTkFrame(card, fg_color="transparent")
+        options_frame.pack(fill="x", padx=20, pady=5)
+        
+        # Radio buttons
+        r_both = ctk.CTkRadioButton(
+            options_frame, 
+            text="同时导出 Markdown 与 Excel (推荐)", 
+            variable=self.export_format_var, 
+            value="both",
+            font=ctk.CTkFont(family="Microsoft YaHei", size=12)
+        )
+        r_both.pack(anchor="w", pady=6)
+        
+        r_md = ctk.CTkRadioButton(
+            options_frame, 
+            text="仅导出 Markdown 报告 (*.md)", 
+            variable=self.export_format_var, 
+            value="md",
+            font=ctk.CTkFont(family="Microsoft YaHei", size=12)
+        )
+        r_md.pack(anchor="w", pady=6)
+        
+        r_excel = ctk.CTkRadioButton(
+            options_frame, 
+            text="仅导出 Excel 数据归档 (*.xlsx)", 
+            variable=self.export_format_var, 
+            value="excel",
+            font=ctk.CTkFont(family="Microsoft YaHei", size=12)
+        )
+        r_excel.pack(anchor="w", pady=6)
+        
+        # Divider line
+        divider = ctk.CTkFrame(card, height=1, fg_color=("#E5E7EB", "#374151"))
+        divider.pack(fill="x", padx=20, pady=10)
+        
+        # Checkbox for cache details
+        self.include_cache_var = ctk.BooleanVar(value=False)
+        self.cb_cache = ctk.CTkCheckBox(
+            card,
+            text="Excel 中附带完整 F0 / 共振峰缓存明细",
+            variable=self.include_cache_var,
+            font=ctk.CTkFont(family="Microsoft YaHei", size=12),
+            fg_color="#10B981",
+            hover_color="#059669"
+        )
+        self.cb_cache.pack(anchor="w", padx=20, pady=5)
+        
+        # If user selects only markdown, disable the cache details checkbox
+        def on_format_change(*args):
+            if self.export_format_var.get() == "md":
+                self.cb_cache.configure(state="disabled")
+                self.include_cache_var.set(False)
+            else:
+                self.cb_cache.configure(state="normal")
+                
+        self.export_format_var.trace_add("write", on_format_change)
+        
+        # Buttons frame
+        buttons_frame = ctk.CTkFrame(card, fg_color="transparent")
+        buttons_frame.pack(fill="x", side="bottom", padx=20, pady=15)
+        
+        btn_cancel = ctk.CTkButton(
+            buttons_frame,
+            text="取消",
+            width=100,
+            height=32,
+            corner_radius=16,
+            fg_color=("#F3F4F6", "#374151"),
+            text_color=("#1F2937", "#E5E7EB"),
+            hover_color=("#E5E7EB", "#4B5563"),
+            font=ctk.CTkFont(family="Microsoft YaHei", size=12),
+            command=self.destroy
+        )
+        btn_cancel.pack(side="left")
+        
+        btn_ok = ctk.CTkButton(
+            buttons_frame,
+            text="确定",
+            width=100,
+            height=32,
+            corner_radius=16,
+            fg_color=("#10B981", "#059669"),
+            hover_color=("#059669", "#047857"),
+            text_color="white",
+            font=ctk.CTkFont(family="Microsoft YaHei", size=12, weight="bold"),
+            command=self.on_confirm
+        )
+        btn_ok.pack(side="right")
+        
+    def on_confirm(self):
+        fmt = self.export_format_var.get()
+        include_cache = self.include_cache_var.get()
+        self.destroy()
+        self.callback(fmt, include_cache)
 
 
 # ==========================================
@@ -1649,8 +1794,18 @@ class AudioToolkitApp(ctk.CTk):
             tone="purple",
             image=self.icons.get("tab_batch"),
         )
-        self.btn_convert_zip.pack(fill=tk.X)
+        self.btn_convert_zip.pack(fill=tk.X, pady=(0, 10))
         self.btn_convert_zip.configure(state="disabled")  # Disabled until a project is loaded
+
+        self.btn_export_report = self._make_button(
+            actions,
+            "导出研究方法报告",
+            self.show_export_report_dialog,
+            tone="success",
+            image=self.icons.get("tab_batch"),
+        )
+        self.btn_export_report.pack(fill=tk.X)
+        self.btn_export_report.configure(state="disabled")
 
         info_box = ctk.CTkFrame(left_panel, fg_color=self.colors["surface"], corner_radius=14, border_width=1, border_color=self.colors["border"])
         info_box.pack(fill=tk.X, padx=20, pady=(0, 18))
@@ -1849,7 +2004,7 @@ class AudioToolkitApp(ctk.CTk):
             ctk.CTkLabel(param_frame, text="分析引擎参数", font=ctk.CTkFont(family="Microsoft YaHei", size=12, weight="bold"), text_color="#111827").grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=5)
             last_params = spk.get("last_params", {})
             if last_params:
-                self.create_detail_row(param_frame, 1, "基频范围 (F0 Range):", f"{last_params.get('f0_min', 75)} Hz ~ {last_params.get('f0_max', 600)} Hz")
+                self.create_detail_row(param_frame, 1, "基频范围 (F0 Range):", f"{get_pitch_floor(last_params):.0f} Hz ~ {get_pitch_ceiling(last_params):.0f} Hz")
                 self.create_detail_row(param_frame, 2, "时序分析点数 (Pts):", str(last_params.get('pts', 11)))
                 self.create_detail_row(param_frame, 3, "分析算法:", last_params.get('method', 'ac'))
             else:
@@ -1958,11 +2113,13 @@ class AudioToolkitApp(ctk.CTk):
     def _finish_project_preview(self, project_data, namelist):
         self.display_project_preview(project_data, namelist)
         self.btn_convert_zip.configure(state="normal")
+        self.btn_export_report.configure(state="normal")
 
     def _show_project_preview_error(self, message):
         err_msg = f"❌ 无法解析工程文件: {message}"
         self.show_error_placeholder(err_msg)
         self.btn_convert_zip.configure(state="disabled")
+        self.btn_export_report.configure(state="disabled")
         self.lbl_proj_file.configure(text="解析失败", text_color=self.colors["danger"])
         messagebox.showerror("错误", f"解析 .teproj 文件失败:\n{message}")
 
@@ -2018,7 +2175,7 @@ class AudioToolkitApp(ctk.CTk):
             # Engine parameters
             if last_params:
                 lines.append("    • 分析引擎参数配置:")
-                lines.append(f"      - 基频范围 (F0 Range): {last_params.get('f0_min', 75)} Hz ~ {last_params.get('f0_max', 600)} Hz")
+                lines.append(f"      - 基频范围 (F0 Range): {get_pitch_floor(last_params):.0f} Hz ~ {get_pitch_ceiling(last_params):.0f} Hz")
                 lines.append(f"      - 时序分析点数 (Points): {last_params.get('pts', 11)}")
                 lines.append(f"      - 分析算法: {last_params.get('method', 'ac')}")
             
@@ -2083,6 +2240,46 @@ class AudioToolkitApp(ctk.CTk):
             messagebox.showinfo("转换成功", f"工程已成功另存为 ZIP 压缩包：\n{zip_path}")
         except Exception as e:
             messagebox.showerror("错误", f"另存为 ZIP 失败：\n{str(e)}")
+
+    def show_export_report_dialog(self):
+        if not hasattr(self, 'loaded_teproj_path') or not self.loaded_teproj_path:
+            return messagebox.showwarning("提示", "请先选择并加载 .teproj 文件")
+            
+        ExportReportDialog(self, self.execute_export_report)
+
+    def execute_export_report(self, export_format, include_cache):
+        output_dir = filedialog.askdirectory(title="选择报告导出保存目录")
+        if not output_dir:
+            return
+            
+        from modules.report_generator import export_reports_from_teproj
+        
+        def run():
+            self.set_loading(True, "正在生成研究报告与数据档案...")
+            try:
+                export_markdown = (export_format in ("both", "md"))
+                export_excel = (export_format in ("both", "excel"))
+                
+                exported_files, base_name = export_reports_from_teproj(
+                    self.loaded_teproj_path,
+                    output_dir,
+                    export_markdown=export_markdown,
+                    export_excel=export_excel,
+                    include_cache_details=include_cache
+                )
+                
+                filenames = [os.path.basename(f) for f in exported_files]
+                msg = f"报告已成功导出至以下文件：\n" + "\n".join([f"• {name}" for name in filenames])
+                
+                self.after(0, lambda: messagebox.showinfo("导出成功", msg))
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                self.after(0, lambda err_msg=str(e): messagebox.showerror("错误", f"导出失败：\n{err_msg}"))
+            finally:
+                self.after(0, lambda: self.set_loading(False))
+                
+        start_safe_thread(run)
 
 if __name__ == "__main__":
     app = AudioToolkitApp()
