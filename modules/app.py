@@ -623,6 +623,7 @@ class PhoneticsApp:
             "import_white": "import_white.png", "copy_white": "copy_white.png", "check_white": "check_white.png",
             "pause": "pause.png", "eraser": "eraser.png",
             "blue_dot": "blue_dot.png",
+            "gray_dot": "blue_dot.png",
             "folder_close": "folder_close.png",
             "folder_open": "folder_open.png",
             "audio_wave": "audio_wave.png",
@@ -641,7 +642,7 @@ class PhoneticsApp:
                 img = Image.open(path)
 
                 # 将 自动识别 (bulb) 的黑色图标染色为对应红色（#DC2626），与删除按钮风格高度统一
-                if key in ["bulb", "save_black"]:
+                if key in ["bulb", "save_black", "gray_dot"]:
                     try:
                         img_rgba = img.convert("RGBA")
                         data = np.array(img_rgba)
@@ -654,15 +655,20 @@ class PhoneticsApp:
                             data[mask, 0] = 31
                             data[mask, 1] = 41
                             data[mask, 2] = 55
+                        elif key == "gray_dot":
+                            mask = data[:,:,3] > 0
+                            data[mask, 0] = 156
+                            data[mask, 1] = 163
+                            data[mask, 2] = 175
                         img = Image.fromarray(data)
                     except Exception:
                         pass
 
                 if "filter_" in key:
                     img_tk = img.resize((18, 18), Image.Resampling.LANCZOS)
-                elif key == "blue_dot":
+                elif key in ["blue_dot", "gray_dot"]:
                     try:
-                        # Resize the blue dot to 8x8
+                        # Resize the dot to 8x8
                         img_small = img.resize((8, 8), Image.Resampling.LANCZOS)
                         # Create a 16x16 transparent image
                         new_img = Image.new("RGBA", (16, 16), (0, 0, 0, 0))

@@ -1368,6 +1368,14 @@ class ProjectTreePanel:
             else:
                 new_mode = "已修改"
             self.filter_var.set(new_mode)
+        elif mode == "全部":
+            if current_mode == "全部":
+                new_mode = "已忽略"
+            elif current_mode == "已忽略":
+                new_mode = "全部"
+            else:
+                new_mode = "全部"
+            self.filter_var.set(new_mode)
         else:
             self.filter_var.set(mode)
         self._update_filter_buttons()
@@ -1376,9 +1384,15 @@ class ProjectTreePanel:
     def _update_filter_buttons(self):
         current_mode = self.filter_var.get()
 
+        # 动态更新全部/已忽略按钮的背景颜色：全部为蓝色，已忽略为灰色
+        if current_mode == "全部":
+            self.btn_filter_all.update_active_colors("#3B82F6", "#2563EB")
+        elif current_mode == "已忽略":
+            self.btn_filter_all.update_active_colors("#9CA3AF", "#6B7280")
+
         self.btn_filter_all.configure_button(
-            image=self.tk_icons.get("filter_all_white" if current_mode == "全部" else "filter_all_black"),
-            is_active=(current_mode == "全部")
+            image=self.tk_icons.get("filter_all_white" if current_mode in ("全部", "已忽略") else "filter_all_black"),
+            is_active=(current_mode in ("全部", "已忽略"))
         )
         self.btn_filter_warning.configure_button(
             image=self.tk_icons.get("filter_warning_white" if current_mode == "需检查" else "filter_warning_black"),
@@ -1439,7 +1453,18 @@ class ProjectTreePanel:
             if iid not in sel:
                 self.tree.selection_set(iid)
 
-        menu = tk.Menu(self.tree, tearoff=0, font=("Microsoft YaHei", 11))
+        menu = tk.Menu(
+            self.tree,
+            tearoff=0,
+            font=("Microsoft YaHei", 12),
+            bg="#FFFFFF",
+            fg="#2C3E50",
+            activebackground="#3B82F6",
+            activeforeground="#FFFFFF",
+            activeborderwidth=0,
+            bd=1,
+            relief="solid"
+        )
 
         if iid and self.tree.exists(iid):
             tags = self.tree.item(iid, 'tags')
@@ -1448,33 +1473,44 @@ class ProjectTreePanel:
                 item = self.items.get(real_iid)
                 if item:
                     is_excluded = item.get('is_excluded', False)
-                    exclude_lbl = "恢复此项 (Delete)" if is_excluded else "忽略此项（不参与导出） (Delete)"
+                    exclude_lbl = "🔄 恢复此项" if is_excluded else "🚫 忽略此项（不参与导出）"
                     menu.add_command(label=exclude_lbl, command=lambda: self.on_tree_backspace(None))
 
                     if is_excluded:
-                        menu.add_command(label="填写忽略原因...", command=lambda: self.prompt_exclusion_reason(real_iid))
+                        menu.add_command(label="📝 填写忽略原因...", command=lambda: self.prompt_exclusion_reason(real_iid))
 
                     is_ignored = item.get('ignore_warnings', False)
-                    label_text = "仅恢复异常提示" if is_ignored else "仅忽略异常提示"
+                    label_text = "⚠️ 仅恢复异常提示" if is_ignored else "🔕 仅忽略异常提示"
                     menu.add_command(label=label_text, command=lambda: self.toggle_ignore_warnings(real_iid))
 
-                    menu.add_command(label="重命名 (F2)", command=lambda: self.start_inline_edit(real_iid))
+                    menu.add_command(label="✏️ 重命名", command=lambda: self.start_inline_edit(real_iid))
 
                     menu.add_separator()
-                    adv_menu = tk.Menu(menu, tearoff=0, font=("Microsoft YaHei", 11))
-                    adv_menu.add_command(label="彻底删除此项...", command=lambda: self.permanently_delete_selected_items())
-                    menu.add_cascade(label="高级操作", menu=adv_menu)
+                    adv_menu = tk.Menu(
+                        menu,
+                        tearoff=0,
+                        font=("Microsoft YaHei", 12),
+                        bg="#FFFFFF",
+                        fg="#2C3E50",
+                        activebackground="#3B82F6",
+                        activeforeground="#FFFFFF",
+                        activeborderwidth=0,
+                        bd=1,
+                        relief="solid"
+                    )
+                    adv_menu.add_command(label="🗑️ 彻底删除此项...", command=lambda: self.permanently_delete_selected_items())
+                    menu.add_cascade(label="⚙️ 高级操作", menu=adv_menu)
             elif 'group' in tags and iid != self.warning_group_id:
                 group_name = iid[11:]
-                menu.add_command(label="忽略整组 (不参与导出)", command=lambda: self.toggle_group_exclusion(group_name, True))
-                menu.add_command(label="恢复整组 (参与导出)", command=lambda: self.toggle_group_exclusion(group_name, False))
+                menu.add_command(label="🚫 忽略整组 (不参与导出)", command=lambda: self.toggle_group_exclusion(group_name, True))
+                menu.add_command(label="🔄 恢复整组 (参与导出)", command=lambda: self.toggle_group_exclusion(group_name, False))
                 menu.add_separator()
-                menu.add_command(label="重命名组", command=lambda: self.start_inline_edit(iid))
-                menu.add_command(label="清空此组中所有项", command=lambda: self.clear_group_items(iid))
+                menu.add_command(label="✏️ 重命名组", command=lambda: self.start_inline_edit(iid))
+                menu.add_command(label="🧹 清空此组中所有项", command=lambda: self.clear_group_items(iid))
                 menu.add_separator()
-                menu.add_command(label="删除组及其所有项", command=lambda: self.delete_group_and_items(iid))
+                menu.add_command(label="🗑️ 删除组及其所有项", command=lambda: self.delete_group_and_items(iid))
         else:
-            menu.add_command(label="新建组别", command=self.add_new_group)
+            menu.add_command(label="➕ 新建组别", command=self.add_new_group)
 
         menu.post(event.x_root, event.y_root)
 
@@ -1888,6 +1924,10 @@ class ProjectTreePanel:
 
             item['warnings'] = self.analyze_item_anomalies(item, group_stats, speaker_stats)
             needs_check = any(w.startswith("[致命]") or w.startswith("[警告]") for w in item['warnings']) and not item.get('is_excluded', False)
+            if status_filter == "已忽略" and not item.get('is_excluded', False):
+                continue
+            if status_filter != "全部" and status_filter != "已忽略" and item.get('is_excluded', False):
+                continue
             if status_filter == "需检查" and not needs_check:
                 continue
             if status_filter == "已修改" and not item.get('is_manual_edited', False):
@@ -1930,13 +1970,16 @@ class ProjectTreePanel:
 
             for iid, item in items_in_grp:
                 display = item.get('label', '')
-                has_empty = any(w.startswith("[致命]") or w.startswith("[警告]") for w in item.get('warnings', []))
-                if has_empty:
-                    img = self.tk_icons.get('warning', '') if self.tk_icons else ''
-                elif item.get('is_manual_edited'):
-                    img = self.tk_icons.get('blue_dot', '') if self.tk_icons else ''
+                if item.get('is_excluded', False):
+                    img = self.tk_icons.get('gray_dot', '') if self.tk_icons else ''
                 else:
-                    img = ''  # Removed sound wave icon
+                    has_empty = any(w.startswith("[致命]") or w.startswith("[警告]") for w in item.get('warnings', []))
+                    if has_empty:
+                        img = self.tk_icons.get('warning', '') if self.tk_icons else ''
+                    elif item.get('is_manual_edited'):
+                        img = self.tk_icons.get('blue_dot', '') if self.tk_icons else ''
+                    else:
+                        img = ''  # Removed sound wave icon
 
                 tags_list = ['item']
                 if item.get('is_excluded', False):
