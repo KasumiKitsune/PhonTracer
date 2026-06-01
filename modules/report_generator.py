@@ -424,6 +424,7 @@ def generate_natural_language_summary(state: Dict[str, Any]) -> str:
     total_spk = len(speakers)
     
     total_items = 0
+    excluded_count = 0
     manual_adjusted_count = 0
     
     spk_descriptions = []
@@ -432,6 +433,7 @@ def generate_natural_language_summary(state: Dict[str, Any]) -> str:
         name = spk.get("name", "发音人")
         items = spk.get("items", {})
         total_items += len(items)
+        excluded_count += sum(1 for it in items.values() if it.get("is_excluded", False))
         
         # Analyze parameters
         params = spk.get("last_params", {})
@@ -481,8 +483,13 @@ def generate_natural_language_summary(state: Dict[str, Any]) -> str:
         
     spk_combined = "；".join(spk_descriptions) + "。" if spk_descriptions else ""
     
+    if excluded_count > 0:
+        ex_str = f"本工程共保存了 {total_items} 条记录，其中 {excluded_count} 条被标记为不参与分析，最终纳入 {total_items - excluded_count} 条。{spk_combined}"
+    else:
+        ex_str = f"本工程共包含 {total_spk} 名发音人的 {total_items} 个分析条目。{spk_combined}"
+
     summary = (
-        f"本工程共包含 {total_spk} 名发音人的 {total_items} 个分析条目。{spk_combined}"
+        f"{ex_str}"
         f"工程保留了自动检测后的原始边界、最终采用边界及多音节词内部切分点。"
         f"其中 {manual_adjusted_count} 个条目经过人工复核调整。"
     )
@@ -563,8 +570,10 @@ def generate_markdown_report(teproj_path: str, state: Dict[str, Any], zip_ref: z
         
     # Count variables
     total_items = 0
+    excluded_count = 0
     manually_adjusted = 0
     warning_list = []
+    excluded_list = []
     
     # Build usage map to map deviating files to speakers/items
     wav_usage = {}
@@ -581,6 +590,20 @@ def generate_markdown_report(teproj_path: str, state: Dict[str, Any], zip_ref: z
             wav_usage.setdefault(path.replace("\\", "/"), []).append((name, "批处理列表", "未关联条目"))
             
         for item_id, item in items.items():
+            if item.get("is_excluded", False):
+                excluded_count += 1
+                excluded_list.append({
+                    "speaker": name,
+                    "group": item.get("group", "默认组"),
+                    "id": item_id,
+                    "label": item.get("label", "无"),
+                    "start": item.get("start"),
+                    "end": item.get("end"),
+                    "reason": item.get("exclusion_reason", "未说明原因") or "未说明原因",
+                    "excluded_at": item.get("excluded_at", "未知时间") or "未知时间"
+                })
+                continue
+
             item_path = item.get("path")
             if item_path:
                 wav_usage.setdefault(item_path.replace("\\", "/"), []).append((name, item_id, item.get("label", "无")))
@@ -618,7 +641,9 @@ def generate_markdown_report(teproj_path: str, state: Dict[str, Any], zip_ref: z
     lines.append(f"| **工程最后保存时间** | `{save_time_str}` |")
     lines.append(f"| **归档文件指纹 (SHA-256)** | `{file_hash}` |")
     lines.append(f"| **发音人总数** | {len(speakers)} |")
-    lines.append(f"| **总分析条目数** | {total_items} |")
+    lines.append(f"| **保存条目总数** | {total_items} |")
+    lines.append(f"| **已忽略/排除条目数** | {excluded_count} |")
+    lines.append(f"| **最终分析条目数** | {total_items - excluded_count} |")
     lines.append(f"| **录音数字化共识参数** | {consensus_str} |")
     lines.append(f"| **边缘静音裁切** | {trim_silence_str} (参与边界修正计算) |")
     lines.append(f"| **音节标号规则** | {export_rule_str} |")
@@ -819,6 +844,20 @@ def generate_markdown_report(teproj_path: str, state: Dict[str, Any], zip_ref: z
     lines.append("> 4. **TextGrid 的外部导入溯源**：若边界来自外部 MFA (Montreal Forced Aligner) 或 Praat 标注的 TextGrid 导入，请在此处补充说明原始标注的标准和对齐信度。")
     lines.append("")
     
+    lines.append("## 8. 数据清洗与排除条目清单")
+    lines.append("")
+    if excluded_list:
+        lines.append("以下条目已被研究者标记为“忽略（不参与分析与导出）”，但在工程归档中完整保留了其原始录音、时间边界与状态，以便溯源和复核：")
+        lines.append("")
+        lines.append("| 发音人 | 分组 | 条目 ID | 标签 | 时间边界(s) | 排除原因 | 排除操作时间 |")
+        lines.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
+        for ex in excluded_list:
+            b_str = f"{ex['start']:.3f}–{ex['end']:.3f}" if ex['start'] is not None and ex['end'] is not None else "-"
+            lines.append(f"| {ex['speaker']} | {ex['group']} | `{ex['id']}` | {ex['label']} | {b_str} | {ex['reason']} | {ex['excluded_at']} |")
+    else:
+        lines.append("工程中无任何被忽略或排除的分析条目。")
+    lines.append("")
+    
     return "\n".join(lines)
 
 def write_excel_archive(teproj_path: str, state: Dict[str, Any], output_xlsx_path: str, include_cache_details: bool = False):
@@ -836,6 +875,7 @@ def write_excel_archive(teproj_path: str, state: Dict[str, Any], output_xlsx_pat
     char_boundary_rows = []
     param_exception_rows = []
     audit_warning_rows = []
+    excluded_rows = []
     resource_rows = []
     f0_cache_rows = []
     formant_cache_rows = []
@@ -892,6 +932,15 @@ def write_excel_archive(teproj_path: str, state: Dict[str, Any], output_xlsx_pat
                 group = item.get("group", "默认组")
                 group_counts[group] = group_counts.get(group, 0) + 1
                 
+                is_excluded = item.get("is_excluded", False)
+                if is_excluded:
+                    b_str = f"{item.get('start', 0.0):.3f} - {item.get('end', 0.0):.3f}" if item.get('start') is not None else "-"
+                    excluded_rows.append([
+                        spk_name, group, item_id, label, b_str,
+                        item.get("exclusion_reason", "未说明原因") or "未说明原因",
+                        item.get("excluded_at", "未知时间") or "未知时间"
+                    ])
+
                 # Custom overrides check
                 item_floor = get_pitch_floor(item, p_floor)
                 item_ceiling = get_pitch_ceiling(item, p_ceiling)
@@ -916,11 +965,12 @@ def write_excel_archive(teproj_path: str, state: Dict[str, Any], output_xlsx_pat
                     param_exception_rows.append([spk_name, group, item_id, label, ", ".join(diffs)])
                 
                 item_detail_rows.append([spk_name, group, item_id, label, item.get("path", "无"), item.get("analysis_mode", mode), 
+                                         "是" if is_excluded else "否",
                                          item_floor if item_floor != p_floor else "同默认", 
                                          item_ceiling if item_ceiling != p_ceiling else "同默认", 
                                          item_thresh if item_thresh != v_thresh else "同默认"])
                 
-                word_boundary_rows.append([spk_name, group, item_id, label, item.get("macro_start", 0.0), item.get("macro_end", 0.0),
+                word_boundary_rows.append([spk_name, group, item_id, label, "是" if is_excluded else "否", item.get("macro_start", 0.0), item.get("macro_end", 0.0),
                                            item.get("raw_start", 0.0), item.get("raw_end", 0.0), item.get("start", 0.0), item.get("end", 0.0),
                                            (item.get("end", 0.0) - item.get("start", 0.0)) if item.get("start") is not None else 0.0])
                 
@@ -930,7 +980,7 @@ def write_excel_archive(teproj_path: str, state: Dict[str, Any], output_xlsx_pat
                 for idx_syl, syl in enumerate(syls):
                     c_s, c_e = chars_bounds[idx_syl] if idx_syl < len(chars_bounds) else (0.0, 0.0)
                     split_pt = inner_splits[idx_syl - 1] if (idx_syl > 0 and idx_syl - 1 < len(inner_splits)) else ""
-                    char_boundary_rows.append([spk_name, group, item_id, label, idx_syl + 1, syl, c_s, c_e, split_pt])
+                    char_boundary_rows.append([spk_name, group, item_id, label, "是" if is_excluded else "否", idx_syl + 1, syl, c_s, c_e, split_pt])
                     
                 pitch_data, formant_data, p_status, f_status = load_item_cache_if_any(item, z)
                 p_file = item.get("pitch_data_file")
@@ -939,8 +989,8 @@ def write_excel_archive(teproj_path: str, state: Dict[str, Any], output_xlsx_pat
                 if f_file: cache_statuses[f_file.replace("\\", "/")] = f_status
                     
                 item_warnings = analyze_item_anomalies(item, pitch_data, formant_data, params, p_status, f_status)
-                if item.get("is_manual_edited"): manually_adjusted += 1
-                audit_warning_rows.append([spk_name, group, item_id, label, "是" if item.get("is_manual_edited") else "否", 
+                if not is_excluded and item.get("is_manual_edited"): manually_adjusted += 1
+                audit_warning_rows.append([spk_name, group, item_id, label, "是" if is_excluded else "否", "是" if item.get("is_manual_edited") else "否", 
                                            item.get("split_confidence", 1.0), ", ".join(item.get("split_warnings", [])), 
                                            ", ".join(item_warnings) if item_warnings else "合格无警告"])
                 
@@ -972,8 +1022,12 @@ def write_excel_archive(teproj_path: str, state: Dict[str, Any], output_xlsx_pat
     export_rule_val = state.get("export_numbering_rule")
     export_rule_excel = "全部连续" if export_rule_val == "continuous" else ("按分组重新标号" if export_rule_val == "by_group" else "未记录")
     
+    excluded_count = len(excluded_rows)
+    
     overview_rows.extend([["工程格式版本", state.get("version", "1.0")], ["PhonTracer 软件版本", sw_ver_str], ["工程最后保存时间", save_time_str],
-                          ["归档文件 SHA-256 校验码", file_hash], ["发音人数量", len(speakers)], ["条目总数", total_items], ["人工微调条目数", manually_adjusted],
+                          ["归档文件 SHA-256 校验码", file_hash], ["发音人数量", len(speakers)], ["条目总数", total_items],
+                          ["已忽略/排除条目数", excluded_count], ["实际分析条目数", total_items - excluded_count],
+                          ["人工微调条目数", manually_adjusted],
                           ["边缘静音裁切是否启用", trim_silence_str], ["词内标号策略", export_rule_excel], ["总体录音数字化参数", consensus_str]])
     
     wb = xlsxwriter.Workbook(output_xlsx_path, {'strings_to_formulas': False})
@@ -997,11 +1051,12 @@ def write_excel_archive(teproj_path: str, state: Dict[str, Any], output_xlsx_pat
     ws_summary.merge_range("A4:H10", generate_natural_language_summary(state), wb.add_format({'border': 1, 'bg_color': '#EFF6FF', 'text_wrap': True}))
     write_sheet("工程概览", ["概览指标", "指标取值"], overview_rows)
     write_sheet("发音人参数", ["发音人姓名", "分析模式", "时序点数", "F0下限", "F0上限", "清浊阈值", "声能跌落", "排除声母", "最大共振峰", "追踪个数", "窗长", "预加重", "策略"], speaker_params_rows)
-    write_sheet("条目明细", ["发音人", "组别", "条目ID", "标签", "路径", "模式", "定制下限", "定制上限", "定制阈值"], item_detail_rows)
-    write_sheet("词级边界", ["发音人", "组别", "ID", "标签", "宏起点", "宏终点", "自起点", "自终点", "采样起点", "采样终点", "时长"], word_boundary_rows)
-    write_sheet("字级边界", ["发音人", "组别", "ID", "标签", "序号", "音节", "字起点", "字终点", "切分点"], char_boundary_rows)
+    write_sheet("条目明细", ["发音人", "组别", "条目ID", "标签", "路径", "模式", "是否排除", "定制下限", "定制上限", "定制阈值"], item_detail_rows)
+    write_sheet("词级边界", ["发音人", "组别", "ID", "标签", "是否排除", "宏起点", "宏终点", "自起点", "自终点", "采样起点", "采样终点", "时长"], word_boundary_rows)
+    write_sheet("字级边界", ["发音人", "组别", "ID", "标签", "是否排除", "序号", "音节", "字起点", "字终点", "切分点"], char_boundary_rows)
     write_sheet("局部参数差异", ["发音人", "组别", "ID", "标签", "差异详情"], param_exception_rows)
-    write_sheet("人工复核与风险", ["发音人", "组别", "ID", "标签", "人工修改", "置信度", "警告", "致命异常"], audit_warning_rows)
+    write_sheet("人工复核与风险", ["发音人", "组别", "ID", "标签", "是否排除", "人工修改", "置信度", "警告", "致命异常"], audit_warning_rows)
+    write_sheet("排除与忽略条目", ["发音人", "组别", "ID", "标签", "时间边界", "排除原因", "排除时间"], excluded_rows)
     write_sheet("资源清单", ["类型", "路径", "大小", "数字化参数", "校验状态"], resource_rows)
     write_sheet("字段说明", ["工作表", "字段", "定义"], [["工程概览", "SHA-256", "唯一性校验"], ["发音人参数", "基频阈值", "Praat检测配置"], ["词级边界", "自动对齐", "能量核"], ["人工复核", "是否修改", "人工干预"]])
     

@@ -242,9 +242,25 @@ class TestWarningSync(unittest.TestCase):
         shadow_iid = f"warning_{item_id}"
         self.assertTrue(shadow_iid in self.tree_nodes)
 
-        # Select the shadow item and delete it via Backspace
+        # Select the shadow item and perform soft exclusion via Backspace
         self.tree_selection = [shadow_iid]
         self.panel.on_tree_backspace(None)
+
+        # Under the new soft-exclusion logic, the item should be excluded, not physically deleted
+        self.assertTrue(self.items_dict[item_id].get('is_excluded'))
+        self.assertNotIn(shadow_iid, self.tree_nodes)
+        self.assertIsNone(self.panel.warning_group_id)
+
+        # Now test physical deletion via permanently_delete_selected_items
+        # Restore shadow item and warning group to test physical deletion
+        self.items_dict[item_id]['is_excluded'] = False
+        self.panel.update_item_icon(item_id)
+        self.panel.rebuild_tree()
+        self.assertTrue(shadow_iid in self.tree_nodes)
+
+        self.tree_selection = [shadow_iid]
+        with patch('tkinter.messagebox.askyesno', return_value=True):
+            self.panel.permanently_delete_selected_items()
 
         # The item should be completely deleted from items_dict, tree, and warning_iids
         self.assertNotIn(item_id, self.items_dict)

@@ -227,6 +227,70 @@ class AnomalyWarningDialog(ctk.CTkToplevel):
         ).pack(side=tk.RIGHT)
 
 
+class ExclusionReasonDialog(ctk.CTkToplevel):
+    def __init__(self, parent, current_reason, font_title=None, font_main=None):
+        super().__init__(parent)
+        self.title("填写忽略原因")
+        self.geometry("380x300")
+        self.resizable(False, False)
+        self.transient(parent)
+        self.grab_set()
+
+        self.result = None
+
+        # Center the window
+        self.update_idletasks()
+        main_win = parent.winfo_toplevel()
+        x = main_win.winfo_rootx() + (main_win.winfo_width() - 380) // 2
+        y = main_win.winfo_rooty() + (main_win.winfo_height() - 300) // 2
+        self.geometry(f"+{x}+{y}")
+
+        self.font_title = font_title or ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold")
+        self.font_main = font_main or ctk.CTkFont(family="Microsoft YaHei", size=12)
+
+        ctk.CTkLabel(self, text="请选择或输入忽略该条目的原因：", font=self.font_title).pack(anchor="w", padx=20, pady=(15, 10))
+
+        self.reason_var = ctk.StringVar(value="")
+        common_reasons = ["录音中断", "发音错误", "背景噪声过强"]
+
+        # Radio buttons for common reasons
+        for reason in common_reasons:
+            rb = ctk.CTkRadioButton(self, text=reason, variable=self.reason_var, value=reason, font=self.font_main)
+            rb.pack(anchor="w", padx=30, pady=5)
+
+        # Custom input option
+        custom_rb = ctk.CTkRadioButton(self, text="其他原因：", variable=self.reason_var, value="custom", font=self.font_main)
+        custom_rb.pack(anchor="w", padx=30, pady=5)
+
+        self.entry_custom = ctk.CTkEntry(self, font=self.font_main, width=280, placeholder_text="请输入自定义原因...")
+        self.entry_custom.pack(anchor="w", padx=55, pady=5)
+
+        # Set initial value
+        if current_reason in common_reasons:
+            self.reason_var.set(current_reason)
+        elif current_reason:
+            self.reason_var.set("custom")
+            self.entry_custom.insert(0, current_reason)
+
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.pack(fill=tk.X, side=tk.BOTTOM, padx=20, pady=15)
+
+        def on_confirm():
+            sel = self.reason_var.get()
+            if sel == "custom":
+                self.result = self.entry_custom.get().strip()
+            else:
+                self.result = sel
+            self.destroy()
+
+        def on_cancel():
+            self.result = None
+            self.destroy()
+
+        ctk.CTkButton(btn_frame, text="取消", width=80, command=on_cancel).pack(side=tk.LEFT)
+        ctk.CTkButton(btn_frame, text="确定", width=80, command=on_confirm).pack(side=tk.RIGHT)
+
+
 class ProjectTreePanel:
     def __init__(self, parent, icons, items_dict, app_state_params, on_item_selected_callback, on_clear_canvas_callback, tk_icons=None, app=None):
         self.parent = parent
@@ -357,6 +421,7 @@ class ProjectTreePanel:
         self.tree.tag_configure('hover', background='#F3F4F6')
         self.tree.tag_configure('drag_target', background='#DBEAFE')
         self.tree.tag_configure('group', background='#F3F4F6')
+        self.tree.tag_configure('excluded', foreground='#9CA3AF')
 
         self.tree.bind('<Double-1>', self.on_tree_double_click)
         self.tree.bind('<BackSpace>', self.on_tree_backspace)
@@ -550,13 +615,83 @@ class ProjectTreePanel:
         selection = self.tree.selection()
         if not selection: return
 
+        items_to_toggle = []
+        for iid in selection:
+            if 'item' in self.tree.item(iid, 'tags'):
+                real_iid = iid[8:] if str(iid).startswith('warning_') else iid
+                items_to_toggle.append(real_iid)
+
+        if items_to_toggle:
+            any_active = any(not self.items[iid].get('is_excluded', False) for iid in items_to_toggle)
+            target_excluded = any_active
+            import time
+            now_str = time.strftime("%Y-%m-%d %H:%M:%S")
+
+            for iid in items_to_toggle:
+                item = self.items[iid]
+                item['is_excluded'] = target_excluded
+                if target_excluded:
+                    item['excluded_at'] = now_str
+                    if 'exclusion_reason' not in item:
+                        item['exclusion_reason'] = ""
+                else:
+                    item.pop('excluded_at', None)
+                    item.pop('exclusion_reason', None)
+
+            if self.app:
+                self.app.mark_modified()
+                self.app.project_manager.trigger_auto_save()
+            self.rebuild_tree()
+            self.update_preview()
+
+    def prompt_exclusion_reason(self, real_iid):
+        if real_iid not in self.items: return
+        item = self.items[real_iid]
+        current_reason = item.get('exclusion_reason', "")
+
+        dialog = ExclusionReasonDialog(self.parent, current_reason, font_title=self.font_title, font_main=self.font_main)
+        self.parent.wait_window(dialog)
+
+        if dialog.result is not None:
+            item['exclusion_reason'] = dialog.result
+            if self.app:
+                self.app.mark_modified()
+                self.app.project_manager.trigger_auto_save()
+            self.rebuild_tree()
+            self.update_preview()
+
+    def toggle_group_exclusion(self, group_name, exclude_state):
+        import time
+        now_str = time.strftime("%Y-%m-%d %H:%M:%S")
+        modified = False
+        for item in self.items.values():
+            if item.get('group') == group_name:
+                item['is_excluded'] = exclude_state
+                if exclude_state:
+                    item['excluded_at'] = now_str
+                    if 'exclusion_reason' not in item:
+                        item['exclusion_reason'] = ""
+                else:
+                    item.pop('excluded_at', None)
+                    item.pop('exclusion_reason', None)
+                modified = True
+        if modified and self.app:
+            self.app.mark_modified()
+            self.app.project_manager.trigger_auto_save()
+        self.rebuild_tree()
+        self.update_preview()
+
+    def permanently_delete_selected_items(self):
+        selection = self.tree.selection()
+        if not selection: return
+
         groups_to_del = [iid for iid in selection if 'group' in self.tree.item(iid, 'tags')]
         items_to_del = [iid for iid in selection if 'item' in self.tree.item(iid, 'tags')]
 
         if groups_to_del:
-            if messagebox.askyesno("确认删除", f"确定要删除选中的 {len(groups_to_del)} 个组别吗？"):
+            if messagebox.askyesno("确认彻底删除组", f"确定要从工程中彻底删除选中的 {len(groups_to_del)} 个组别及其所有音频/数据吗？\n此操作不可逆！"):
                 for gid in groups_to_del:
-                    group_name = self.tree.item(gid, 'text')
+                    group_name = self.tree.item(gid, 'text').split(' (')[0]
                     for child in self.tree.get_children(gid):
                         real_child = child[8:] if str(child).startswith('warning_') else child
                         self.items.pop(real_child, None)
@@ -584,18 +719,20 @@ class ProjectTreePanel:
             real_iid = iid[8:] if str(iid).startswith('warning_') else iid
             real_items_to_del.add(real_iid)
 
-        for iid in real_items_to_del:
-            self.items.pop(iid, None)
-            w_iid = f"warning_{iid}"
-            if self.tree.exists(w_iid):
-                self.tree.delete(w_iid)
-            if self.tree.exists(iid):
-                self.tree.delete(iid)
-            self.warning_iids.pop(iid, None)
+        if real_items_to_del:
+            if messagebox.askyesno("确认彻底删除条目", f"确定要从工程中彻底删除选中的 {len(real_items_to_del)} 个条目及其所有音频/数据吗？\n此操作不可逆！"):
+                for iid in real_items_to_del:
+                    self.items.pop(iid, None)
+                    w_iid = f"warning_{iid}"
+                    if self.tree.exists(w_iid):
+                        self.tree.delete(w_iid)
+                    if self.tree.exists(iid):
+                        self.tree.delete(iid)
+                    self.warning_iids.pop(iid, None)
 
-            if self.current_iid == iid:
-                self.current_iid = None
-                if self.on_clear_canvas: self.on_clear_canvas()
+                    if self.current_iid == iid:
+                        self.current_iid = None
+                        if self.on_clear_canvas: self.on_clear_canvas()
 
         if self.warning_group_id and self.tree.exists(self.warning_group_id):
             if not self.tree.get_children(self.warning_group_id):
@@ -604,8 +741,9 @@ class ProjectTreePanel:
 
         if self.app:
             self.app.mark_modified()
+            self.app.project_manager.trigger_auto_save()
+        self.rebuild_tree()
         self.update_preview()
-        self._debounce_zebra_stripes()
 
     def on_tree_drag_start(self, event):
         self._drag_start_pos = (event.x, event.y)
@@ -710,7 +848,7 @@ class ProjectTreePanel:
         for grp_name in self.project_groups:
             grp_node = self.group_nodes.get(grp_name)
             if grp_node:
-                children = [c for c in self.tree.get_children(grp_node) if c in self.items]
+                children = [c for c in self.tree.get_children(grp_node) if c in self.items and not self.items[c].get('is_excluded', False)]
                 structure.append((grp_name, children))
         return structure
 
@@ -1073,12 +1211,28 @@ class ProjectTreePanel:
                 real_iid = iid[8:] if str(iid).startswith('warning_') else iid
                 item = self.items.get(real_iid)
                 if item:
+                    is_excluded = item.get('is_excluded', False)
+                    exclude_lbl = "恢复此项 (Delete)" if is_excluded else "忽略此项（不参与导出） (Delete)"
+                    menu.add_command(label=exclude_lbl, command=lambda: self.on_tree_backspace(None))
+
+                    if is_excluded:
+                        menu.add_command(label="填写忽略原因...", command=lambda: self.prompt_exclusion_reason(real_iid))
+
                     is_ignored = item.get('ignore_warnings', False)
-                    label_text = "取消忽略警告" if is_ignored else "忽略警告"
-                    menu.add_command(label="重命名 (F2)", command=lambda: self.start_inline_edit(real_iid))
-                    menu.add_command(label="删除选中项 (Delete)", command=lambda: self.on_tree_backspace(None))
+                    label_text = "仅恢复异常提示" if is_ignored else "仅忽略异常提示"
                     menu.add_command(label=label_text, command=lambda: self.toggle_ignore_warnings(real_iid))
+
+                    menu.add_command(label="重命名 (F2)", command=lambda: self.start_inline_edit(real_iid))
+
+                    menu.add_separator()
+                    adv_menu = tk.Menu(menu, tearoff=0, font=("Microsoft YaHei", 11))
+                    adv_menu.add_command(label="彻底删除此项...", command=lambda: self.permanently_delete_selected_items())
+                    menu.add_cascade(label="高级操作", menu=adv_menu)
             elif 'group' in tags and iid != self.warning_group_id:
+                group_name = self.tree.item(iid, 'text').split(' (')[0]
+                menu.add_command(label="忽略整组 (不参与导出)", command=lambda: self.toggle_group_exclusion(group_name, True))
+                menu.add_command(label="恢复整组 (参与导出)", command=lambda: self.toggle_group_exclusion(group_name, False))
+                menu.add_separator()
                 menu.add_command(label="重命名组", command=lambda: self.start_inline_edit(iid))
                 menu.add_command(label="清空此组中所有项", command=lambda: self.clear_group_items(iid))
                 menu.add_separator()
@@ -1489,7 +1643,7 @@ class ProjectTreePanel:
                 continue
 
             item['warnings'] = self.analyze_item_anomalies(item, group_stats, speaker_stats)
-            needs_check = any(w.startswith("[致命]") or w.startswith("[警告]") for w in item['warnings'])
+            needs_check = any(w.startswith("[致命]") or w.startswith("[警告]") for w in item['warnings']) and not item.get('is_excluded', False)
             if status_filter == "需检查" and not needs_check:
                 continue
             if status_filter == "已修改" and not item.get('is_manual_edited', False):
@@ -1520,7 +1674,12 @@ class ProjectTreePanel:
             if not items_in_grp and (search_query or status_filter != "全部"):
                 continue
 
-            g_text = f"{grp} ({len(items_in_grp)})"
+            total_count = len(items_in_grp)
+            excluded_count = sum(1 for iid, item in items_in_grp if item.get('is_excluded', False))
+            if excluded_count > 0:
+                g_text = f"{grp} ({total_count - excluded_count}/{total_count}, 已忽略 {excluded_count} 项)"
+            else:
+                g_text = f"{grp} ({total_count})"
             is_open = grp in expanded_groups or not expanded_groups
             gid = self.tree.insert("", 'end', iid=f"group_node_{grp}", text=g_text, open=is_open, tags=('group',))
             self.group_nodes[grp] = gid
@@ -1535,7 +1694,10 @@ class ProjectTreePanel:
                 else:
                     img = ''  # Removed sound wave icon
 
-                self.tree.insert(gid, 'end', iid=iid, text=display, tags=('item',), image=img)
+                tags_list = ['item']
+                if item.get('is_excluded', False):
+                    tags_list.append('excluded')
+                self.tree.insert(gid, 'end', iid=iid, text=display, tags=tuple(tags_list), image=img)
 
         # 7. 恢复选择和可见性
         if sel:
@@ -1716,6 +1878,8 @@ class ProjectTreePanel:
     def _get_items_by_group_for_dict(self, items_dict):
         groups = {}
         for k, v in items_dict.items():
+            if v.get('is_excluded', False):
+                continue
             g = v.get('group', '导入内容')
             if g not in groups: groups[g] = []
             groups[g].append(k)

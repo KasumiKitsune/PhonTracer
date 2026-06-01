@@ -1123,8 +1123,9 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
             "params": self.params,
             "groups": self.groups,
             "total_items": len(self.items),
-            "missing_items": sum(1 for it in self.items.values() if it.get('missing') or not it.get('success', True)),
-            "warnings": sum(1 for it in self.items.values() if self._check_item_has_empty_data(it))
+            "excluded_items": sum(1 for it in self.items.values() if it.get('is_excluded', False)),
+            "missing_items": sum(1 for it in self.items.values() if (it.get('missing') or not it.get('success', True)) and not it.get('is_excluded', False)),
+            "warnings": sum(1 for it in self.items.values() if self._check_item_has_empty_data(it) and not it.get('is_excluded', False))
         }
         print(json.dumps({"success": True, "status": status}))
 
@@ -1146,8 +1147,13 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                 "id": iid,
                 "label": item.get('label'),
                 "group": item.get('group'),
+                "is_excluded": item.get('is_excluded', False),
             }
-            if item.get('missing') or not item.get('success', True):
+            if item.get('is_excluded', False):
+                entry['status'] = 'excluded'
+                entry['exclusion_reason'] = item.get('exclusion_reason', "")
+                entry['excluded_at'] = item.get('excluded_at', "")
+            elif item.get('missing') or not item.get('success', True):
                 entry['status'] = 'missing/error'
             else:
                 entry['status'] = 'ok'
@@ -1344,6 +1350,8 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
             pitch_freqs = pitch_data['freqs']
 
             for iid, item in self.items.items():
+                if item.get('is_excluded', False):
+                    continue
                 if item.get('missing') or not item.get('success', True):
                     continue
 
@@ -1416,6 +1424,8 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
             tasks = []
             iids = []
             for iid, item in self.items.items():
+                if item.get('is_excluded', False):
+                    continue
                 if item.get('missing') or not item.get('success', True):
                     continue
                 tasks.append({'path': item['path'], 'label': item.get('label', '')})
@@ -1948,7 +1958,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                 # Export individually to out_file (treated as directory)
                 os.makedirs(out_file, exist_ok=True)
                 for s in speakers_to_process:
-                    s_struct = [(grp, [iid for iid, item in s.items.items() if item.get('group') == grp]) for grp in getattr(s, 'cli_groups', [])]
+                    s_struct = [(grp, [iid for iid, item in s.items.items() if item.get('group') == grp and not item.get('is_excluded', False)]) for grp in getattr(s, 'cli_groups', [])]
                     s_out = os.path.join(out_file, f"{s.name}_{fmt}")
 
                     if fmt == 'txt':
@@ -1989,7 +1999,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
 
             else: # active
                 s = self.current_speaker
-                structure = [(grp, [iid for iid, item in s.items.items() if item.get('group') == grp]) for grp in self.groups]
+                structure = [(grp, [iid for iid, item in s.items.items() if item.get('group') == grp and not item.get('is_excluded', False)]) for grp in self.groups]
                 if fmt == 'txt':
                     self._export_txt(out_file, structure, rule, s)
                 elif fmt == 'xlsx':
@@ -2573,7 +2583,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
         with open(out_file, "w", encoding="utf-8-sig") as f:
             global_idx = 1
             for s in speakers:
-                s_struct = [(grp, [iid for iid, item in s.items.items() if item.get('group') == grp]) for grp in getattr(s, 'cli_groups', [])]
+                s_struct = [(grp, [iid for iid, item in s.items.items() if item.get('group') == grp and not item.get('is_excluded', False)]) for grp in getattr(s, 'cli_groups', [])]
                 f.write(f"--- 发音人: {s.name} ---\n\n")
                 if not is_continuous: global_idx = 1
                 for grp_name, children in s_struct:
@@ -2641,7 +2651,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
 
         for s in speakers:
             if not is_continuous: global_idx = 1
-            s_struct = [(grp, [iid for iid, item in s.items.items() if item.get('group') == grp]) for grp in getattr(s, 'cli_groups', [])]
+            s_struct = [(grp, [iid for iid, item in s.items.items() if item.get('group') == grp and not item.get('is_excluded', False)]) for grp in getattr(s, 'cli_groups', [])]
             for grp_name, children in s_struct:
                 if grp_name not in all_groups: all_groups.append(grp_name)
                 for child in children:
@@ -2727,7 +2737,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
         all_groups = []
 
         for s in speakers:
-            s_struct = [(grp, [iid for iid, item in s.items.items() if item.get('group') == grp]) for grp in getattr(s, 'cli_groups', [])]
+            s_struct = [(grp, [iid for iid, item in s.items.items() if item.get('group') == grp and not item.get('is_excluded', False)]) for grp in getattr(s, 'cli_groups', [])]
             data, m_syls = self._collect_group_avg_data(s_struct, speaker=s)
             if not data: continue
             if m_syls > max_syls: max_syls = m_syls
@@ -2856,7 +2866,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
     def _extract_kde_heatmap_contours(self, speakers, N_DENSE):
         group_syl_contours = {}
         for s in speakers:
-            s_struct = [(grp, [iid for iid, item in s.items.items() if item.get('group') == grp]) for grp in getattr(s, 'cli_groups', [])]
+            s_struct = [(grp, [iid for iid, item in s.items.items() if item.get('group') == grp and not item.get('is_excluded', False)]) for grp in getattr(s, 'cli_groups', [])]
             for grp_name, children in s_struct:
                 if grp_name not in group_syl_contours:
                     group_syl_contours[grp_name] = {}
@@ -3486,6 +3496,8 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
 
             groups = {}
             for item_id, item in spk.items.items():
+                if item.get('is_excluded', False):
+                    continue
                 g = item.get('group', '导入内容')
                 if g not in groups:
                     groups[g] = []
@@ -3649,6 +3661,8 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
         data_points = []
         for spk in speakers_to_process:
             for item_id, item in spk.items.items():
+                if item.get('is_excluded', False):
+                    continue
                 self._ensure_item_loaded(item)
                 if not item.get('snd') or not item.get('formant_data'):
                     continue

@@ -1886,7 +1886,7 @@ class PhoneticsApp:
             if (pitch_changed or formant_changed) and not boundary_params_changed:
                 only_pitch_changed = True
 
-        items_snapshot = list(self.items.items())
+        items_snapshot = [(iid, item) for iid, item in self.items.items() if not item.get('is_excluded', False)]
         total = len(items_snapshot)
 
         def run():
@@ -3783,6 +3783,8 @@ class PhoneticsApp:
         # 快照常规属性，避免工作线程直接读取或操作主线程的 self.items 数据字典
         items_snapshot = []
         for item in self.items.values():
+            if item.get('is_excluded', False):
+                continue
             items_snapshot.append({
                 'macro_start': item.get('macro_start'),
                 'macro_end': item.get('macro_end'),
@@ -4292,6 +4294,8 @@ class PhoneticsApp:
 
         items_snapshot = []
         for item in self.items.values():
+            if item.get('is_excluded', False):
+                continue
             items_snapshot.append({
                 'macro_start': item.get('macro_start'),
                 'macro_end': item.get('macro_end'),
