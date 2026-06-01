@@ -24,6 +24,65 @@ def get_voicing_threshold(params: Dict[str, Any], default: float = 0.25) -> floa
         return default
     return params.get("voicing_threshold") or params.get("voicing_thresh") or default
 
+def _majority_value(values: List[Any], fallback: Any) -> Any:
+    """返回出现次数最多的值；并列时优先使用发音人记录值。"""
+    if not values:
+        return fallback
+    counts = Counter(values)
+    highest_count = max(counts.values())
+    candidates = [value for value, count in counts.items() if count == highest_count]
+    if fallback in candidates:
+        return fallback
+    return candidates[0]
+
+def get_majority_item_params(items: Dict[str, Dict[str, Any]], speaker_params: Dict[str, Any]) -> Dict[str, Any]:
+    """根据纳入分析的条目计算局部差异基准，不使用界面当前值。"""
+    included_items = [item for item in items.values() if not item.get("is_excluded", False)]
+    fallbacks = {
+        "pitch_floor": get_pitch_floor(speaker_params),
+        "pitch_ceiling": get_pitch_ceiling(speaker_params),
+        "voicing_threshold": get_voicing_threshold(speaker_params),
+        "formant_max_hz": speaker_params.get("formant_max_hz", 5500.0),
+        "formant_count": speaker_params.get("formant_count", 5),
+        "formant_window_length": speaker_params.get("formant_window_length", 0.025),
+        "formant_pre_emphasis": speaker_params.get("formant_pre_emphasis", 50.0),
+        "formant_sample_strategy": speaker_params.get("formant_sample_strategy", "整段11点"),
+    }
+    return {
+        "pitch_floor": _majority_value(
+            [get_pitch_floor(item, fallbacks["pitch_floor"]) for item in included_items],
+            fallbacks["pitch_floor"]
+        ),
+        "pitch_ceiling": _majority_value(
+            [get_pitch_ceiling(item, fallbacks["pitch_ceiling"]) for item in included_items],
+            fallbacks["pitch_ceiling"]
+        ),
+        "voicing_threshold": _majority_value(
+            [get_voicing_threshold(item, fallbacks["voicing_threshold"]) for item in included_items],
+            fallbacks["voicing_threshold"]
+        ),
+        "formant_max_hz": _majority_value(
+            [item.get("formant_max_hz", fallbacks["formant_max_hz"]) for item in included_items],
+            fallbacks["formant_max_hz"]
+        ),
+        "formant_count": _majority_value(
+            [item.get("formant_count", fallbacks["formant_count"]) for item in included_items],
+            fallbacks["formant_count"]
+        ),
+        "formant_window_length": _majority_value(
+            [item.get("formant_window_length", fallbacks["formant_window_length"]) for item in included_items],
+            fallbacks["formant_window_length"]
+        ),
+        "formant_pre_emphasis": _majority_value(
+            [item.get("formant_pre_emphasis", fallbacks["formant_pre_emphasis"]) for item in included_items],
+            fallbacks["formant_pre_emphasis"]
+        ),
+        "formant_sample_strategy": _majority_value(
+            [item.get("formant_sample_strategy", fallbacks["formant_sample_strategy"]) for item in included_items],
+            fallbacks["formant_sample_strategy"]
+        ),
+    }
+
 def calculate_sha256(filepath: str) -> str:
     sha256_hash = hashlib.sha256()
     try:
@@ -742,36 +801,41 @@ def generate_markdown_report(teproj_path: str, state: Dict[str, Any], zip_ref: z
             lines.append(f"  - 共振峰采样策略 (Strategy): {params.get('formant_sample_strategy', '整段11点')}")
         lines.append("")
         
-    lines.append("## 4. 条目级个性化例外参数")
+    lines.append("## 4. 条目级参数偏离（以多数条目为基准）")
+    lines.append("")
+    lines.append("以下差异以各发音人最终纳入分析条目的多数参数为基准，而不是以导出报告时界面中最后停留的设置值为基准。")
     lines.append("")
     exceptions = []
     for spk_id, spk in speakers.items():
         name = spk.get("name", "发音人")
         params = spk.get("last_params", {})
-        p_floor = get_pitch_floor(params)
-        p_ceiling = get_pitch_ceiling(params)
-        v_thresh = get_voicing_threshold(params)
-        
-        # Formant defaults
-        f_max = params.get("formant_max_hz", 5500.0)
-        f_count = params.get("formant_count", 5)
-        f_win = params.get("formant_window_length", 0.025)
-        f_pre = params.get("formant_pre_emphasis", 50.0)
-        f_strat = params.get("formant_sample_strategy", "整段11点")
-        
         items = spk.get("items", {})
+        majority_params = get_majority_item_params(items, params)
+        p_floor = majority_params["pitch_floor"]
+        p_ceiling = majority_params["pitch_ceiling"]
+        v_thresh = majority_params["voicing_threshold"]
+        
+        # 纳入分析条目的多数值
+        f_max = majority_params["formant_max_hz"]
+        f_count = majority_params["formant_count"]
+        f_win = majority_params["formant_window_length"]
+        f_pre = majority_params["formant_pre_emphasis"]
+        f_strat = majority_params["formant_sample_strategy"]
+        
         for item_id, item in items.items():
+            if item.get("is_excluded", False):
+                continue
             diffs = []
             item_floor = get_pitch_floor(item, p_floor)
             item_ceiling = get_pitch_ceiling(item, p_ceiling)
             item_thresh = get_voicing_threshold(item, v_thresh)
             
             if item_floor != p_floor:
-                diffs.append(f"基频下限: {item_floor:.0f} Hz (默认 {p_floor:.0f} Hz)")
+                diffs.append(f"基频下限: {item_floor:.0f} Hz (多数值 {p_floor:.0f} Hz)")
             if item_ceiling != p_ceiling:
-                diffs.append(f"基频上限: {item_ceiling:.0f} Hz (默认 {p_ceiling:.0f} Hz)")
+                diffs.append(f"基频上限: {item_ceiling:.0f} Hz (多数值 {p_ceiling:.0f} Hz)")
             if item_thresh != v_thresh:
-                diffs.append(f"浊音阈值: {item_thresh:.2f} (默认 {v_thresh:.2f})")
+                diffs.append(f"浊音阈值: {item_thresh:.2f} (多数值 {v_thresh:.2f})")
                 
             item_f_max = item.get("formant_max_hz", f_max)
             item_f_count = item.get("formant_count", f_count)
@@ -780,15 +844,15 @@ def generate_markdown_report(teproj_path: str, state: Dict[str, Any], zip_ref: z
             item_f_strat = item.get("formant_sample_strategy", f_strat)
             
             if item_f_max != f_max:
-                diffs.append(f"最大共振峰频率: {item_f_max:.0f} Hz (默认 {f_max:.0f} Hz)")
+                diffs.append(f"最大共振峰频率: {item_f_max:.0f} Hz (多数值 {f_max:.0f} Hz)")
             if item_f_count != f_count:
-                diffs.append(f"共振峰追踪个数: {item_f_count} (默认 {f_count})")
+                diffs.append(f"共振峰追踪个数: {item_f_count} (多数值 {f_count})")
             if item_f_win != f_win:
-                diffs.append(f"共振峰分析窗长: {item_f_win:.3f} s (默认 {f_win:.3f} s)")
+                diffs.append(f"共振峰分析窗长: {item_f_win:.3f} s (多数值 {f_win:.3f} s)")
             if item_f_pre != f_pre:
-                diffs.append(f"共振峰预加重: {item_f_pre:.1f} Hz (默认 {f_pre:.1f} Hz)")
+                diffs.append(f"共振峰预加重: {item_f_pre:.1f} Hz (多数值 {f_pre:.1f} Hz)")
             if item_f_strat != f_strat:
-                diffs.append(f"共振峰采样策略: {item_f_strat} (默认 {f_strat})")
+                diffs.append(f"共振峰采样策略: {item_f_strat} (多数值 {f_strat})")
                 
             if diffs:
                 exceptions.append({
@@ -804,7 +868,7 @@ def generate_markdown_report(teproj_path: str, state: Dict[str, Any], zip_ref: z
         for exc in exceptions:
             lines.append(f"| {exc['speaker']} | {exc['id']} | {exc['label']} | {exc['diffs']} |")
     else:
-        lines.append("工程中所有分析条目均严格采用了所属发音人的全局算法默认参数，无任何局部例外。")
+        lines.append("工程中所有纳入分析的条目均与所属发音人的多数参数一致，无任何局部例外。")
     lines.append("")
     
     lines.append("## 5. 音段边界提取与切分规则")
@@ -920,6 +984,7 @@ def write_excel_archive(teproj_path: str, state: Dict[str, Any], output_xlsx_pat
             f_win = params.get("formant_window_length", 0.025)
             f_pre = params.get("formant_pre_emphasis", 50.0)
             f_strat = params.get("formant_sample_strategy", "整段11点")
+            majority_params = get_majority_item_params(items, params)
             
             speaker_params_rows.append([
                 spk_name, mode, pts, p_floor, p_ceiling, v_thresh,
@@ -941,34 +1006,42 @@ def write_excel_archive(teproj_path: str, state: Dict[str, Any], output_xlsx_pat
                         item.get("excluded_at", "未知时间") or "未知时间"
                     ])
 
-                # Custom overrides check
-                item_floor = get_pitch_floor(item, p_floor)
-                item_ceiling = get_pitch_ceiling(item, p_ceiling)
-                item_thresh = get_voicing_threshold(item, v_thresh)
-                item_f_max = item.get("formant_max_hz", f_max)
-                item_f_count = item.get("formant_count", f_count)
-                item_f_win = item.get("formant_window_length", f_win)
-                item_f_pre = item.get("formant_pre_emphasis", f_pre)
-                item_f_strat = item.get("formant_sample_strategy", f_strat)
+                # 使用纳入分析条目的多数值比较，不使用界面当前值。
+                majority_floor = majority_params["pitch_floor"]
+                majority_ceiling = majority_params["pitch_ceiling"]
+                majority_thresh = majority_params["voicing_threshold"]
+                majority_f_max = majority_params["formant_max_hz"]
+                majority_f_count = majority_params["formant_count"]
+                majority_f_win = majority_params["formant_window_length"]
+                majority_f_pre = majority_params["formant_pre_emphasis"]
+                majority_f_strat = majority_params["formant_sample_strategy"]
+                item_floor = get_pitch_floor(item, majority_floor)
+                item_ceiling = get_pitch_ceiling(item, majority_ceiling)
+                item_thresh = get_voicing_threshold(item, majority_thresh)
+                item_f_max = item.get("formant_max_hz", majority_f_max)
+                item_f_count = item.get("formant_count", majority_f_count)
+                item_f_win = item.get("formant_window_length", majority_f_win)
+                item_f_pre = item.get("formant_pre_emphasis", majority_f_pre)
+                item_f_strat = item.get("formant_sample_strategy", majority_f_strat)
                 
                 diffs = []
-                if item_floor != p_floor: diffs.append(f"基频下限: {item_floor:.0f}Hz")
-                if item_ceiling != p_ceiling: diffs.append(f"基频上限: {item_ceiling:.0f}Hz")
-                if item_thresh != v_thresh: diffs.append(f"清浊阈值: {item_thresh:.2f}")
-                if item_f_max != f_max: diffs.append(f"最大共振峰频率: {item_f_max:.0f}Hz")
-                if item_f_count != f_count: diffs.append(f"共振峰追踪个数: {item_f_count}")
-                if item_f_win != f_win: diffs.append(f"共振峰窗长: {item_f_win:.3f}s")
-                if item_f_pre != f_pre: diffs.append(f"共振峰预加重: {item_f_pre:.1f}Hz")
-                if item_f_strat != f_strat: diffs.append(f"共振峰采样策略: {item_f_strat}")
+                if item_floor != majority_floor: diffs.append(f"基频下限: {item_floor:.0f}Hz (多数值: {majority_floor:.0f}Hz)")
+                if item_ceiling != majority_ceiling: diffs.append(f"基频上限: {item_ceiling:.0f}Hz (多数值: {majority_ceiling:.0f}Hz)")
+                if item_thresh != majority_thresh: diffs.append(f"清浊阈值: {item_thresh:.2f} (多数值: {majority_thresh:.2f})")
+                if item_f_max != majority_f_max: diffs.append(f"最大共振峰频率: {item_f_max:.0f}Hz (多数值: {majority_f_max:.0f}Hz)")
+                if item_f_count != majority_f_count: diffs.append(f"共振峰追踪个数: {item_f_count} (多数值: {majority_f_count})")
+                if item_f_win != majority_f_win: diffs.append(f"共振峰窗长: {item_f_win:.3f}s (多数值: {majority_f_win:.3f}s)")
+                if item_f_pre != majority_f_pre: diffs.append(f"共振峰预加重: {item_f_pre:.1f}Hz (多数值: {majority_f_pre:.1f}Hz)")
+                if item_f_strat != majority_f_strat: diffs.append(f"共振峰采样策略: {item_f_strat} (多数值: {majority_f_strat})")
                     
-                if diffs:
+                if diffs and not is_excluded:
                     param_exception_rows.append([spk_name, group, item_id, label, ", ".join(diffs)])
                 
                 item_detail_rows.append([spk_name, group, item_id, label, item.get("path", "无"), item.get("analysis_mode", mode), 
                                          "是" if is_excluded else "否",
-                                         item_floor if item_floor != p_floor else "同默认", 
-                                         item_ceiling if item_ceiling != p_ceiling else "同默认", 
-                                         item_thresh if item_thresh != v_thresh else "同默认"])
+                                         item_floor if item_floor != majority_floor else "同多数",
+                                         item_ceiling if item_ceiling != majority_ceiling else "同多数",
+                                         item_thresh if item_thresh != majority_thresh else "同多数"])
                 
                 word_boundary_rows.append([spk_name, group, item_id, label, "是" if is_excluded else "否", item.get("macro_start", 0.0), item.get("macro_end", 0.0),
                                            item.get("raw_start", 0.0), item.get("raw_end", 0.0), item.get("start", 0.0), item.get("end", 0.0),

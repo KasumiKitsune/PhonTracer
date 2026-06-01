@@ -1,4 +1,5 @@
 import os
+import json
 import shutil
 import tempfile
 import zipfile
@@ -8,7 +9,10 @@ from modules.report_generator import (
     export_reports_from_teproj,
     calculate_sha256,
     format_speaker_name,
-    parse_wav_header_from_bytes
+    generate_markdown_report,
+    get_majority_item_params,
+    parse_wav_header_from_bytes,
+    write_excel_archive,
 )
 
 def test_speaker_name_formatting():
@@ -83,3 +87,91 @@ def test_report_generation_from_sample():
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
+
+def test_local_param_differences_use_majority_included_items():
+    state = {
+        "version": "1.0",
+        "speakers": {
+            "sp1": {
+                "name": "测试者",
+                "last_params": {
+                    "analysis_mode": "f0",
+                    "pitch_floor": 200,
+                    "pitch_ceiling": 500,
+                    "voicing_threshold": 0.40,
+                },
+                "items": {
+                    "common_1": {
+                        "label": "甲",
+                        "group": "测试组",
+                        "pitch_floor": 75,
+                        "pitch_ceiling": 300,
+                        "voicing_threshold": 0.25,
+                        "start": 0.1,
+                        "end": 0.4,
+                    },
+                    "common_2": {
+                        "label": "乙",
+                        "group": "测试组",
+                        "pitch_floor": 75,
+                        "pitch_ceiling": 300,
+                        "voicing_threshold": 0.25,
+                        "start": 0.5,
+                        "end": 0.8,
+                    },
+                    "minority": {
+                        "label": "丙",
+                        "group": "测试组",
+                        "pitch_floor": 120,
+                        "pitch_ceiling": 300,
+                        "voicing_threshold": 0.25,
+                        "start": 0.9,
+                        "end": 1.2,
+                    },
+                    "excluded": {
+                        "label": "丁",
+                        "group": "测试组",
+                        "pitch_floor": 999,
+                        "pitch_ceiling": 999,
+                        "voicing_threshold": 0.99,
+                        "start": 1.3,
+                        "end": 1.6,
+                        "is_excluded": True,
+                        "exclusion_reason": "发音错误",
+                    },
+                },
+            }
+        },
+    }
+
+    majority = get_majority_item_params(
+        state["speakers"]["sp1"]["items"],
+        state["speakers"]["sp1"]["last_params"],
+    )
+    assert majority["pitch_floor"] == 75
+    assert majority["pitch_ceiling"] == 300
+    assert majority["voicing_threshold"] == 0.25
+
+    temp_dir = tempfile.mkdtemp()
+    try:
+        teproj_path = os.path.join(temp_dir, "majority.teproj")
+        with zipfile.ZipFile(teproj_path, "w") as z:
+            z.writestr("project.json", json.dumps(state, ensure_ascii=False))
+
+        with zipfile.ZipFile(teproj_path, "r") as z:
+            md_content = generate_markdown_report(teproj_path, state, z)
+
+        assert "## 4. 条目级参数偏离（以多数条目为基准）" in md_content
+        assert "基频下限: 120 Hz (多数值 75 Hz)" in md_content
+        assert "基频下限: 75 Hz (多数值 200 Hz)" not in md_content
+        assert "基频下限: 999 Hz" not in md_content
+
+        xlsx_path = os.path.join(temp_dir, "majority.xlsx")
+        write_excel_archive(teproj_path, state, xlsx_path)
+        with zipfile.ZipFile(xlsx_path, "r") as z:
+            shared_strings = z.read("xl/sharedStrings.xml").decode("utf-8")
+
+        assert "基频下限: 120Hz (多数值: 75Hz)" in shared_strings
+        assert "基频下限: 999Hz" not in shared_strings
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)

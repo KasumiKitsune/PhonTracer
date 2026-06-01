@@ -334,7 +334,8 @@ class TestExclusionLogic(unittest.TestCase):
             # Mock tree existence
             panel.tree.exists.return_value = True
             
-            with patch('tkinter.messagebox.askyesno', return_value=True):
+            with patch('tkinter.messagebox.askyesno', return_value=True), \
+                 patch('tkinter.messagebox.showinfo'):
                 # Call clear_group_items on "group_node_ao (3)"
                 panel.clear_group_items("group_node_ao (3)")
                 # If parsed correctly, item1 group "ao (3)" matches and item1 is popped
