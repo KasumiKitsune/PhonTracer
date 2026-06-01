@@ -622,7 +622,7 @@ class ProjectTreePanel:
         self.tree.bind('<Delete>', self.on_tree_backspace)
         self.tree.bind('<Motion>', self.on_tree_hover)
         self.tree.bind('<Leave>', self.on_tree_leave)
-        self.tree.bind('<<TreeviewSelect>>', self.on_tree_select)
+        self.tree.bind('<<TreeviewSelect>>', self.on_tree_select, add='+')
         self.tree.bind('<ButtonPress-1>', self.on_tree_drag_start, add='+')
         self.tree.bind('<B1-Motion>', self.on_tree_drag_motion, add='+')
         self.tree.bind('<ButtonRelease-1>', self.on_tree_drag_release, add='+')

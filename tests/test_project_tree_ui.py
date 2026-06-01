@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import MagicMock, patch
 import tkinter as tk
+import customtkinter as ctk
 import numpy as np
 from tests.shared_root import get_shared_root
 from modules.project_tree import ProjectTreePanel
@@ -20,6 +21,7 @@ class TestProjectTreeUI(unittest.TestCase):
             'folder_open': 'tk_folder_open_mock',
             'audio_wave': 'tk_audio_wave_mock',
             'blue_dot': 'tk_blue_dot_mock',
+            'gray_dot': 'tk_gray_dot_mock',
             'warning': 'tk_warning_mock'
         }
         self.items_dict = {
@@ -198,6 +200,78 @@ class TestProjectTreeUI(unittest.TestCase):
         children = self.tree_get_children_mock(group2_id)
         self.assertEqual(len(children), 1)
         self.assertEqual(children[0], 'item_edited')
+
+    def test_rebuild_tree_status_filter_ignored_uses_gray_dot(self):
+        """Test ignored status filter only renders excluded items with gray dots"""
+        self.items_dict['item_ignored'] = {
+            'label': 'Discarded',
+            'group': 'Group1',
+            'start': 0.0,
+            'end': 1.0,
+            'has_empty_data': False,
+            'is_excluded': True,
+        }
+        self.panel.filter_var.get.return_value = "已忽略"
+        self.panel.rebuild_tree()
+
+        group1_id = self.panel.group_nodes['Group1']
+        children = self.tree_get_children_mock(group1_id)
+        self.assertEqual(children, ['item_ignored'])
+        self.assertEqual(self.tree_nodes['item_ignored']['image'], 'tk_gray_dot_mock')
+        self.assertIn('excluded', self.tree_nodes['item_ignored']['tags'])
+        self.assertNotIn('Group2', self.panel.group_nodes)
+
+    def test_filter_all_button_cycles_between_all_and_ignored(self):
+        """Test all-items button toggles between all and ignored states"""
+        state = {'value': '全部'}
+        self.panel.filter_var.get.side_effect = lambda: state['value']
+        self.panel.filter_var.set.side_effect = lambda value: state.__setitem__('value', value)
+        self.panel.btn_filter_all = MagicMock()
+        self.panel.btn_filter_warning = MagicMock()
+        self.panel.btn_filter_check = MagicMock()
+        self.panel.filter_tree = MagicMock()
+
+        self.panel._on_filter_btn_click("全部")
+        self.assertEqual(state['value'], "已忽略")
+        self.panel.btn_filter_all.update_active_colors.assert_called_with("#9CA3AF", "#6B7280")
+
+        self.panel._on_filter_btn_click("全部")
+        self.assertEqual(state['value'], "全部")
+        self.panel.btn_filter_all.update_active_colors.assert_called_with("#3B82F6", "#2563EB")
+
+    def test_excluded_selection_keeps_gray_treeview_style(self):
+        """Test both selection handlers remain active for ignored items"""
+        host = ctk.CTkFrame(self.parent)
+        host.pack()
+        try:
+            gray_dot = tk.PhotoImage(master=self.parent, width=1, height=1)
+            panel = ProjectTreePanel(
+                parent=host,
+                icons={},
+                items_dict={
+                    'item_ignored': {
+                        'label': 'Discarded',
+                        'group': 'Group1',
+                        'start': 0.0,
+                        'end': 1.0,
+                        'has_empty_data': False,
+                        'is_excluded': True,
+                    }
+                },
+                app_state_params={'pts': 10},
+                on_item_selected_callback=MagicMock(),
+                on_clear_canvas_callback=MagicMock(),
+                tk_icons={'gray_dot': gray_dot},
+            )
+            panel.project_groups = ['Group1']
+            panel.rebuild_tree()
+            panel.tree.selection_set('item_ignored')
+            panel.tree.event_generate('<<TreeviewSelect>>')
+            self.parent.update()
+
+            self.assertIn(('selected', '#6B7280'), panel._tree_style.map('Treeview', 'foreground'))
+        finally:
+            host.destroy()
 
     def test_kde_uses_chars_bounds_and_syllable_splitter(self):
         item = {
