@@ -1473,17 +1473,17 @@ class ProjectTreePanel:
                 item = self.items.get(real_iid)
                 if item:
                     is_excluded = item.get('is_excluded', False)
-                    exclude_lbl = "🔄 恢复此项" if is_excluded else "🚫 忽略此项（不参与导出）"
+                    exclude_lbl = "恢复此项" if is_excluded else "忽略此项（不参与导出）"
                     menu.add_command(label=exclude_lbl, command=lambda: self.on_tree_backspace(None))
 
                     if is_excluded:
-                        menu.add_command(label="📝 填写忽略原因...", command=lambda: self.prompt_exclusion_reason(real_iid))
+                        menu.add_command(label="填写忽略原因...", command=lambda: self.prompt_exclusion_reason(real_iid))
 
                     is_ignored = item.get('ignore_warnings', False)
-                    label_text = "⚠️ 仅恢复异常提示" if is_ignored else "🔕 仅忽略异常提示"
+                    label_text = "仅恢复异常提示" if is_ignored else "仅忽略异常提示"
                     menu.add_command(label=label_text, command=lambda: self.toggle_ignore_warnings(real_iid))
 
-                    menu.add_command(label="✏️ 重命名", command=lambda: self.start_inline_edit(real_iid))
+                    menu.add_command(label="重命名", command=lambda: self.start_inline_edit(real_iid))
 
                     menu.add_separator()
                     adv_menu = tk.Menu(
@@ -1498,19 +1498,19 @@ class ProjectTreePanel:
                         bd=1,
                         relief="solid"
                     )
-                    adv_menu.add_command(label="🗑️ 彻底删除此项...", command=lambda: self.permanently_delete_selected_items())
-                    menu.add_cascade(label="⚙️ 高级操作", menu=adv_menu)
+                    adv_menu.add_command(label="彻底删除此项...", command=lambda: self.permanently_delete_selected_items())
+                    menu.add_cascade(label="高级操作", menu=adv_menu)
             elif 'group' in tags and iid != self.warning_group_id:
                 group_name = iid[11:]
-                menu.add_command(label="🚫 忽略整组 (不参与导出)", command=lambda: self.toggle_group_exclusion(group_name, True))
-                menu.add_command(label="🔄 恢复整组 (参与导出)", command=lambda: self.toggle_group_exclusion(group_name, False))
+                menu.add_command(label="忽略整组 (不参与导出)", command=lambda: self.toggle_group_exclusion(group_name, True))
+                menu.add_command(label="恢复整组 (参与导出)", command=lambda: self.toggle_group_exclusion(group_name, False))
                 menu.add_separator()
-                menu.add_command(label="✏️ 重命名组", command=lambda: self.start_inline_edit(iid))
-                menu.add_command(label="🧹 清空此组中所有项", command=lambda: self.clear_group_items(iid))
+                menu.add_command(label="重命名组", command=lambda: self.start_inline_edit(iid))
+                menu.add_command(label="清空此组中所有项", command=lambda: self.clear_group_items(iid))
                 menu.add_separator()
-                menu.add_command(label="🗑️ 删除组及其所有项", command=lambda: self.delete_group_and_items(iid))
+                menu.add_command(label="删除组及其所有项", command=lambda: self.delete_group_and_items(iid))
         else:
-            menu.add_command(label="➕ 新建组别", command=self.add_new_group)
+            menu.add_command(label="新建组别", command=self.add_new_group)
 
         menu.post(event.x_root, event.y_root)
 
