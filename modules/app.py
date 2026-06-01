@@ -92,6 +92,7 @@ class PhoneticsApp:
         self.executor = concurrent.futures.ProcessPoolExecutor(max_workers=max_workers)
 
         def on_closing():
+            self.flush_eraser_changes()
             if getattr(self, 'has_changes', False):
                 ans = messagebox.askyesnocancel("保存项目", "项目已被修改，是否在关闭前保存？")
                 if ans is True: # Yes
@@ -226,6 +227,11 @@ class PhoneticsApp:
     def run_startup_check(self):
         _startup_debug("run_startup_check 开始")
         self._check_autosave_recovery()
+
+    def flush_eraser_changes(self):
+        if hasattr(self, 'spectrogram_panel') and self.spectrogram_panel:
+            if getattr(self.spectrogram_panel, 'eraser_mode', False):
+                self.spectrogram_panel.apply_eraser_changes()
 
     def mark_modified(self):
         self.has_changes = True
@@ -1028,7 +1034,7 @@ class PhoneticsApp:
         row_formant_strategy = ctk.CTkFrame(self.formant_params_container, fg_color="transparent")
         row_formant_strategy.pack(fill=tk.X, padx=15, pady=4)
         ctk.CTkLabel(row_formant_strategy, text=" 采样策略:", image=self.icons.get("tag"), compound="left", text_color="#374151", font=self.font_main).pack(side=tk.LEFT)
-        
+
         self.option_formant_sample_strategy = ctk.CTkOptionMenu(
             row_formant_strategy,
             values=["整段11点", "中段均值"],
@@ -1183,6 +1189,8 @@ class PhoneticsApp:
     def on_spectrogram_auto_detect(self):
         item = self.spectrogram_panel.current_item
         if not item: return
+        if self.spectrogram_panel:
+            self.spectrogram_panel.discard_eraser_changes()
         snd = item['snd']
 
         # 重新提取 F0 / Formant，以还原橡皮擦抹去的数据点
@@ -1722,6 +1730,7 @@ class PhoneticsApp:
         item.pop('warnings', None)
 
     def on_analysis_mode_change(self, value):
+        self.flush_eraser_changes()
         old_mode = self.last_params.get('analysis_mode', 'f0')
         mode = 'f0' if value == "声调/F0" else 'formant'
         if mode == old_mode:
@@ -1760,7 +1769,7 @@ class PhoneticsApp:
             self.f0_params_container.pack_forget()
             self.row_trim.pack_forget()
             self.row_export_rule.pack_forget()
-            
+
             self.formant_params_container.pack(fill=tk.X)
             self.row_trim.pack(fill=tk.X, padx=15, pady=(10, 15))
             self.row_export_rule.pack(fill=tk.X, padx=15, pady=(0, 15))
@@ -1768,7 +1777,7 @@ class PhoneticsApp:
             self.formant_params_container.pack_forget()
             self.row_trim.pack_forget()
             self.row_export_rule.pack_forget()
-            
+
             self.f0_params_container.pack(fill=tk.X)
             self.row_trim.pack(fill=tk.X, padx=15, pady=(10, 15))
             self.row_export_rule.pack(fill=tk.X, padx=15, pady=(0, 15))
@@ -1777,40 +1786,40 @@ class PhoneticsApp:
         start = item['start']
         end = item['end']
         preview_times = np.linspace(start, end, pts)
-        
+
         f_data = item.get('formant_data')
         if not f_data or 'xs' not in f_data or 'f1' not in f_data or 'f2' not in f_data:
             nan_list = [np.nan] * pts
             return preview_times, nan_list, nan_list
-            
+
         xs = f_data['xs']
         f1_arr = f_data['f1']
         f2_arr = f_data['f2']
-        
+
         if strategy == '中段均值':
             duration = end - start
             m_start = start + duration / 3.0
             m_end = start + 2.0 * duration / 3.0
-            
+
             mask = (xs >= m_start) & (xs <= m_end)
             f1_slice = f1_arr[mask]
             f2_slice = f2_arr[mask]
-            
+
             f1_vals = f1_slice[~np.isnan(f1_slice)]
             f2_vals = f2_slice[~np.isnan(f2_slice)]
-            
+
             mean_f1 = np.nanmean(f1_vals) if len(f1_vals) > 0 else np.nan
             mean_f2 = np.nanmean(f2_vals) if len(f2_vals) > 0 else np.nan
-            
+
             preview_f1 = [mean_f1] * pts
             preview_f2 = [mean_f2] * pts
         else:
             preview_f1 = []
             preview_f2 = []
-            
+
             f1_valid_idx = np.where(~np.isnan(f1_arr))[0]
             f2_valid_idx = np.where(~np.isnan(f2_arr))[0]
-            
+
             for t in preview_times:
                 # F1
                 if len(f1_valid_idx) == 0 or t < xs[0] or t > xs[-1]:
@@ -1830,10 +1839,12 @@ class PhoneticsApp:
                         preview_f2.append(np.nan)
                     else:
                         preview_f2.append(float(np.interp(t, xs[f2_valid_idx], f2_arr[f2_valid_idx])))
-                        
+
         return preview_times.tolist(), preview_f1, preview_f2
 
     def recalculate_all_audio(self, only_trim_silence=False, recompute_pitch=True, only_pitch_changed=False):
+        if hasattr(self, 'spectrogram_panel') and self.spectrogram_panel:
+            self.spectrogram_panel.discard_eraser_changes()
         if not self.items: return
 
         # Capture parameter values before sync
@@ -2058,6 +2069,8 @@ class PhoneticsApp:
 
     def recalculate_current_item(self, only_trim_silence=False, recompute_pitch=False, recompute_formant_only=False):
         """仅针对当前正在编辑的项重新计算参数（暂不影响全局）"""
+        if hasattr(self, 'spectrogram_panel') and self.spectrogram_panel:
+            self.spectrogram_panel.discard_eraser_changes()
         item = self.spectrogram_panel.current_item
         if not item: return
 
@@ -2103,10 +2116,10 @@ class PhoneticsApp:
                         item['pitch_floor'] = self.last_params['pitch_floor']
                         item['pitch_ceiling'] = self.last_params['pitch_ceiling']
                         item['voicing_threshold'] = self.last_params.get('voicing_threshold', 0.25)
-                    
+
                     # 总是为单项重新生成 formant
                     item['formant_data'] = get_segmented_formant(item['snd'], self.last_params)
-                    
+
                     # 独立音频的宏观边界就是全文
                     item['macro_start'] = 0.0
                     item['macro_end'] = item['snd'].get_total_duration()
@@ -2122,7 +2135,7 @@ class PhoneticsApp:
                     item['pitch_floor'] = self.last_params['pitch_floor']
                     item['pitch_ceiling'] = self.last_params['pitch_ceiling']
                     item['voicing_threshold'] = self.last_params.get('voicing_threshold', 0.25)
-                    
+
                     # 重新生成 formant
                     item['formant_data'] = get_segmented_formant(item['snd'], self.last_params)
 
@@ -3068,7 +3081,7 @@ class PhoneticsApp:
             "   (如 bro/ther 或 北/京)，则强制按斜杠分割音节，不再按字拆分。"
         )
         rule_lbl = ctk.CTkLabel(rule_frame, text=rule_text, text_color=("#1E40AF", "#93C5FD"), font=("Microsoft YaHei", 11), justify=tk.LEFT)
-        
+
         is_expanded = [False]
         def toggle_rules(event=None):
             if is_expanded[0]:
@@ -3519,7 +3532,7 @@ class PhoneticsApp:
             try:
                 with open(project_json, "r", encoding="utf-8") as f:
                     state = json.load(f)
-                
+
                 # Check if the project actually has any speakers with data
                 is_empty = True
                 speakers = state.get("speakers", {})
@@ -3530,7 +3543,7 @@ class PhoneticsApp:
                     spk_data = speakers[spk_id]
                     if spk_data.get("items") or spk_data.get("long_audio_path") or spk_data.get("pending_batch_paths"):
                         is_empty = False
-                
+
                 if not is_empty:
                     has_autosave = True
                 else:
@@ -3550,7 +3563,7 @@ class PhoneticsApp:
                     os.makedirs(self.project_manager.workspace_dir)
                 except Exception as e2:
                     print(f"Failed to clean up corrupted autosave workspace: {e2}")
-        
+
         initial_files = self._normalize_startup_files(getattr(self, '_initial_files_list', None))
         self._initial_files_list = initial_files
         teproj_path = self._find_startup_project_file(initial_files)
@@ -3586,12 +3599,12 @@ class PhoneticsApp:
                     if success:
                         def finalize_recovery():
                             self._sync_ui_after_project_load(is_recovery=True)
-                            
+
                             # Ask if they want to import the initial files too
                             if initial_files:
                                 import_ans = messagebox.askyesno(
-                                    "导入启动文件", 
-                                    "工程已成功恢复。是否继续导入启动时选择的音频文件？", 
+                                    "导入启动文件",
+                                    "工程已成功恢复。是否继续导入启动时选择的音频文件？",
                                     parent=self.root
                                 )
                                 if import_ans:
@@ -3607,7 +3620,7 @@ class PhoneticsApp:
                     os.makedirs(self.project_manager.workspace_dir)
                 except Exception as e:
                     print(f"Failed to clean up autosave workspace: {e}")
-                
+
                 # Now load initial files in a clean workspace
                 if initial_files:
                     self.on_files_dropped(initial_files)
@@ -3622,7 +3635,7 @@ class PhoneticsApp:
             return
         path = filedialog.askopenfilename(filetypes=[("PhonTracer Project", "*.teproj *.zip")])
         if not path: return
-        
+
         from modules.project_import_dialog import ProjectImportPreviewDialog
         ProjectImportPreviewDialog(self.root, self, path)
 
@@ -3662,7 +3675,7 @@ class PhoneticsApp:
 
         self.spectrogram_panel.clear_canvas()
         self._refresh_ui_for_speaker()
-        
+
         if is_recovery:
             self.has_changes = True
         else:
@@ -3686,6 +3699,7 @@ class PhoneticsApp:
         )
         if not path: return
         self._last_exported_path = path
+        self.flush_eraser_changes()
         self.project_manager.capture_ui_state()
         self.start_loading("正在导出工程...")
 
@@ -3757,7 +3771,7 @@ class PhoneticsApp:
         tab_mode = self.tabview.get()
         pending_long_snd = self.pending_long_snd
         long_audio_path = self.long_audio_path
-        
+
         # 快照常规属性，避免工作线程直接读取或操作主线程的 self.items 数据字典
         items_snapshot = []
         for item in self.items.values():
@@ -4294,7 +4308,7 @@ class PhoneticsApp:
             self.entry_formant_max_hz.insert(0, str(float(max_hz)))
             if hasattr(self.entry_formant_max_hz, '_last_val'):
                 self.entry_formant_max_hz._last_val = str(float(max_hz))
-                
+
         if hasattr(self, 'entry_formant_count') and self.entry_formant_count:
             self.entry_formant_count.delete(0, tk.END)
             self.entry_formant_count.insert(0, str(int(count)))
@@ -4322,6 +4336,8 @@ class PhoneticsApp:
         self.recalculate_all_formants()
 
     def recalculate_all_formants(self):
+        if hasattr(self, 'spectrogram_panel') and self.spectrogram_panel:
+            self.spectrogram_panel.discard_eraser_changes()
         if not self.items: return
 
         # Ensure last params is synced
@@ -4335,11 +4351,11 @@ class PhoneticsApp:
 
         def run():
             self.root.after(0, lambda: self.start_loading("正在重新计算共振峰..."))
-            
+
             import parselmouth
             import os
             from modules.audio_core import _sample_formants_helper
-            
+
             params = {
                 'formant_max_hz': self.last_params.get('formant_max_hz', 5500.0),
                 'formant_count': self.last_params.get('formant_count', 5),
@@ -4358,42 +4374,42 @@ class PhoneticsApp:
                         item['snd'] = snd
                     except Exception:
                         pass
-                
+
                 if snd and item.get('start') is not None and item.get('end') is not None:
                     try:
                         mic_s = item['start']
                         mic_e = item['end']
-                        
+
                         is_long = ('macro_start' in item and 'macro_end' in item and snd.get_total_duration() > 15.0)
-                        
+
                         if is_long:
                             ms = item['macro_start']
                             me = item['macro_end']
                             valid_ms = max(0, ms)
                             valid_me = min(snd.get_total_duration(), me)
-                            
+
                             padding = 1.0
                             seg_start = max(0.0, valid_ms - padding)
                             seg_end = min(snd.get_total_duration(), valid_me + padding)
                             part_snd = snd.extract_part(from_time=seg_start, to_time=seg_end)
-                            
+
                             rel_s = mic_s - seg_start
                             rel_e = mic_e - seg_start
-                            
+
                             formant_data, preview_formants = _sample_formants_helper(part_snd, rel_s, rel_e, params)
                             formant_data['xs'] = formant_data['xs'] + seg_start
                         else:
                             formant_data, preview_formants = _sample_formants_helper(snd, mic_s, mic_e, params)
-                            
+
                         item['formant_data'] = formant_data
                         item['preview_formants'] = preview_formants
-                        
+
                         item['formant_max_hz'] = params['formant_max_hz']
                         item['formant_count'] = params['formant_count']
                         item['formant_window_length'] = params['formant_window_length']
                         item['formant_pre_emphasis'] = params['formant_pre_emphasis']
                         item['formant_sample_strategy'] = params['formant_sample_strategy']
-                        
+
                         if item.get('path'):
                             if item['path'] in self.audio_cache:
                                 cache_item = self.audio_cache[item['path']]
@@ -4407,7 +4423,7 @@ class PhoneticsApp:
                     except Exception as e:
                         import logging
                         logging.getLogger(__name__).error(f"Error recalculating formant: {e}")
-                
+
                 if i % 5 == 0 or i == total - 1:
                     self.root.after(0, lambda v=(i + 1) / total: self.set_progress(v))
 
@@ -4435,11 +4451,11 @@ class RenameSpeakerDialog(ctk.CTkToplevel):
         self.parent = parent
         self.result = None
         self.current_name = current_name or ""
-        
+
         self.title("重命名发音人")
         self.resizable(False, False)
         self.configure(fg_color=("#FFFFFF", "#1A1D24"))
-        
+
         # Geometry and centering (extremely compact vertical size)
         width, height = 360, 110
         screen_width = self.winfo_screenwidth()
@@ -4447,31 +4463,31 @@ class RenameSpeakerDialog(ctk.CTkToplevel):
         x = (screen_width - width) // 2
         y = (screen_height - height) // 2
         self.geometry(f"{width}x{height}+{x}+{y}")
-        
+
         self.transient(parent)
         self.grab_set()
-        
+
         # Top stripe
         accent_strip = ctk.CTkFrame(self, height=4, fg_color="#3B82F6", corner_radius=0)
         accent_strip.pack(fill="x", side="top")
-        
+
         # Content frame
         content_frame = ctk.CTkFrame(self, fg_color="transparent")
         content_frame.pack(fill="both", expand=True, padx=20, pady=(15, 15))
-        
+
         # Label
         lbl = ctk.CTkLabel(
-            content_frame, 
-            text="请输入新的名称：", 
+            content_frame,
+            text="请输入新的名称：",
             font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"),
             text_color=("#111827", "#F9FAFB")
         )
         lbl.pack(anchor="w", pady=(0, 8))
-        
+
         # Row frame (Entry + Buttons on the same line)
         row_frame = ctk.CTkFrame(content_frame, fg_color="transparent")
         row_frame.pack(fill="x")
-        
+
         # Pill-shaped Entry (height 36, corner_radius 18)
         self.entry = ctk.CTkEntry(
             row_frame,
@@ -4485,11 +4501,11 @@ class RenameSpeakerDialog(ctk.CTkToplevel):
         self.entry.insert(0, self.current_name)
         self.entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
         self.entry.focus_set()
-        
+
         # Select all text in entry
         self.entry.select_range(0, tk.END)
         self.entry.icursor(tk.END)
-        
+
         # Circular Cancel button (✕, height 36, corner_radius 18)
         btn_cancel = ctk.CTkButton(
             row_frame,
@@ -4505,7 +4521,7 @@ class RenameSpeakerDialog(ctk.CTkToplevel):
             command=self.on_cancel
         )
         btn_cancel.pack(side="left", padx=(0, 6))
-        
+
         # Circular OK button (✓, height 36, corner_radius 18)
         btn_ok = ctk.CTkButton(
             row_frame,
@@ -4521,13 +4537,13 @@ class RenameSpeakerDialog(ctk.CTkToplevel):
             command=self.on_ok
         )
         btn_ok.pack(side="left")
-        
+
         # Bind Enter and Escape
         self.bind("<Return>", lambda e: self.on_ok())
         self.bind("<Escape>", lambda e: self.on_cancel())
-        
+
         self.parent.wait_window(self)
-        
+
     def on_ok(self):
         val = self.entry.get().strip()
         if val:
@@ -4535,7 +4551,7 @@ class RenameSpeakerDialog(ctk.CTkToplevel):
             self.destroy()
         else:
             messagebox.showwarning("提示", "名称不能为空！", parent=self)
-            
+
     def on_cancel(self):
         self.result = None
         self.destroy()

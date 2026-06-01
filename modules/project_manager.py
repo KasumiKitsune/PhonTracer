@@ -124,18 +124,18 @@ class ProjectManager:
         self._save_lock = threading.RLock()
         self.auto_save_delay = 2.0
         self.auto_save_interval = 30.0
-        
+
         if not os.path.exists(self.workspace_dir):
             os.makedirs(self.workspace_dir)
-            
+
         self.load_config()
-            
+
     def _get_data_dir(self):
         d = os.path.join(self.workspace_dir, "data")
         if not os.path.exists(d):
             os.makedirs(d)
         return d
-        
+
     def _get_audio_dir(self):
         d = os.path.join(self.workspace_dir, "audio")
         if not os.path.exists(d):
@@ -222,8 +222,8 @@ class ProjectManager:
         dest_name = f"{self._safe_token(token)}_{base}"
         dest = os.path.join(target_dir, dest_name)
         if os.path.abspath(src_path) != os.path.abspath(dest):
-            if (not os.path.exists(dest) or 
-                os.path.getsize(src_path) != os.path.getsize(dest) or 
+            if (not os.path.exists(dest) or
+                os.path.getsize(src_path) != os.path.getsize(dest) or
                 abs(os.path.getmtime(src_path) - os.path.getmtime(dest)) > 1e-4):
                 shutil.copy2(src_path, dest)
         rel_path = os.path.join(subdir, dest_name).replace(os.sep, "/")
@@ -439,13 +439,13 @@ class ProjectManager:
                 "export_numbering_rule": getattr(self.app, "export_numbering_rule_value", "continuous"),
                 "speakers": {}
             }
-            
+
             data_dir = self._get_data_dir()
             audio_dir = self._get_audio_dir()
             copy_cache = {}
             runtime_attr_updates = []
             runtime_item_path_updates = []
-            
+
             for spk_id, spk in self.app.speaker_manager.speakers.items():
                 spk_data = {
                     "id": spk.id,
@@ -459,7 +459,7 @@ class ProjectManager:
                     "last_selected_iid": getattr(spk, "last_selected_iid", None),
                     "items": {}
                 }
-                
+
                 # Copy long audio to workspace if exists
                 spk_data["long_audio_path"] = self._copy_to_workspace(
                     spk_data["long_audio_path"],
@@ -483,7 +483,7 @@ class ProjectManager:
                     "pending_batch_paths",
                     [self._resolve_project_path(path) for path in new_batch]
                 ))
-                
+
                 for item_id, item in spk.items.items():
                     item_dict = {}
                     for k, v in item.items():
@@ -518,9 +518,9 @@ class ProjectManager:
                         else:
                             item_dict[k] = v
                     spk_data["items"][item_id] = item_dict
-                
+
                 state["speakers"][spk_id] = spk_data
-                
+
             project_json = os.path.join(self.workspace_dir, "project.json")
             serializable_state = migrate_removed_f0_engine(to_json_serializable(state))
             tmp_json = project_json + ".tmp"
@@ -562,18 +562,18 @@ class ProjectManager:
             traceback.print_exc()
             self._show_error("导出失败", f"无法准备工程数据：{e}")
             return False
-        
+
         try:
             with self._save_lock:
                 self._write_project_archive(zip_path)
-            
+
             # Delete backup after successful export
             if os.path.exists(self.backup_path):
                 try:
                     os.remove(self.backup_path)
                 except:
                     pass
-                    
+
             return True
         except Exception as e:
             traceback.print_exc()
@@ -738,11 +738,11 @@ class ProjectManager:
             temp_workspace = self._make_import_workspace()
             with zipfile.ZipFile(zip_path, 'r') as zf:
                 self._safe_extract(zf, temp_workspace)
-                
+
             project_json = os.path.join(temp_workspace, "project.json")
             if not os.path.exists(project_json):
                 raise ValueError("工程文件损坏：未找到 project.json")
-                
+
             self._validate_project_resources(state, temp_workspace)
 
             with self._save_lock:
@@ -785,7 +785,7 @@ class ProjectManager:
 
                 self._discard_workspace_backup(backup_workspace)
                 backup_workspace = None
-            
+
             return True
         except Exception as e:
             if backup_workspace is not None:
@@ -871,7 +871,7 @@ class ProjectManager:
         workspace_dir = workspace_dir or self.workspace_dir
         restored = {}
         id_mapping = {}
-        
+
         current_speakers = self.app.speaker_manager.speakers
         existing_names = {s.name for s in current_speakers.values()} if overlay else set()
 
@@ -887,15 +887,15 @@ class ProjectManager:
                 existing_names.add(name)
 
             spk = SpeakerState(name)
-            
+
             orig_id = spk_data.get("id", old_spk_id)
             if overlay and orig_id in current_speakers:
                 spk.id = str(uuid.uuid4())
             else:
                 spk.id = orig_id
-                
+
             id_mapping[orig_id] = spk.id
-            
+
             spk.last_params = spk_data.get("last_params", spk.last_params)
             spk.tab_mode = spk_data.get("tab_mode", "多条独立音频")
             if "单条" in spk.tab_mode:

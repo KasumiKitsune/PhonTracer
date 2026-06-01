@@ -86,26 +86,26 @@ class TestUISyncBugs(unittest.TestCase):
         mock_dlg = MagicMock()
         mock_textbox = MagicMock()
         mock_update_stats = MagicMock()
-        
+
         self.app.active_import_dlg = mock_dlg
         self.app.active_import_textbox = mock_textbox
         self.app.active_import_update_stats = mock_update_stats
         self.app.active_import_mode = 'long'
-        
+
         # Simulate dropping a .txt file path (in bytes or string)
         import tempfile
         import os
         with tempfile.NamedTemporaryFile(suffix='.txt', delete=False) as f:
             f.write(b"Group1\nword1 word2")
             f_path = f.name
-            
+
         try:
             # Put the drag and drop item in the drop queue
             self.app.drop_queue.put(('dlg', [f_path.encode('utf-8')]))
-            
+
             # Check the drop queue
             self.app._check_drop_queue()
-            
+
             # Assert text_box.delete and text_box.insert were called
             mock_textbox.delete.assert_called_with("1.0", "end")
             mock_textbox.insert.assert_called_with("1.0", "Group1\nword1 word2")
@@ -145,7 +145,7 @@ class TestUISyncBugs(unittest.TestCase):
             mock_dlg = MagicMock()
             mock_textbox = MagicMock()
             mock_update_stats = MagicMock()
-            
+
             # Setup active import dlg references that would be set by open_text_dialog
             def mock_open(mode):
                 self.app.active_import_dlg = mock_dlg
@@ -169,25 +169,25 @@ class TestUISyncBugs(unittest.TestCase):
     def test_add_segment_by_right_click(self):
         """Test right-clicking on an empty area adds a 0.5s segment and fits it in sequence"""
         from modules.visual_splitter import VisualSplitter
-        
+
         mock_snd = MagicMock()
         mock_snd.get_total_duration.return_value = 10.0
         mock_snd.values = [np.zeros(20000)]
         mock_snd.sampling_frequency = 2000
-        
+
         callback = MagicMock()
-        
+
         existing_items = [
             {'id': 0, 'label': 'A', 'start': 1.0, 'end': 2.0},
             {'id': 1, 'label': 'B', 'start': 4.0, 'end': 5.0}
         ]
-        
+
         with patch.object(VisualSplitter, 'setup_ui'), \
              patch.object(VisualSplitter, 'init_data'), \
              patch.object(VisualSplitter, 'update_dynamic_labels'), \
              patch.object(VisualSplitter, 'render_canvas'), \
              patch.object(VisualSplitter, 'auto_fit_scale'):
-             
+
             splitter = VisualSplitter(
                 master=self.root,
                 snd=mock_snd,
@@ -195,21 +195,21 @@ class TestUISyncBugs(unittest.TestCase):
                 callback=callback,
                 existing_items=existing_items
             )
-            
+
             splitter.original_words = [
                 {'id': 0, 'label': 'A'},
                 {'id': 1, 'label': 'B'}
             ]
             splitter.deleted_indices = set()
-            
+
             mock_event = MagicMock()
             splitter.px_per_sec = 100
             mock_event.x = 300
             splitter.canvas = MagicMock()
             splitter.canvas.canvasx.return_value = 300.0
-            
+
             splitter.on_right_click(mock_event)
-            
+
             self.assertEqual(len(splitter.segments), 3)
             self.assertEqual(splitter.segments[0]['start'], 1.0)
             self.assertEqual(splitter.segments[1]['start'], 2.75) # 3.0 - 0.25
@@ -357,31 +357,31 @@ class TestUISyncBugs(unittest.TestCase):
             panel.ax2 = MagicMock()
             panel.fig = MagicMock()
             panel.canvas = MagicMock()
-            
+
             # Mock the background for blitting
             mock_bg = MagicMock()
             panel.background = mock_bg
-            
+
             # Simulate a motion event inside axes
             mock_event = MagicMock()
             mock_event.x = 200
             mock_event.y = 300
             mock_event.inaxes = panel.ax2
-            
+
             # The circle is originally None, it should be created
             self.assertIsNone(panel.eraser_circle)
             panel.update_eraser_circle(mock_event)
-            
+
             # Circle should be created, animated=True, and added to ax2.patches
             self.assertIsNotNone(panel.eraser_circle)
             self.assertTrue(panel.eraser_circle.get_animated())
             panel.ax2.add_patch.assert_called_once_with(panel.eraser_circle)
-            
+
             # Calling restore_region, draw_artist, and blit should be invoked for high-performance blitting
             panel.canvas.restore_region.assert_called_once_with(mock_bg)
             panel.ax2.draw_artist.assert_called_once_with(panel.eraser_circle)
             panel.canvas.blit.assert_called_once_with(panel.fig.bbox)
-            
+
             # Test that on_draw updates background
             draw_event = MagicMock()
             panel.on_draw(draw_event)
@@ -799,6 +799,343 @@ class TestUISyncBugs(unittest.TestCase):
             panel.canvas.restore_region.assert_called_once_with("background")
             panel.ax.draw_artist.assert_any_call(panel.cursor_line)
             panel.ax.draw_artist.assert_any_call(panel.cursor_text)
+
+    def test_spectrogram_panel_eraser_session_caching_and_deferral(self):
+        """测试橡皮擦模式使用会话缓存，将实际的物理落盘和界面重绘进行解耦控制"""
+        with patch.object(SpectrogramPanel, 'setup_ui'):
+            panel = SpectrogramPanel(self.root, {}, None, None, None)
+            panel.ax = MagicMock()
+            panel.ax2 = MagicMock()
+            panel.canvas = MagicMock()
+
+            # 设置 F0 模式模拟条目
+            xs = np.array([0.1, 0.2, 0.3])
+            freqs = np.array([150.0, 160.0, 170.0])
+            item = {
+                'start': 0.1,
+                'end': 0.9,
+                'label': 'test',
+                'pitch_data': {
+                    'xs': xs,
+                    'freqs': freqs.copy()
+                }
+            }
+            panel.current_item = item
+            panel.eraser_mode = True
+
+            # 模拟 F0 预览图层
+            mock_layer = MagicMock()
+            panel.erased_pitch_layer = mock_layer
+
+            # 模拟靠近索引 1 的点击事件 (x=0.2, y=160)
+            mock_event = MagicMock()
+            mock_event.inaxes = panel.ax2
+            mock_event.x = 200
+            mock_event.y = 300
+            mock_event.xdata = 0.2
+
+            # 模拟 transData.transform 返回像素坐标
+            panel.ax2.transData.transform.return_value = np.array([
+                [100, 300], # 索引 0: 距离 100 像素
+                [200, 300], # 索引 1: 距离 0 像素
+                [300, 300]  # 索引 2: 距离 100 像素
+            ])
+
+            panel.erase_radius = 15.0
+
+            # 1. 擦除靠近的点：应该仅加入会话缓存，暂不修改底层 freqs 数组
+            panel.erase_points_near(mock_event)
+
+            # 会话缓存中应包含索引 1
+            self.assertIn(1, panel.session_erased_pitch_indices)
+            self.assertNotIn(0, panel.session_erased_pitch_indices)
+            self.assertNotIn(2, panel.session_erased_pitch_indices)
+
+            # 底层原始数据依然保持完整（暂缓提交）
+            self.assertEqual(item['pitch_data']['freqs'][1], 160.0)
+
+            # 预览图层的 set_data 和 draw_idle 应该已被调用（保证流畅展示）
+            mock_layer.set_data.assert_called_once()
+            panel.canvas.draw_idle.assert_called_once()
+
+            # 2. 调用 apply_eraser_changes 进行提交：应该将物理改动写入实际数组，并清空临时缓存
+            panel.plot_item_spectrogram = MagicMock()
+            panel.update_ui_times = MagicMock()
+
+            panel.apply_eraser_changes()
+
+            # 底层数组中的 1 号索引已成功置为 0.0
+            self.assertEqual(item['pitch_data']['freqs'][1], 0.0)
+            # 临时缓存清空
+            self.assertEqual(len(panel.session_erased_pitch_indices), 0)
+            # 条目已被标记为手动编辑
+            self.assertTrue(item.get('is_manual_edited'))
+
+    def test_spectrogram_panel_eraser_discard_changes(self):
+        """测试 discard_eraser_changes 能够安全清空临时擦除会话而不影响底层实际数据"""
+        with patch.object(SpectrogramPanel, 'setup_ui'):
+            panel = SpectrogramPanel(self.root, {}, None, None, None)
+            panel.ax = MagicMock()
+            panel.ax2 = MagicMock()
+            panel.canvas = MagicMock()
+
+            # 设置共振峰模式的模拟条目
+            xs = np.array([0.1, 0.2, 0.3])
+            f1 = np.array([500.0, 550.0, 600.0])
+            f2 = np.array([1500.0, 1550.0, 1600.0])
+            item = {
+                'start': 0.1,
+                'end': 0.9,
+                'label': 'test',
+                'formant_data': {
+                    'xs': xs,
+                    'f1': f1.copy(),
+                    'f2': f2.copy()
+                }
+            }
+            panel.current_item = item
+            panel.eraser_mode = True
+
+            # 模拟未提交的会话缓存
+            panel.session_erased_formant_indices["f1"].add(1)
+
+            # 放弃本次会话的全部更改
+            panel.discard_eraser_changes()
+
+            # 会话缓存已清空
+            self.assertEqual(len(panel.session_erased_formant_indices["f1"]), 0)
+            # 底层的原始物理数据依然保持完好，完全没有被修改
+            self.assertEqual(item['formant_data']['f1'][1], 550.0)
+
+    def test_eraser_background_save_thread_safety(self):
+        """测试在后台线程保存/导出时，绝对不调用 UI 相关的刷新逻辑，确保多线程安全性"""
+        import threading
+
+        with patch.object(SpectrogramPanel, 'setup_ui'):
+            panel = SpectrogramPanel(self.root, {}, None, None, None)
+            panel.ax = MagicMock()
+            panel.ax2 = MagicMock()
+            panel.canvas = MagicMock()
+            panel.plot_item_spectrogram = MagicMock()
+
+            # 模拟一个有未提交擦除点的项
+            xs = np.array([0.1, 0.2, 0.3])
+            freqs = np.array([150.0, 160.0, 170.0])
+            item = {
+                'start': 0.1, 'end': 0.9, 'label': 'test',
+                'pitch_data': {'xs': xs, 'freqs': freqs.copy()}
+            }
+            panel.current_item = item
+            panel.eraser_mode = True
+            panel.session_erased_pitch_indices.add(1)
+
+            # 创建 ProjectManager，不绑定真实的 Tk UI 重绘
+            app_mock = MagicMock()
+            app_mock.spectrogram_panel = panel
+            app_mock.speaker_manager.active_speaker_id = "spk1"
+            app_mock.speaker_manager.speakers = {}
+            app_mock.export_numbering_rule_value = "continuous"
+            app_mock.flush_eraser_changes = MagicMock()
+
+            from modules.project_manager import ProjectManager
+            manager = ProjectManager(app_mock)
+
+            # 后台线程直接调用 save_to_workspace()
+            # 应该在我们的修改下决不调用 app_mock.flush_eraser_changes()
+            errors = []
+            def save_in_background():
+                try:
+                    manager.save_to_workspace()
+                except Exception as exc:
+                    errors.append(exc)
+
+            worker = threading.Thread(
+                target=save_in_background,
+                daemon=True
+            )
+            worker.start()
+            worker.join(timeout=3)
+
+            # 确保 flush_eraser_changes 没有在 save_to_workspace 内被执行
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(errors, [])
+            app_mock.flush_eraser_changes.assert_not_called()
+            panel.plot_item_spectrogram.assert_not_called()
+
+    def test_eraser_clean_project_mark_modified(self):
+        """测试干净工程（has_changes=False）在擦除并释放鼠标时，立刻触发 mark_modified，启动自动保存"""
+        with patch.object(SpectrogramPanel, 'setup_ui'):
+            panel = SpectrogramPanel(self.root, {}, None, None, None)
+            panel.ax = MagicMock()
+            panel.ax2 = MagicMock()
+            panel.canvas = MagicMock()
+            panel.erased_pitch_layer = MagicMock()
+            panel.update_ui_times = MagicMock()
+
+            xs = np.array([0.1, 0.2, 0.3])
+            freqs = np.array([150.0, 160.0, 170.0])
+            item = {
+                'start': 0.1, 'end': 0.9, 'label': 'test',
+                'pitch_data': {'xs': xs, 'freqs': freqs.copy()}
+            }
+            panel.current_item = item
+            panel.eraser_mode = True
+
+            app_mock = MagicMock()
+            app_mock.mark_modified = MagicMock()
+            panel.app = app_mock
+
+            # 模拟拖拽擦除索引 1
+            panel.session_erased_pitch_indices.add(1)
+
+            # 释放鼠标触发轻量落盘
+            mock_event = MagicMock()
+            mock_event.x = 100
+            mock_event.y = 100
+            panel.erasing = True
+            panel.on_release(mock_event)
+
+            # 应该直接写入底层频率数组，并且只触发一次 app.mark_modified()
+            self.assertEqual(item['pitch_data']['freqs'][1], 0.0)
+            app_mock.mark_modified.assert_called_once()
+            panel.update_ui_times.assert_not_called()
+
+    def test_eraser_highlight_stays_at_original_frequency_after_light_apply(self):
+        """测试轻量落盘后继续拖动时，历史红点仍停留在原始频率位置"""
+        with patch.object(SpectrogramPanel, 'setup_ui'):
+            panel = SpectrogramPanel(self.root, {}, None, None, None)
+            panel.ax = MagicMock()
+            panel.ax2 = MagicMock()
+            panel.canvas = MagicMock()
+            panel.erased_pitch_layer = MagicMock()
+
+            xs = np.array([0.1, 0.2, 0.3])
+            freqs = np.array([150.0, 160.0, 170.0])
+            panel.current_item = {
+                'start': 0.1, 'end': 0.9, 'label': 'test',
+                'pitch_data': {'xs': xs, 'freqs': freqs.copy()}
+            }
+            panel.eraser_mode = True
+            panel.erase_radius = 15.0
+            panel.ax2.transData.transform.return_value = np.array([
+                [100, 300],
+                [200, 300],
+                [300, 300]
+            ])
+
+            first_event = MagicMock(inaxes=panel.ax2, x=200, y=300)
+            panel.erase_points_near(first_event)
+            panel.light_apply_eraser_changes()
+            self.assertEqual(panel.current_item['pitch_data']['freqs'][1], 0.0)
+
+            second_event = MagicMock(inaxes=panel.ax2, x=300, y=300)
+            panel.erase_points_near(second_event)
+
+            shown_xs, shown_freqs = panel.erased_pitch_layer.set_data.call_args.args
+            self.assertEqual(shown_xs, [0.2, 0.3])
+            self.assertEqual(shown_freqs, [160.0, 170.0])
+
+    def test_formant_highlight_stays_visible_after_light_apply(self):
+        """测试共振峰轻量落盘为 NaN 后，继续拖动时历史红点仍保持可见"""
+        with patch.object(SpectrogramPanel, 'setup_ui'):
+            panel = SpectrogramPanel(self.root, {}, None, None, None)
+            panel.ax = MagicMock()
+            panel.ax2 = MagicMock()
+            panel.canvas = MagicMock()
+            panel.erased_f1_layer = MagicMock()
+            panel.erased_f2_layer = MagicMock()
+
+            xs = np.array([0.1, 0.2, 0.3])
+            f1 = np.array([500.0, 550.0, 600.0])
+            f2 = np.array([1500.0, 1550.0, 1600.0])
+            panel.current_item = {
+                'start': 0.1, 'end': 0.9, 'label': 'test',
+                'analysis_mode': 'formant',
+                'formant_data': {'xs': xs, 'f1': f1.copy(), 'f2': f2.copy()}
+            }
+            panel.eraser_mode = True
+            panel.erase_radius = 15.0
+
+            def transform(points):
+                if np.max(points[:, 1]) < 1000:
+                    return np.array([[100, 100], [200, 100], [300, 100]])
+                return np.array([[100, 1000], [200, 1000], [300, 1000]])
+
+            panel.ax.transData.transform.side_effect = transform
+
+            first_event = MagicMock(inaxes=panel.ax, x=200, y=100)
+            panel.erase_points_near(first_event)
+            panel.light_apply_eraser_changes()
+            self.assertTrue(np.isnan(panel.current_item['formant_data']['f1'][1]))
+
+            second_event = MagicMock(inaxes=panel.ax, x=300, y=100)
+            panel.erase_points_near(second_event)
+
+            offsets = panel.erased_f1_layer.set_offsets.call_args.args[0]
+            self.assertEqual(offsets.tolist(), [[0.2, 550.0], [0.3, 600.0]])
+
+    def test_eraser_mode_switch_flush(self):
+        """测试由 F0 模式切换至共振峰模式时，切换前能够自动且安全地落盘已擦除的数据点"""
+        with patch.object(SpectrogramPanel, 'setup_ui'):
+            panel = SpectrogramPanel(self.root, {}, None, None, None)
+            panel.ax = MagicMock()
+            panel.ax2 = MagicMock()
+            panel.canvas = MagicMock()
+            panel.plot_item_spectrogram = MagicMock()
+
+            xs = np.array([0.1, 0.2, 0.3])
+            freqs = np.array([150.0, 160.0, 170.0])
+            item = {
+                'start': 0.1, 'end': 0.9, 'label': 'test',
+                'pitch_data': {'xs': xs, 'freqs': freqs.copy()}
+            }
+            panel.current_item = item
+            panel.eraser_mode = True
+
+            app_mock = MagicMock()
+            app_mock.spectrogram_panel = panel
+            panel.app = app_mock
+
+            # 模拟未提交的 F0 擦除
+            panel.session_erased_pitch_indices.add(2)
+
+            # 模拟在 app 中切换分析模式（触发 flush）
+            app_mock.flush_eraser_changes.side_effect = lambda: panel.apply_eraser_changes()
+            app_mock.flush_eraser_changes()
+
+            # 切换前应该已经将 2 号索引的值写入底层的 freqs 数组
+            self.assertEqual(item['pitch_data']['freqs'][2], 0.0)
+
+    def test_eraser_formant_actual_apply(self):
+        """测试共振峰模式下的橡皮擦擦除，能够在鼠标释放时将 NaN 写入 f1 和 f2 数组"""
+        with patch.object(SpectrogramPanel, 'setup_ui'):
+            panel = SpectrogramPanel(self.root, {}, None, None, None)
+            panel.ax = MagicMock()
+            panel.ax2 = MagicMock()
+            panel.canvas = MagicMock()
+
+            xs = np.array([0.1, 0.2, 0.3])
+            f1 = np.array([500.0, 550.0, 600.0])
+            f2 = np.array([1500.0, 1550.0, 1600.0])
+            item = {
+                'start': 0.1, 'end': 0.9, 'label': 'test',
+                'formant_data': {'xs': xs, 'f1': f1.copy(), 'f2': f2.copy()}
+            }
+            panel.current_item = item
+            panel.eraser_mode = True
+            panel.app = MagicMock()
+
+            # 模拟拖拽剔除了 f1 的 1 号点，以及 f2 的 0 号点
+            panel.session_erased_formant_indices["f1"].add(1)
+            panel.session_erased_formant_indices["f2"].add(0)
+
+            # 调用轻量提交
+            panel.light_apply_eraser_changes()
+
+            # 验证底层数组数据已被成功更改为 NaN
+            self.assertTrue(np.isnan(item['formant_data']['f1'][1]))
+            self.assertTrue(np.isnan(item['formant_data']['f2'][0]))
+            self.assertEqual(item['formant_data']['f1'][0], 500.0)  # 未擦除的点保持原样
 
 if __name__ == '__main__':
     unittest.main()

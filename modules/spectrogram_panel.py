@@ -19,7 +19,7 @@ class SpectrogramPanel:
         self.on_auto_detect_callback = on_auto_detect_callback
         self.on_export_callback = on_export_callback
         self.app = app
-        
+
         self.current_item = None
         self.current_item_iid = None
         self.dragging = None # 取值: 'start', 'end', 或 ('inner', idx)
@@ -33,7 +33,7 @@ class SpectrogramPanel:
             self.font_title = ctk.CTkFont(family="Microsoft YaHei", size=15, weight="bold")
         except Exception:
             self.font_title = ("Microsoft YaHei", 15, "bold")
-        
+
         # Cursor and playback state
         self.is_playing = False
         self.play_start_sys_time = 0
@@ -56,23 +56,27 @@ class SpectrogramPanel:
         self.playback_mode_buttons = {}
         self.playback_domain_start = None
         self.playback_domain_end = None
-        
+
         # Eraser mode state
         self.eraser_mode = False
         self.erasing = False
         self.erase_radius = 15.0  # Default pixel radius
         self.eraser_circle = None # Matplotlib patch for displaying the eraser scope
         self.background = None
+        self.session_erased_pitch_indices = set()
+        self.session_erased_formant_indices = {"f1": set(), "f2": set()}
+        self.session_erased_pitch_points = {}
+        self.session_erased_formant_points = {"f1": {}, "f2": {}}
 
         self.setup_ui()
-        
+
     def setup_ui(self):
         center_frame = ctk.CTkFrame(self.parent, fg_color="white", corner_radius=10)
         center_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, pady=10)
-        
+
         top_bar = ctk.CTkFrame(center_frame, fg_color="transparent")
         top_bar.pack(side=tk.TOP, fill=tk.X, padx=15, pady=(15, 5))
-        
+
         frame_tune = ctk.CTkFrame(top_bar, fg_color="#F9FAFB", corner_radius=8)
         frame_tune.pack(side=tk.TOP, fill=tk.X, pady=(0, 10))
         ctk.CTkLabel(frame_tune, text="区间(s):", font=self.font_title, text_color="#111827").pack(side=tk.LEFT, padx=(10, 10), pady=10)
@@ -81,50 +85,50 @@ class SpectrogramPanel:
         self.entry_t_start = ctk.CTkEntry(frame_tune, textvariable=self.var_t_start, width=70, corner_radius=20, height=28)
         self.entry_t_start.pack(side=tk.LEFT, padx=(5, 10))
         self.setup_entry_behavior(self.entry_t_start, 'start_manual')
-        
+
         ctk.CTkLabel(frame_tune, text="止:").pack(side=tk.LEFT)
         self.var_t_end = ctk.StringVar(value="0.000")
         self.entry_t_end = ctk.CTkEntry(frame_tune, textvariable=self.var_t_end, width=70, corner_radius=20, height=28)
         self.entry_t_end.pack(side=tk.LEFT, padx=(5, 15))
         self.setup_entry_behavior(self.entry_t_end, 'end_manual')
-        
+
         # 将 “应用” 按钮放置在右上角，与区间在同一行
         CTkReleaseButton(
-            frame_tune, 
-            text="应用", 
-            image=self.icons.get("check"), 
-            compound="left", 
-            command=self.apply_manual_time, 
-            corner_radius=14, 
-            height=28, 
-            width=70, 
-            fg_color="#E5E7EB", 
-            text_color="#1F2937", 
+            frame_tune,
+            text="应用",
+            image=self.icons.get("check"),
+            compound="left",
+            command=self.apply_manual_time,
+            corner_radius=14,
+            height=28,
+            width=70,
+            fg_color="#E5E7EB",
+            text_color="#1F2937",
             hover_color="#D1D5DB"
         ).pack(side=tk.RIGHT, padx=(0, 10), pady=10)
-        
+
         frame_actions = ctk.CTkFrame(top_bar, fg_color="transparent")
         frame_actions.pack(side=tk.TOP, fill=tk.X, pady=(5, 0))
-        
+
         CTkReleaseButton(frame_actions, text="自动识别", image=self.icons.get("bulb"), compound="left", command=self.apply_auto_detect, corner_radius=20, height=36, width=110, fg_color="#FEE2E2", text_color="#DC2626", hover_color="#FCA5A5").pack(side=tk.LEFT, padx=(0, 20))
-        
+
         # 橡皮擦模式按钮
         self.btn_eraser = CTkReleaseButton(
-            frame_actions, 
-            text="橡皮擦", 
-            image=self.icons.get("eraser"), 
-            compound="left", 
-            command=self.toggle_eraser_mode, 
-            corner_radius=20, 
-            height=36, 
-            width=100, 
-            fg_color="#E5E7EB", 
-            text_color="#1F2937", 
+            frame_actions,
+            text="橡皮擦",
+            image=self.icons.get("eraser"),
+            compound="left",
+            command=self.toggle_eraser_mode,
+            corner_radius=20,
+            height=36,
+            width=100,
+            fg_color="#E5E7EB",
+            text_color="#1F2937",
             hover_color="#D1D5DB",
             font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold")
         )
         self.btn_eraser.pack(side=tk.LEFT, padx=(0, 20))
-        
+
         self.playback_status_var = ctk.StringVar(value="0.000 / 0.000 s")
 
         # 导出按钮 (使用 ctk.CTkButton，实现即时按键响应)
@@ -156,7 +160,7 @@ class SpectrogramPanel:
         # --- Bottom bar for Project Management ---
         bottom_bar = ctk.CTkFrame(center_frame, fg_color="#F9FAFB", corner_radius=8, height=36)
         bottom_bar.pack(side=tk.BOTTOM, fill=tk.X, padx=15, pady=(5, 5))
-        
+
         CTkReleaseButton(bottom_bar, text=" 导入工程", image=self.icons.get("import"), compound="left", command=self.on_import_project_clicked, corner_radius=15, height=30, fg_color="#E5E7EB", text_color="#1F2937", hover_color="#D1D5DB").pack(side=tk.LEFT, padx=(10, 5), pady=5)
         CTkReleaseButton(bottom_bar, text=" 导出工程", image=self.icons.get("save_black"), compound="left", command=self.on_export_project_clicked, corner_radius=15, height=30, fg_color="#E5E7EB", text_color="#1F2937", hover_color="#D1D5DB").pack(side=tk.LEFT, padx=5, pady=5)
 
@@ -258,6 +262,8 @@ class SpectrogramPanel:
     def clear_canvas(self):
         if self.is_playing:
             self._stop_playback()
+        if self.eraser_mode:
+            self.apply_eraser_changes()
         self.current_item = None
         self.ax.clear()
         self.ax2.clear()
@@ -276,6 +282,9 @@ class SpectrogramPanel:
     def load_item(self, item):
         if self.is_playing:
             self._stop_playback()
+        if self.eraser_mode:
+            self.apply_eraser_changes()
+            self._reset_eraser_session()
         self.current_item = item
         self.current_item_iid = None
         if self.app and hasattr(self.app, 'items'):
@@ -285,7 +294,7 @@ class SpectrogramPanel:
                     break
         t_start = item.get('start')
         t_end = item.get('end')
-        
+
         # Init chars_bounds
         label = item.get('label', '')
         from .data_utils import split_into_syllables
@@ -314,7 +323,7 @@ class SpectrogramPanel:
 
         self.var_t_start.set(f"{t_start:.3f}" if t_start is not None else "0.000")
         self.var_t_end.set(f"{t_end:.3f}" if t_end is not None else "0.000")
-        
+
         self.cursor_x = t_start # Reset cursor position when loading new item
         self.cursor_char_index = 0 if item.get('chars_bounds') else None
         self.playback_domain_start = None
@@ -482,7 +491,7 @@ class SpectrogramPanel:
         item = self.current_item
         if not item: return
         if not item.get('snd') or item.get('start') is None: return
-        
+
         self.ax.clear()
         self.ax2.clear()
         self.eraser_circle = None
@@ -504,12 +513,12 @@ class SpectrogramPanel:
         self.cursor_line = None
         self.cursor_text = None
         self.selection_patch = None
-        
+
         snd = item['snd']
         t_s, t_e = item['start'], item['end']
         chars_bounds = item.get('chars_bounds', [])
         label = item.get('label', '')
-        
+
         if self.switch_trim_silence and self.switch_trim_silence.get():
             mac_part = snd.extract_part(from_time=item['macro_start'], to_time=item['macro_end'])
             vals = mac_part.values[0]
@@ -527,9 +536,9 @@ class SpectrogramPanel:
             view_e = min(item['macro_end'] + 0.2, snd.get_total_duration())
         self.playback_domain_start = view_s
         self.playback_domain_end = view_e
-        
+
         part = snd.extract_part(from_time=view_s, to_time=view_e)
-        
+
         app_params = getattr(self.app, 'last_params', {}) if self.app else {}
         analysis_mode = item.get('analysis_mode', app_params.get('analysis_mode', 'f0'))
         self.update_eraser_button_text()
@@ -546,11 +555,11 @@ class SpectrogramPanel:
             pass
 
         spectrogram = part.to_spectrogram(window_length=0.005, maximum_frequency=spec_max_freq)
-        X = spectrogram.x_grid() + view_s 
+        X = spectrogram.x_grid() + view_s
         Y = spectrogram.y_grid()
         vals = np.where(spectrogram.values > 0, spectrogram.values, 1e-10)
         sg_db = 10 * np.log10(vals)
-        
+
         self.ax.pcolormesh(X, Y, sg_db, vmin=sg_db.max()-50, vmax=sg_db.max(), cmap='Greys')
 
         if analysis_mode == 'formant':
@@ -564,7 +573,7 @@ class SpectrogramPanel:
             self.ax.set_ylim([0, plot_max_hz])
             self.ax.set_xlim([view_s, view_e])
             self.ax.set_ylabel("Frequency (Hz)")
-            
+
             if item.get('formant_data'):
                 f_xs = item['formant_data']['xs']
                 f1_arr = item['formant_data']['f1']
@@ -573,15 +582,23 @@ class SpectrogramPanel:
                 f_xs_filtered = f_xs[mask]
                 f1_plot = f1_arr[mask].copy()
                 f2_plot = f2_arr[mask].copy()
-                
+
                 self.ax.scatter(f_xs_filtered, f1_plot, s=18, color='#F97316', alpha=0.9, edgecolors='none', zorder=5, label="F1")
                 self.ax.scatter(f_xs_filtered, f2_plot, s=18, color='#22C55E', alpha=0.9, edgecolors='none', zorder=5, label="F2")
+
+                # 创建共振峰待剔除点图层
+                self.erased_f1_layer = self.ax.scatter([], [], s=22, color='#DC2626', alpha=0.6, edgecolors='none', zorder=7, label="待剔除F1")
+                self.erased_f2_layer = self.ax.scatter([], [], s=22, color='#DC2626', alpha=0.6, edgecolors='none', zorder=7, label="待剔除F2")
+
+                if self.eraser_mode and hasattr(self, 'session_erased_formant_indices'):
+                    self._remember_erased_formant_points(f_xs, f1_arr, f2_arr)
+                    self._update_erased_formant_layers()
         else:
             self.ax2.set_visible(True)
             self.ax.set_ylim([0, 5000])
             self.ax.set_xlim([view_s, view_e])
             self.ax.set_ylabel("Frequency (Hz)")
-            
+
             if item.get('pitch_data'):
                 p_xs = item['pitch_data']['xs']
                 p_freqs = item['pitch_data']['freqs']
@@ -601,7 +618,15 @@ class SpectrogramPanel:
                 p_xs = np.array([])
                 p_vals = np.array([])
             self.ax2.plot(p_xs, p_vals, '-o', markersize=4, linewidth=1.5, color='#3B82F6', zorder=5)
-            
+
+            # 创建 F0 待擦除点图层
+            self.erased_pitch_layer = self.ax2.plot([], [], 'o', color='#DC2626', markersize=5, zorder=7, label="待擦除点", alpha=0.6)[0]
+            if self.eraser_mode and item.get('pitch_data') and hasattr(self, 'session_erased_pitch_indices') and self.session_erased_pitch_indices:
+                xs = item['pitch_data']['xs']
+                freqs = item['pitch_data']['freqs']
+                self._remember_erased_pitch_points(xs, freqs)
+                self._update_erased_pitch_layer()
+
             # Highlight anomalies (pitch jumps)
             p_xs_raw, p_freqs_raw = None, None
             if item.get('pitch_data'):
@@ -622,7 +647,7 @@ class SpectrogramPanel:
                     p_xs_raw, p_freqs_raw, bounds=bounds, start=t_s, end=t_e
                 )
 
-                if anomaly_points:
+                if anomaly_points and not self.eraser_mode:
                     jumps_x = [t for t, _ in anomaly_points]
                     jumps_y = [f for _, f in anomaly_points]
                     self.ax2.plot(jumps_x, jumps_y, 'o', color='#EF4444', markersize=6, zorder=6, label="异常点")
@@ -638,7 +663,7 @@ class SpectrogramPanel:
             self.ax2.set_ylabel("F0 (Hz)", color='#3B82F6')
             self.ax2.tick_params(axis='y', labelcolor='#3B82F6')
         self.ax.set_title(f"编辑区: {label}", pad=10)
-        
+
         from .data_utils import split_into_syllables
         syls = split_into_syllables(label)
         for i, (c_start, c_end) in enumerate(chars_bounds):
@@ -647,12 +672,12 @@ class SpectrogramPanel:
             self.bound_lines.append((line_s, line_e))
             span = self.ax.axvspan(c_start, c_end, color='#BFDBFE', alpha=0.35)
             self.span_fills.append(span)
-            
+
             if i < len(syls):
                 cx = (c_start + c_end) / 2
                 txt = self.ax.text(cx, 4800, syls[i], color='#111827', fontsize=12, ha='center', va='top', fontweight='bold', bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.7))
                 self.char_texts.append(txt)
-        
+
         if self.cursor_x is None:
             self.cursor_x = t_s
         self.cursor_line = self.ax.axvline(
@@ -698,11 +723,11 @@ class SpectrogramPanel:
 
         item = self.current_item
         chars_bounds = item.get('chars_bounds', [])
-        
+
         closest = None
         min_dist = 15 # px threshold
         closest_priority = 99
-        
+
         for i, (c_s, c_e) in enumerate(chars_bounds):
             s_px = self.ax.transData.transform((c_s, 0))[0]
             s_dist = abs(event.x - s_px)
@@ -719,7 +744,7 @@ class SpectrogramPanel:
                 closest = ('end', i)
                 min_dist = e_dist
                 closest_priority = 1
-        
+
         if self.cursor_x is not None:
             c_px = self.ax.transData.transform((self.cursor_x, 0))[0]
             c_dist = abs(event.x - c_px)
@@ -748,7 +773,7 @@ class SpectrogramPanel:
         elif closest == 'cursor':
             self.cursor_line.set_color('#064E3B')
             self.cursor_line.set_linewidth(2.5)
-            
+
         if self.dragging:
             self.canvas.draw_idle()
         else:
@@ -786,28 +811,28 @@ class SpectrogramPanel:
 
     def on_motion(self, event):
         if not self.ax or not self.current_item: return
-        
+
         if self.eraser_mode:
             self.canvas.get_tk_widget().config(cursor="crosshair")
             if event.x is not None and event.y is not None:
                 self.update_eraser_circle(event)
             else:
                 self.update_eraser_circle(None)
-                
+
             if self.erasing and event.xdata is not None:
                 self.erase_points_near(event)
             return
 
         item = self.current_item
         chars_bounds = item.get('chars_bounds', [])
-        
+
         if not self.dragging:
             is_hovering = False
             needs_redraw = False
             for i, (c_s, c_e) in enumerate(chars_bounds):
                 s_px = self.ax.transData.transform((c_s, 0))[0]
                 e_px = self.ax.transData.transform((c_e, 0))[0]
-                
+
                 if abs(event.x - s_px) < 15:
                     if self.bound_lines[i][0].get_linewidth() != 4:
                         self.bound_lines[i][0].set_linewidth(4)
@@ -831,7 +856,7 @@ class SpectrogramPanel:
                         self.bound_lines[i][1].set_linewidth(2)
                         self.bound_lines[i][1].set_color('#EF4444')
                         needs_redraw = True
-                
+
             if self.cursor_x is not None:
                 c_px = self.ax.transData.transform((self.cursor_x, 0))[0]
                 if abs(event.x - c_px) < 15:
@@ -853,7 +878,7 @@ class SpectrogramPanel:
             if needs_redraw:
                 self.canvas.draw_idle()
             return
-            
+
         if event.xdata is None:
             return
 
@@ -892,28 +917,17 @@ class SpectrogramPanel:
         elif self.dragging == 'cursor':
             self._set_cursor_position(event.xdata)
             return
-            
+
         self.update_lines()
 
     def on_release(self, event):
         if self.eraser_mode:
             if self.erasing:
                 self.erasing = False
-                item = self.current_item
-                if item:
-                    app_params = getattr(self.app, 'last_params', {}) if self.app else {}
-                    mode = item.get('analysis_mode', app_params.get('analysis_mode', 'f0'))
-                    if 'preview_f0' in item:
-                        item.pop('preview_f0')
-                    if mode == 'formant' and 'preview_formants' in item:
-                        item.pop('preview_formants')
-                    if 'has_empty_data' in item:
-                        item.pop('has_empty_data')
-                self.update_ui_times()
-                self.plot_item_spectrogram()
-                # Re-draw the eraser circle since plot_item_spectrogram cleared the axes
+                # 更新橡皮擦圆圈并轻量提交底层数组
                 if event.x is not None and event.y is not None:
                     self.update_eraser_circle(event)
+                self.light_apply_eraser_changes()
             return
 
         if self.dragging:
@@ -942,7 +956,7 @@ class SpectrogramPanel:
         item = self.current_item
         chars_bounds = item.get('chars_bounds', [])
         if not chars_bounds or len(self.bound_lines) != len(chars_bounds): return
-        
+
         for i, (c_s, c_e) in enumerate(chars_bounds):
             self.bound_lines[i][0].set_xdata([c_s, c_s])
             self.bound_lines[i][1].set_xdata([c_e, c_e])
@@ -968,14 +982,16 @@ class SpectrogramPanel:
             if i < len(self.char_texts):
                 cx = (c_s + c_e) / 2
                 self.char_texts[i].set_position((cx, 4800))
-                
+
         self.canvas.draw_idle()
 
     def update_ui_times(self):
         item = self.current_item
         if not item: return
-        self.var_t_start.set(f"{item['start']:.3f}")
-        self.var_t_end.set(f"{item['end']:.3f}")
+        if getattr(self, 'var_t_start', None) is not None:
+            self.var_t_start.set(f"{item['start']:.3f}")
+        if getattr(self, 'var_t_end', None) is not None:
+            self.var_t_end.set(f"{item['end']:.3f}")
         if self.on_time_changed:
             self.on_time_changed(item)
 
@@ -986,7 +1002,7 @@ class SpectrogramPanel:
             t1, t2 = float(self.var_t_start.get()), float(self.var_t_end.get())
             old_s, old_e = item['start'], item['end']
             new_s, new_e = min(t1, t2), max(t1, t2)
-            
+
             chars_bounds = item.get('chars_bounds', [])
             if chars_bounds:
                 ratio = (new_e - new_s) / (old_e - old_s) if old_e > old_s else 1
@@ -998,7 +1014,7 @@ class SpectrogramPanel:
             else:
                 item['start'] = new_s
                 item['end'] = new_e
-                
+
             item['is_manual_edited'] = True
             panel = None
             if self.app:
@@ -1012,7 +1028,7 @@ class SpectrogramPanel:
 
             self.plot_item_spectrogram()
             self.update_ui_times()
-        except ValueError: 
+        except ValueError:
             messagebox.showerror("错误", "请输入有效的数字")
 
     def _update_play_button_state(self, playing=False):
@@ -1188,19 +1204,166 @@ class SpectrogramPanel:
         if self.on_auto_detect_callback:
             self.on_auto_detect_callback()
 
+    def _reset_eraser_session(self):
+        self.session_erased_pitch_indices = set()
+        self.session_erased_formant_indices = {"f1": set(), "f2": set()}
+        self.session_erased_pitch_points = {}
+        self.session_erased_formant_points = {"f1": {}, "f2": {}}
+
+    def _remember_erased_pitch_points(self, xs, freqs):
+        points = getattr(self, 'session_erased_pitch_points', {})
+        for idx in self.session_erased_pitch_indices:
+            if idx not in points and 0 <= idx < len(xs) and 0 <= idx < len(freqs):
+                points[idx] = (xs[idx], freqs[idx])
+        self.session_erased_pitch_points = points
+
+    def _remember_erased_formant_points(self, xs, f1, f2):
+        points = getattr(self, 'session_erased_formant_points', {"f1": {}, "f2": {}})
+        for curve, values in (("f1", f1), ("f2", f2)):
+            curve_points = points.setdefault(curve, {})
+            for idx in self.session_erased_formant_indices.get(curve, set()):
+                if idx not in curve_points and 0 <= idx < len(xs) and 0 <= idx < len(values):
+                    curve_points[idx] = (xs[idx], values[idx])
+        self.session_erased_formant_points = points
+
+    def _update_erased_pitch_layer(self):
+        if not hasattr(self, 'erased_pitch_layer') or not self.erased_pitch_layer:
+            return
+        points = getattr(self, 'session_erased_pitch_points', {})
+        ordered_points = [points[idx] for idx in sorted(points)]
+        self.erased_pitch_layer.set_data(
+            [point[0] for point in ordered_points],
+            [point[1] for point in ordered_points]
+        )
+
+    def _update_erased_formant_layers(self):
+        points = getattr(self, 'session_erased_formant_points', {"f1": {}, "f2": {}})
+        for curve, layer_name in (("f1", "erased_f1_layer"), ("f2", "erased_f2_layer")):
+            layer = getattr(self, layer_name, None)
+            if not layer:
+                continue
+            ordered_points = [points.get(curve, {})[idx] for idx in sorted(points.get(curve, {}))]
+            offsets = np.array(ordered_points) if ordered_points else np.empty((0, 2))
+            layer.set_offsets(offsets)
+
+    def light_apply_eraser_changes(self):
+        if not self.current_item:
+            return
+
+        applied_pitch = False
+        applied_formant = False
+        item = self.current_item
+
+        # 提交共振峰剔除，同时保留原始坐标供红色图层持续显示
+        if hasattr(self, 'session_erased_formant_indices') and (
+            self.session_erased_formant_indices.get("f1") or self.session_erased_formant_indices.get("f2")
+        ):
+            if item.get('formant_data'):
+                f1 = item['formant_data']['f1']
+                f2 = item['formant_data']['f2']
+                self._remember_erased_formant_points(item['formant_data']['xs'], f1, f2)
+
+                for idx in self.session_erased_formant_indices.get("f1", set()):
+                    if 0 <= idx < len(f1) and not np.isnan(f1[idx]):
+                        f1[idx] = np.nan
+                        applied_formant = True
+                for idx in self.session_erased_formant_indices.get("f2", set()):
+                    if 0 <= idx < len(f2) and not np.isnan(f2[idx]):
+                        f2[idx] = np.nan
+                        applied_formant = True
+
+        # 提交 F0 擦除，同时保留原始坐标供红色图层持续显示
+        if hasattr(self, 'session_erased_pitch_indices') and self.session_erased_pitch_indices:
+            if not item.get('pitch_data') and item.get('pitch'):
+                pitch = item['pitch']
+                item['pitch_data'] = {
+                    'xs': pitch.xs(),
+                    'freqs': pitch.selected_array['frequency'].copy()
+                }
+                if 'pitch' in item:
+                    del item['pitch']
+
+            if item.get('pitch_data'):
+                self._remember_erased_pitch_points(item['pitch_data']['xs'], item['pitch_data']['freqs'])
+                freqs = item['pitch_data']['freqs']
+                for idx in self.session_erased_pitch_indices:
+                    if 0 <= idx < len(freqs) and freqs[idx] != 0.0:
+                        freqs[idx] = 0.0
+                        applied_pitch = True
+
+        if applied_pitch or applied_formant:
+            item['is_manual_edited'] = True
+            # 清理预览和空值标记
+            if 'preview_f0' in item:
+                item.pop('preview_f0')
+            if 'preview_formants' in item:
+                item.pop('preview_formants')
+            if 'has_empty_data' in item:
+                item.pop('has_empty_data')
+
+            if self.app:
+                self.app.mark_modified()
+
+                # 必要时重新生成共振峰预览
+                app_params = getattr(self.app, 'last_params', {}) if self.app else {}
+                if applied_formant:
+                    pts = int(app_params.get('pts', 11))
+                    strategy = app_params.get('formant_sample_strategy', '整段11点')
+                    try:
+                        res = self.app.sample_formant_points(item, pts, strategy)
+                        if isinstance(res, (tuple, list)) and len(res) == 3:
+                            _, preview_f1, preview_f2 = res
+                            item['preview_formants'] = {"f1": preview_f1, "f2": preview_f2}
+                    except Exception:
+                        pass
+
+                panel = None
+                if hasattr(self.app, 'tree_panel') and self.app.tree_panel:
+                    panel = self.app.tree_panel
+                elif hasattr(self.app, 'project_panel') and self.app.project_panel:
+                    panel = self.app.project_panel
+                if panel:
+                    panel.update_item_icon(self.current_item_iid)
+                    if hasattr(panel, 'update_preview'):
+                        panel.update_preview()
+
+    def apply_eraser_changes(self):
+        self.light_apply_eraser_changes()
+        self._reset_eraser_session()
+        self.plot_item_spectrogram()
+
+    def discard_eraser_changes(self):
+        self._reset_eraser_session()
+
+        # 清空待擦除点图层
+        if hasattr(self, 'erased_pitch_layer') and self.erased_pitch_layer:
+            self.erased_pitch_layer.set_data([], [])
+        if hasattr(self, 'erased_f1_layer') and self.erased_f1_layer:
+            self.erased_f1_layer.set_offsets(np.empty((0, 2)))
+        if hasattr(self, 'erased_f2_layer') and self.erased_f2_layer:
+            self.erased_f2_layer.set_offsets(np.empty((0, 2)))
+
+        self.canvas.draw_idle()
+
     def toggle_eraser_mode(self):
         self.eraser_mode = not self.eraser_mode
         if self.eraser_mode:
+            # 初始化会话状态
+            self._reset_eraser_session()
             self.btn_eraser.configure(
-                fg_color="#FEE2E2", 
-                text_color="#DC2626", 
+                fg_color="#FEE2E2",
+                text_color="#DC2626",
                 hover_color="#FCA5A5"
             )
             self.canvas.get_tk_widget().config(cursor="crosshair")
+            # 重绘一次，隐藏异常点并初始化干净状态
+            self.plot_item_spectrogram()
         else:
+            # 退出橡皮擦模式时完成提交和重绘
+            self.apply_eraser_changes()
             self.btn_eraser.configure(
-                fg_color="#E5E7EB", 
-                text_color="#1F2937", 
+                fg_color="#E5E7EB",
+                text_color="#1F2937",
                 hover_color="#D1D5DB"
             )
             self.canvas.get_tk_widget().config(cursor="arrow")
@@ -1210,35 +1373,45 @@ class SpectrogramPanel:
     def erase_points_near(self, event):
         item = self.current_item
         if not item: return
-        
+
         app_params = getattr(self.app, 'last_params', {}) if self.app else {}
         mode = item.get('analysis_mode', app_params.get('analysis_mode', 'f0'))
-        
+
         if mode == 'formant':
             if event.inaxes != self.ax: return
             if not item.get('formant_data'): return
-            
+
             xs = item['formant_data']['xs']
             f1 = item['formant_data']['f1']
             f2 = item['formant_data']['f2']
             if len(xs) == 0: return
-            
-            f1_clean = f1.copy()
+
+            # 已剔除点临时设为 NaN，确保下一次选择相邻点
+            f1_temp = f1.copy()
+            for idx in self.session_erased_formant_indices["f1"]:
+                if 0 <= idx < len(f1_temp):
+                    f1_temp[idx] = np.nan
+
+            f2_temp = f2.copy()
+            for idx in self.session_erased_formant_indices["f2"]:
+                if 0 <= idx < len(f2_temp):
+                    f2_temp[idx] = np.nan
+
+            f1_clean = f1_temp.copy()
             f1_clean[np.isnan(f1_clean)] = 0.0
             pts_f1 = np.column_stack((xs, f1_clean))
             pixels_f1 = self.ax.transData.transform(pts_f1)
             dists_f1 = np.hypot(pixels_f1[:, 0] - event.x, pixels_f1[:, 1] - event.y)
-            dists_f1[np.isnan(f1)] = np.inf
-            
-            f2_clean = f2.copy()
+            dists_f1[np.isnan(f1_temp)] = np.inf
+
+            f2_clean = f2_temp.copy()
             f2_clean[np.isnan(f2_clean)] = 0.0
             pts_f2 = np.column_stack((xs, f2_clean))
             pixels_f2 = self.ax.transData.transform(pts_f2)
             dists_f2 = np.hypot(pixels_f2[:, 0] - event.x, pixels_f2[:, 1] - event.y)
-            dists_f2[np.isnan(f2)] = np.inf
-            
+            dists_f2[np.isnan(f2_temp)] = np.inf
+
             erase_radius = self.erase_radius
-            # Formant mode erases only the nearest single point to avoid wiping an entire time strip.
             nearest_f1_idx = int(np.argmin(dists_f1)) if len(dists_f1) > 0 else -1
             nearest_f2_idx = int(np.argmin(dists_f2)) if len(dists_f2) > 0 else -1
             nearest_f1_dist = dists_f1[nearest_f1_idx] if nearest_f1_idx >= 0 else np.inf
@@ -1257,52 +1430,16 @@ class SpectrogramPanel:
 
             if target_idx >= 0:
                 if target_curve == "f1":
-                    f1[target_idx] = np.nan
+                    self.session_erased_formant_indices["f1"].add(target_idx)
                 else:
-                    f2[target_idx] = np.nan
-                item['is_manual_edited'] = True
-                
-                if self.app:
-                    self.app.mark_modified()
-                    pts = int(self.app.last_params.get('pts', 11))
-                    strategy = self.app.last_params.get('formant_sample_strategy', '整段11点')
-                    _, preview_f1, preview_f2 = self.app.sample_formant_points(item, pts, strategy)
-                    item['preview_formants'] = {"f1": preview_f1, "f2": preview_f2}
-                    item.pop('has_empty_data', None)
-                    
-                    panel = None
-                    if hasattr(self.app, 'tree_panel') and self.app.tree_panel:
-                        panel = self.app.tree_panel
-                    elif hasattr(self.app, 'project_panel') and self.app.project_panel:
-                        panel = self.app.project_panel
-                    if panel:
-                        panel.update_item_icon(self.current_item_iid)
-                        panel.update_preview()
-                
-                updated_lines = False
-                view_s, view_e = self.ax.get_xlim()
-                mask = (xs >= view_s) & (xs <= view_e)
-                f1_plot = f1[mask].copy()
-                f2_plot = f2[mask].copy()
-                
-                formant_lines = [l for l in self.ax.lines if l.get_label() in ["F1", "F2"]]
-                if len(formant_lines) == 2:
-                    try:
-                        f1_line = [l for l in formant_lines if l.get_label() == "F1"][0]
-                        f2_line = [l for l in formant_lines if l.get_label() == "F2"][0]
-                        if len(f1_plot) == len(f1_line.get_ydata()):
-                            f1_line.set_ydata(f1_plot)
-                            f2_line.set_ydata(f2_plot)
-                            self.canvas.draw_idle()
-                            updated_lines = True
-                    except Exception:
-                        pass
-                
-                if not updated_lines:
-                    self.plot_item_spectrogram()
+                    self.session_erased_formant_indices["f2"].add(target_idx)
+
+                self._remember_erased_formant_points(xs, f1, f2)
+                self._update_erased_formant_layers()
+                self.canvas.draw_idle()
         else:
             if event.inaxes != self.ax2: return
-            
+
             if not item.get('pitch_data') and item.get('pitch'):
                 pitch = item['pitch']
                 item['pitch_data'] = {
@@ -1311,46 +1448,30 @@ class SpectrogramPanel:
                 }
                 if 'pitch' in item:
                     del item['pitch']
-                    
+
             if not item.get('pitch_data'): return
-            
+
             xs = item['pitch_data']['xs']
             freqs = item['pitch_data']['freqs']
             if len(xs) == 0: return
-            
+
             pts_data = np.column_stack((xs, freqs))
             pts_pixels = self.ax2.transData.transform(pts_data)
-            
+
             dists = np.hypot(pts_pixels[:, 0] - event.x, pts_pixels[:, 1] - event.y)
-            
+
             erase_radius = self.erase_radius
             mask_to_erase = (dists <= erase_radius) & (freqs > 0)
-            
+
             if np.any(mask_to_erase):
-                freqs[mask_to_erase] = 0.0
-                item['is_manual_edited'] = True
-                panel = None
-                if self.app:
-                    self.app.mark_modified()
-                    if hasattr(self.app, 'tree_panel') and self.app.tree_panel:
-                        panel = self.app.tree_panel
-                    elif hasattr(self.app, 'project_panel') and self.app.project_panel:
-                        panel = self.app.project_panel
-                if panel:
-                    panel.update_item_icon(self.current_item_iid)
-                
-                if self.ax2.lines:
-                    f0_line = self.ax2.lines[0]
-                    view_s, view_e = self.ax.get_xlim()
-                    mask = (xs >= view_s) & (xs <= view_e)
-                    p_vals = freqs[mask].copy()
-                    p_vals[p_vals == 0] = np.nan
-                    
-                    if len(p_vals) == len(f0_line.get_ydata()):
-                        f0_line.set_ydata(p_vals)
-                        self.canvas.draw_idle()
-                    else:
-                        self.plot_item_spectrogram()
+                erased_indices = np.where(mask_to_erase)[0]
+                self.session_erased_pitch_indices.update(erased_indices)
+
+                # 实时更新待擦除点图层
+                self._remember_erased_pitch_points(xs, freqs)
+                if hasattr(self, 'erased_pitch_layer') and self.erased_pitch_layer:
+                    self._update_erased_pitch_layer()
+                    self.canvas.draw_idle()
 
     def on_draw(self, event):
         self.background = self.canvas.copy_from_bbox(self.fig.bbox)
@@ -1395,12 +1516,12 @@ class SpectrogramPanel:
         if self.eraser_circle is None or self.eraser_circle not in target_ax.patches:
             from matplotlib.patches import Circle
             self.eraser_circle = Circle(
-                (event.x, event.y), 
-                radius=self.erase_radius, 
-                fill=True, 
-                facecolor='#FEE2E2', 
-                edgecolor='#EF4444', 
-                alpha=0.4, 
+                (event.x, event.y),
+                radius=self.erase_radius,
+                fill=True,
+                facecolor='#FEE2E2',
+                edgecolor='#EF4444',
+                alpha=0.4,
                 linewidth=1.5,
                 transform=None,
                 zorder=100,
@@ -1425,10 +1546,10 @@ class SpectrogramPanel:
     def on_scroll(self, event):
         if not self.eraser_mode: return
         if event.step is None: return
-        
+
         delta = 2.0 * event.step
         self.erase_radius = max(3.0, min(100.0, self.erase_radius + delta))
-        
+
         if event.x is not None and event.y is not None and event.inaxes is not None:
             self.update_eraser_circle(event)
 

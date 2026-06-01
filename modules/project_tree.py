@@ -128,36 +128,36 @@ class AnomalyWarningDialog(ctk.CTkToplevel):
         self.parent = parent
         self.anomalous_labels = anomalous_labels
         self.result = False  # True if user ignores and continues, False if they return to edit
-        
+
         self.title("异常数据警告")
         self.configure(fg_color=("#FFFFFF", "#1A1D24"))
         self.geometry("540x440")
         self.resizable(True, True)
         self.transient(parent)
         self.grab_set()
-        
+
         # Center the window
         self.update_idletasks()
         main_win = parent.winfo_toplevel()
         x = main_win.winfo_rootx() + (main_win.winfo_width() - 540) // 2
         y = main_win.winfo_rooty() + (main_win.winfo_height() - 440) // 2
         self.geometry(f"+{x}+{y}")
-        
+
         # Fonts
         self.font_title = font_title or ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold")
         self.font_main = font_main or ctk.CTkFont(family="Microsoft YaHei", size=12)
         font_small = ctk.CTkFont(family="Microsoft YaHei", size=11)
-        
+
         # Header banner
         header_frame = ctk.CTkFrame(self, fg_color="transparent")
         header_frame.pack(fill=tk.X, padx=30, pady=(15, 5))
-        
+
         # Warning title in soft warning red/orange
         ctk.CTkLabel(
             header_frame, text=title,
             font=self.font_title, text_color=("#E11D48", "#FB7185")
         ).pack(anchor="w")
-        
+
         if description is None:
             description = (
                 "以下项目检测到潜在异常（如 F0 缺失、边界无效、声母段过短、或跳变疑似噪声等）。"
@@ -167,7 +167,7 @@ class AnomalyWarningDialog(ctk.CTkToplevel):
             header_frame, text=description, font=font_small, text_color=("#4B5563", "#9CA3AF"),
             wraplength=480, justify="left"
         ).pack(anchor="w", pady=(4, 0))
-        
+
         # Scrollable Warning List Frame with subtle warning border
         scroll_frame = ctk.CTkScrollableFrame(
             self, height=160, corner_radius=8, border_width=1,
@@ -175,22 +175,22 @@ class AnomalyWarningDialog(ctk.CTkToplevel):
         )
         scroll_frame._scrollbar.grid_configure(padx=(0, 9))
         scroll_frame.pack(fill=tk.BOTH, expand=True, padx=30, pady=5)
-        
+
         for warning in self.anomalous_labels:
             row_frame = ctk.CTkFrame(scroll_frame, fg_color="transparent")
             row_frame.pack(fill=tk.X, padx=5, pady=3)
-            
+
             # Warning bullet
             ctk.CTkLabel(
                 row_frame, text="•", font=ctk.CTkFont(family="Microsoft YaHei", size=14, weight="bold"),
                 text_color=("#EF4444", "#F87171")
             ).pack(side=tk.LEFT, padx=(5, 5), anchor="n")
-            
+
             ctk.CTkLabel(
                 row_frame, text=warning, font=font_small, text_color=("#991B1B", "#FCA5A5"),
                 wraplength=420, justify="left", anchor="w"
             ).pack(side=tk.LEFT, fill=tk.X, expand=True, anchor="w")
-            
+
         # Count warning bar
         count_bar = ctk.CTkFrame(self, fg_color="transparent")
         count_bar.pack(fill=tk.X, padx=30, pady=(6, 0))
@@ -198,26 +198,26 @@ class AnomalyWarningDialog(ctk.CTkToplevel):
             count_bar, text=f"共检测到 {len(self.anomalous_labels)} 处数据异常。",
             font=font_small, text_color=("#DC2626", "#F87171")
         ).pack(side=tk.LEFT)
-        
+
         # Action Buttons Card
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
         btn_frame.pack(fill=tk.X, padx=30, pady=(10, 30))
-        
+
         def on_ignore():
             self.result = True
             self.destroy()
-            
+
         def on_cancel():
             self.result = False
             self.destroy()
-            
+
         # Left button: Return to main window to fix anomalies
         ctk.CTkButton(
             btn_frame, text="返回修改", width=120, height=36, corner_radius=18,
             fg_color=("#3B82F6", "#2563EB"), text_color="#FFFFFF", hover_color=("#2563EB", "#1D4ED8"),
             font=self.font_main, command=on_cancel
         ).pack(side=tk.LEFT)
-        
+
         # Right button: Ignore warnings and continue export
         ctk.CTkButton(
             btn_frame, text="忽略警告并导出", width=140, height=36, corner_radius=18,
@@ -892,7 +892,7 @@ class ProjectTreePanel:
                 margin = dur * 0.125
                 core_s = c_s + margin
                 core_e = c_e - margin
-                
+
                 mask = (f_xs >= core_s) & (f_xs <= core_e)
                 seg_xs = f_xs[mask]
                 seg_f1 = f1[mask]
@@ -1010,7 +1010,7 @@ class ProjectTreePanel:
             image=self.tk_icons.get("filter_warning_white" if current_mode == "需检查" else "filter_warning_black"),
             is_active=(current_mode == "需检查")
         )
-        
+
         # 动态更新已修改/未修改过滤按钮的背景颜色：已修改为蓝色，未修改为灰色
         if current_mode == "已修改":
             self.btn_filter_check.update_active_colors("#3B82F6", "#2563EB")
@@ -1237,7 +1237,7 @@ class ProjectTreePanel:
                 margin = dur * 0.125
                 core_s = c_s + margin
                 core_e = c_e - margin
-                
+
                 mask = (f_xs >= core_s) & (f_xs <= core_e)
                 seg_xs = f_xs[mask]
                 seg_f1 = f1[mask]
@@ -1567,6 +1567,8 @@ class ProjectTreePanel:
         self._schedule_rebuild()
 
     def export_project(self):
+        if self.app and hasattr(self.app, 'flush_eraser_changes'):
+            self.app.flush_eraser_changes()
         sm = getattr(self.app, 'speaker_manager', None)
         if not self.items and (not sm or len(sm.get_all_speakers()) <= 1):
             return messagebox.showwarning("提示", "没有可导出的数据。")
@@ -2573,7 +2575,7 @@ class ProjectTreePanel:
                 s_end = (k + 1) * num_points
                 s_t_vals = t_vals[s_start:s_end]
                 s_x_vals = x_vals[s_start:s_end]
-                
+
                 valid_x = [x for x, v in zip(s_x_vals, s_t_vals) if v is not None]
                 valid_y = [v for v in s_t_vals if v is not None]
                 if valid_x:
@@ -3463,10 +3465,10 @@ class ProjectTreePanel:
         x = main_win.winfo_rootx() + (main_win.winfo_width() - 320) // 2
         y = main_win.winfo_rooty() + (main_win.winfo_height() - 300) // 2
         dlg.geometry(f"+{x}+{y}")
-        
+
         ctk.CTkLabel(dlg, text="请选择共振峰导出内容", font=self.font_title, text_color=("#111827", "#F9FAFB")).pack(pady=(20, 15))
         btn_kwargs = {"corner_radius": 8, "height": 44, "font": self.font_main, "anchor": "w", "compound": "left", "border_width": 1.5}
-        
+
         btn_table = CTkReleaseButton(
             dlg,
             text=" 导出共振峰数据表 (.xlsx)",
@@ -3479,7 +3481,7 @@ class ProjectTreePanel:
             **btn_kwargs
         )
         btn_table.pack(fill=tk.X, padx=30, pady=8)
-        
+
         btn_space = CTkReleaseButton(
             dlg,
             text=" 共振峰可视化工具箱...",
@@ -3492,7 +3494,7 @@ class ProjectTreePanel:
             **btn_kwargs
         )
         btn_space.pack(fill=tk.X, padx=30, pady=8)
-        
+
         btn_cancel = ctk.CTkButton(
             dlg,
             text="取消",
@@ -3529,7 +3531,7 @@ class ProjectTreePanel:
                     return
             except Exception:
                 self.app.active_chart_dialog = None
-                
+
         from .acoustic_exporter import AcousticChartExportDialog
         AcousticChartExportDialog(self.parent, app=self.app, project_tree=self, mode=mode, all_speakers=all_speakers)
 
