@@ -16,7 +16,7 @@ class AboutDialog(ctk.CTkToplevel):
         self.resizable(False, False)
         
         # 居中显示
-        width, height = 460, 420
+        width, height = 460, 390
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         x = (screen_width - width) // 2
