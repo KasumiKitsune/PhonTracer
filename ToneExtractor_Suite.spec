@@ -122,7 +122,7 @@ exe2 = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='assets/tool_icon.ico',
+    icon='assets/toolkit.ico',
 )
 
 # --- 5. 定义命令行工具 EXE ---
@@ -199,6 +199,6 @@ else:
     app2 = BUNDLE(
         coll2,
         name='Toolkit.app',
-        icon='assets/tool_icon.icns',
+        icon='assets/toolkit.icns',
         bundle_identifier='com.kasumikitsune.toolkit',
     )

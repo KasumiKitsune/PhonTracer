@@ -873,8 +873,8 @@ class ToolkitApp(ctk.CTk):
         self.setup_ui()
 
         # 设置窗口图标
-        ico_path = os.path.join(os.path.dirname(__file__), "assets", "tool_icon.ico")
-        png_path = os.path.join(os.path.dirname(__file__), "assets", "tool_icon.png")
+        ico_path = os.path.join(os.path.dirname(__file__), "assets", "toolkit.ico")
+        png_path = os.path.join(os.path.dirname(__file__), "assets", "toolkit.png")
 
         if os.path.exists(ico_path) and sys.platform == "win32":
             try:
@@ -950,7 +950,7 @@ class ToolkitApp(ctk.CTk):
                 self.icons[key] = None
         
         # 加载软件 Logo
-        logo_path = os.path.join(os.path.dirname(__file__), "assets", "tool_icon.png")
+        logo_path = os.path.join(os.path.dirname(__file__), "assets", "toolkit.png")
         if os.path.exists(logo_path):
             img = Image.open(logo_path)
             self.icons["logo"] = ctk.CTkImage(light_image=img, dark_image=img, size=(32, 32))
