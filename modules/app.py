@@ -1459,6 +1459,8 @@ class PhoneticsApp:
             else:
                 self.tree_panel.select_first_item()
 
+        self.root.after(100, self._maybe_refresh_formants_after_import)
+
     def _make_scrollable_auto(self, scrollable_frame):
         """
         使 CTkScrollableFrame 的滚动条仅在内容溢出时显示。
@@ -1526,12 +1528,17 @@ class PhoneticsApp:
         item['formant_sample_strategy'] = params.get('formant_sample_strategy', self.last_params.get('formant_sample_strategy', '整段11点'))
 
     def _maybe_refresh_formants_after_import(self):
-        if self.last_params.get('analysis_mode', 'f0') != 'formant':
-            return
-        for item in self.items.values():
-            if item.get('snd') and item.get('start') is not None and item.get('end') is not None and not item.get('formant_data'):
-                self.root.after(50, self.recalculate_all_formants)
-                return
+        analysis_mode = self.last_params.get('analysis_mode', 'f0')
+        if analysis_mode == 'formant':
+            for item in self.items.values():
+                if item.get('snd') and item.get('start') is not None and item.get('end') is not None and not item.get('formant_data'):
+                    self.root.after(50, self.recalculate_all_formants)
+                    return
+        else:
+            for item in self.items.values():
+                if item.get('snd') and item.get('start') is not None and item.get('end') is not None and not item.get('pitch_data'):
+                    self.root.after(50, lambda: self.recalculate_all_audio(recompute_pitch=True, only_pitch_changed=True))
+                    return
 
 
 
@@ -3675,6 +3682,7 @@ class PhoneticsApp:
 
         self.spectrogram_panel.clear_canvas()
         self._refresh_ui_for_speaker()
+        self._maybe_refresh_formants_after_import()
 
         if is_recovery:
             self.has_changes = True

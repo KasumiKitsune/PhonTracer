@@ -1395,6 +1395,23 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                 item['preview_f0'] = preview_f0
                 item['has_empty_data'] = any(f == 0.0 for f in item['preview_f0'])
 
+                if self.params.get('analysis_mode') == 'formant':
+                    try:
+                        from modules.audio_core import extract_formants
+                        total_dur = item['snd'].get_total_duration()
+                        if 'macro_start' in item and 'macro_end' in item and total_dur > 15.0:
+                            padding = 1.0
+                            seg_start = max(0.0, item['macro_start'] - padding)
+                            seg_end = min(total_dur, item['macro_end'] + padding)
+                            part_snd = item['snd'].extract_part(from_time=seg_start, to_time=seg_end)
+                            part_formant_data = extract_formants(part_snd, self.params)
+                            part_formant_data['xs'] = part_formant_data['xs'] + seg_start
+                            item['formant_data'] = part_formant_data
+                        else:
+                            item['formant_data'] = extract_formants(item['snd'], self.params)
+                    except Exception:
+                        pass
+
         elif self.mode == 'batch':
             tasks = []
             iids = []
@@ -1437,6 +1454,12 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                     item['pitch_floor'] = self.params['pitch_floor']
                     item['pitch_ceiling'] = self.params['pitch_ceiling']
                     item['voicing_threshold'] = self.params.get('voicing_threshold', 0.25)
+                    if self.params.get('analysis_mode') == 'formant':
+                        try:
+                            from modules.audio_core import extract_formants
+                            item['formant_data'] = extract_formants(item['snd'], self.params)
+                        except Exception:
+                            pass
                 except Exception:
                     pass
 
@@ -3003,6 +3026,9 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                     res['snd'] = snd
                     if 'pitch_data' not in res or not res['pitch_data']:
                         res['pitch_data'] = extract_f0(snd, params)
+                    if params.get('analysis_mode') == 'formant' and ('formant_data' not in res or not res['formant_data']):
+                        from modules.audio_core import extract_formants
+                        res['formant_data'] = extract_formants(snd, params)
                 except Exception:
                     pass
 
@@ -3111,6 +3137,16 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
         if all_spks:
             self.speaker_manager.active_speaker_id = all_spks[0].id
 
+        orig_active_id = self.speaker_manager.active_speaker_id
+        try:
+            for spk in self.speaker_manager.get_all_speakers():
+                self.speaker_manager.set_active_speaker(spk.id)
+                for item in spk.items.values():
+                    self._ensure_item_loaded(item)
+        finally:
+            if orig_active_id:
+                self.speaker_manager.set_active_speaker(orig_active_id)
+
         ok = self.project_manager.export_project(teproj_path)
         if ok:
             self._emit(True, f"Imported speakers {imported_speakers} and exported project successfully.", path=teproj_path)
@@ -3128,6 +3164,16 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
             return
 
         path = args[0]
+        orig_active_id = self.speaker_manager.active_speaker_id
+        try:
+            for spk in self.speaker_manager.get_all_speakers():
+                self.speaker_manager.set_active_speaker(spk.id)
+                for item in spk.items.values():
+                    self._ensure_item_loaded(item)
+        finally:
+            if orig_active_id:
+                self.speaker_manager.set_active_speaker(orig_active_id)
+
         ok = self.project_manager.export_project(path)
         if ok:
             self._emit(True, "工程已导出。这个文件包含当前发音人、项目项、音频副本和基频缓存。", path=path)
