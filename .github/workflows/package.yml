@@ -8,12 +8,23 @@ on:
 
 jobs:
   build:
-    name: Build for ${{ matrix.os }}
+    name: Build for ${{ matrix.os }} (${{ matrix.suffix }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        include:
+          - os: windows-latest
+            python-arch: x64
+            suffix: Windows-x64
+            iscc_args: '/F"PhonTracer_Setup_Windows_x64"'
+          - os: windows-11-arm
+            python-arch: arm64
+            suffix: Windows-ARM64
+            iscc_args: '/F"PhonTracer_Setup_Windows_ARM64"'
+          - os: macos-latest
+            python-arch: arm64
+            suffix: macOS
     permissions:
       contents: write
 
@@ -25,6 +36,7 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: '3.12'
+        architecture: ${{ matrix.python-arch }}
         cache: 'pip'
 
     - name: Install dependencies
@@ -38,17 +50,29 @@ jobs:
         pyinstaller --noconfirm --clean ToneExtractor_Suite.spec
 
     - name: Create Zip Archive (Windows)
-      if: matrix.os == 'windows-latest'
+      if: startsWith(matrix.os, 'windows')
       shell: pwsh
       run: |
         # 压缩整个套件文件夹
-        Compress-Archive -Path dist/PhonTracer_Suite -DestinationPath dist/PhonTracer_Suite-Windows.zip
+        Compress-Archive -Path dist/PhonTracer_Suite -DestinationPath dist/PhonTracer_Suite-${{ matrix.suffix }}.zip
 
     - name: Build Setup Installer with Inno Setup (Windows)
-      if: matrix.os == 'windows-latest'
+      if: startsWith(matrix.os, 'windows')
       shell: pwsh
       run: |
-        & "C:\Program Files (x86)\Inno Setup 6\iscc.exe" /DMyAppVersion="${{ github.ref_name }}" installer.iss
+        $iscc = Get-Command iscc -ErrorAction SilentlyContinue
+        if ($iscc) {
+            & iscc ${{ matrix.iscc_args }} /DMyAppVersion="${{ github.ref_name }}" installer.iss
+        } else {
+            if (Test-Path "C:\Program Files (x86)\Inno Setup 6\iscc.exe") {
+                & "C:\Program Files (x86)\Inno Setup 6\iscc.exe" ${{ matrix.iscc_args }} /DMyAppVersion="${{ github.ref_name }}" installer.iss
+            } elseif (Test-Path "C:\Program Files\Inno Setup 6\iscc.exe") {
+                & "C:\Program Files\Inno Setup 6\iscc.exe" ${{ matrix.iscc_args }} /DMyAppVersion="${{ github.ref_name }}" installer.iss
+            } else {
+                Write-Error "Inno Setup compiler (iscc.exe) not found!"
+                exit 1
+            }
+        }
 
     - name: Create DMG Archive (macOS)
       if: matrix.os == 'macos-latest'
@@ -82,7 +106,7 @@ jobs:
         name: PhonTracer ${{ github.ref_name }}
         body: |
           ### 自动化发布
-          - 平台: ${{ matrix.os }}
+          - 平台: ${{ matrix.suffix }}
           - 自动构建可执行文件 (Windows 为 Zip 与 Setup安装包, macOS 为 DMG)
           - 基于最新代码逻辑与资源路径
         draft: false
@@ -94,7 +118,7 @@ jobs:
       if: "!startsWith(github.ref, 'refs/tags/')"
       uses: actions/upload-artifact@v4
       with:
-        name: PhonTracer-Suite-${{ matrix.os }}
+        name: PhonTracer-Suite-${{ matrix.suffix }}
         path: |
           dist/*.zip
           dist/*.dmg

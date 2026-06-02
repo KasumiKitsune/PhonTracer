@@ -32,7 +32,7 @@ SetupIconFile=assets\Setup.ico
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
-ArchitecturesInstallIn64BitMode=x64
+ArchitecturesInstallIn64BitMode=x64compatible arm64
 
 [Languages]
 Name: "chinesesimplified"; MessagesFile: "assets\ChineseSimplified.isl"
