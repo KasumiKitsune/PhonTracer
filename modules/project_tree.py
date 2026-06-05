@@ -562,9 +562,9 @@ class ItemPropertiesDialog(ctk.CTkToplevel):
         grid_frame = ctk.CTkFrame(card, fg_color="transparent")
         grid_frame.pack(fill=tk.X, padx=14, pady=(0, 6))
         grid_frame.grid_columnconfigure(0, weight=0)
-        grid_frame.grid_columnconfigure(1, weight=1)
+        grid_frame.grid_columnconfigure(1, weight=1, uniform="val_cols")
         grid_frame.grid_columnconfigure(2, weight=0)
-        grid_frame.grid_columnconfigure(3, weight=1)
+        grid_frame.grid_columnconfigure(3, weight=1, uniform="val_cols")
         
         val_labels = []
         for i, (label, value) in enumerate(rows):
@@ -576,7 +576,7 @@ class ItemPropertiesDialog(ctk.CTkToplevel):
             lbl.grid(row=r, column=c, sticky="w", padx=lbl_padx, pady=2)
             
             val_text = self._empty_to_dash(value)
-            val = ctk.CTkLabel(grid_frame, text=val_text, anchor="w", justify="left", font=self.font_main, text_color=("#1F2937", "#E5E7EB"))
+            val = ctk.CTkLabel(grid_frame, text=val_text, anchor="w", justify="left", font=self.font_main, text_color=("#1F2937", "#E5E7EB"), wraplength=200)
             val.grid(row=r, column=c+1, sticky="ew", padx=(0, 10), pady=2)
             val_labels.append(val)
             
@@ -591,12 +591,17 @@ class ItemPropertiesDialog(ctk.CTkToplevel):
         grid_frame.bind("<Configure>", on_configure)
         ctk.CTkFrame(card, height=6, fg_color="transparent").pack(fill=tk.X)
 
+    def _format_path(self, path):
+        if not path:
+            return ""
+        return str(path).replace("\\", "\\​").replace("/", "/​")
+
     def _data_summary_rows(self):
         return [
             ("内部 ID", self.item_id),
             ("标签", self.item.get('label', '')),
             ("组别", self.item.get('group', '')),
-            ("文件路径", self.item.get('path', '')),
+            ("文件路径", self._format_path(self.item.get('path', ''))),
             ("分析模式", self._value_with_source('analysis_mode', 'f0')),
             ("忽略导出", self._yes_no(self.item.get('is_excluded', False))),
             ("忽略原因", self.item.get('exclusion_reason', '')),
