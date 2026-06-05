@@ -2,7 +2,7 @@ import tkinter as tk
 import customtkinter as ctk
 
 class F0DetectionDialog(ctk.CTkToplevel):
-    def __init__(self, parent, app, p5, p10, p50, p90, p95, stable_count, stable_duration, cons_range, reco_range, fine_range):
+    def __init__(self, parent, app, p5, p10, p50, p90, p95, stable_count, stable_duration, cons_range, reco_range, fine_range, apply_scope="global"):
         super().__init__(parent)
         self.parent = parent
         self.app = app
@@ -16,6 +16,7 @@ class F0DetectionDialog(ctk.CTkToplevel):
         self.cons_range = cons_range
         self.reco_range = reco_range
         self.fine_range = fine_range
+        self.apply_scope = apply_scope
 
         self.title("估计 F0 分布与建议范围")
         self.resizable(False, False)
@@ -208,4 +209,4 @@ class F0DetectionDialog(ctk.CTkToplevel):
     def apply_and_close(self, floor, ceiling):
         self.destroy()
         # 延迟一下触发，以便弹窗已完全销毁且恢复主窗口交互
-        self.app.root.after(50, lambda: self.app.apply_f0_bounds(floor, ceiling))
+        self.app.root.after(50, lambda: self.app.apply_f0_bounds(floor, ceiling, scope=self.apply_scope))

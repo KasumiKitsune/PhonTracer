@@ -2,7 +2,7 @@ import tkinter as tk
 import customtkinter as ctk
 
 class FormantDetectionDialog(ctk.CTkToplevel):
-    def __init__(self, parent, app, voiced_duration, insufficient_data, reco_params, anti_params, fine_params):
+    def __init__(self, parent, app, voiced_duration, insufficient_data, reco_params, anti_params, fine_params, apply_scope="global"):
         super().__init__(parent)
         self.parent = parent
         self.app = app
@@ -11,6 +11,7 @@ class FormantDetectionDialog(ctk.CTkToplevel):
         self.reco_params = reco_params
         self.anti_params = anti_params
         self.fine_params = fine_params
+        self.apply_scope = apply_scope
 
         self.title("估计共振峰最佳参数与建议范围")
         self.resizable(False, False)
@@ -209,4 +210,4 @@ class FormantDetectionDialog(ctk.CTkToplevel):
     def apply_and_close(self, max_hz, count, window_length, pre_emphasis):
         self.destroy()
         # 异步应用参数，刷新界面
-        self.app.root.after(50, lambda: self.app.apply_formant_params(max_hz, count, window_length, pre_emphasis))
+        self.app.root.after(50, lambda: self.app.apply_formant_params(max_hz, count, window_length, pre_emphasis, scope=self.apply_scope))

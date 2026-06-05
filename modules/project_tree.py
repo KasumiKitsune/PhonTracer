@@ -483,6 +483,211 @@ class ExclusionReasonDialog(ctk.CTkToplevel):
         ).pack(side=tk.RIGHT)
 
 
+class ItemPropertiesDialog(ctk.CTkToplevel):
+    def __init__(self, parent, item_id, item, app_state_params, font_title=None, font_main=None):
+        super().__init__(parent)
+        self.parent = parent
+        self.item_id = item_id
+        self.item = item
+        self.app_state_params = app_state_params
+
+        self.title("条目属性")
+        self.geometry("700x580")
+        self.resizable(True, True)
+        self.configure(fg_color=("#F9FAFB", "#1A1D24"))
+        self.transient(parent)
+        self.grab_set()
+
+        # Center the window
+        self.update_idletasks()
+        main_win = parent.winfo_toplevel()
+        x = main_win.winfo_rootx() + (main_win.winfo_width() - 700) // 2
+        y = main_win.winfo_rooty() + (main_win.winfo_height() - 580) // 2
+        self.geometry(f"+{x}+{y}")
+
+        self.font_title = font_title or ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold")
+        self.font_main = font_main or ctk.CTkFont(family="Microsoft YaHei", size=12)
+
+        # Top accent stripe
+        accent = ctk.CTkFrame(self, height=4, corner_radius=0, fg_color="#3B82F6")
+        accent.pack(fill=tk.X, side=tk.TOP)
+
+        # Scrollable container for properties
+        scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        scroll.pack(fill=tk.BOTH, expand=True, padx=22, pady=(14, 10))
+
+        # Add sections
+        self._add_section(scroll, "基本信息", self._data_summary_rows())
+        self._add_section(scroll, "边界与切分", self._boundary_rows())
+        self._add_section(scroll, "声学参数", self._acoustic_rows())
+
+        # Buttons frame
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.pack(fill=tk.X, padx=22, pady=(0, 18))
+        
+        # Close button on the right
+        ctk.CTkButton(
+            btn_frame,
+            text="关闭",
+            width=96,
+            height=34,
+            corner_radius=17,
+            font=self.font_main,
+            fg_color=("#E5E7EB", "#374151"),
+            hover_color=("#D1D5DB", "#4B5563"),
+            text_color=("#374151", "#E5E7EB"),
+            command=self.destroy
+        ).pack(side=tk.RIGHT)
+
+        # Copy button to the left of Close button
+        self.btn_copy = ctk.CTkButton(
+            btn_frame,
+            text="复制参数",
+            width=96,
+            height=34,
+            corner_radius=17,
+            font=self.font_main,
+            fg_color=("#3B82F6", "#2563EB"),
+            hover_color=("#2563EB", "#1D4ED8"),
+            text_color="#FFFFFF",
+            command=self._copy_to_clipboard
+        )
+        self.btn_copy.pack(side=tk.RIGHT, padx=(0, 10))
+
+    def _add_section(self, parent, title, rows):
+        card = ctk.CTkFrame(parent, fg_color=("#F9FAFB", "#262930"), corner_radius=8, border_width=1, border_color=("#E5E7EB", "#374151"))
+        card.pack(fill=tk.X, pady=7)
+        ctk.CTkLabel(card, text=title, font=self.font_title, text_color=("#111827", "#F9FAFB")).pack(anchor="w", padx=14, pady=(10, 4))
+        
+        grid_frame = ctk.CTkFrame(card, fg_color="transparent")
+        grid_frame.pack(fill=tk.X, padx=14, pady=(0, 6))
+        grid_frame.grid_columnconfigure(0, weight=0)
+        grid_frame.grid_columnconfigure(1, weight=1)
+        grid_frame.grid_columnconfigure(2, weight=0)
+        grid_frame.grid_columnconfigure(3, weight=1)
+        
+        val_labels = []
+        for i, (label, value) in enumerate(rows):
+            r = i // 2
+            c = (i % 2) * 2
+            
+            lbl_padx = (10, 5) if c == 2 else (0, 5)
+            lbl = ctk.CTkLabel(grid_frame, text=label, width=110, anchor="w", font=self.font_main, text_color=("#6B7280", "#9CA3AF"))
+            lbl.grid(row=r, column=c, sticky="w", padx=lbl_padx, pady=2)
+            
+            val_text = self._empty_to_dash(value)
+            val = ctk.CTkLabel(grid_frame, text=val_text, anchor="w", justify="left", font=self.font_main, text_color=("#1F2937", "#E5E7EB"))
+            val.grid(row=r, column=c+1, sticky="ew", padx=(0, 10), pady=2)
+            val_labels.append(val)
+            
+        def on_configure(event):
+            if event.widget == grid_frame:
+                col_width = (event.width - 220 - 30) // 2
+                if col_width < 100:
+                    col_width = 100
+                for v_lbl in val_labels:
+                    v_lbl.configure(wraplength=col_width)
+                
+        grid_frame.bind("<Configure>", on_configure)
+        ctk.CTkFrame(card, height=6, fg_color="transparent").pack(fill=tk.X)
+
+    def _data_summary_rows(self):
+        return [
+            ("内部 ID", self.item_id),
+            ("标签", self.item.get('label', '')),
+            ("组别", self.item.get('group', '')),
+            ("文件路径", self.item.get('path', '')),
+            ("分析模式", self._value_with_source('analysis_mode', 'f0')),
+            ("忽略导出", self._yes_no(self.item.get('is_excluded', False))),
+            ("忽略原因", self.item.get('exclusion_reason', '')),
+            ("忽略异常提示", self._yes_no(self.item.get('ignore_warnings', False))),
+            ("手动修改", self._yes_no(self.item.get('is_manual_edited', False))),
+        ]
+
+    def _boundary_rows(self):
+        return [
+            ("开始时间", f"{self._fmt_num(self.item.get('start'))} s" if self.item.get('start') is not None else ""),
+            ("结束时间", f"{self._fmt_num(self.item.get('end'))} s" if self.item.get('end') is not None else ""),
+            ("持续时长", self._duration_text()),
+            ("内部切分点", self._fmt_sequence(self.item.get('inner_splits'))),
+            ("字符边界", self._fmt_sequence(self.item.get('chars_bounds'))),
+        ]
+
+    def _acoustic_rows(self):
+        return [
+            ("基频下限", self._value_with_source('pitch_floor', 75.0)),
+            ("基频上限", self._value_with_source('pitch_ceiling', 600.0)),
+            ("发音阈值", self._value_with_source('voicing_threshold', 0.25)),
+            ("共振峰最大值", self._value_with_source('formant_max_hz', 5500.0)),
+            ("共振峰个数", self._value_with_source('formant_count', 5)),
+            ("共振峰窗长", self._value_with_source('formant_window_length', 0.025)),
+            ("预加重系数", self._value_with_source('formant_pre_emphasis', 50.0)),
+        ]
+
+    def _empty_to_dash(self, value):
+        text = str(value) if value is not None else ""
+        return text if text else "--"
+
+    def _yes_no(self, value):
+        return "是" if bool(value) else "否"
+
+    def _fmt_num(self, value):
+        if value is None:
+            return ""
+        try:
+            return f"{float(value):.6f}"
+        except Exception:
+            return str(value)
+
+    def _fmt_sequence(self, value, max_items=6):
+        if value is None:
+            return ""
+        try:
+            seq = value.tolist() if hasattr(value, "tolist") else list(value)
+        except Exception:
+            return str(value)
+        shown = seq[:max_items]
+        suffix = f" ... 共 {len(seq)} 项" if len(seq) > max_items else ""
+        return f"{shown}{suffix}"
+
+    def _value_with_source(self, key, default):
+        if key in self.item:
+            return f"{self.item.get(key)} (条目自定)"
+        return f"{self.app_state_params.get(key, default)} (发音人默认)"
+
+    def _duration_text(self):
+        start = self.item.get('start')
+        end = self.item.get('end')
+        if start is None or end is None:
+            return ""
+        return f"{self._fmt_num(end - start)} s"
+
+    def _copy_to_clipboard(self):
+        sections = [
+            ("【基本信息】", self._data_summary_rows()),
+            ("【边界与切分】", self._boundary_rows()),
+            ("【声学参数】", self._acoustic_rows())
+        ]
+        
+        lines = []
+        for sec_title, rows in sections:
+            lines.append(sec_title)
+            for label, value in rows:
+                lines.append(f"{label}: {self._empty_to_dash(value)}")
+            lines.append("")
+            
+        text = "\n".join(lines).strip()
+        
+        self.clipboard_clear()
+        self.clipboard_append(text)
+        self.update()
+        
+        old_text = self.btn_copy.cget("text")
+        self.btn_copy.configure(text="已复制")
+        self.after(1500, lambda: self.btn_copy.configure(text=old_text))
+
+
+
 class ProjectTreePanel:
     def __init__(self, parent, icons, items_dict, app_state_params, on_item_selected_callback, on_clear_canvas_callback, tk_icons=None, app=None):
         self.parent = parent
@@ -631,6 +836,7 @@ class ProjectTreePanel:
         self.tree.bind('<Button-3>', self.on_right_click)
         self.tree.bind('<Button-2>', self.on_right_click)
         self.tree.bind('<Key-F2>', self.on_f2_press)
+        self.tree.bind('<Return>', self.on_enter_press)
 
         self._update_filter_buttons()
 
@@ -1445,6 +1651,38 @@ class ProjectTreePanel:
         if sel:
             self.start_inline_edit(sel[0])
 
+    def on_enter_press(self, event=None):
+        sel = self.tree.selection()
+        if sel:
+            iid = sel[0]
+            tags = self.tree.item(iid, 'tags')
+            if 'item' in tags:
+                real_iid = iid[8:] if str(iid).startswith('warning_') else iid
+                self.show_item_properties(real_iid)
+
+    def show_item_properties(self, real_iid):
+        item = self.items.get(real_iid)
+        if not item:
+            return
+        ItemPropertiesDialog(
+            self.parent,
+            real_iid,
+            item,
+            self.app_state_params,
+            font_title=self.font_title,
+            font_main=self.font_main
+        )
+
+    def _get_item_analysis_mode(self, item):
+        return item.get('analysis_mode', self.app_state_params.get('analysis_mode', 'f0'))
+
+    def _get_item_f0_export_params(self, item):
+        return {
+            'pitch_floor': item.get('pitch_floor', self.app_state_params.get('pitch_floor', 75.0)),
+            'pitch_ceiling': item.get('pitch_ceiling', self.app_state_params.get('pitch_ceiling', 600.0)),
+            'voicing_threshold': item.get('voicing_threshold', self.app_state_params.get('voicing_threshold', 0.25))
+        }
+
     def on_right_click(self, event):
         iid = self.tree.identify_row(event.y)
 
@@ -1484,6 +1722,7 @@ class ProjectTreePanel:
                     menu.add_command(label=label_text, command=lambda: self.toggle_ignore_warnings(real_iid))
 
                     menu.add_command(label="重命名", command=lambda: self.start_inline_edit(real_iid))
+                    menu.add_command(label="属性", command=lambda: self.show_item_properties(real_iid))
 
                     menu.add_separator()
                     adv_menu = tk.Menu(
@@ -2941,11 +3180,13 @@ class ProjectTreePanel:
                 for child in children:
                     item = self.items[child]
                     if item['start'] is not None:
-                        if mode == 'formant':
+                        item_mode = self._get_item_analysis_mode(item)
+                        if item_mode == 'formant':
                             from .data_utils import get_formant_export_text_for_item
                             txt_data = get_formant_export_text_for_item(item, global_idx, self.app_state_params['pts'])
                         else:
-                            txt_data = get_export_text_for_item(item, global_idx, self.app_state_params['pts'], pitch_floor=self.app_state_params.get('pitch_floor', 75.0), pitch_ceiling=self.app_state_params.get('pitch_ceiling', 600.0), voicing_threshold=self.app_state_params.get('voicing_threshold', 0.25))
+                            f0_params = self._get_item_f0_export_params(item)
+                            txt_data = get_export_text_for_item(item, global_idx, self.app_state_params['pts'], **f0_params)
                         f.write(txt_data)
                         global_idx += 1
 

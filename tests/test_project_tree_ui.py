@@ -287,6 +287,37 @@ class TestProjectTreeUI(unittest.TestCase):
         self.assertEqual(syls, ['米', '汤'])
         self.assertEqual(bounds, [[0.12, 0.33], [0.55, 0.88]])
 
+    def test_item_f0_export_params_prefer_item_values(self):
+        self.panel.app_state_params = {
+            'pts': 11,
+            'pitch_floor': 75,
+            'pitch_ceiling': 600,
+            'voicing_threshold': 0.25,
+            'analysis_mode': 'f0',
+        }
+        item = {
+            'pitch_floor': 100,
+            'pitch_ceiling': 500,
+            'voicing_threshold': 0.35,
+            'analysis_mode': 'formant',
+        }
+
+        params = self.panel._get_item_f0_export_params(item)
+
+        self.assertEqual(params['pitch_floor'], 100)
+        self.assertEqual(params['pitch_ceiling'], 500)
+        self.assertEqual(params['voicing_threshold'], 0.35)
+        self.assertEqual(self.panel._get_item_analysis_mode(item), 'formant')
+
+    def test_show_item_properties_opens_dialog_for_item(self):
+        with patch('modules.project_tree.ItemPropertiesDialog') as mock_dialog:
+            self.panel.show_item_properties('item_normal')
+
+        mock_dialog.assert_called_once()
+        args = mock_dialog.call_args.args
+        self.assertEqual(args[1], 'item_normal')
+        self.assertIs(args[2], self.items_dict['item_normal'])
+
     def test_kde_contour_preserves_erased_gap(self):
         xs = np.linspace(0.0, 1.0, 101)
         freqs = np.linspace(120.0, 180.0, 101)

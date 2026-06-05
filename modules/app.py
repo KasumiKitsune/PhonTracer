@@ -969,11 +969,13 @@ class PhoneticsApp:
         self.entry_pitch_ceiling.insert(0, str(self.last_params['pitch_ceiling']))
         self.entry_pitch_ceiling.pack(side=tk.RIGHT)
         self.setup_entry_behavior(self.entry_pitch_ceiling, 'pitch_ceiling')
+        self.setup_numeric_wheel_stepper(self.entry_pitch_ceiling, 'pitch_ceiling', step=25, value_type=int)
         ctk.CTkLabel(row_pitch, text="~", text_color="#6B7280").pack(side=tk.RIGHT, padx=2)
         self.entry_pitch_floor = ctk.CTkEntry(row_pitch, width=50, justify="center", corner_radius=20, height=26)
         self.entry_pitch_floor.insert(0, str(self.last_params['pitch_floor']))
         self.entry_pitch_floor.pack(side=tk.RIGHT)
         self.setup_entry_behavior(self.entry_pitch_floor, 'pitch_floor')
+        self.setup_numeric_wheel_stepper(self.entry_pitch_floor, 'pitch_floor', step=25, value_type=int)
 
         # 浊音阈值参数
         row_voicing = ctk.CTkFrame(self.f0_params_container, fg_color="transparent")
@@ -1017,6 +1019,7 @@ class PhoneticsApp:
         self.entry_formant_max_hz.insert(0, str(self.last_params.get('formant_max_hz', 5500.0)))
         self.entry_formant_max_hz.pack(side=tk.RIGHT)
         self.setup_entry_behavior(self.entry_formant_max_hz, 'formant_max_hz')
+        self.setup_numeric_wheel_stepper(self.entry_formant_max_hz, 'formant_max_hz', step=250, value_type=float, formatter=lambda v: str(float(v)))
 
         # 共振峰参数 row 3: Window Length (0.025)
         row_formant_win = ctk.CTkFrame(self.formant_params_container, fg_color="transparent")
@@ -1153,18 +1156,41 @@ class PhoneticsApp:
 
     def _sync_ui_and_plot(self, item):
         # 同步侧边栏 UI 参数为当前选中项的独立参数（所见即所得）
-        if 'pitch_floor' in item:
+        if hasattr(self, 'entry_pitch_floor'):
+            pitch_floor = item.get('pitch_floor', self.last_params.get('pitch_floor', 75))
             self.entry_pitch_floor.delete(0, tk.END)
-            self.entry_pitch_floor.insert(0, str(int(item['pitch_floor'])))
-            self.entry_pitch_floor._last_val = str(int(item['pitch_floor']))
-        if 'pitch_ceiling' in item:
+            self.entry_pitch_floor.insert(0, str(int(pitch_floor)))
+            self.entry_pitch_floor._last_val = str(int(pitch_floor))
+        if hasattr(self, 'entry_pitch_ceiling'):
+            pitch_ceiling = item.get('pitch_ceiling', self.last_params.get('pitch_ceiling', 600))
             self.entry_pitch_ceiling.delete(0, tk.END)
-            self.entry_pitch_ceiling.insert(0, str(int(item['pitch_ceiling'])))
-            self.entry_pitch_ceiling._last_val = str(int(item['pitch_ceiling']))
-        if 'voicing_threshold' in item:
+            self.entry_pitch_ceiling.insert(0, str(int(pitch_ceiling)))
+            self.entry_pitch_ceiling._last_val = str(int(pitch_ceiling))
+        if hasattr(self, 'entry_voicing_threshold'):
+            voicing_threshold = item.get('voicing_threshold', self.last_params.get('voicing_threshold', 0.25))
             self.entry_voicing_threshold.delete(0, tk.END)
-            self.entry_voicing_threshold.insert(0, str(float(item['voicing_threshold'])))
-            self.entry_voicing_threshold._last_val = str(float(item['voicing_threshold']))
+            self.entry_voicing_threshold.insert(0, str(float(voicing_threshold)))
+            self.entry_voicing_threshold._last_val = str(float(voicing_threshold))
+        if hasattr(self, 'entry_formant_max_hz'):
+            formant_max_hz = item.get('formant_max_hz', self.last_params.get('formant_max_hz', 5500.0))
+            self.entry_formant_max_hz.delete(0, tk.END)
+            self.entry_formant_max_hz.insert(0, str(float(formant_max_hz)))
+            self.entry_formant_max_hz._last_val = str(float(formant_max_hz))
+        if hasattr(self, 'entry_formant_count'):
+            formant_count = item.get('formant_count', self.last_params.get('formant_count', 5))
+            self.entry_formant_count.delete(0, tk.END)
+            self.entry_formant_count.insert(0, str(int(formant_count)))
+            self.entry_formant_count._last_val = str(int(formant_count))
+        if hasattr(self, 'entry_formant_window_length'):
+            formant_window_length = item.get('formant_window_length', self.last_params.get('formant_window_length', 0.025))
+            self.entry_formant_window_length.delete(0, tk.END)
+            self.entry_formant_window_length.insert(0, f"{float(formant_window_length):.3f}")
+            self.entry_formant_window_length._last_val = f"{float(formant_window_length):.3f}"
+        if hasattr(self, 'entry_formant_pre_emphasis'):
+            formant_pre_emphasis = item.get('formant_pre_emphasis', self.last_params.get('formant_pre_emphasis', 50.0))
+            self.entry_formant_pre_emphasis.delete(0, tk.END)
+            self.entry_formant_pre_emphasis.insert(0, str(float(formant_pre_emphasis)))
+            self.entry_formant_pre_emphasis._last_val = str(float(formant_pre_emphasis))
 
         self.spectrogram_panel.load_item(item)
 
@@ -1265,7 +1291,7 @@ class PhoneticsApp:
                     self.spectrogram_panel.plot_item_spectrogram()
                     self.spectrogram_panel.update_ui_times()
                     self.mark_modified()
-                    self.stop_loading("识别完成")
+                    self.stop_loading("识别完成，可点击 F0/共振峰检测获取建议参数")
                 self.root.after(0, update_ui)
             except Exception as e:
                 self.root.after(0, lambda: self.set_status(f"识别失败: {str(e)}", "#EF4444", "status_error"))
@@ -1508,6 +1534,116 @@ class PhoneticsApp:
         entry.bind("<FocusIn>", on_focus_in)
         entry.bind("<FocusOut>", on_focus_out)
         entry.bind("<Return>", lambda e: self.root.focus_set())
+
+    def setup_numeric_wheel_stepper(self, entry, param_key, step, value_type=int, min_value=None, max_value=None, formatter=None):
+        def on_wheel(event):
+            event_num = getattr(event, "num", None)
+            if event_num == 4:
+                direction = 1
+            elif event_num == 5:
+                direction = -1
+            else:
+                direction = 1 if getattr(event, "delta", 0) > 0 else -1
+
+            try:
+                val = value_type(entry.get())
+            except Exception:
+                val = value_type(self.last_params[param_key])
+
+            new_val = val + direction * step
+
+            if param_key == 'pitch_floor':
+                try:
+                    ceiling = int(self.entry_pitch_ceiling.get())
+                except Exception:
+                    ceiling = int(self.last_params['pitch_ceiling'])
+                effective_min = min_value if min_value is not None else 40
+                effective_max = ceiling - 25
+                if new_val < effective_min:
+                    new_val = effective_min
+                if new_val > effective_max:
+                    new_val = effective_max
+            elif param_key == 'pitch_ceiling':
+                try:
+                    floor = int(self.entry_pitch_floor.get())
+                except Exception:
+                    floor = int(self.last_params['pitch_floor'])
+                effective_max = max_value if max_value is not None else 1000
+                effective_min = floor + 25
+                if new_val > effective_max:
+                    new_val = effective_max
+                if new_val < effective_min:
+                    new_val = effective_min
+            elif param_key == 'formant_max_hz':
+                effective_min = min_value if min_value is not None else 3000
+                effective_max = max_value if max_value is not None else 9000
+                if new_val < effective_min:
+                    new_val = effective_min
+                if new_val > effective_max:
+                    new_val = effective_max
+            else:
+                if min_value is not None and new_val < min_value:
+                    new_val = min_value
+                if max_value is not None and new_val > max_value:
+                    new_val = max_value
+
+            entry.delete(0, tk.END)
+            formatted = formatter(new_val) if formatter else str(new_val)
+            entry.insert(0, formatted)
+            entry._last_val = formatted
+
+            timer_attr = f"_wheel_timer_{param_key}"
+            timer = getattr(self, timer_attr, None)
+            if timer:
+                self.root.after_cancel(timer)
+
+            def do_apply():
+                curr_item = getattr(self, 'spectrogram_panel', None) and self.spectrogram_panel.current_item
+                if param_key in ['pitch_floor', 'pitch_ceiling']:
+                    if curr_item:
+                        try:
+                            pitch_overrides = {
+                                'pitch_floor': int(self.entry_pitch_floor.get()),
+                                'pitch_ceiling': int(self.entry_pitch_ceiling.get()),
+                                'voicing_threshold': float(self.entry_voicing_threshold.get())
+                            }
+                        except Exception:
+                            pitch_overrides = None
+                        self.recalculate_current_item(
+                            recompute_pitch=True,
+                            preserve_bounds=True,
+                            completion_text="当前条目 F0 范围已应用",
+                            param_overrides=pitch_overrides
+                        )
+                    else:
+                        self.on_param_change(recalculate_current=False)
+                        self.recalculate_all_audio(recompute_pitch=True, only_pitch_changed=True)
+                elif param_key == 'formant_max_hz' and curr_item:
+                    try:
+                        formant_overrides = {
+                            'formant_max_hz': float(self.entry_formant_max_hz.get()),
+                            'formant_count': int(self.entry_formant_count.get()),
+                            'formant_window_length': float(self.entry_formant_window_length.get()),
+                            'formant_pre_emphasis': float(self.entry_formant_pre_emphasis.get()),
+                            'formant_sample_strategy': curr_item.get('formant_sample_strategy', self.last_params.get('formant_sample_strategy', '整段11点')),
+                            'analysis_mode': curr_item.get('analysis_mode', self.last_params.get('analysis_mode', 'f0'))
+                        }
+                    except Exception:
+                        formant_overrides = None
+                    self.recalculate_current_item(
+                        recompute_formant_only=True,
+                        completion_text="当前条目共振峰参数已应用",
+                        param_overrides=formant_overrides
+                    )
+                else:
+                    self.on_param_change()
+
+            setattr(self, timer_attr, self.root.after(300, do_apply))
+            return "break"
+
+        entry.bind("<MouseWheel>", on_wheel)
+        entry.bind("<Button-4>", on_wheel)
+        entry.bind("<Button-5>", on_wheel)
 
     def _build_worker_params(self):
         return {
@@ -2085,7 +2221,7 @@ class PhoneticsApp:
             self.root.after(0, finalize)
         threading.Thread(target=run, daemon=True).start()
 
-    def recalculate_current_item(self, only_trim_silence=False, recompute_pitch=False, recompute_formant_only=False):
+    def recalculate_current_item(self, only_trim_silence=False, recompute_pitch=False, recompute_formant_only=False, preserve_bounds=False, completion_text=None, param_overrides=None):
         """仅针对当前正在编辑的项重新计算参数（暂不影响全局）"""
         if hasattr(self, 'spectrogram_panel') and self.spectrogram_panel:
             self.spectrogram_panel.discard_eraser_changes()
@@ -2095,21 +2231,24 @@ class PhoneticsApp:
         def run():
             try:
                 self.root.after(0, lambda: self.set_status("正在更新当前项...", "#3B82F6", "status_loading"))
+                worker_params = dict(self.last_params)
+                if param_overrides:
+                    worker_params.update(param_overrides)
 
-                def get_segmented_f0(snd, last_params):
+                def get_segmented_f0(snd, params):
                     total_dur = snd.get_total_duration()
                     if 'macro_start' in item and 'macro_end' in item and total_dur > 15.0:
                         padding = 1.0
                         seg_start = max(0.0, item['macro_start'] - padding)
                         seg_end = min(total_dur, item['macro_end'] + padding)
                         part_snd = snd.extract_part(from_time=seg_start, to_time=seg_end)
-                        part_pitch_data = extract_f0(part_snd, last_params)
+                        part_pitch_data = extract_f0(part_snd, params)
                         part_pitch_data['xs'] = part_pitch_data['xs'] + seg_start
                         return part_pitch_data
                     else:
-                        return extract_f0(snd, last_params)
+                        return extract_f0(snd, params)
 
-                def get_segmented_formant(snd, last_params):
+                def get_segmented_formant(snd, params):
                     from modules.audio_core import extract_formants
                     total_dur = snd.get_total_duration()
                     if 'macro_start' in item and 'macro_end' in item and total_dur > 15.0:
@@ -2117,26 +2256,26 @@ class PhoneticsApp:
                         seg_start = max(0.0, item['macro_start'] - padding)
                         seg_end = min(total_dur, item['macro_end'] + padding)
                         part_snd = snd.extract_part(from_time=seg_start, to_time=seg_end)
-                        part_formant_data = extract_formants(part_snd, last_params)
+                        part_formant_data = extract_formants(part_snd, params)
                         part_formant_data['xs'] = part_formant_data['xs'] + seg_start
                         return part_formant_data
                     else:
-                        return extract_formants(snd, last_params)
+                        return extract_formants(snd, params)
 
                 # 如果是独立音频模式且没有加载 Sound 对象
                 if not item.get('snd') and item.get('path'):
                     item['snd'] = parselmouth.Sound(item['path'])
                     # 总是为单项重新生成 pitch 确保准确性
                     if not recompute_formant_only:
-                        item['pitch_data'] = get_segmented_f0(item['snd'], self.last_params)
+                        item['pitch_data'] = get_segmented_f0(item['snd'], worker_params)
                         if 'pitch' in item:
                             del item['pitch']
-                        item['pitch_floor'] = self.last_params['pitch_floor']
-                        item['pitch_ceiling'] = self.last_params['pitch_ceiling']
-                        item['voicing_threshold'] = self.last_params.get('voicing_threshold', 0.25)
+                        item['pitch_floor'] = worker_params['pitch_floor']
+                        item['pitch_ceiling'] = worker_params['pitch_ceiling']
+                        item['voicing_threshold'] = worker_params.get('voicing_threshold', 0.25)
 
                     # 总是为单项重新生成 formant
-                    item['formant_data'] = get_segmented_formant(item['snd'], self.last_params)
+                    item['formant_data'] = get_segmented_formant(item['snd'], worker_params)
 
                     # 独立音频的宏观边界就是全文
                     item['macro_start'] = 0.0
@@ -2144,24 +2283,24 @@ class PhoneticsApp:
 
                 # 如果是仅重新计算共振峰且 Sound 对象已存在
                 if recompute_formant_only and item.get('snd'):
-                    item['formant_data'] = get_segmented_formant(item['snd'], self.last_params)
+                    item['formant_data'] = get_segmented_formant(item['snd'], worker_params)
                 # 如果修改了 Pitch Floor/Ceiling 或 Formant 参数，且非仅重算共振峰，重新计算该项
                 elif recompute_pitch and item.get('snd'):
-                    item['pitch_data'] = get_segmented_f0(item['snd'], self.last_params)
+                    item['pitch_data'] = get_segmented_f0(item['snd'], worker_params)
                     if 'pitch' in item:
                         del item['pitch']
-                    item['pitch_floor'] = self.last_params['pitch_floor']
-                    item['pitch_ceiling'] = self.last_params['pitch_ceiling']
-                    item['voicing_threshold'] = self.last_params.get('voicing_threshold', 0.25)
+                    item['pitch_floor'] = worker_params['pitch_floor']
+                    item['pitch_ceiling'] = worker_params['pitch_ceiling']
+                    item['voicing_threshold'] = worker_params.get('voicing_threshold', 0.25)
 
                     # 重新生成 formant
-                    item['formant_data'] = get_segmented_formant(item['snd'], self.last_params)
+                    item['formant_data'] = get_segmented_formant(item['snd'], worker_params)
 
                 if item.get('formant_data'):
-                    self._stamp_formant_params_on_item(item)
+                    self._stamp_formant_params_on_item(item, worker_params)
 
-                # 仅在非 recompute_formant_only 时才重新计算/定位边界，从而完美保护手动边界修改
-                if not recompute_formant_only and item.get('snd') and 'macro_start' in item and 'macro_end' in item:
+                # 单条参数应用可以只刷新声学数据，保留已经识别或手动调整过的边界。
+                if not preserve_bounds and not recompute_formant_only and item.get('snd') and 'macro_start' in item and 'macro_end' in item:
                     current_pitch = item.get('pitch_data', item.get('pitch'))
                     if only_trim_silence:
                         mic_s, mic_e = recalculate_bounds_fast(
@@ -2192,7 +2331,7 @@ class PhoneticsApp:
                             split_warnings = meta.get('split_warnings', [])
                             split_confidence = meta.get('split_confidence', 1.0)
                             from modules.audio_core import auto_split_to_chars_bounds
-                            item['chars_bounds'] = auto_split_to_chars_bounds(item['snd'], raw_s, raw_e, item['inner_splits'], len(syls), self.last_params)
+                            item['chars_bounds'] = auto_split_to_chars_bounds(item['snd'], raw_s, raw_e, item['inner_splits'], len(syls), worker_params)
                             if item['chars_bounds']:
                                 item['start'] = item['chars_bounds'][0][0]
                                 item['end'] = item['chars_bounds'][-1][1]
@@ -2227,8 +2366,8 @@ class PhoneticsApp:
 
                 # 同时重新生成 preview_formants
                 if item.get('snd') and item.get('formant_data'):
-                    pts = int(self.last_params.get('pts', 11))
-                    strategy = self.last_params.get('formant_sample_strategy', '整段11点')
+                    pts = int(worker_params.get('pts', 11))
+                    strategy = worker_params.get('formant_sample_strategy', '整段11点')
                     _, preview_f1, preview_f2 = self.sample_formant_points(item, pts, strategy)
                     item['preview_formants'] = {"f1": preview_f1, "f2": preview_f2}
 
@@ -2242,7 +2381,7 @@ class PhoneticsApp:
                             break
                     self.tree_panel.update_preview()
                     self.mark_modified()
-                    self.set_status("当前项已更新", "#10B981", "status_success")
+                    self.set_status(completion_text or "当前项已更新", "#10B981", "status_success")
 
                 self.root.after(0, finalize)
             except Exception as e:
@@ -3787,6 +3926,133 @@ class PhoneticsApp:
             messagebox.showwarning("提示", "请先导入音频文件以进行检测。")
             return
 
+        curr_item = getattr(self, 'spectrogram_panel', None) and self.spectrogram_panel.current_item
+        detect_current_only = False
+        if curr_item:
+            resp = messagebox.askyesnocancel("检测范围", "是否仅针对当前选中的音频条目进行 F0 参数估算？\n\n- 选择【是】：仅针对当前条目估算本条建议参数\n- 选择【否】：对项目内的代表性音频进行全局参数估算\n- 选择【取消】：取消本次操作")
+            if resp is None:
+                return
+            detect_current_only = resp
+
+        if detect_current_only:
+            snd = curr_item.get('snd')
+            if snd is None and curr_item.get('path'):
+                try:
+                    import parselmouth
+                    snd = parselmouth.Sound(curr_item['path'])
+                except Exception as e:
+                    messagebox.showerror("错误", f"加载当前项音频失败: {e}")
+                    return
+            if snd is None:
+                messagebox.showwarning("提示", "未找到已加载的音频。")
+                return
+
+            self.start_loading("正在估算本条 F0 分布...")
+
+            params_temp = {
+                'pitch_floor': 50,
+                'pitch_ceiling': 700,
+                'voicing_threshold': self.last_params.get('voicing_threshold', 0.25),
+                'very_accurate': False
+            }
+
+            def run_current_detection():
+                try:
+                    is_long = ('macro_start' in curr_item and 'macro_end' in curr_item and snd.get_total_duration() > 15.0)
+                    if is_long:
+                        m_s = curr_item['macro_start']
+                        m_e = curr_item['macro_end']
+                        padding = 0.1
+                        from_t = max(0.0, m_s - padding)
+                        to_t = min(snd.get_total_duration(), m_e + padding)
+                        part = snd.extract_part(from_time=from_t, to_time=to_t)
+                        pitch_data = extract_f0(part, params_temp)
+                        pitch_times = pitch_data['xs'] + from_t
+                        pitch_freqs = pitch_data['freqs']
+                        mask = (pitch_times >= m_s) & (pitch_times <= m_e)
+                        item_times = pitch_times[mask]
+                        item_freqs = pitch_freqs[mask]
+                        all_stable_f0 = self.extract_stable_f0_values(item_times, item_freqs)
+                    else:
+                        pitch_data = extract_f0(snd, params_temp)
+                        all_stable_f0 = self.extract_stable_f0_values(pitch_data['xs'], pitch_data['freqs'])
+
+                    if len(all_stable_f0) < 20:
+                        self.root.after(0, self.stop_loading)
+                        self.root.after(0, lambda: messagebox.showwarning("无法可靠建议", "当前条目有效有声数据太少（少于 20 帧），无法提取稳定 F0。"))
+                        return
+
+                    import numpy as np
+                    p5 = float(np.percentile(all_stable_f0, 5))
+                    p10 = float(np.percentile(all_stable_f0, 10))
+                    p50 = float(np.percentile(all_stable_f0, 50))
+                    p90 = float(np.percentile(all_stable_f0, 90))
+                    p95 = float(np.percentile(all_stable_f0, 95))
+
+                    med = p50
+                    w = (med - 120.0) / 120.0
+                    w = max(0.0, min(1.0, w))
+
+                    mult_cons_floor = 0.66 * (1.0 - w) + 0.58 * w
+                    mult_cons_ceil = 1.94 * (1.0 - w) + 1.61 * w
+
+                    mult_reco_floor = 0.78 * (1.0 - w) + 0.76 * w
+                    mult_reco_ceil = 1.67 * (1.0 - w) + 1.45 * w
+
+                    mult_fine_floor = 0.89 * (1.0 - w) + 0.88 * w
+                    mult_fine_ceil = 1.44 * (1.0 - w) + 1.35 * w
+
+                    cons_floor = p5 * mult_cons_floor
+                    cons_ceil = p95 * mult_cons_ceil
+
+                    reco_floor = p5 * mult_reco_floor
+                    reco_ceil = p95 * mult_reco_ceil
+
+                    fine_floor = p5 * mult_fine_floor
+                    fine_ceil = p95 * mult_fine_ceil
+
+                    def round_to_25(val):
+                        return int(round(val / 25.0) * 25.0)
+
+                    cons_floor = max(40, round_to_25(cons_floor))
+                    cons_ceil = min(1000, round_to_25(cons_ceil))
+
+                    reco_floor = max(40, round_to_25(reco_floor))
+                    reco_ceil = min(1000, round_to_25(reco_ceil))
+
+                    fine_floor = max(40, round_to_25(fine_floor))
+                    fine_ceil = min(1000, round_to_25(fine_ceil))
+
+                    voiced_duration = len(all_stable_f0) * 0.01
+
+                    def show_result_dialog():
+                        self.stop_loading()
+                        from modules.f0_detection_dialog import F0DetectionDialog
+                        F0DetectionDialog(
+                            parent=self.root,
+                            app=self,
+                            p5=p5,
+                            p10=p10,
+                            p50=p50,
+                            p90=p90,
+                            p95=p95,
+                            stable_count=len(all_stable_f0),
+                            stable_duration=voiced_duration,
+                            cons_range=(cons_floor, cons_ceil),
+                            reco_range=(reco_floor, reco_ceil),
+                            fine_range=(fine_floor, fine_ceil),
+                            apply_scope="current"
+                        )
+
+                    self.root.after(0, show_result_dialog)
+                except Exception as e:
+                    self.root.after(0, self.stop_loading)
+                    self.root.after(0, lambda: messagebox.showerror("错误", f"检测过程中发生错误: {e}"))
+
+            import threading
+            threading.Thread(target=run_current_detection, daemon=True).start()
+            return
+
         self.start_loading("正在估算发音人 F0 分布...")
 
         # 在主线程中捕获 UI 和 Tkinter 状态，保证线程安全
@@ -4036,7 +4302,7 @@ class PhoneticsApp:
                         stable_values.append(item[1])
         return stable_values
 
-    def apply_f0_bounds(self, floor, ceiling):
+    def apply_f0_bounds(self, floor, ceiling, scope="global"):
         self.entry_pitch_floor.delete(0, tk.END)
         self.entry_pitch_floor.insert(0, str(int(floor)))
         if hasattr(self.entry_pitch_floor, '_last_val'):
@@ -4047,9 +4313,25 @@ class PhoneticsApp:
         if hasattr(self.entry_pitch_ceiling, '_last_val'):
             self.entry_pitch_ceiling._last_val = str(int(ceiling))
 
-        # [P1 优化]：触发参数变化逻辑，并传入 only_pitch_changed=True 以保护所有非手动切分边界不被重写
-        self.on_param_change(recalculate_current=False)
-        self.recalculate_all_audio(recompute_pitch=True, only_pitch_changed=True)
+        if scope == "current":
+            try:
+                voicing_threshold = float(self.entry_voicing_threshold.get())
+            except Exception:
+                voicing_threshold = self.last_params.get('voicing_threshold', 0.25)
+            self.recalculate_current_item(
+                recompute_pitch=True,
+                preserve_bounds=True,
+                completion_text="当前条目 F0 范围已应用",
+                param_overrides={
+                    'pitch_floor': int(floor),
+                    'pitch_ceiling': int(ceiling),
+                    'voicing_threshold': voicing_threshold
+                }
+            )
+        else:
+            # [P1 优化]：触发参数变化逻辑，并传入 only_pitch_changed=True 以保护所有非手动切分边界不被重写
+            self.on_param_change(recalculate_current=False)
+            self.recalculate_all_audio(recompute_pitch=True, only_pitch_changed=True)
 
     def _collect_formant_snippets(self, tab_mode, pending_long_snd, long_audio_path, items_snapshot):
         import parselmouth
@@ -4302,6 +4584,94 @@ class PhoneticsApp:
             messagebox.showwarning("提示", "请先导入音频文件以进行检测。")
             return
 
+        curr_item = getattr(self, 'spectrogram_panel', None) and self.spectrogram_panel.current_item
+        detect_current_only = False
+        if curr_item:
+            resp = messagebox.askyesnocancel("检测范围", "是否仅针对当前选中的音频条目进行共振峰参数估算？\n\n- 选择【是】：仅针对当前条目估算本条建议参数\n- 选择【否】：对项目内的代表性音频进行全局参数估算\n- 选择【取消】：取消本次操作")
+            if resp is None:
+                return
+            detect_current_only = resp
+
+        if detect_current_only:
+            snd = curr_item.get('snd')
+            if snd is None and curr_item.get('path'):
+                try:
+                    import parselmouth
+                    snd = parselmouth.Sound(curr_item['path'])
+                except Exception as e:
+                    messagebox.showerror("错误", f"加载当前项音频失败: {e}")
+                    return
+            if snd is None:
+                messagebox.showwarning("提示", "未找到已加载的音频。")
+                return
+
+            self.start_loading("正在分析本条共振峰最佳参数...")
+
+            def run_current_detection():
+                try:
+                    is_long = ('macro_start' in curr_item and 'macro_end' in curr_item and snd.get_total_duration() > 15.0)
+                    snippets = []
+                    if is_long:
+                        m_s = curr_item.get('macro_start', curr_item.get('start', 0.0))
+                        m_e = curr_item.get('macro_end', curr_item.get('end', 0.0))
+                        if m_e > m_s:
+                            part = snd.extract_part(from_time=m_s, to_time=m_e)
+                            snippets.append(part)
+                    else:
+                        s_t = curr_item.get('start', 0.0)
+                        e_t = curr_item.get('end', snd.get_total_duration())
+                        from_t = s_t + 0.025
+                        to_t = e_t - 0.025
+                        if to_t > from_t + 0.01:
+                            part = snd.extract_part(from_time=from_t, to_time=to_t)
+                        else:
+                            part = snd.extract_part(from_time=s_t, to_time=e_t)
+                        snippets.append(part)
+
+                    if not snippets:
+                        self.root.after(0, self.stop_loading)
+                        self.root.after(0, lambda: messagebox.showwarning("提示", "当前条目没有有效发音片段可进行分析。"))
+                        return
+
+                    voiced_duration = 0.0
+                    for s in snippets:
+                        try:
+                            voiced_duration += float(s.get_total_duration())
+                        except Exception: pass
+                    insufficient_data = voiced_duration < 0.5
+
+                    best_score, best_config, all_fine_results = self._search_best_formant_config(snippets)
+
+                    if best_config is None:
+                        self.root.after(0, self.stop_loading)
+                        self.root.after(0, lambda: messagebox.showwarning("提示", "未找到有效的最佳配置。"))
+                        return
+
+                    reco_params, anti_params, fine_params = self._generate_formant_gears(best_score, best_config, all_fine_results)
+
+                    def show_result_dialog():
+                        self.stop_loading()
+                        from modules.formant_detection_dialog import FormantDetectionDialog
+                        FormantDetectionDialog(
+                            parent=self.root,
+                            app=self,
+                            voiced_duration=voiced_duration,
+                            insufficient_data=insufficient_data,
+                            reco_params=reco_params,
+                            anti_params=anti_params,
+                            fine_params=fine_params,
+                            apply_scope="current"
+                        )
+
+                    self.root.after(0, show_result_dialog)
+                except Exception as e:
+                    self.root.after(0, self.stop_loading)
+                    self.root.after(0, lambda: messagebox.showerror("错误", f"检测过程中发生错误: {e}"))
+
+            import threading
+            threading.Thread(target=run_current_detection, daemon=True).start()
+            return
+
         self.start_loading("正在分析共振峰最佳参数...")
 
         tab_mode = self.tabview.get()
@@ -4329,7 +4699,7 @@ class PhoneticsApp:
             daemon=True
         ).start()
 
-    def apply_formant_params(self, max_hz, count, window_length, pre_emphasis):
+    def apply_formant_params(self, max_hz, count, window_length, pre_emphasis, scope="global"):
         # Update entry fields UI
         if hasattr(self, 'entry_formant_max_hz') and self.entry_formant_max_hz:
             self.entry_formant_max_hz.delete(0, tk.END)
@@ -4355,13 +4725,27 @@ class PhoneticsApp:
             if hasattr(self.entry_formant_pre_emphasis, '_last_val'):
                 self.entry_formant_pre_emphasis._last_val = str(float(pre_emphasis))
 
-        # Sync to self.last_params
-        self.last_params['formant_max_hz'] = float(max_hz)
-        self.last_params['formant_count'] = int(count)
-        self.last_params['formant_window_length'] = float(window_length)
-        self.last_params['formant_pre_emphasis'] = float(pre_emphasis)
-
-        self.recalculate_all_formants()
+        if scope == "current":
+            curr_item = getattr(self, 'spectrogram_panel', None) and self.spectrogram_panel.current_item
+            self.recalculate_current_item(
+                recompute_formant_only=True,
+                completion_text="当前条目共振峰参数已应用",
+                param_overrides={
+                    'formant_max_hz': float(max_hz),
+                    'formant_count': int(count),
+                    'formant_window_length': float(window_length),
+                    'formant_pre_emphasis': float(pre_emphasis),
+                    'formant_sample_strategy': (curr_item or {}).get('formant_sample_strategy', self.last_params.get('formant_sample_strategy', '整段11点')),
+                    'analysis_mode': (curr_item or {}).get('analysis_mode', self.last_params.get('analysis_mode', 'f0'))
+                }
+            )
+        else:
+            # Sync to self.last_params
+            self.last_params['formant_max_hz'] = float(max_hz)
+            self.last_params['formant_count'] = int(count)
+            self.last_params['formant_window_length'] = float(window_length)
+            self.last_params['formant_pre_emphasis'] = float(pre_emphasis)
+            self.recalculate_all_formants()
 
     def recalculate_all_formants(self):
         if hasattr(self, 'spectrogram_panel') and self.spectrogram_panel:

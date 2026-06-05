@@ -333,3 +333,304 @@ def test_recalculate_current_formant_stamps_item_level_params():
     assert item['formant_max_hz'] == 8000.0
     assert item['formant_window_length'] == 0.035
     assert item['analysis_mode'] == 'formant'
+
+
+class MockEvent:
+    def __init__(self, delta=0, num=0):
+        self.delta = delta
+        self.num = num
+
+
+class MockEntry:
+    def __init__(self, initial_val=""):
+        self.val = initial_val
+        self.bindings = {}
+        self._last_val = initial_val
+
+    def get(self):
+        return self.val
+
+    def delete(self, start, end):
+        self.val = ""
+
+    def insert(self, index, val):
+        self.val = val
+
+    def bind(self, seq, func):
+        self.bindings[seq] = func
+
+
+def test_setup_numeric_wheel_stepper_pitch_floor():
+    from unittest.mock import MagicMock
+    app = DummyApp()
+    app.root = MagicMock()
+    app.last_params = {'pitch_floor': 75, 'pitch_ceiling': 600}
+    
+    app.entry_pitch_floor = MockEntry("75")
+    app.entry_pitch_ceiling = MockEntry("600")
+    
+    PhoneticsApp.setup_numeric_wheel_stepper(app, app.entry_pitch_floor, 'pitch_floor', step=25, value_type=int)
+    
+    # 1. Scroll up: 75 -> 100
+    event_up = MockEvent(delta=120)
+    app.entry_pitch_floor.bindings["<MouseWheel>"](event_up)
+    assert app.entry_pitch_floor.get() == "100"
+    
+    # 2. Scroll down: 100 -> 75
+    event_down = MockEvent(delta=-120)
+    app.entry_pitch_floor.bindings["<MouseWheel>"](event_down)
+    assert app.entry_pitch_floor.get() == "75"
+    
+    # 3. Floor cannot go below 40
+    app.entry_pitch_floor.insert(0, "45")
+    app.entry_pitch_floor.bindings["<MouseWheel>"](event_down)  # 45 - 25 = 20 -> 40
+    assert app.entry_pitch_floor.get() == "40"
+    
+    # 4. Floor cannot exceed ceiling - 25
+    app.entry_pitch_ceiling.insert(0, "100")
+    app.entry_pitch_floor.insert(0, "75")
+    app.entry_pitch_floor.bindings["<MouseWheel>"](event_up)  # 75 + 25 = 100 -> capped at 100 - 25 = 75
+    assert app.entry_pitch_floor.get() == "75"
+
+
+def test_setup_numeric_wheel_stepper_pitch_ceiling():
+    from unittest.mock import MagicMock
+    app = DummyApp()
+    app.root = MagicMock()
+    app.last_params = {'pitch_floor': 75, 'pitch_ceiling': 600}
+    
+    app.entry_pitch_floor = MockEntry("75")
+    app.entry_pitch_ceiling = MockEntry("600")
+    
+    PhoneticsApp.setup_numeric_wheel_stepper(app, app.entry_pitch_ceiling, 'pitch_ceiling', step=25, value_type=int)
+    
+    # 1. Scroll up: 600 -> 625
+    event_up = MockEvent(delta=120)
+    app.entry_pitch_ceiling.bindings["<MouseWheel>"](event_up)
+    assert app.entry_pitch_ceiling.get() == "625"
+    
+    # 2. Ceiling cannot go below floor + 25
+    app.entry_pitch_floor.insert(0, "100")
+    app.entry_pitch_ceiling.insert(0, "125")
+    event_down = MockEvent(delta=-120)
+    app.entry_pitch_ceiling.bindings["<MouseWheel>"](event_down)  # 125 - 25 = 100 -> capped at 100 + 25 = 125
+    assert app.entry_pitch_ceiling.get() == "125"
+    
+    # 3. Ceiling cannot exceed 1000
+    app.entry_pitch_ceiling.insert(0, "990")
+    app.entry_pitch_ceiling.bindings["<MouseWheel>"](event_up)  # 990 + 25 = 1015 -> capped at 1000
+    assert app.entry_pitch_ceiling.get() == "1000"
+
+
+def test_setup_numeric_wheel_stepper_formant_max_hz():
+    from unittest.mock import MagicMock
+    app = DummyApp()
+    app.root = MagicMock()
+    app.last_params = {'formant_max_hz': 5500.0}
+    
+    app.entry_formant_max_hz = MockEntry("5500.0")
+    
+    PhoneticsApp.setup_numeric_wheel_stepper(app, app.entry_formant_max_hz, 'formant_max_hz', step=250, value_type=float, formatter=lambda v: str(float(v)))
+    
+    # 1. Scroll up: 5500 -> 5750
+    event_up = MockEvent(delta=120)
+    app.entry_formant_max_hz.bindings["<MouseWheel>"](event_up)
+    assert app.entry_formant_max_hz.get() == "5750.0"
+    
+    # 2. Scroll down: 5500 -> 5250
+    app.entry_formant_max_hz.insert(0, "5500.0")
+    event_down = MockEvent(delta=-120)
+    app.entry_formant_max_hz.bindings["<MouseWheel>"](event_down)
+    assert app.entry_formant_max_hz.get() == "5250.0"
+    
+    # 3. Bounded by 3000
+    app.entry_formant_max_hz.insert(0, "3100.0")
+    app.entry_formant_max_hz.bindings["<MouseWheel>"](event_down)
+    assert app.entry_formant_max_hz.get() == "3000.0"
+    
+    # 4. Bounded by 9000
+    app.entry_formant_max_hz.insert(0, "8900.0")
+    app.entry_formant_max_hz.bindings["<MouseWheel>"](event_up)
+    assert app.entry_formant_max_hz.get() == "9000.0"
+
+
+def test_setup_numeric_wheel_stepper_apply_triggers():
+    from unittest.mock import MagicMock
+    app = DummyApp()
+    app.root = MagicMock()
+    app.last_params = {'pitch_floor': 75, 'pitch_ceiling': 600, 'formant_max_hz': 5500.0}
+    app.spectrogram_panel = MagicMock()
+    app.spectrogram_panel.current_item = {"label": "test"}
+    
+    app.entry_pitch_floor = MockEntry("75")
+    app.entry_pitch_ceiling = MockEntry("600")
+    app.entry_voicing_threshold = MockEntry("0.25")
+    app.entry_formant_max_hz = MockEntry("5500.0")
+    app.entry_formant_count = MockEntry("5")
+    app.entry_formant_window_length = MockEntry("0.025")
+    app.entry_formant_pre_emphasis = MockEntry("50.0")
+    
+    app.on_param_change = MagicMock()
+    app.recalculate_current_item = MagicMock()
+    app.recalculate_all_audio = MagicMock()
+    
+    # Intercept root.after to run the callback synchronously
+    app.root.after = lambda delay, callback: callback()
+    
+    # 1. Pitch floor wheel trigger
+    PhoneticsApp.setup_numeric_wheel_stepper(app, app.entry_pitch_floor, 'pitch_floor', step=25, value_type=int)
+    event_up = MockEvent(delta=120)
+    app.entry_pitch_floor.bindings["<MouseWheel>"](event_up)
+    
+    app.recalculate_current_item.assert_called_once_with(
+        recompute_pitch=True,
+        preserve_bounds=True,
+        completion_text="当前条目 F0 范围已应用",
+        param_overrides={
+            'pitch_floor': 100,
+            'pitch_ceiling': 600,
+            'voicing_threshold': 0.25
+        }
+    )
+    app.on_param_change.assert_not_called()
+    app.recalculate_all_audio.assert_not_called()
+    
+    # 2. Formant max HZ wheel trigger
+    app.on_param_change.reset_mock()
+    app.recalculate_current_item.reset_mock()
+    app.recalculate_all_audio.reset_mock()
+    
+    PhoneticsApp.setup_numeric_wheel_stepper(app, app.entry_formant_max_hz, 'formant_max_hz', step=250, value_type=float, formatter=lambda v: str(float(v)))
+    app.entry_formant_max_hz.bindings["<MouseWheel>"](event_up)
+    
+    app.on_param_change.assert_not_called()
+    app.recalculate_current_item.assert_called_once_with(
+        recompute_formant_only=True,
+        completion_text="当前条目共振峰参数已应用",
+        param_overrides={
+            'formant_max_hz': 5750.0,
+            'formant_count': 5,
+            'formant_window_length': 0.025,
+            'formant_pre_emphasis': 50.0,
+            'formant_sample_strategy': '整段11点',
+            'analysis_mode': 'f0'
+        }
+    )
+    app.recalculate_all_audio.assert_not_called()
+
+
+def test_setup_numeric_wheel_stepper_pitch_without_current_item_falls_back_to_global():
+    from unittest.mock import MagicMock
+    app = DummyApp()
+    app.root = MagicMock()
+    app.last_params = {'pitch_floor': 75, 'pitch_ceiling': 600}
+    app.spectrogram_panel = MagicMock()
+    app.spectrogram_panel.current_item = None
+    app.entry_pitch_floor = MockEntry("75")
+    app.entry_pitch_ceiling = MockEntry("600")
+    app.on_param_change = MagicMock()
+    app.recalculate_current_item = MagicMock()
+    app.recalculate_all_audio = MagicMock()
+    app.root.after = lambda delay, callback: callback()
+
+    PhoneticsApp.setup_numeric_wheel_stepper(app, app.entry_pitch_floor, 'pitch_floor', step=25, value_type=int)
+    app.entry_pitch_floor.bindings["<MouseWheel>"](MockEvent(delta=120))
+
+    app.on_param_change.assert_called_once_with(recalculate_current=False)
+    app.recalculate_current_item.assert_not_called()
+    app.recalculate_all_audio.assert_called_once_with(recompute_pitch=True, only_pitch_changed=True)
+
+
+def test_apply_f0_bounds_current_scope_refreshes_current_item_only():
+    from unittest.mock import MagicMock
+    app = DummyApp()
+    app.entry_pitch_floor = MockEntry("75")
+    app.entry_pitch_ceiling = MockEntry("600")
+    app.entry_voicing_threshold = MockEntry("0.25")
+    app.last_params = {'pitch_floor': 75, 'pitch_ceiling': 600, 'voicing_threshold': 0.25}
+    app.on_param_change = MagicMock()
+    app.recalculate_current_item = MagicMock()
+    app.recalculate_all_audio = MagicMock()
+
+    PhoneticsApp.apply_f0_bounds(app, 100, 500, scope="current")
+
+    assert app.entry_pitch_floor.get() == "100"
+    assert app.entry_pitch_ceiling.get() == "500"
+    app.on_param_change.assert_not_called()
+    app.recalculate_current_item.assert_called_once_with(
+        recompute_pitch=True,
+        preserve_bounds=True,
+        completion_text="当前条目 F0 范围已应用",
+        param_overrides={
+            'pitch_floor': 100,
+            'pitch_ceiling': 500,
+            'voicing_threshold': 0.25
+        }
+    )
+    app.recalculate_all_audio.assert_not_called()
+    assert app.last_params == {'pitch_floor': 75, 'pitch_ceiling': 600, 'voicing_threshold': 0.25}
+
+
+def test_apply_formant_params_current_scope_refreshes_current_item_only():
+    from unittest.mock import MagicMock
+    app = DummyApp()
+    app.entry_formant_max_hz = MockEntry("5500.0")
+    app.entry_formant_count = MockEntry("5")
+    app.entry_formant_window_length = MockEntry("0.025")
+    app.entry_formant_pre_emphasis = MockEntry("50.0")
+    app.last_params = {}
+    app.recalculate_current_item = MagicMock()
+    app.recalculate_all_formants = MagicMock()
+
+    PhoneticsApp.apply_formant_params(app, 5750, 5, 0.030, 80, scope="current")
+
+    assert app.entry_formant_max_hz.get() == "5750.0"
+    assert app.entry_formant_count.get() == "5"
+    assert app.entry_formant_window_length.get() == "0.030"
+    assert app.entry_formant_pre_emphasis.get() == "80.0"
+    assert app.last_params == {}
+    app.recalculate_current_item.assert_called_once_with(
+        recompute_formant_only=True,
+        completion_text="当前条目共振峰参数已应用",
+        param_overrides={
+            'formant_max_hz': 5750.0,
+            'formant_count': 5,
+            'formant_window_length': 0.030,
+            'formant_pre_emphasis': 80.0,
+            'formant_sample_strategy': '整段11点',
+            'analysis_mode': 'f0'
+        }
+    )
+    app.recalculate_all_formants.assert_not_called()
+
+
+def test_sync_ui_and_plot_resets_missing_item_params_to_defaults():
+    from unittest.mock import MagicMock
+    app = DummyApp()
+    app.last_params = {
+        'pitch_floor': 75,
+        'pitch_ceiling': 600,
+        'voicing_threshold': 0.25,
+        'formant_max_hz': 5500.0,
+        'formant_count': 5,
+        'formant_window_length': 0.025,
+        'formant_pre_emphasis': 50.0,
+    }
+    app.entry_pitch_floor = MockEntry("100")
+    app.entry_pitch_ceiling = MockEntry("500")
+    app.entry_voicing_threshold = MockEntry("0.35")
+    app.entry_formant_max_hz = MockEntry("5750.0")
+    app.entry_formant_count = MockEntry("5")
+    app.entry_formant_window_length = MockEntry("0.030")
+    app.entry_formant_pre_emphasis = MockEntry("80.0")
+    app.spectrogram_panel = MagicMock()
+
+    PhoneticsApp._sync_ui_and_plot(app, {'label': '旧条目'})
+
+    assert app.entry_pitch_floor.get() == "75"
+    assert app.entry_pitch_ceiling.get() == "600"
+    assert app.entry_voicing_threshold.get() == "0.25"
+    assert app.entry_formant_max_hz.get() == "5500.0"
+    assert app.entry_formant_window_length.get() == "0.025"
+    assert app.entry_formant_pre_emphasis.get() == "50.0"
+    app.spectrogram_panel.load_item.assert_called_once()
