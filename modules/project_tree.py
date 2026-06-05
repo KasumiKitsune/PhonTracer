@@ -812,7 +812,9 @@ class ProjectTreePanel:
         tree_container.grid_columnconfigure(0, weight=1)
         tree_container.grid_rowconfigure(0, weight=1)
 
-        self.tree = ttk.Treeview(tree_container, show='tree', selectmode='extended')
+        self.tree = ttk.Treeview(tree_container, show='tree', selectmode='extended', columns=("info",))
+        self.tree.column("#0", anchor="w", stretch=True)
+        self.tree.column("info", anchor="e", width=125, minwidth=80, stretch=False)
         scroll_tree = AutoScrollbar(tree_container, command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll_tree.set)
 
@@ -2038,6 +2040,101 @@ class ProjectTreePanel:
 
         return warnings
 
+    def _shorten_warning(self, warning_msg):
+        msg = warning_msg
+        for prefix in ("[致命]", "[警告]", "[提示]"):
+            if msg.startswith(prefix):
+                msg = msg[len(prefix):].strip()
+        
+        if "时间边界" in msg and "无效" in msg:
+            return "边界无效"
+        if "时间边界" in msg and "缺失" in msg:
+            return "边界缺失"
+        if "子段数量" in msg:
+            return "子段不匹配"
+        if "共振峰数据为空" in msg:
+            return "无共振峰"
+        if "共振峰存在明显缺失" in msg:
+            return "共振峰缺失"
+        if "核心区间无共振峰" in msg:
+            return "核心无数据"
+        if "共振峰有效帧" in msg and "过低" in msg:
+            return "有效帧率低"
+        if "共振峰有效帧" in msg and "偏低" in msg:
+            return "有效帧率低"
+        if "F2<=F1" in msg or "F2<=F1" in msg.replace(" ", ""):
+            return "F2F1异常"
+        if "F2 轨迹跳变" in msg:
+            return "F2跳变"
+        if "F1 轨迹波动" in msg:
+            return "F1波动"
+        if "边界过短" in msg:
+            return "边界过短"
+        if "时长严重失衡" in msg:
+            return "时长失衡"
+        if "未能识别到能量谷" in msg or "能量谷" in msg:
+            return "无能量谷"
+        if "等分兜底" in msg:
+            return "等分兜底"
+        if "基频数据含有0值" in msg or "F0 缺失" in msg:
+            return "基频缺失"
+        if "倍频/半频/噪声" in msg or "倍频" in msg or "半频" in msg or "噪声" in msg:
+            return "疑似噪声"
+        if "F0 覆盖率低" in msg or "F0覆盖率低" in msg:
+            return "基频率低"
+        if "时长明显偏离" in msg:
+            return "时长偏离"
+        if "基频均值明显偏离" in msg:
+            return "基频偏离"
+        if "波动范围明显偏离" in msg:
+            return "波动偏离"
+        if "有效点比例偏低" in msg:
+            return "有效点低"
+        if "Pitch Floor/Ceiling" in msg or "整体基频" in msg:
+            return "检查设置"
+        if "平均有效" in msg:
+            return "有效率低"
+
+        msg = msg.replace("[", "").replace("]", "").replace(" ", "")
+        import re
+        msg = re.sub(r"音节\[.*?\]", "", msg)
+        msg = msg.split("(")[0]
+        msg = msg.split("（")[0]
+        
+        if len(msg) > 6:
+            return msg[:6]
+        return msg
+
+    def _shorten_exclusion_reason(self, reason):
+        reason = (reason or "").strip()
+        if not reason:
+            return "已忽略"
+        category, detail, custom = parse_exclusion_reason(reason)
+        if category == EXCLUSION_REASON_CUSTOM_CATEGORY:
+            if len(custom) > 8:
+                return custom[:8] + ".."
+            return custom
+        if detail and detail != EXCLUSION_REASON_DETAIL_PLACEHOLDER:
+            if len(detail) > 8:
+                return detail[:8] + ".."
+            return detail
+        if len(category) > 8:
+            return category[:8] + ".."
+        return category
+
+    def _get_item_info_text(self, item):
+        if item.get('is_excluded', False):
+            reason = item.get('exclusion_reason', '')
+            return self._shorten_exclusion_reason(reason)
+        
+        warn_msgs = item.get('warnings', [])
+        short_warns = []
+        for w in warn_msgs:
+            short_w = self._shorten_warning(w)
+            if short_w and short_w not in short_warns:
+                short_warns.append(short_w)
+        return " ".join(short_warns[:2])
+
     def rebuild_tree(self):
         # 1. 保存当前选择和展开状态
         sel = self.tree.selection()
@@ -2193,7 +2290,8 @@ class ProjectTreePanel:
             for iid, item in warning_items:
                 w_iid = f"warning_{iid}"
                 img = self.tk_icons.get('warning', '') if self.tk_icons else ''
-                self.tree.insert(self.warning_group_id, 'end', iid=w_iid, text=item.get('label', ''), image=img, tags=('item', 'warning_item'))
+                info_text = self._get_item_info_text(item)
+                self.tree.insert(self.warning_group_id, 'end', iid=w_iid, text=item.get('label', ''), image=img, tags=('item', 'warning_item'), values=(info_text,))
                 self.warning_iids[iid] = w_iid
 
         # 6. 插入常规组
@@ -2228,7 +2326,8 @@ class ProjectTreePanel:
                 tags_list = ['item']
                 if item.get('is_excluded', False):
                     tags_list.append('excluded')
-                self.tree.insert(gid, 'end', iid=iid, text=display, tags=tuple(tags_list), image=img)
+                info_text = self._get_item_info_text(item)
+                self.tree.insert(gid, 'end', iid=iid, text=display, tags=tuple(tags_list), image=img, values=(info_text,))
 
         # 7. 恢复选择和可见性
         if sel:
