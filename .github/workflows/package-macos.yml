@@ -1,0 +1,73 @@
+name: macOS ARM64 打包
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: 构建 macOS ARM64 磁盘映像
+    runs-on: macos-latest
+
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v6
+
+    - name: 配置 Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.12'
+        architecture: arm64
+        cache: 'pip'
+
+    - name: 安装依赖
+      run: |
+        python -m pip install --upgrade pip
+        pip install --upgrade pyinstaller
+        pip install -r requirements.txt
+
+    - name: 使用 PyInstaller 构建
+      run: |
+        pyinstaller --noconfirm --clean ToneExtractor_Suite.spec
+
+    - name: 创建 macOS 磁盘映像
+      run: |
+        cd dist
+        mkdir -p PhonTracer_Suite
+        mv PhonTracer.app PhonTracer_Suite/
+        mv Toolkit.app PhonTracer_Suite/
+        for attempt in 1 2 3; do
+          hdiutil detach "/Volumes/PhonTracer_Suite" -force 2>/dev/null || true
+          rm -f PhonTracer_Suite-macOS.dmg
+          if hdiutil create -volname "PhonTracer_Suite" -srcfolder PhonTracer_Suite -ov -format UDZO PhonTracer_Suite-macOS.dmg; then
+            break
+          fi
+          if [ "$attempt" = "3" ]; then
+            exit 1
+          fi
+          sleep 5
+        done
+
+    - name: 发布 macOS ARM64 产物
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v3
+      with:
+        files: dist/PhonTracer_Suite-macOS.dmg
+        name: PhonTracer ${{ github.ref_name }}
+        draft: false
+        prerelease: false
+        overwrite_files: true
+        fail_on_unmatched_files: true
+
+    - name: 上传 macOS ARM64 开发产物
+      if: "!startsWith(github.ref, 'refs/tags/')"
+      uses: actions/upload-artifact@v4
+      with:
+        name: PhonTracer-Suite-macOS-ARM64
+        path: dist/PhonTracer_Suite-macOS.dmg
+        if-no-files-found: error

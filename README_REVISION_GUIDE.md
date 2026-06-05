@@ -30,7 +30,7 @@
 | 当前标签 | `v1.2.0` |
 | 应用名称 | `PhonTracer` |
 | 版本来源 | `modules/version.py` |
-| 打包工作流 | `.github/workflows/package.yml` |
+| 打包工作流 | `.github/workflows/package-windows.yml`、`.github/workflows/package-macos.yml`、`.github/workflows/package-windows-arm64.yml` |
 | 当前套件打包配置 | `ToneExtractor_Suite.spec` |
 | 主要用户手册 | `assets/manual/manual.md` |
 
@@ -53,7 +53,7 @@
 - 科学图表导出器：`modules/acoustic_exporter.py`
 - 关于窗口和更新机制：`modules/about_dialog.py`、`modules/updater.py`
 - 打包和安装：`ToneExtractor_Suite.spec`、`ToneExtractor.spec`、`installer.iss`
-- 发布工作流：`.github/workflows/package.yml`
+- 发布工作流：`.github/workflows/package-windows.yml`、`.github/workflows/package-macos.yml`、`.github/workflows/package-windows-arm64.yml`
 - 依赖：`requirements.txt`
 - 自动化测试：`tests/`
 
@@ -760,7 +760,7 @@ modules/project_tree.py         # 项目树、异常提示和导出入口
 modules/acoustic_exporter.py    # 科学图表导出器
 assets/manual/manual.md         # 用户手册
 ToneExtractor_Suite.spec        # 当前套件打包配置
-.github/workflows/package.yml   # GitHub Actions 发布构建
+.github/workflows/              # Windows x64、macOS ARM64、Windows ARM64 发布构建
 tests/                          # 自动化测试
 ```
 ````
@@ -884,7 +884,7 @@ tests/                          # 自动化测试
 | --- | --- |
 | 当前版本 `v1.2.0` | `modules/version.py` |
 | 三入口套件 | `ToneExtractor_Suite.spec`、`installer.iss` |
-| Windows 和 macOS 发布流程 | `.github/workflows/package.yml` |
+| Windows x64、macOS ARM64 和 Windows ARM64 发布流程 | `.github/workflows/package-windows.yml`、`.github/workflows/package-macos.yml`、`.github/workflows/package-windows-arm64.yml` |
 | 说话人默认 F0 与共振峰参数 | `modules/speaker_manager.py` |
 | 主程序拖拽、启动恢复、模式切换 | `modules/app.py` |
 | Praat F0 提取 | `modules/audio_core.py` |
