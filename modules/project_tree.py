@@ -69,6 +69,43 @@ EXCLUSION_REASON_LEGACY_ALIASES = {
     "背景噪声过强": ("录音质量问题", "背景噪声过强"),
     "发音错误": ("发音内容问题", "发音错误"),
 }
+TREE_INFO_MAX_CHARS = 8
+EXCLUSION_REASON_SHORT_LABELS = {
+    "录音质量问题": "录音质量",
+    "录音中断或不完整": "录音中断",
+    "背景噪声过强": "背景噪声",
+    "爆音、削波或音量失真": "削波失真",
+    "音量过低、信噪比不足": "信噪比低",
+    "混入他人声音": "混入人声",
+    "串音、回声或设备异常": "设备异常",
+    "发音内容问题": "发音问题",
+    "发音错误": "发音错误",
+    "漏读、错读或多读": "漏错多读",
+    "重复发音": "重复发音",
+    "目标音节不完整": "音节不全",
+    "口误、犹豫或自我修正": "口误犹豫",
+    "未按实验要求发音": "要求不符",
+    "语音现象干扰": "语音干扰",
+    "咳嗽、笑声、吸气或清嗓": "非目标声",
+    "目标词与前后语音严重粘连": "语音粘连",
+    "意外停顿过长": "停顿过长",
+    "明显强调、拖长或唱读": "拖长唱读",
+    "沙哑、气声或耳语": "嗓音异常",
+    "声学分析困难": "分析困难",
+    "F0 无法可靠提取": "F0失效",
+    "倍频、半频或跳点过多": "倍半频/跳点",
+    "清浊判断异常": "清浊异常",
+    "共振峰轨迹无法可靠识别": "共振峰异常",
+    "边界无法可靠确定": "边界不稳",
+    "多音节内部切分不明确": "切分不明",
+    "有效分析区间过短": "区间过短",
+    "实验与数据管理": "数据管理",
+    "重复条目，仅保留其中一次": "重复条目",
+    "试读、练习或测试录音": "试读练习",
+    "发音人主动重录，旧版本作废": "重录作废",
+    "文件损坏或音频缺失": "文件缺失",
+    "标签、分组或录音对象不匹配": "标签不符",
+}
 
 
 def format_exclusion_reason(category, detail="", custom_reason=""):
@@ -2105,22 +2142,34 @@ class ProjectTreePanel:
             return msg[:6]
         return msg
 
+    def _compact_tree_info_text(self, text, max_chars=TREE_INFO_MAX_CHARS):
+        text = (text or "").strip()
+        if len(text) <= max_chars:
+            return text
+        if max_chars <= 2:
+            return text[:max_chars]
+        return text[:max_chars - 2] + ".."
+
+    def _format_tree_info_labels(self, labels):
+        labels = [label for label in labels if label]
+        if not labels:
+            return ""
+        if len(labels) == 1:
+            return self._compact_tree_info_text(labels[0])
+        suffix = f"+{len(labels) - 1}"
+        first_max = max(2, TREE_INFO_MAX_CHARS - len(suffix))
+        return f"{self._compact_tree_info_text(labels[0], first_max)}{suffix}"
+
     def _shorten_exclusion_reason(self, reason):
         reason = (reason or "").strip()
         if not reason:
             return "已忽略"
         category, detail, custom = parse_exclusion_reason(reason)
         if category == EXCLUSION_REASON_CUSTOM_CATEGORY:
-            if len(custom) > 8:
-                return custom[:8] + ".."
-            return custom
+            return self._compact_tree_info_text(custom)
         if detail and detail != EXCLUSION_REASON_DETAIL_PLACEHOLDER:
-            if len(detail) > 8:
-                return detail[:8] + ".."
-            return detail
-        if len(category) > 8:
-            return category[:8] + ".."
-        return category
+            return EXCLUSION_REASON_SHORT_LABELS.get(detail, self._compact_tree_info_text(detail))
+        return EXCLUSION_REASON_SHORT_LABELS.get(category, self._compact_tree_info_text(category))
 
     def _get_item_info_text(self, item):
         if item.get('is_excluded', False):
@@ -2135,7 +2184,7 @@ class ProjectTreePanel:
             short_w = self._shorten_warning(w)
             if short_w and short_w not in short_warns:
                 short_warns.append(short_w)
-        return " ".join(short_warns[:2])
+        return self._format_tree_info_labels(short_warns)
 
     def rebuild_tree(self):
         # 1. 保存当前选择和展开状态

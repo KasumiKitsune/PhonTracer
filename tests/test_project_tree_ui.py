@@ -4,7 +4,7 @@ import tkinter as tk
 import customtkinter as ctk
 import numpy as np
 from tests.shared_root import get_shared_root
-from modules.project_tree import ProjectTreePanel
+from modules.project_tree import ProjectTreePanel, format_exclusion_reason
 
 class TestProjectTreeUI(unittest.TestCase):
     def setUp(self):
@@ -92,6 +92,7 @@ class TestProjectTreeUI(unittest.TestCase):
             'text': kwargs.get('text', ''),
             'image': kwargs.get('image', ''),
             'tags': kwargs.get('tags', ()),
+            'values': kwargs.get('values', ()),
             'children': [],
             'open': kwargs.get('open', True)
         }
@@ -107,6 +108,8 @@ class TestProjectTreeUI(unittest.TestCase):
             return node.get('text', '')
         if option == 'image':
             return node.get('image', '')
+        if option == 'values':
+            return node.get('values', ())
         if option == 'open':
             return node.get('open', True)
         if kwargs:
@@ -116,6 +119,8 @@ class TestProjectTreeUI(unittest.TestCase):
                 node['image'] = kwargs['image']
             if 'tags' in kwargs:
                 node['tags'] = kwargs['tags']
+            if 'values' in kwargs:
+                node['values'] = kwargs['values']
             if 'open' in kwargs:
                 node['open'] = kwargs['open']
         return node
@@ -220,6 +225,35 @@ class TestProjectTreeUI(unittest.TestCase):
         self.assertEqual(self.tree_nodes['item_ignored']['image'], 'tk_gray_dot_mock')
         self.assertIn('excluded', self.tree_nodes['item_ignored']['tags'])
         self.assertNotIn('Group2', self.panel.group_nodes)
+
+    def test_ignored_item_info_uses_compact_reason_label(self):
+        """项目树右侧状态列应使用短标签，避免长忽略原因被截断"""
+        self.items_dict.clear()
+        self.items_dict['item_ignored'] = {
+            'label': 'Sport',
+            'group': 'Group1',
+            'start': 0.0,
+            'end': 1.0,
+            'has_empty_data': False,
+            'is_excluded': True,
+            'exclusion_reason': format_exclusion_reason("声学分析困难", "倍频、半频或跳点过多"),
+        }
+
+        self.panel.rebuild_tree()
+
+        self.assertEqual(self.tree_nodes['item_ignored']['values'], ("倍半频/跳点",))
+
+    def test_multiple_warning_info_uses_count_suffix(self):
+        """多个异常只显示首要短标签和剩余数量，保证状态列稳定"""
+        item = {
+            'warnings': [
+                "[警告] 共振峰有效帧比例偏低 (42.0% < 55%)",
+                "[警告] F2 轨迹跳变异常 (最大跳变 900Hz)",
+                "[致命] 边界过短 (某个子段短于 80ms)",
+            ]
+        }
+
+        self.assertEqual(self.panel._get_item_info_text(item), "有效帧率低+2")
 
     def test_filter_all_button_cycles_between_all_and_ignored(self):
         """Test all-items button toggles between all and ignored states"""
