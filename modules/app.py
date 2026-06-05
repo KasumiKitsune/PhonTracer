@@ -2725,7 +2725,7 @@ class PhoneticsApp:
                         tasks[idx]['raw_e'] = res['raw_e']
                         tasks[idx]['inner_splits'] = res.get('inner_splits', [])
                         if 'chars_bounds' in res: tasks[idx]['chars_bounds'] = res['chars_bounds']
-                        tasks[idx]['has_empty_data'] = res['has_empty_data']
+                        tasks[idx]['has_empty_data'] = res.get('has_empty_data', False)
                         tasks[idx]['split_warnings'] = res.get('split_warnings', [])
                         tasks[idx]['split_confidence'] = res.get('split_confidence', 1.0)
                         tasks[idx]['formant_data'] = res.get('formant_data')
@@ -2740,7 +2740,7 @@ class PhoneticsApp:
             results = tasks
 
             def finalize():
-                for res in results:
+                for idx, res in enumerate(results):
                     gid = self.tree_panel.ensure_group(res['group'])
                     if not res.get('missing'):
                         has_empty = res.get('has_empty_data', False)
@@ -2768,12 +2768,13 @@ class PhoneticsApp:
                             'split_warnings': res.get('split_warnings', []),
                             'split_confidence': res.get('split_confidence', 1.0),
                             'preview_f0': res.get('preview_f0', []),
-                            'has_empty_data': res.get('has_empty_data', False)
+                            'has_empty_data': res.get('has_empty_data', False),
+                            'import_index': idx
                         }
                         self.tree_panel.update_item_icon(iid)
                     else:
                         iid = self.tree_panel.tree.insert(gid, tk.END, text=res['word'] + " (缺失)", tags=('item',))
-                        self.items[iid] = {'label': res['word'], 'group': res['group'], 'snd': None, 'start': None, 'end': None, 'inner_splits': []}
+                        self.items[iid] = {'label': res['word'], 'group': res['group'], 'snd': None, 'start': None, 'end': None, 'inner_splits': [], 'import_index': idx}
 
                 self.stop_loading("长音频切分完成")
                 self.tree_panel.select_first_item()
@@ -2862,12 +2863,13 @@ class PhoneticsApp:
             def finalize():
                 results.sort(key=lambda x: x[0])
                 gid = self.tree_panel.ensure_group("独立文件")
-                for _, res in results:
+                for i, (orig_idx, res) in enumerate(results):
                     if res.get('success'):
                         res['group'] = "独立文件"
                         res['pitch_floor'] = params['pitch_floor']
                         res['pitch_ceiling'] = params['pitch_ceiling']
                         res['voicing_threshold'] = params['voicing_threshold']
+                        res['import_index'] = i
                         self._stamp_formant_params_on_item(res, params)
                         iid = f"batch_{res['label']}_{id(res)}"
                         self.items[iid] = res
@@ -2993,6 +2995,7 @@ class PhoneticsApp:
             if not res.get('missing') and res.get('success'):
                 res['group'] = tasks[i]['group']
                 res['label'] = tasks[i]['word']
+                res['import_index'] = i
                 if 'pitch_floor' not in res:
                     res['pitch_floor'] = params['pitch_floor']
                     res['pitch_ceiling'] = params['pitch_ceiling']
@@ -3013,7 +3016,7 @@ class PhoneticsApp:
                 suffix = " (未匹配)" if match_mode == 'fuzzy' else " (缺失)"
                 iid = f"missing_{res['label']}_{id(res)}"
                 self.tree_panel.tree.insert(gid, tk.END, iid=iid, text=res['label'] + suffix, tags=('item',))
-                self.items[iid] = {'label': res['label'], 'group': res['group'], 'snd': None, 'start': None, 'end': None, 'inner_splits': []}
+                self.items[iid] = {'label': res['label'], 'group': res['group'], 'snd': None, 'start': None, 'end': None, 'inner_splits': [], 'import_index': i}
 
         self.stop_loading(f"并行处理完成: {matched_count}/{total}")
         self.tree_panel.select_first_item()
@@ -3646,6 +3649,7 @@ class PhoneticsApp:
                         res['pitch_ceiling'] = params['pitch_ceiling']
                         res['voicing_threshold'] = params['voicing_threshold']
                         self._stamp_formant_params_on_item(res, params)
+                        res['import_index'] = idx
 
                         self.tree_panel.tree.insert(gid, tk.END, iid=iid, text=res['label'], tags=('item',))
                         self.items[iid] = res
@@ -3654,7 +3658,7 @@ class PhoneticsApp:
                     else:
                         iid = f"missing_{res['label']}_{id(res)}"
                         self.tree_panel.tree.insert(gid, tk.END, iid=iid, text=res['label'] + " (失败)", tags=('item',))
-                        self.items[iid] = {'label': res['label'], 'group': res['group'], 'snd': None, 'start': None, 'end': None, 'inner_splits': []}
+                        self.items[iid] = {'label': res['label'], 'group': res['group'], 'snd': None, 'start': None, 'end': None, 'inner_splits': [], 'import_index': idx}
 
                 self.stop_loading(f"TextGrid 导入完成: {matched_count}/{total}")
                 self.tree_panel.select_first_item()

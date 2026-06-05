@@ -813,8 +813,8 @@ class ProjectTreePanel:
         tree_container.grid_rowconfigure(0, weight=1)
 
         self.tree = ttk.Treeview(tree_container, show='tree', selectmode='extended', columns=("info",))
-        self.tree.column("#0", anchor="w", width=120, minwidth=80, stretch=True)
-        self.tree.column("info", anchor="e", width=110, minwidth=80, stretch=False)
+        self.tree.column("#0", anchor="w", width=80, minwidth=60, stretch=True)
+        self.tree.column("info", anchor="w", width=130, minwidth=80, stretch=False)
         scroll_tree = AutoScrollbar(tree_container, command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll_tree.set)
 
@@ -2283,8 +2283,18 @@ class ProjectTreePanel:
             if needs_check:
                 warning_items.append((iid, item))
 
+        keys_order = {k: idx for idx, k in enumerate(self.items.keys())}
+        def get_sort_key(x):
+            iid, item = x
+            if 'import_index' in item:
+                return item['import_index']
+            if item.get('start') is not None:
+                return item['start']
+            return keys_order.get(iid, 999999)
+
         # 5. 插入“需要检查”组
         if warning_items:
+            warning_items.sort(key=get_sort_key)
             w_count = len(warning_items)
             w_text = f"需要检查 ({w_count})"
             is_open = '__warning__' in expanded_groups or not expanded_groups
@@ -2301,6 +2311,8 @@ class ProjectTreePanel:
             items_in_grp = group_items.get(grp, [])
             if not items_in_grp and (search_query or status_filter != "全部"):
                 continue
+
+            items_in_grp.sort(key=get_sort_key)
 
             total_count = len(items_in_grp)
             excluded_count = sum(1 for iid, item in items_in_grp if item.get('is_excluded', False))
