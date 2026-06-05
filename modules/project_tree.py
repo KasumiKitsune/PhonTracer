@@ -813,8 +813,8 @@ class ProjectTreePanel:
         tree_container.grid_rowconfigure(0, weight=1)
 
         self.tree = ttk.Treeview(tree_container, show='tree', selectmode='extended', columns=("info",))
-        self.tree.column("#0", anchor="w", stretch=True)
-        self.tree.column("info", anchor="e", width=125, minwidth=80, stretch=False)
+        self.tree.column("#0", anchor="w", width=120, minwidth=80, stretch=True)
+        self.tree.column("info", anchor="e", width=110, minwidth=80, stretch=False)
         scroll_tree = AutoScrollbar(tree_container, command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll_tree.set)
 
@@ -2130,6 +2130,8 @@ class ProjectTreePanel:
         warn_msgs = item.get('warnings', [])
         short_warns = []
         for w in warn_msgs:
+            if w.startswith("[提示]"):
+                continue
             short_w = self._shorten_warning(w)
             if short_w and short_w not in short_warns:
                 short_warns.append(short_w)
