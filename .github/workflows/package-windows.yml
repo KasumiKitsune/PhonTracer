@@ -45,11 +45,11 @@ jobs:
       run: |
         $iscc = Get-Command iscc -ErrorAction SilentlyContinue
         if ($iscc) {
-            & iscc '/F"PhonTracer_Setup_Windows_x64"' /DMyAppVersion="${{ github.ref_name }}" installer.iss
+            & iscc '/FPhonTracer_Setup_Windows_x64' /DMyAppVersion="${{ github.ref_name }}" installer.iss
         } elseif (Test-Path "C:\Program Files (x86)\Inno Setup 6\iscc.exe") {
-            & "C:\Program Files (x86)\Inno Setup 6\iscc.exe" '/F"PhonTracer_Setup_Windows_x64"' /DMyAppVersion="${{ github.ref_name }}" installer.iss
+            & "C:\Program Files (x86)\Inno Setup 6\iscc.exe" '/FPhonTracer_Setup_Windows_x64' /DMyAppVersion="${{ github.ref_name }}" installer.iss
         } elseif (Test-Path "C:\Program Files\Inno Setup 6\iscc.exe") {
-            & "C:\Program Files\Inno Setup 6\iscc.exe" '/F"PhonTracer_Setup_Windows_x64"' /DMyAppVersion="${{ github.ref_name }}" installer.iss
+            & "C:\Program Files\Inno Setup 6\iscc.exe" '/FPhonTracer_Setup_Windows_x64' /DMyAppVersion="${{ github.ref_name }}" installer.iss
         } else {
             Write-Error "未找到 Inno Setup 编译器 iscc.exe"
             exit 1
