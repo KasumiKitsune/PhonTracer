@@ -154,10 +154,8 @@ DEFAULT_SCRIPTS = [
     fig_hz, fig_t = figs
     ctx.log(f"成功绘制 {plotted_count} 个分组的 Hz 和 T值 均值曲线。")
     return [
-        ctx.figure(fig_hz, filename="f0_group_means_hz.png", title="F0 分组均值图 (Hz - PNG)"),
-        ctx.figure(fig_hz, filename="f0_group_means_hz.svg", title="F0 分组均值图 (Hz - SVG)"),
-        ctx.figure(fig_t, filename="f0_group_means_t.png", title="F0 分组均值图 (T值 - PNG)"),
-        ctx.figure(fig_t, filename="f0_group_means_t.svg", title="F0 分组均值图 (T值 - SVG)"),
+        ctx.figure(fig_hz, filename="f0_group_means_hz.png", title="F0 分组均值图 (Hz)"),
+        ctx.figure(fig_t, filename="f0_group_means_t.png", title="F0 分组均值图 (T值)"),
     ]
 '''
     },
@@ -312,10 +310,7 @@ DEFAULT_SCRIPTS = [
         ax.legend(loc="upper right")
 
     ctx.log(f"成功绘制 {len(vowel_data)} 个不同分组的元音空间分布图。")
-    return [
-        ctx.figure(fig, filename="vowel_space.png", title="元音空间分布图 (PNG)"),
-        ctx.figure(fig, filename="vowel_space.svg", title="元音空间分布图 (SVG)"),
-    ]
+    return ctx.figure(fig, filename="vowel_space.png", title="元音空间分布图")
 '''
     }
 ]

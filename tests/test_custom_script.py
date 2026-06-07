@@ -11,6 +11,7 @@ import pytest
 from modules.script_api import build_dataset_snapshot, ScriptContext, FigureResult, TableResult
 from modules.script_runner import check_script_safety, run_custom_script
 from modules.script_prompt import generate_ai_prompt
+from modules.script_manager import DEFAULT_SCRIPTS
 from modules.project_manager import ProjectManager
 from modules.report_generator import write_excel_archive
 
@@ -138,6 +139,10 @@ def run(ctx):
 
         missing_glyph_warnings = [w for w in captured if "Glyph" in str(w.message)]
         self.assertEqual(missing_glyph_warnings, [])
+
+    def test_builtin_example_scripts_do_not_emit_extra_svg_outputs(self):
+        for script in DEFAULT_SCRIPTS:
+            self.assertNotIn(".svg", script["code"])
 
     def test_run_custom_script_syntax_error(self):
         code = """

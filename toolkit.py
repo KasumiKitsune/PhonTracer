@@ -1837,6 +1837,15 @@ class ToolkitApp(ctk.CTk):
         self.btn_export_report.pack(fill=tk.X)
         self.btn_export_report.configure(state="disabled")
 
+        self.btn_clear_script_runs = self._make_button(
+            actions,
+            "清理脚本运行记录",
+            self.clear_project_script_runs,
+            tone="warning",
+        )
+        self.btn_clear_script_runs.pack(fill=tk.X, pady=(10, 0))
+        self.btn_clear_script_runs.configure(state="disabled")
+
         info_box = ctk.CTkFrame(left_panel, fg_color=self.colors["surface"], corner_radius=14, border_width=1, border_color=self.colors["border"])
         info_box.pack(fill=tk.X, padx=20, pady=(0, 18))
         ctk.CTkLabel(info_box, text="文件信息", font=ctk.CTkFont(family=self.font_family, size=13, weight="bold"), text_color=self.colors["text"]).pack(anchor="w", padx=14, pady=(12, 4))
@@ -2387,6 +2396,13 @@ class ToolkitApp(ctk.CTk):
         os.makedirs(unique_folder, exist_ok=True)
         return unique_folder
 
+    def get_script_preview_dir(self, output_dir):
+        base_dir = os.path.join(os.path.expanduser("~"), ".phon_tracer", "temp", "script_previews")
+        run_name = os.path.basename(os.path.normpath(output_dir)) if output_dir else "script_run"
+        preview_dir = os.path.join(base_dir, run_name)
+        os.makedirs(preview_dir, exist_ok=True)
+        return preview_dir
+
     def open_script_output_dir(self):
         folder = getattr(self, "script_output_dir", None)
         if not folder or not os.path.isdir(folder):
@@ -2474,12 +2490,14 @@ class ToolkitApp(ctk.CTk):
         script_type = script_meta.get("type") or "chart"
 
         output_dir = None
+        preview_dir = None
         output_records = []
         self.script_figure_results = []
         self.current_script_figure_index = 0
 
         if figure_results or table_results:
             output_dir = self.get_script_output_dir(script_name)
+            preview_dir = self.get_script_preview_dir(output_dir)
             self.script_output_dir = output_dir
             if hasattr(self, "btn_open_script_output"):
                 self.btn_open_script_output.configure(state="normal")
@@ -2519,7 +2537,7 @@ class ToolkitApp(ctk.CTk):
             fig_id = id(fig_res.fig)
             if fig_id not in saved_figs:
                 saved_figs.add(fig_id)
-                preview_path = self._unique_path(output_dir, f"_preview_{idx}_{os.path.splitext(os.path.basename(output_path))[0]}.png")
+                preview_path = self._unique_path(preview_dir, f"preview_{idx}_{os.path.splitext(os.path.basename(output_path))[0]}.png")
                 try:
                     fig_res.fig.savefig(preview_path, dpi=150, bbox_inches="tight")
                     item = {
@@ -2563,8 +2581,18 @@ class ToolkitApp(ctk.CTk):
             if hasattr(self, "script_preview_nav"):
                 self.script_preview_nav.grid_remove()
 
-        # 2. 归档运行历史到工程文件 project.json
+        # 2. 按用户确认归档运行历史到工程文件 project.json
         if hasattr(self, 'loaded_teproj_path') and self.loaded_teproj_path and hasattr(self, 'project_data') and self.project_data:
+            should_archive = messagebox.askyesno(
+                "写入工程记录",
+                "是否将本次成功运行的脚本写入当前工程文件？\n\n"
+                "选择“是”：保存脚本源码、运行时间、输出文件信息，便于复现和报告归档。\n"
+                "选择“否”：只保留本次生成的图表/表格文件，不污染工程历史。",
+            )
+            if not should_archive:
+                self.append_script_log("本次脚本运行未写入工程记录。\n")
+                return
+
             import hashlib
             from modules.version import __version__
 
@@ -2589,14 +2617,20 @@ class ToolkitApp(ctk.CTk):
                 self.project_data["custom_script_runs"] = []
 
             # 避免同一 SHA256 频繁追加入历史，做唯一性/最后一次覆盖，或直接追加
-            self.project_data["custom_script_runs"].append(run_record)
+            script_runs = self.project_data["custom_script_runs"]
+            script_runs.append(run_record)
 
             # 自动写回 zip 压缩包
-            self.save_project_data_back_to_teproj()
+            if self.save_project_data_back_to_teproj():
+                self.append_script_log("本次脚本运行已写入工程记录。\n")
+            else:
+                if script_runs and script_runs[-1] is run_record:
+                    script_runs.pop()
+                self.append_script_log("本次脚本运行写入工程记录失败。\n")
 
     def save_project_data_back_to_teproj(self):
         if not hasattr(self, 'loaded_teproj_path') or not self.loaded_teproj_path:
-            return
+            return False
         import tempfile
         import zipfile
         import json
@@ -2617,8 +2651,10 @@ class ToolkitApp(ctk.CTk):
                     yout.writestr('project.json', json_bytes)
             read_project_metadata_from_archive(temp_path)
             os.replace(temp_path, zip_path)
+            return True
         except Exception as e:
             messagebox.showerror("错误", f"更新工程文件归档失败：{e}")
+            return False
         finally:
             if os.path.exists(temp_path):
                 try:
@@ -2652,6 +2688,34 @@ class ToolkitApp(ctk.CTk):
         path = filedialog.askopenfilename(filetypes=[("PhonTracer Project", "*.teproj")])
         if path:
             self.load_project_file(path)
+
+    def clear_project_script_runs(self):
+        if not hasattr(self, "loaded_teproj_path") or not self.loaded_teproj_path:
+            messagebox.showinfo("提示", "请先打开一个工程文件。")
+            return
+        if not hasattr(self, "project_data") or not self.project_data:
+            messagebox.showinfo("提示", "当前没有可清理的工程数据。")
+            return
+
+        count = len(self.project_data.get("custom_script_runs", []) or [])
+        if count <= 0:
+            messagebox.showinfo("提示", "当前工程没有脚本运行记录。")
+            return
+
+        ok = messagebox.askyesno(
+            "确认清理",
+            f"确认清理当前工程中的 {count} 条脚本运行记录吗？\n\n"
+            "这只会移除工程里的脚本运行历史和源码归档，不会删除本地脚本库、音频、条目、缓存数据或已导出的图表文件。",
+        )
+        if not ok:
+            return
+
+        self.project_data.pop("custom_script_runs", None)
+        if not self.save_project_data_back_to_teproj():
+            return
+        self.display_project_preview(self.project_data, getattr(self, "project_namelist", []))
+        self.update_script_tab_project_summary()
+        messagebox.showinfo("完成", "已清理当前工程中的脚本运行记录。")
 
     def clear_preview_container(self):
         for widget in self.preview_container.winfo_children():
@@ -2753,6 +2817,7 @@ class ToolkitApp(ctk.CTk):
         self.create_detail_row(meta_frame, 1, "工程格式版本:", version)
         self.create_detail_row(meta_frame, 2, "发音人数量:", str(len(speakers)))
         self.create_detail_row(meta_frame, 3, "默认选中发音人 ID:", trunc_active_id)
+        self.create_detail_row(meta_frame, 4, "脚本运行记录:", str(len(project_data.get("custom_script_runs", []) or [])))
 
         # Right summary col (Files)
         files_frame = ctk.CTkFrame(sub_grid, fg_color="transparent")
@@ -2913,6 +2978,8 @@ class ToolkitApp(ctk.CTk):
         )
 
         self.show_loading_placeholder()
+        if hasattr(self, "btn_clear_script_runs"):
+            self.btn_clear_script_runs.configure(state="disabled")
         def run():
             try:
                 project_data, namelist = read_project_metadata_from_archive(path)
@@ -2928,6 +2995,8 @@ class ToolkitApp(ctk.CTk):
         self.display_project_preview(project_data, namelist)
         self.btn_convert_zip.configure(state="normal")
         self.btn_export_report.configure(state="normal")
+        if hasattr(self, "btn_clear_script_runs"):
+            self.btn_clear_script_runs.configure(state="normal")
         self.update_script_tab_project_summary()
 
     def _show_project_preview_error(self, message):
@@ -2935,6 +3004,8 @@ class ToolkitApp(ctk.CTk):
         self.show_error_placeholder(err_msg)
         self.btn_convert_zip.configure(state="disabled")
         self.btn_export_report.configure(state="disabled")
+        if hasattr(self, "btn_clear_script_runs"):
+            self.btn_clear_script_runs.configure(state="disabled")
         self.lbl_proj_file.configure(text="解析失败", text_color=self.colors["danger"])
         messagebox.showerror("错误", f"解析 .teproj 文件失败:\n{message}")
 
