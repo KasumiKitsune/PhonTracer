@@ -9,6 +9,39 @@ import json
 import math
 import numpy as np
 
+
+def configure_matplotlib_chinese_font():
+    """
+    为脚本生成的 Matplotlib 图表配置中文字体。
+    Windows 打包环境优先使用 Microsoft YaHei，其他平台按常见 CJK 字体兜底。
+    """
+    try:
+        import matplotlib
+        from matplotlib import font_manager
+
+        candidates = [
+            "Microsoft YaHei",
+            "SimHei",
+            "SimSun",
+            "DengXian",
+            "Noto Sans CJK SC",
+            "Noto Sans CJK JP",
+            "Arial Unicode MS",
+            "PingFang SC",
+            "WenQuanYi Micro Hei",
+        ]
+        installed = {font.name for font in font_manager.fontManager.ttflist}
+        preferred = [name for name in candidates if name in installed]
+        if preferred:
+            matplotlib.rcParams["font.family"] = "sans-serif"
+            matplotlib.rcParams["font.sans-serif"] = preferred + ["DejaVu Sans", "sans-serif"]
+        else:
+            matplotlib.rcParams["font.sans-serif"] = candidates + ["DejaVu Sans", "sans-serif"]
+        matplotlib.rcParams["axes.unicode_minus"] = False
+    except Exception:
+        pass
+
+
 class FigureResult:
     """
     表示脚本生成的图表结果。
@@ -73,6 +106,7 @@ class ScriptContext:
         import matplotlib.pyplot as plt
         import scipy
 
+        configure_matplotlib_chinese_font()
         self.dataset = DatasetSnapshot(dataset_items)
         self.np = np
         self.plt = plt

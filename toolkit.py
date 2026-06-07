@@ -1879,6 +1879,9 @@ class ToolkitApp(ctk.CTk):
         self.is_script_running = False
         self.run_cancel_event = None
         self.local_scripts = []
+        self.script_output_dir = None
+        self.script_figure_results = []
+        self.current_script_figure_index = 0
 
         # 生成白色的 play 和 pause 图标
         for icon_key, filename in [("play_white", "play.png"), ("pause_white", "pause.png")]:
@@ -2052,6 +2055,10 @@ class ToolkitApp(ctk.CTk):
         self.btn_copy_prompt = self._make_button(control_frame, " 复制 AI 脚本提示词", self.show_prompt_dialog, tone="purple", image=self.icons.get("copy"), height=36)
         self.btn_copy_prompt.pack(side=tk.LEFT, padx=(0, 10))
 
+        self.btn_open_script_output = self._make_button(control_frame, "打开结果目录", self.open_script_output_dir, tone="secondary", height=36)
+        self.btn_open_script_output.pack(side=tk.LEFT, padx=(0, 10))
+        self.btn_open_script_output.configure(state="disabled")
+
         self.lbl_script_proj_summary = ctk.CTkLabel(control_frame, text="数据状态: 未加载工程", font=self.font_small, text_color=self.colors["muted"], anchor="e", justify="right")
         self.lbl_script_proj_summary.pack(side=tk.RIGHT, fill="x", expand=True)
 
@@ -2065,8 +2072,31 @@ class ToolkitApp(ctk.CTk):
         # 左侧大图表预览
         preview_box = ctk.CTkFrame(output_frame, fg_color=self.colors["surface_soft"], corner_radius=10, border_width=1, border_color=self.colors["border"])
         preview_box.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        preview_box.grid_rowconfigure(1, weight=1)
+        preview_box.grid_columnconfigure(0, weight=1)
+        self.script_preview_nav = ctk.CTkFrame(preview_box, fg_color="transparent")
+        self.script_preview_nav.grid(row=0, column=0, sticky="ew", padx=10, pady=(8, 0))
+        self.script_preview_nav.grid_columnconfigure(1, weight=1)
+        self.btn_script_prev_fig = ctk.CTkButton(
+            self.script_preview_nav, text="上一张", width=82, height=28,
+            corner_radius=14, fg_color="#E5E7EB", text_color="#1F2937",
+            hover_color="#D1D5DB", command=self.show_prev_script_figure
+        )
+        self.btn_script_prev_fig.grid(row=0, column=0, sticky="w")
+        self.lbl_script_fig_page = ctk.CTkLabel(
+            self.script_preview_nav, text="图表: 0/0", font=self.font_small,
+            text_color=self.colors["muted"], anchor="center"
+        )
+        self.lbl_script_fig_page.grid(row=0, column=1, sticky="ew")
+        self.btn_script_next_fig = ctk.CTkButton(
+            self.script_preview_nav, text="下一张", width=82, height=28,
+            corner_radius=14, fg_color="#E5E7EB", text_color="#1F2937",
+            hover_color="#D1D5DB", command=self.show_next_script_figure
+        )
+        self.btn_script_next_fig.grid(row=0, column=2, sticky="e")
+        self.script_preview_nav.grid_remove()
         self.lbl_chart_preview = ctk.CTkLabel(preview_box, text="暂无图表预览")
-        self.lbl_chart_preview.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        self.lbl_chart_preview.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
 
         # 右侧日志输出
         log_box = ctk.CTkFrame(output_frame, fg_color=self.colors["surface_soft"], corner_radius=10, border_width=1, border_color=self.colors["border"])
@@ -2259,6 +2289,15 @@ class ToolkitApp(ctk.CTk):
         self.is_script_running = True
         self.btn_run_script.configure(state="disabled")
         self.btn_stop_script.configure(state="normal")
+        self.script_output_dir = None
+        self.script_figure_results = []
+        self.current_script_figure_index = 0
+        if hasattr(self, "btn_open_script_output"):
+            self.btn_open_script_output.configure(state="disabled")
+        if hasattr(self, "script_preview_nav"):
+            self.script_preview_nav.grid_remove()
+        self.lbl_chart_preview.configure(text="正在运行脚本，等待图表输出...", image="")
+        self.lbl_chart_preview.image = None
 
         self.txt_script_log.configure(state="normal")
         self.txt_script_log.delete("1.0", tk.END)
@@ -2296,7 +2335,15 @@ class ToolkitApp(ctk.CTk):
 
         if err:
             self.txt_script_log.insert(tk.END, f"运行失败：\n{err}\n")
+            self.script_output_dir = None
+            self.script_figure_results = []
+            self.current_script_figure_index = 0
+            if hasattr(self, "btn_open_script_output"):
+                self.btn_open_script_output.configure(state="disabled")
+            if hasattr(self, "script_preview_nav"):
+                self.script_preview_nav.grid_remove()
             self.lbl_chart_preview.configure(text="运行失败", image="")
+            self.lbl_chart_preview.image = None
             self.txt_script_log.configure(state="disabled")
             return
 
@@ -2304,42 +2351,201 @@ class ToolkitApp(ctk.CTk):
         self.txt_script_log.configure(state="disabled")
 
         self.display_script_result(res)
+
+    def append_script_log(self, text):
+        if not hasattr(self, "txt_script_log"):
+            return
+        self.txt_script_log.configure(state="normal")
+        self.txt_script_log.insert(tk.END, str(text))
+        self.txt_script_log.see(tk.END)
+        self.txt_script_log.configure(state="disabled")
+
+    def _safe_script_output_name(self, name, fallback="output"):
+        raw = str(name or fallback).strip()
+        raw = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", raw)
+        raw = re.sub(r"\s+", "_", raw)
+        raw = raw.strip("._ ")
+        return raw[:80] or fallback
+
+    def _unique_path(self, folder, filename):
+        base, ext = os.path.splitext(filename)
+        path = os.path.join(folder, filename)
+        index = 2
+        while os.path.exists(path):
+            path = os.path.join(folder, f"{base}_{index}{ext}")
+            index += 1
+        return path
+
+    def get_script_output_dir(self, script_name):
+        base_dir = os.path.join(os.path.expanduser("~"), ".phon_tracer", "script_outputs")
+        safe_name = self._safe_script_output_name(script_name, "script")
+        stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        folder = os.path.join(base_dir, f"{stamp}_{safe_name}")
+        suffix = 2
+        unique_folder = folder
+        while os.path.exists(unique_folder):
+            unique_folder = f"{folder}_{suffix}"
+            suffix += 1
+        os.makedirs(unique_folder, exist_ok=True)
+        return unique_folder
+
+    def open_script_output_dir(self):
+        folder = getattr(self, "script_output_dir", None)
+        if not folder or not os.path.isdir(folder):
+            messagebox.showinfo("结果目录", "当前还没有可打开的脚本输出目录。请先运行脚本并生成结果。")
+            return
+        try:
+            if sys.platform == "win32":
+                os.startfile(folder)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", folder])
+            else:
+                subprocess.Popen(["xdg-open", folder])
+        except Exception as e:
+            messagebox.showerror("打开失败", f"无法打开结果目录：\n{e}")
+
+    def show_prev_script_figure(self):
+        self.show_script_figure_at(getattr(self, "current_script_figure_index", 0) - 1)
+
+    def show_next_script_figure(self):
+        self.show_script_figure_at(getattr(self, "current_script_figure_index", 0) + 1)
+
+    def show_script_figure_at(self, index):
+        figures = getattr(self, "script_figure_results", []) or []
+        if not figures:
+            if hasattr(self, "script_preview_nav"):
+                self.script_preview_nav.grid_remove()
+            self.lbl_chart_preview.configure(text="暂无图表预览", image="")
+            self.lbl_chart_preview.image = None
+            return
+
+        index = max(0, min(index, len(figures) - 1))
+        self.current_script_figure_index = index
+        item = figures[index]
+
+        try:
+            with Image.open(item["preview_path"]) as src:
+                img = src.convert("RGBA")
+
+            w_avail = self.lbl_chart_preview.master.winfo_width() - 28
+            h_avail = self.lbl_chart_preview.master.winfo_height() - 64
+            if w_avail < 80:
+                w_avail = 480
+            if h_avail < 80:
+                h_avail = 320
+            img.thumbnail((w_avail, h_avail), Image.Resampling.LANCZOS)
+
+            ctk_image = ctk.CTkImage(light_image=img, dark_image=img, size=img.size)
+            self.lbl_chart_preview.configure(text="", image=ctk_image)
+            self.lbl_chart_preview.image = ctk_image
+        except Exception as e:
+            self.lbl_chart_preview.configure(text=f"无法加载图像预览：{e}", image="")
+            self.lbl_chart_preview.image = None
+
+        total = len(figures)
+        title = item.get("title") or item.get("filename") or "自定义图表"
+        if len(title) > 36:
+            title = title[:33] + "..."
+        self.lbl_script_fig_page.configure(text=f"图表: {index + 1}/{total}  {title}")
+        self.btn_script_prev_fig.configure(state="normal" if index > 0 else "disabled")
+        self.btn_script_next_fig.configure(state="normal" if index < total - 1 else "disabled")
+        if total > 1:
+            self.script_preview_nav.grid()
+        else:
+            self.script_preview_nav.grid_remove()
+
     def display_script_result(self, res):
-        from modules.script_api import FigureResult, TableResult
+        from modules.script_api import FigureResult, TableResult, configure_matplotlib_chinese_font
 
         results = res if isinstance(res, list) else [res]
+        figure_results = [r for r in results if isinstance(r, FigureResult)]
+        table_results = [r for r in results if isinstance(r, TableResult)]
 
-        fig_res = next((r for r in results if isinstance(r, FigureResult)), None)
-        tbl_res = next((r for r in results if isinstance(r, TableResult)), None)
+        script_meta = next((s for s in self.local_scripts if s.get("id") == self.selected_script_id), {}) or {}
+        script_name = script_meta.get("name") or "未命名脚本"
+        script_desc = script_meta.get("description") or "绘图分析"
+        script_type = script_meta.get("type") or "chart"
 
-        # 1. 渲染图表预览
-        if fig_res:
-            fig = fig_res.fig
-            import tempfile
-            temp_dir = os.path.join(os.path.expanduser("~"), ".phon_tracer", "temp")
-            os.makedirs(temp_dir, exist_ok=True)
-            temp_png = os.path.join(temp_dir, "script_run_chart.png")
+        output_dir = None
+        output_records = []
+        self.script_figure_results = []
+        self.current_script_figure_index = 0
 
+        if figure_results or table_results:
+            output_dir = self.get_script_output_dir(script_name)
+            self.script_output_dir = output_dir
+            if hasattr(self, "btn_open_script_output"):
+                self.btn_open_script_output.configure(state="normal")
+            self.append_script_log(f"\n输出目录：{output_dir}\n")
+        else:
+            self.script_output_dir = None
+            if hasattr(self, "btn_open_script_output"):
+                self.btn_open_script_output.configure(state="disabled")
+
+        configure_matplotlib_chinese_font()
+
+        for idx, fig_res in enumerate(figure_results, start=1):
+            filename = self._safe_script_output_name(fig_res.filename or f"custom_chart_{idx}.png", f"custom_chart_{idx}.png")
+            root, ext = os.path.splitext(filename)
+            if not ext:
+                filename = f"{filename}.png"
+            elif ext.lower() not in {".png", ".jpg", ".jpeg", ".svg", ".pdf"}:
+                filename = f"{root}.png"
+
+            output_path = self._unique_path(output_dir, filename)
+            preview_path = self._unique_path(output_dir, f"_preview_{idx}_{os.path.splitext(os.path.basename(output_path))[0]}.png")
             try:
-                fig.savefig(temp_png, dpi=150, bbox_inches='tight')
-                img = Image.open(temp_png)
-
-                # 获取展示尺寸
-                w_avail = self.lbl_chart_preview.master.winfo_width() - 20
-                h_avail = self.lbl_chart_preview.master.winfo_height() - 20
-                if w_avail < 50: w_avail = 280
-                if h_avail < 50: h_avail = 200
-
-                img.thumbnail((w_avail, h_avail), Image.Resampling.LANCZOS)
-
-                from PIL import ImageTk
-                photo = ImageTk.PhotoImage(img)
-                self.lbl_chart_preview.configure(text="", image=photo)
-                self.lbl_chart_preview.image = photo
+                fig_res.fig.savefig(output_path, dpi=300, bbox_inches="tight")
+                fig_res.fig.savefig(preview_path, dpi=150, bbox_inches="tight")
+                item = {
+                    "result": fig_res,
+                    "output_path": output_path,
+                    "preview_path": preview_path,
+                    "title": fig_res.title,
+                    "filename": os.path.basename(output_path),
+                }
+                self.script_figure_results.append(item)
+                output_records.append({
+                    "type": "figure",
+                    "title": fig_res.title,
+                    "filename": os.path.basename(output_path),
+                    "saved_path": output_path,
+                })
+                self.append_script_log(f"图表 {idx}：{output_path}\n")
             except Exception as e:
-                self.lbl_chart_preview.configure(text=f"无法加载图像预览：{e}", image="")
+                self.append_script_log(f"图表 {idx} 保存失败：{e}\n")
+
+        for idx, tbl_res in enumerate(table_results, start=1):
+            import csv
+            base_name = self._safe_script_output_name(tbl_res.title or f"custom_table_{idx}", f"custom_table_{idx}")
+            table_path = self._unique_path(output_dir, f"{base_name}.csv")
+            try:
+                with open(table_path, "w", encoding="utf-8-sig", newline="") as f:
+                    writer = csv.writer(f)
+                    writer.writerow(list(tbl_res.columns or []))
+                    writer.writerows(tbl_res.rows or [])
+                output_records.append({
+                    "type": "table",
+                    "title": tbl_res.title,
+                    "filename": os.path.basename(table_path),
+                    "saved_path": table_path,
+                })
+                self.append_script_log(f"表格 {idx}：{table_path}\n")
+            except Exception as e:
+                self.append_script_log(f"表格 {idx} 保存失败：{e}\n")
+
+        if self.script_figure_results:
+            self.show_script_figure_at(0)
+        elif table_results:
+            self.lbl_chart_preview.configure(text="未生成图表，表格结果已保存到输出目录。", image="")
+            self.lbl_chart_preview.image = None
+            if hasattr(self, "script_preview_nav"):
+                self.script_preview_nav.grid_remove()
         else:
             self.lbl_chart_preview.configure(text="暂无图表预览", image="")
+            self.lbl_chart_preview.image = None
+            if hasattr(self, "script_preview_nav"):
+                self.script_preview_nav.grid_remove()
 
         # 2. 归档运行历史到工程文件 project.json
         if hasattr(self, 'loaded_teproj_path') and self.loaded_teproj_path and hasattr(self, 'project_data') and self.project_data:
@@ -2348,24 +2554,6 @@ class ToolkitApp(ctk.CTk):
 
             code = self.txt_script_code_preview.get("1.0", tk.END).strip()
             code_sha256 = hashlib.sha256(code.encode('utf-8')).hexdigest()
-            script_meta = next((s for s in self.local_scripts if s.get("id") == self.selected_script_id), {}) or {}
-            script_name = script_meta.get("name") or "未命名脚本"
-            script_desc = script_meta.get("description") or "绘图分析"
-            script_type = script_meta.get("type") or "chart"
-
-            outputs = []
-            if fig_res:
-                outputs.append({
-                    "type": "figure",
-                    "title": fig_res.title,
-                    "filename": fig_res.filename
-                })
-            if tbl_res:
-                outputs.append({
-                    "type": "table",
-                    "title": tbl_res.title,
-                    "filename": "custom_table.csv"
-                })
 
             run_record = {
                 "script_id": self.selected_script_id or str(uuid.uuid4()),
@@ -2378,7 +2566,7 @@ class ToolkitApp(ctk.CTk):
                 "used_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "user_goal": script_desc,
                 "status": "成功",
-                "outputs": outputs
+                "outputs": output_records
             }
 
             if "custom_script_runs" not in self.project_data:

@@ -5,9 +5,10 @@ import tempfile
 import zipfile
 import shutil
 import unittest
+import warnings
 import pytest
 
-from modules.script_api import build_dataset_snapshot, ScriptContext
+from modules.script_api import build_dataset_snapshot, ScriptContext, FigureResult, TableResult
 from modules.script_runner import check_script_safety, run_custom_script
 from modules.script_prompt import generate_ai_prompt
 from modules.project_manager import ProjectManager
@@ -29,6 +30,11 @@ class TestCustomScript(unittest.TestCase):
         self.temp_dir = tempfile.mkdtemp()
 
     def tearDown(self):
+        try:
+            import matplotlib.pyplot as plt
+            plt.close("all")
+        except Exception:
+            pass
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_ast_safety_checks(self):
@@ -92,6 +98,46 @@ def run(ctx):
         self.assertEqual(res, "result_value")
         self.assertIn("日志记录", logs)
         self.assertIn("控制台输出", logs)
+
+    def test_run_custom_script_multiple_chart_results(self):
+        code = """
+def run(ctx):
+    fig1, ax1 = ctx.plt.subplots(figsize=(3, 2))
+    ax1.set_title("第一张：基频均值")
+    ax1.plot([0, 1], [100, 180])
+
+    fig2, ax2 = ctx.plt.subplots(figsize=(3, 2))
+    ax2.set_title("第二张：元音空间")
+    ax2.scatter([500, 600], [1500, 1200])
+
+    return [
+        ctx.figure(fig1, filename="图表一.png", title="中文图表一"),
+        ctx.figure(fig2, filename="图表二.png", title="中文图表二"),
+        ctx.table([["a", 1], ["b", 2]], ["组别", "数值"], title="统计表")
+    ]
+"""
+        res, logs, err = run_custom_script(code, [], timeout=5)
+        self.assertIsNone(err)
+        self.assertEqual(len(res), 3)
+        self.assertIsInstance(res[0], FigureResult)
+        self.assertIsInstance(res[1], FigureResult)
+        self.assertIsInstance(res[2], TableResult)
+
+    def test_script_context_matplotlib_cjk_font(self):
+        ctx = ScriptContext([])
+        fig, ax = ctx.plt.subplots(figsize=(3, 2))
+        ax.set_title("基频 各声调组 均值曲线图")
+        ax.set_xlabel("归一化时间")
+        ax.set_ylabel("基频 F0 (Hz)")
+        ax.plot([0, 1], [100, 180])
+
+        out_path = os.path.join(self.temp_dir, "cjk_font_chart.png")
+        with warnings.catch_warnings(record=True) as captured:
+            warnings.simplefilter("always")
+            fig.savefig(out_path, dpi=80, bbox_inches="tight")
+
+        missing_glyph_warnings = [w for w in captured if "Glyph" in str(w.message)]
+        self.assertEqual(missing_glyph_warnings, [])
 
     def test_run_custom_script_syntax_error(self):
         code = """
