@@ -225,6 +225,94 @@ def build_dataset_snapshot(teproj_path):
                     f1_clean = [f if not np.isnan(f) else np.nan for f in f1]
                     f2_clean = [f if not np.isnan(f) else np.nan for f in f2]
 
+                    # 提取每个音节的 F0 数据 (syl_data)、T值数据 (syl_t_values) 与共振峰数据 (syl_formants)
+                    syl_data = []
+                    syl_t_values = []
+                    syl_formants = []
+                    try:
+                        from modules.data_utils import get_item_syllable_bounds, split_into_syllables, sample_formant_points_by_bounds
+                        
+                        # 构造临时字典用于获取音节边界和单字
+                        tmp_item = {
+                            "start": start,
+                            "end": end,
+                            "label": item.get("label", ""),
+                            "chars_bounds": item.get("chars_bounds", []),
+                            "inner_splits": item.get("inner_splits", [])
+                        }
+                        bounds = get_item_syllable_bounds(tmp_item)
+                        syls = split_into_syllables(tmp_item["label"])
+
+                        # 1. 提取 F0 syl_data & syl_t_values
+                        if xs_p and freqs:
+                            p_xs_arr = np.asarray(xs_p)
+                            p_freqs_arr = np.asarray(freqs)
+                            p_t_arr = np.asarray(t_values)
+                            for c_s, c_e in bounds:
+                                if c_e <= c_s:
+                                    syl_data.append((0.0, [0.0]*11))
+                                    syl_t_values.append([np.nan]*11)
+                                    continue
+                                valid_idx = np.where((p_xs_arr >= c_s) & (p_xs_arr <= c_e) & (p_freqs_arr > 0))[0]
+                                if len(valid_idx) >= 2:
+                                    v_s, v_e = p_xs_arr[valid_idx[0]], p_xs_arr[valid_idx[-1]]
+                                    seg_xs = p_xs_arr[valid_idx]
+                                    seg_ys = p_freqs_arr[valid_idx]
+                                    seg_ts = p_t_arr[valid_idx]
+                                else:
+                                    syl_data.append((0.0, [0.0]*11))
+                                    syl_t_values.append([np.nan]*11)
+                                    continue
+                                dur = v_e - v_s
+                                if dur <= 0:
+                                    syl_data.append((0.0, [0.0]*11))
+                                    syl_t_values.append([np.nan]*11)
+                                    continue
+                                times_p = np.linspace(v_s, v_e, 11)
+                                f0s = np.interp(times_p, seg_xs, seg_ys).tolist()
+                                ts_vals = np.interp(times_p, seg_xs, seg_ts).tolist()
+                                for j, t in enumerate(times_p):
+                                    if np.min(np.abs(seg_xs - t)) > 0.025:
+                                        f0s[j] = 0.0
+                                        ts_vals[j] = np.nan
+                                syl_data.append((dur, f0s))
+                                syl_t_values.append(ts_vals)
+
+                        # 2. 提取共振峰 syl_formants
+                        if xs_f and f1_clean and f2_clean:
+                            f_data_mock = {
+                                "xs": np.asarray(xs_f),
+                                "f1": np.asarray(f1_clean),
+                                "f2": np.asarray(f2_clean)
+                            }
+                            mock_item = {
+                                "start": start,
+                                "end": end,
+                                "label": item.get("label", ""),
+                                "chars_bounds": item.get("chars_bounds", []),
+                                "inner_splits": item.get("inner_splits", []),
+                                "formant_data": f_data_mock
+                            }
+                            strategy = item.get("formant_sample_strategy", spk.get("last_params", {}).get("formant_sample_strategy", "整段11点"))
+                            times_f, f1_vals, f2_vals = sample_formant_points_by_bounds(mock_item, bounds, 11, strategy)
+                            for idx_syl, (c_s, c_e) in enumerate(bounds):
+                                char = syls[idx_syl] if idx_syl < len(syls) else f"字{idx_syl+1}"
+                                s_idx = idx_syl * 11
+                                e_idx = s_idx + 11
+                                s_times = times_f[s_idx:e_idx]
+                                s_f1 = f1_vals[s_idx:e_idx]
+                                s_f2 = f2_vals[s_idx:e_idx]
+                                syl_formants.append({
+                                    "syllable_index": idx_syl,
+                                    "char": char,
+                                    "bounds": [c_s, c_e],
+                                    "times": s_times,
+                                    "f1": s_f1,
+                                    "f2": s_f2
+                                })
+                    except Exception as ex:
+                        print(f"Error extracting syllable data in snapshot: {ex}")
+
                     snapshot_item = {
                         "speaker_id": spk_id,
                         "speaker_name": spk_name,
@@ -245,7 +333,10 @@ def build_dataset_snapshot(teproj_path):
                             "xs": xs_f,
                             "f1": f1_clean,
                             "f2": f2_clean
-                        }
+                        },
+                        "syl_data": syl_data,
+                        "syl_t_values": syl_t_values,
+                        "syl_formants": syl_formants
                     }
                     items_snapshot.append(snapshot_item)
 

@@ -20,6 +20,7 @@ ALLOWED_IMPORT_ROOTS = {
     "scipy",
     "statistics",
     "time",
+    "warnings",
 }
 
 ALLOWED_BUILTINS = {

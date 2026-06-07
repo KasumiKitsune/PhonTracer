@@ -34,60 +34,137 @@ DEFAULT_SCRIPTS = [
             groups[g] = []
         groups[g].append(item)
 
-    # 3. 初始化画板
-    fig, ax = ctx.plt.subplots(figsize=(8, 5))
-    ax.grid(True, linestyle="--", alpha=0.5)
+    # 找出最大音节数
+    max_syls = 1
+    for item in items:
+        s_data = item.get("syl_data", [])
+        if len(s_data) > max_syls:
+            max_syls = len(s_data)
 
-    # 4. 遍历分组进行数据对齐与统计
     num_pts = 11
-    plotted_count = 0
+    total_pts = max_syls * num_pts
+    colors = ['#2563EB', '#DC2626', '#16A34A', '#9333EA', '#EA580C', '#0891B2', '#CA8A04', '#6366F1']
 
-    for g_name, g_items in groups.items():
-        all_curves = []
-        for item in g_items:
-            pitch = ctx.dataset.pitch_points(item)
-            freqs = pitch.get("freqs", [])
-            valid_freqs = [f for f in freqs if f > 0]
-            if len(valid_freqs) >= 2:
-                all_curves.append(valid_freqs)
+    figs = []
+    # 分别生成 Hz 均值曲线和 T值 均值曲线
+    for scale_mode in ["Hz", "T值"]:
+        fig, ax = ctx.plt.subplots(figsize=(8, 5.5))
+        ax.set_facecolor("#F8FAFC")
+        ax.grid(True, linestyle="--", alpha=0.25, linewidth=0.8)
 
-        if not all_curves:
-            continue
+        plotted_count = 0
+        for g_idx, (g_name, g_items) in enumerate(sorted(groups.items())):
+            color = colors[g_idx % len(colors)]
+            
+            syl_curves = [[] for _ in range(max_syls)]
+            for item in g_items:
+                s_data = item.get("syl_data", [])
+                s_t_data = item.get("syl_t_values", [])
+                for s_idx in range(max_syls):
+                    if s_idx < len(s_data):
+                        if scale_mode == "T值":
+                            syl_t_vals = s_t_data[s_idx] if s_idx < len(s_t_data) else [ctx.np.nan]*num_pts
+                            syl_curves[s_idx].append(syl_t_vals)
+                        else:
+                            dur, f0s = s_data[s_idx]
+                            syl_curves[s_idx].append(f0s)
 
-        # 对齐到 11 点
-        aligned_curves = []
-        for freqs in all_curves:
-            x_old = ctx.np.linspace(0, 1, len(freqs))
-            x_new = ctx.np.linspace(0, 1, num_pts)
-            iy = ctx.np.interp(x_new, x_old, freqs)
-            aligned_curves.append(iy)
+            mean_all = []
+            std_all = []
+            for s_idx in range(max_syls):
+                curves = syl_curves[s_idx]
+                if not curves:
+                    mean_all.extend([ctx.np.nan] * num_pts)
+                    std_all.extend([ctx.np.nan] * num_pts)
+                    continue
+                
+                # 过滤无效值 (<=0 或 NaN)
+                curves_clean = []
+                for c in curves:
+                    c_clean = [f if (f is not None and not ctx.np.isnan(f) and f > 0) else ctx.np.nan for f in c]
+                    curves_clean.append(c_clean)
+                
+                # 检查是否有任何有效值，防止 nanmean/nanstd 在全 NaN 数据上引发 RuntimeWarning 警告
+                has_valid = False
+                for c in curves_clean:
+                    for val in c:
+                        if val is not None and not ctx.np.isnan(val) and val > 0:
+                            has_valid = True
+                            break
+                    if has_valid:
+                        break
 
-        # 计算均值和标准差
-        mean_y = ctx.np.mean(aligned_curves, axis=0)
-        std_y = ctx.np.std(aligned_curves, axis=0)
+                if has_valid:
+                    with ctx.np.errstate(all='ignore'):
+                        mean_syl = ctx.np.nanmean(curves_clean, axis=0)
+                        std_syl = ctx.np.nanstd(curves_clean, axis=0)
+                else:
+                    mean_syl = ctx.np.full(num_pts, ctx.np.nan)
+                    std_syl = ctx.np.full(num_pts, ctx.np.nan)
+                    
+                mean_all.extend(mean_syl.tolist())
+                std_all.extend(std_syl.tolist())
 
-        x_pts = ctx.np.linspace(0, 100, num_pts)
+            x_pts = ctx.np.arange(1, total_pts + 1)
+            mean_all = ctx.np.array(mean_all)
+            std_all = ctx.np.array(std_all)
 
-        # 绘图
-        ax.plot(x_pts, mean_y, "-o", label=g_name, linewidth=2)
-        ax.fill_between(x_pts, mean_y - std_y, mean_y + std_y, alpha=0.1)
-        plotted_count += 1
+            # 仅在非全空时绘制折线图
+            if not ctx.np.all(ctx.np.isnan(mean_all)):
+                ax.plot(x_pts, mean_all, "-o", color=color, linewidth=2.5, markersize=5, label=g_name, zorder=5)
+                # 忽略 nan 带来的警告并绘制置信区间
+                with ctx.np.errstate(all='ignore'):
+                    ax.fill_between(x_pts, mean_all - std_all, mean_all + std_all, color=color, alpha=0.15, zorder=4)
+                plotted_count += 1
 
-    ax.set_title("各声调组 F0 均值曲线图", fontsize=14, fontweight="bold")
-    ax.set_xlabel("归一化时间 (%)", fontsize=12)
-    ax.set_ylabel("基频 F0 (Hz)", fontsize=12)
+        if max_syls > 1:
+            for k in range(1, max_syls):
+                ax.axvline(k * num_pts + 0.5, color='gray', linestyle='--', alpha=0.5, zorder=3)
 
-    if plotted_count > 0:
-        ax.legend(loc="upper right")
+        ax.set_title(f"各声调组 F0 均值曲线图 ({scale_mode})", fontsize=14, fontweight="bold", pad=15)
+        ax.set_xlabel("音节测量点 (时序展开)", fontsize=12)
+        ax.set_xticks(ctx.np.arange(1, total_pts + 1))
+        
+        x_labels = []
+        for s_idx in range(max_syls):
+            for p_idx in range(num_pts):
+                if p_idx == 0:
+                    x_labels.append(f"音节{s_idx+1}_点1")
+                elif p_idx == num_pts // 2:
+                    x_labels.append(f"点{p_idx+1}")
+                elif p_idx == num_pts - 1:
+                    x_labels.append(f"点{num_pts}")
+                else:
+                    x_labels.append("")
+        ax.set_xticklabels(x_labels, rotation=45, ha='right', fontsize=9)
 
-    ctx.log(f"成功绘制 {plotted_count} 个分组的均值曲线。")
-    return ctx.figure(fig, filename="f0_group_means.png", title="F0 分组均值图")
+        if scale_mode == "T值":
+            ax.set_ylabel("T 值 (0-5 标度)", fontsize=12)
+            ax.set_ylim(-0.2, 5.2)
+            ax.set_yticks([0, 1, 2, 3, 4, 5])
+        else:
+            ax.set_ylabel("基频 F0 (Hz)", fontsize=12)
+
+        if plotted_count > 0:
+            ax.legend(loc="upper right", frameon=True, facecolor="white", edgecolor="#E5E7EB")
+
+        fig.tight_layout()
+        figs.append(fig)
+
+    fig_hz, fig_t = figs
+    ctx.log(f"成功绘制 {plotted_count} 个分组的 Hz 和 T值 均值曲线。")
+    return [
+        ctx.figure(fig_hz, filename="f0_group_means_hz.png", title="F0 分组均值图 (Hz - PNG)"),
+        ctx.figure(fig_hz, filename="f0_group_means_hz.svg", title="F0 分组均值图 (Hz - SVG)"),
+        ctx.figure(fig_t, filename="f0_group_means_t.png", title="F0 分组均值图 (T值 - PNG)"),
+        ctx.figure(fig_t, filename="f0_group_means_t.svg", title="F0 分组均值图 (T值 - SVG)"),
+    ]
 '''
     },
     {
         "id": "builtin_vowel_space",
         "name": "F1/F2 元音空间图 (示例)",
-        "description": "提取纳入分析的条目的 F1 和 F2 共振峰数据（取中点），绘制元音空间散点图（反转坐标轴）。",
+        "description": "按分组（如声调、实验组）提取并绘制 F1 和 F2 共振峰分布（反转坐标轴），展示不同组别的元音空间和置信椭圆。",
         "type": "chart",
         "code": '''def run(ctx):
     # 1. 获取所有纳入分析的条目
@@ -98,66 +175,147 @@ DEFAULT_SCRIPTS = [
         ax.axis("off")
         return ctx.figure(fig, filename="empty_chart.png", title="无数据提示")
 
-    # 2. 收集 F1/F2 中点值
+    # 2. 收集各分组下的共振峰数据
     vowel_data = {}
     for item in items:
-        # 检查是否为共振峰模式
-        formant = ctx.dataset.formant_points(item)
-        f1_vals = formant.get("f1", [])
-        f2_vals = formant.get("f2", [])
+        syl_formants = item.get("syl_formants", [])
+        if not syl_formants:
+            continue
+            
+        f_xs = item.get("formant", {}).get("xs", [])
+        f_f1 = item.get("formant", {}).get("f1", [])
+        f_f2 = item.get("formant", {}).get("f2", [])
+        
+        if len(f_xs) == 0 or len(f_f1) == 0 or len(f_f2) == 0:
+            continue
+            
+        f_xs_arr = ctx.np.asarray(f_xs)
+        f_f1_arr = ctx.np.asarray(f_f1)
+        f_f2_arr = ctx.np.asarray(f_f2)
+        
+        # 按照组来分
+        g_name = item.get("group", "默认组")
+        if not g_name:
+            g_name = "默认组"
+            
+        for syl in syl_formants:
+            c_s, c_e = syl.get("bounds", [0.0, 0.0])
+            
+            mask = (f_xs_arr >= c_s) & (f_xs_arr <= c_e) & ctx.np.isfinite(f_f1_arr) & ctx.np.isfinite(f_f2_arr) & (f_f2_arr > f_f1_arr)
+            s_f1 = f_f1_arr[mask]
+            s_f2 = f_f2_arr[mask]
+            
+            if len(s_f1) == 0:
+                continue
+                
+            if g_name not in vowel_data:
+                vowel_data[g_name] = {"f1": [], "f2": []}
+                
+            vowel_data[g_name]["f1"].append(s_f1)
+            vowel_data[g_name]["f2"].append(s_f2)
 
-        # 提取有效值
-        valid_f1 = [f for f in f1_vals if f > 0]
-        valid_f2 = [f for f in f2_vals if f > 0]
-
-        if valid_f1 and valid_f2:
-            # 获取中点位置的值
-            mid_idx = len(valid_f1) // 2
-            f1_mid = valid_f1[mid_idx]
-            f2_mid = valid_f2[mid_idx]
-
-            lbl = item.get("label", "元音")
-            # 过滤掉标签中的数字（比如 ma1 -> ma）
-            import re
-            clean_lbl = re.sub(r'\\d+', '', lbl)
-
-            if clean_lbl not in vowel_data:
-                vowel_data[clean_lbl] = {"f1": [], "f2": []}
-            vowel_data[clean_lbl]["f1"].append(f1_mid)
-            vowel_data[clean_lbl]["f2"].append(f2_mid)
+    if not vowel_data:
+        fig, ax = ctx.plt.subplots(figsize=(6, 4))
+        ax.text(0.5, 0.5, "未找到有效的共振峰分析数据", ha="center", va="center", fontsize=12, color="red")
+        ax.axis("off")
+        return ctx.figure(fig, filename="empty_chart.png", title="无有效共振峰数据提示")
 
     # 3. 绘图
-    fig, ax = ctx.plt.subplots(figsize=(7, 6))
-    ax.grid(True, linestyle="--", alpha=0.5)
+    fig, ax = ctx.plt.subplots(figsize=(8.6, 7.2))
+    ax.set_facecolor("#F8FAFC")
+    ax.grid(True, linestyle="--", alpha=0.25, linewidth=0.8)
 
-    colors = ["#2563EB", "#DC2626", "#16A34A", "#9333EA", "#EA580C", "#0891B2"]
-    for idx, (lbl, coords) in enumerate(vowel_data.items()):
-        f1s = coords["f1"]
-        f2s = coords["f2"]
-        color = colors[idx % len(colors)]
+    # 配色方案
+    categories = sorted(list(vowel_data.keys()))
+    cmap = ctx.plt.get_cmap('tab10')
+    cat_colors = {cat: cmap(i % 10) for i, cat in enumerate(categories)}
 
-        # 绘制散点
-        ax.scatter(f2s, f1s, label=lbl, color=color, alpha=0.6, edgecolors="none", s=50)
+    # 置信椭圆绘制辅助函数
+    def draw_confidence_ellipse(x, y, ax, n_std=1.0, facecolor='none', **kwargs):
+        if len(x) < 3:
+            return None
+        from matplotlib.patches import Ellipse
+        try:
+            x = ctx.np.asarray(x, dtype=float)
+            y = ctx.np.asarray(y, dtype=float)
+            cov = ctx.np.cov(x, y)
+            if ctx.np.any(ctx.np.isnan(cov)) or ctx.np.any(ctx.np.isinf(cov)):
+                return None
+            vals, vecs = ctx.np.linalg.eigh(cov)
+            order = vals.argsort()[::-1]
+            vals, vecs = vals[order], vecs[:, order]
+            theta = ctx.np.degrees(ctx.np.arctan2(*vecs[:, 0][::-1]))
+            width, height = 2 * n_std * ctx.np.sqrt(ctx.np.maximum(vals, 0))
+            ellipse = Ellipse(xy=(ctx.np.mean(x), ctx.np.mean(y)), width=width, height=height,
+                               angle=theta, facecolor=facecolor, **kwargs)
+            return ax.add_patch(ellipse)
+        except Exception:
+            return None
 
-        # 绘制均值中心点
-        mean_f1 = ctx.np.mean(f1s)
-        mean_f2 = ctx.np.mean(f2s)
-        ax.scatter(mean_f2, mean_f1, color=color, s=150, marker="*", edgecolors="black", linewidths=1.5)
-        ax.text(mean_f2 + 15, mean_f1 + 10, lbl, fontsize=12, fontweight="bold", color="black")
+    all_f1_plotted = []
+    all_f2_plotted = []
 
-    ax.set_title("F1/F2 元音空间散点图 (取中点)", fontsize=14, fontweight="bold")
-    ax.set_xlabel("F2 频率 (Hz)", fontsize=12)
-    ax.set_ylabel("F1 频率 (Hz)", fontsize=12)
+    # 绘制原始散点 (底层)
+    for cat in categories:
+        color = cat_colors[cat]
+        f1_concat = ctx.np.concatenate(vowel_data[cat]["f1"])
+        f2_concat = ctx.np.concatenate(vowel_data[cat]["f2"])
+        vowel_data[cat]["f1_concat"] = f1_concat
+        vowel_data[cat]["f2_concat"] = f2_concat
+        
+        all_f1_plotted.append(f1_concat)
+        all_f2_plotted.append(f2_concat)
+        
+        ax.scatter(f2_concat, f1_concat, color=color, s=14, alpha=0.15, edgecolors='none', zorder=3)
+
+    # 绘制置信椭圆与均值中心点 (顶层)
+    for cat in categories:
+        color = cat_colors[cat]
+        f1_concat = vowel_data[cat]["f1_concat"]
+        f2_concat = vowel_data[cat]["f2_concat"]
+        
+        mean_f1 = ctx.np.mean(f1_concat)
+        mean_f2 = ctx.np.mean(f2_concat)
+        
+        # 绘制 1-sigma 置信椭圆
+        draw_confidence_ellipse(f2_concat, f1_concat, ax, n_std=1.0, edgecolor=color, linestyle='--', linewidth=1.5, zorder=4)
+        
+        # 绘制大星中心点
+        ax.scatter(mean_f2, mean_f1, color=color, s=150, marker='o', edgecolors='black', linewidth=1.2, zorder=6, label=cat)
+        
+        # 绘制分组标签
+        ax.text(mean_f2, mean_f1 - 15, cat, fontsize=11, fontweight='bold', color='#111827', ha='center', va='bottom', zorder=7,
+                bbox=dict(boxstyle="round,pad=0.2", fc="white", ec=color, alpha=0.8, lw=1))
 
     # 传统元音空间图需要反转 X 轴 (F2) 和 Y 轴 (F1)
     ax.invert_xaxis()
     ax.invert_yaxis()
 
+    # 设置坐标轴范围
+    if all_f1_plotted and all_f2_plotted:
+        limit_f1 = ctx.np.concatenate(all_f1_plotted)
+        limit_f2 = ctx.np.concatenate(all_f2_plotted)
+        f1_p1, f1_p99 = ctx.np.percentile(limit_f1, 1.0), ctx.np.percentile(limit_f1, 99.0)
+        f2_p1, f2_p99 = ctx.np.percentile(limit_f2, 1.0), ctx.np.percentile(limit_f2, 99.0)
+        
+        f1_pad = (f1_p99 - f1_p1) * 0.15 if f1_p99 > f1_p1 else 100.0
+        f2_pad = (f2_p99 - f2_p1) * 0.15 if f2_p99 > f2_p1 else 150.0
+        
+        ax.set_ylim(f1_p99 + f1_pad, max(50.0, f1_p1 - f1_pad))
+        ax.set_xlim(f2_p99 + f2_pad, max(500.0, f2_p1 - f2_pad))
+
+    ax.set_title("F1/F2 元音空间分布图", fontsize=14, fontweight="bold", pad=15)
+    ax.set_xlabel("F2 频率 (Hz)", fontsize=12, fontweight='bold', labelpad=10)
+    ax.set_ylabel("F1 频率 (Hz)", fontsize=12, fontweight='bold', labelpad=10)
+
     if vowel_data:
         ax.legend(loc="upper right")
 
-    ctx.log(f"成功绘制 {len(vowel_data)} 个不同元音的元音空间分布图。")
-    return ctx.figure(fig, filename="vowel_space.png", title="元音空间图")
+    ctx.log(f"成功绘制 {len(vowel_data)} 个不同分组的元音空间分布图。")
+    return [
+        ctx.figure(fig, filename="vowel_space.png", title="元音空间分布图 (PNG)"),
+        ctx.figure(fig, filename="vowel_space.svg", title="元音空间分布图 (SVG)"),
+    ]
 '''
     }
 ]
@@ -172,6 +330,11 @@ def get_scripts_dir():
 def load_all_scripts():
     """加载本地所有脚本"""
     s_dir = get_scripts_dir()
+
+    # 自动更新最新版内置的两个示例脚本
+    for ds in DEFAULT_SCRIPTS:
+        save_script(ds["id"], ds["name"], ds["description"], ds["type"], ds["code"])
+
     scripts = []
 
     # 获取目录下的所有 .json 文件
@@ -186,12 +349,6 @@ def load_all_scripts():
                     scripts.append(s_dict)
         except Exception as e:
             print(f"Error loading script file {f}: {e}")
-
-    # 如果本地没有任何自定义脚本，则自动导入默认的内置脚本
-    if not scripts:
-        for ds in DEFAULT_SCRIPTS:
-            save_script(ds["id"], ds["name"], ds["description"], ds["type"], ds["code"])
-            scripts.append(ds)
 
     # 按名字排序
     scripts.sort(key=lambda x: x.get("name", ""))

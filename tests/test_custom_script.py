@@ -69,8 +69,6 @@ class TestCustomScript(unittest.TestCase):
             check_script_safety("def run(ctx):\n    print('unclosed quote")
         self.assertIn("语法错误", str(ctx.exception))
 
-        # Allowed libraries
-        # Math, statistics, collections, itertools should be allowed, along with numpy, matplotlib, scipy.
         allowed_code = """
 import numpy as np
 import scipy
@@ -78,8 +76,10 @@ import math
 import statistics
 import collections
 import itertools
+import warnings
 
 def run(ctx):
+    warnings.warn("test")
     x = math.sin(0.5)
     return x
 """
