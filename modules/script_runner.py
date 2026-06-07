@@ -100,6 +100,21 @@ def check_script_safety(code):
         "open",
         "vars",
     }
+    forbidden_expensive_calls = {
+        "gaussian_kde": (
+            "第一版脚本运行器暂不允许调用 scipy.stats.gaussian_kde。"
+            "该函数在数据点或网格较多时很容易长时间占用后台 Python 线程，"
+            "请改用散点图、分箱均值曲线、hexbin/hist2d，或先将每组数据降采样到很小规模。"
+        ),
+    }
+
+    def call_name(node):
+        if isinstance(node, ast.Name):
+            return node.id
+        if isinstance(node, ast.Attribute):
+            parent = call_name(node.value)
+            return f"{parent}.{node.attr}" if parent else node.attr
+        return ""
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -113,9 +128,12 @@ def check_script_safety(code):
                 if name not in ALLOWED_IMPORT_ROOTS:
                     raise ValueError(f"安全检查拦截：禁止在第一版脚本中导入库 '{node.module}'")
         elif isinstance(node, ast.Call):
-            if isinstance(node.func, ast.Name):
-                if node.func.id in forbidden_funcs:
-                    raise ValueError(f"安全检查拦截：禁止在第一版脚本中调用系统函数 '{node.func.id}'")
+            name = call_name(node.func)
+            short_name = name.split(".")[-1] if name else ""
+            if short_name in forbidden_funcs:
+                raise ValueError(f"安全检查拦截：禁止在第一版脚本中调用系统函数 '{short_name}'")
+            if short_name in forbidden_expensive_calls:
+                raise ValueError(f"安全检查拦截：{forbidden_expensive_calls[short_name]}")
 
 
 def run_custom_script(code, dataset_items, timeout=30, cancel_event=None):
@@ -210,7 +228,7 @@ def run_custom_script(code, dataset_items, timeout=30, cancel_event=None):
         if cancelled:
             return None, ctx._logs, "运行已请求取消。为了保护主程序稳定，第一版不会强制杀死正在执行的 Python 线程；请让脚本尽快自然结束。"
         else:
-            return None, ctx._logs, f"运行超时：脚本执行时间超过了限时 {timeout} 秒。为了保护主程序稳定，第一版不会强制杀死正在执行的 Python 线程。"
+            return None, ctx._logs, f"运行超时：脚本执行时间超过了限时 {timeout} 秒。为了保护主程序稳定，第一版不会强制杀死正在执行的 Python 线程；请等待它自然结束，或重启工具箱以彻底释放这次脚本占用的计算资源。"
 
     if "error" in exception_container:
         tb = exception_container.get("traceback", "")

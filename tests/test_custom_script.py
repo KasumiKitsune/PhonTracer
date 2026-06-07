@@ -172,6 +172,17 @@ def run(ctx):
         self.assertIsNotNone(err)
         self.assertIn("禁止在第一版脚本中导入库 'os'", err)
 
+    def test_run_custom_script_blocks_expensive_kde(self):
+        code = """
+import scipy.stats
+def run(ctx):
+    return scipy.stats.gaussian_kde([[0, 1], [0, 1]])
+"""
+        res, logs, err = run_custom_script(code, [])
+        self.assertIsNone(res)
+        self.assertIsNotNone(err)
+        self.assertIn("gaussian_kde", err)
+
     def test_run_custom_script_blocks_builtins_import_bypass(self):
         code = """
 def run(ctx):
@@ -236,6 +247,7 @@ def run(ctx):
         self.assertIn("scipy", prompt)
         self.assertIn("pandas", prompt)  # As a forbidden library
         self.assertIn("ctx.is_cancelled()", prompt)
+        self.assertIn("不要使用 scipy.stats.gaussian_kde", prompt)
 
     def test_generate_ai_prompt_goal_oriented(self):
         project_data = {
