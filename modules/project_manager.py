@@ -442,7 +442,8 @@ class ProjectManager:
                 "active_speaker_id": self.app.speaker_manager.active_speaker_id,
                 "export_numbering_rule": getattr(self.app, "export_numbering_rule_value", "continuous"),
                 "trim_silence": self.app.switch_trim_silence.get() if hasattr(self.app, "switch_trim_silence") else True,
-                "speakers": {}
+                "speakers": {},
+                "custom_script_runs": getattr(self.app, "custom_script_runs", [])
             }
 
             data_dir = self._get_data_dir()
@@ -999,3 +1000,4 @@ class ProjectManager:
                 self.app.switch_trim_silence.select()
             else:
                 self.app.switch_trim_silence.deselect()
+        self.app.custom_script_runs = state.get("custom_script_runs", [])

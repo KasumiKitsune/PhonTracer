@@ -37,6 +37,11 @@ import numpy as np
 
 import parselmouth
 from PIL import Image, ImageTk
+import hashlib
+import datetime
+import uuid
+import zipfile
+import json
 from modules.data_utils import fuzzy_match_word_to_path
 from modules.project_manager import read_project_metadata_from_archive
 from modules.report_generator import get_pitch_floor, get_pitch_ceiling
@@ -77,7 +82,7 @@ class CTkReleaseButton(ctk.CTkButton):
             for w in widgets:
                 w.bind("<ButtonPress-1>", self._on_press, add="+")
                 w.bind("<ButtonRelease-1>", self._on_release, add="+")
-            
+
     def _on_press(self, event):
         if self.cget("state") == "disabled":
             return
@@ -95,7 +100,7 @@ class CTkReleaseButton(ctk.CTkButton):
         btn_y = self.winfo_rooty()
         btn_w = self.winfo_width()
         btn_h = self.winfo_height()
-        
+
         if btn_x <= x <= btn_x + btn_w and btn_y <= y <= btn_y + btn_h:
             if self._release_command:
                 self._release_command()
@@ -135,12 +140,12 @@ def macroscopic_vad(snd: parselmouth.Sound, min_dur=0.1, merge_thresh=0.12, expe
     is_sp = vals > thresh
     starts_idx = np.where(np.diff(is_sp.astype(int), prepend=0) == 1)[0]
     ends_idx = np.where(np.diff(is_sp.astype(int), append=0) == -1)[0]
-    
+
     segs = []
     for s_idx, e_idx in zip(starts_idx, ends_idx):
         if s_idx < len(xs) and e_idx < len(xs):
             segs.append([xs[s_idx], xs[e_idx]])
-    
+
     usable_segs = [s for s in segs if s[1] - s[0] > 0.02]
     if expected_count:
         merged = _fit_vad_segments_to_expected_count(usable_segs, expected_count)
@@ -151,7 +156,7 @@ def macroscopic_vad(snd: parselmouth.Sound, min_dur=0.1, merge_thresh=0.12, expe
                 merged.append(s)
             else:
                 merged[-1][1] = s[1]
-            
+
     return [s for s in merged if s[1]-s[0] > min_dur]
 
 def parse_wordlist(raw_text: str):
@@ -175,7 +180,7 @@ class VisualSplitter(ctk.CTkToplevel):
     def __init__(self, master, snd, icons, callback, existing_items=None, vad_segments=None, **kwargs):
         super().__init__(master)
         self.title("段落编辑器")
-        
+
         w, h = 950, 550
         sw = self.winfo_screenwidth()
         sh = self.winfo_screenheight()
@@ -183,14 +188,14 @@ class VisualSplitter(ctk.CTkToplevel):
         y = (sh - h) // 2
         self.geometry(f"{w}x{h}+{x}+{y}")
         self.attributes('-topmost', True)
-        
+
         self.snd = snd
         self.icons = icons
         self.callback = callback
-        
+
         # 确保文字为白色
         self.btn_kwargs = {"text_color": "white", "corner_radius": 20, "height": 36, "font": ("Microsoft YaHei", 13, "bold")}
-        
+
         if existing_items:
             self.mode = 'edit'
             self.segments = []
@@ -209,8 +214,8 @@ class VisualSplitter(ctk.CTkToplevel):
         else:
             self.mode = 'cut'
             self.segments = []
-            
-        self.cuts = [] 
+
+        self.cuts = []
         self.deleted_indices = set()
         self.px_per_sec = 100
         self.duration = self.snd.get_total_duration()
@@ -218,12 +223,12 @@ class VisualSplitter(ctk.CTkToplevel):
         self.play_rects = []
         self.delete_rects = []
         self.wordlist = kwargs.get('wordlist', [])
-        
+
         self.setup_ui()
         self.init_data()
         self.update_dynamic_labels()
         self.after(100, self.auto_fit_scale)
-        
+
     def auto_fit_scale(self):
         cw = self.canvas.winfo_width()
         if cw > 100:
@@ -249,28 +254,28 @@ class VisualSplitter(ctk.CTkToplevel):
         self.configure(fg_color="#F9FAFB")
         info_frame = ctk.CTkFrame(self, height=45, fg_color="#F3F4F6", corner_radius=0)
         info_frame.pack(side=tk.TOP, fill=tk.X)
-        
+
         if self.mode == 'cut': msg = "操作说明：【左键】添加切分线，【右键】删除最近线，【滚轮】滚动，【Ctrl+滚轮】缩放波形。"
         elif self.mode == 'review': msg = "VAD 自动检测完成。【右键】删除噪声段，点击标签【试听】，拖拽红线【微调边界】。"
         else: msg = "【右键】删除错误段。拖动【红线】微调边界。完成后点击右下角确认。"
-            
+
         ctk.CTkLabel(info_frame, text=msg, font=("Microsoft YaHei", 13), text_color="#1F2937").pack(side=tk.LEFT, padx=20, pady=10)
-        
+
         bottom_frame = ctk.CTkFrame(self, height=70, fg_color="white", corner_radius=0)
         bottom_frame.pack(side=tk.BOTTOM, fill=tk.X)
-        
+
         if self.mode == 'cut':
             CTkReleaseButton(bottom_frame, text=" 清空所有点", image=self.icons.get("warning"), compound="left", fg_color="#EF4444", hover_color="#DC2626", text_color="white", corner_radius=20, height=36, command=self.clear_cuts).pack(side=tk.LEFT, padx=20, pady=15)
             self.lbl_count = ctk.CTkLabel(bottom_frame, text="当前切分点：0", font=("Microsoft YaHei", 13, "bold"), text_color="#4B5563")
             self.lbl_count.pack(side=tk.RIGHT, padx=20)
-        
+
         if self.mode in ('review', 'edit'):
             self.lbl_count = ctk.CTkLabel(bottom_frame, text="", font=("Microsoft YaHei", 13, "bold"), text_color="#4B5563")
             self.lbl_count.pack(side=tk.RIGHT, padx=20)
             self.update_review_count()
-        
+
         CTkReleaseButton(bottom_frame, text=" 确认并应用", image=self.icons.get("check"), compound="left", text_color="white", fg_color="#10B981", hover_color="#059669", corner_radius=20, height=40, width=120, command=self.confirm).pack(side=tk.RIGHT, padx=20, pady=15)
-        
+
         zoom_frame = ctk.CTkFrame(bottom_frame, fg_color="transparent")
         zoom_frame.pack(side=tk.LEFT, padx=30, pady=15)
         self.lbl_zoom = ctk.CTkLabel(zoom_frame, text=f"缩放: {int(self.px_per_sec)}", font=("Microsoft YaHei", 13), text_color="#4B5563")
@@ -281,14 +286,14 @@ class VisualSplitter(ctk.CTkToplevel):
 
         self.main_frame = ctk.CTkFrame(self, fg_color="white", corner_radius=12, border_width=1, border_color="#E5E7EB")
         self.main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=(20, 10))
-        
+
         self.canvas = tk.Canvas(self.main_frame, bg="white", highlightthickness=0)
         self.scrollbar = ttk.Scrollbar(self.main_frame, orient="horizontal", command=self.canvas.xview)
         self.canvas.configure(xscrollcommand=self.scrollbar.set)
-        
+
         self.scrollbar.pack(side=tk.BOTTOM, fill=tk.X, padx=2, pady=2)
         self.canvas.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=2, pady=2)
-        
+
         self.canvas.bind("<Button-1>", self.on_click)
         self.canvas.bind("<B1-Motion>", self.on_motion)
         self.canvas.bind("<ButtonRelease-1>", self.on_release)
@@ -296,7 +301,7 @@ class VisualSplitter(ctk.CTkToplevel):
         if self.mode in ('cut', 'review', 'edit'):
             self.canvas.bind("<Button-3>", self.on_right_click)
             self.canvas.bind("<Button-2>", self.on_right_click)
-            
+
         self.canvas.bind("<MouseWheel>", self.on_mousewheel)
         self.canvas.bind("<Control-MouseWheel>", self.on_ctrl_mousewheel)
         if platform.system() == 'Darwin':
@@ -314,18 +319,18 @@ class VisualSplitter(ctk.CTkToplevel):
         new_zoom = round(float(val) / 25) * 25
         if new_zoom == old_zoom:
             return
-            
+
         # 1. 计算当前视口中心的时间点
         viewport_width = self.canvas.winfo_width()
         center_canvas_x = self.canvas.canvasx(0) + viewport_width / 2
         time_at_center = center_canvas_x / old_zoom
-        
+
         # 2. 存储缩放中心目标：保持 time_at_center 在屏幕中心位置不变
         self.zoom_target = {
             'time': time_at_center,
             'widget_x': viewport_width / 2
         }
-        
+
         self.px_per_sec = new_zoom
         self.update_zoom_label()
         if hasattr(self, '_zoom_timer'):
@@ -343,17 +348,17 @@ class VisualSplitter(ctk.CTkToplevel):
         new_zoom = max(25, min(2000, round(new_zoom / 25) * 25))
         if new_zoom == old_zoom:
             return
-            
+
         # 1. 计算当前鼠标指针所在的时间点
         canvas_x = self.canvas.canvasx(event.x)
         time_at_mouse = canvas_x / old_zoom
-        
+
         # 2. 存储缩放中心目标：保持 time_at_mouse 在 event.x 位置不变
         self.zoom_target = {
             'time': time_at_mouse,
             'widget_x': event.x
         }
-        
+
         self.px_per_sec = new_zoom
         self.zoom_slider.set(new_zoom)
         self.update_zoom_label()
@@ -388,10 +393,10 @@ class VisualSplitter(ctk.CTkToplevel):
         self.canvas_width = int(self.duration * self.px_per_sec)
         self.canvas_height = self.canvas.winfo_height()
         if self.canvas_height < 100: self.canvas_height = 400
-        
+
         self.canvas.delete("all")
         self.canvas.config(scrollregion=(0, 0, self.canvas_width, self.canvas_height))
-        
+
         # 绘制片段背景
         if self.mode in ('edit', 'review'):
             for i, seg in enumerate(self.segments):
@@ -403,7 +408,7 @@ class VisualSplitter(ctk.CTkToplevel):
         # 波形中心线
         mid_y = self.canvas_height / 2 + 20
         self.canvas.create_line(0, mid_y, self.canvas_width, mid_y, fill="#E5E7EB")
-        
+
         # 绘制波形
         draw_step = max(1, len(self.envelope_data) // self.canvas_width)
         draw_values = self.envelope_data[::draw_step]
@@ -419,7 +424,7 @@ class VisualSplitter(ctk.CTkToplevel):
                 chunk = points[i:i+chunk_size+2]
                 if len(chunk) >= 4:
                     self.canvas.create_line(chunk, fill="#9CA3AF", width=1, tags="waveform")
-        
+
         # 刻度
         step_sec = 1 if self.px_per_sec > 50 else 5
         if self.px_per_sec > 200: step_sec = 0.5
@@ -440,15 +445,15 @@ class VisualSplitter(ctk.CTkToplevel):
                 is_deleted = i in self.deleted_indices
                 x1 = seg['start'] * self.px_per_sec
                 x2 = seg['end'] * self.px_per_sec
-                
+
                 line_color = "#D1D5DB" if is_deleted else "#EF4444"
                 line_dash = (4, 4) if is_deleted else ()
                 self.canvas.create_line(x1, 0, x1, self.canvas_height, fill=line_color, width=2, dash=line_dash)
                 self.canvas.create_line(x2, 0, x2, self.canvas_height, fill=line_color, width=2, dash=line_dash)
-                
+
                 tag_y = 25
                 display_label = seg.get('dyn_label', seg['label'])
-                
+
                 def create_pill(canvas, x, y, text, bg_color, tags):
                     text_id = canvas.create_text(x, y, text=text, font=("Microsoft YaHei", 10, "bold"), fill="white", tags=tags)
                     b = canvas.bbox(text_id)
@@ -505,14 +510,14 @@ class VisualSplitter(ctk.CTkToplevel):
             new_seg['orig_end'] = end
             new_seg['orig_inner_splits'] = []
             new_seg['inner_splits'] = []
-            
+
         # Find sorted insertion index
         insert_idx = 0
         while insert_idx < len(self.segments) and self.segments[insert_idx]['start'] < start:
             insert_idx += 1
-            
+
         self.segments.insert(insert_idx, new_seg)
-        
+
         # Adjust deleted_indices because we shifted segments after insert_idx
         new_deleted_indices = set()
         for idx in self.deleted_indices:
@@ -521,7 +526,7 @@ class VisualSplitter(ctk.CTkToplevel):
             else:
                 new_deleted_indices.add(idx)
         self.deleted_indices = new_deleted_indices
-        
+
         self.update_dynamic_labels()
         if self.mode in ('review', 'edit'):
             self.update_review_count()
@@ -545,7 +550,7 @@ class VisualSplitter(ctk.CTkToplevel):
     def on_hover(self, event):
         canvas_x = self.canvas.canvasx(event.x)
         canvas_y = self.canvas.canvasy(event.y)
-        
+
         if self.mode in ('edit', 'review'):
             for pr in reversed(self.play_rects):
                 x1, y1, x2, y2 = pr['bbox']
@@ -555,19 +560,19 @@ class VisualSplitter(ctk.CTkToplevel):
                 x1, y1, x2, y2 = dr['bbox']
                 if x1 <= canvas_x <= x2 and y1 <= canvas_y <= y2:
                     return self.canvas.config(cursor="hand2")
-        
+
         if self.mode in ('edit', 'review') and not self.dragging:
             idx, bound = self._get_element_at_x(canvas_x)
             if idx is not None:
                 return self.canvas.config(cursor="sb_h_double_arrow")
-                
+
         self.canvas.config(cursor="arrow")
 
     def on_click(self, event):
         canvas_x = self.canvas.canvasx(event.x)
         canvas_y = self.canvas.canvasy(event.y)
         time_sec = canvas_x / self.px_per_sec
-        
+
         if self.mode in ('edit', 'review'):
             for pr in reversed(self.play_rects):
                 x1, y1, x2, y2 = pr['bbox']
@@ -577,11 +582,11 @@ class VisualSplitter(ctk.CTkToplevel):
                 x1, y1, x2, y2 = dr['bbox']
                 if x1 <= canvas_x <= x2 and y1 <= canvas_y <= y2:
                     return self.toggle_delete_segment(dr['idx'])
-                    
+
             idx, bound = self._get_element_at_x(canvas_x)
             if idx is not None:
                 self.dragging = {'seg_idx': idx, 'bound': bound}
-                
+
         elif self.mode == 'cut' and 0 <= time_sec <= self.duration:
             self.cuts.append(time_sec)
             self.cuts.sort()
@@ -595,7 +600,7 @@ class VisualSplitter(ctk.CTkToplevel):
             idx = self.dragging['seg_idx']
             bound = self.dragging['bound']
             seg = self.segments[idx]
-            
+
             if bound == 'start': seg['start'] = min(time_sec, seg['end'] - 0.01)
             elif bound == 'end': seg['end'] = max(time_sec, seg['start'] + 0.01)
             self.render_canvas()
@@ -670,10 +675,10 @@ class ExportReportDialog(ctk.CTkToplevel):
         super().__init__(parent)
         self.parent = parent
         self.callback = callback
-        
+
         self.title("导出研究方法报告与数据档案")
         self.resizable(False, False)
-        
+
         # Center the dialog
         width, height = 450, 320
         screen_width = self.winfo_screenwidth()
@@ -681,73 +686,73 @@ class ExportReportDialog(ctk.CTkToplevel):
         x = (screen_width - width) // 2
         y = (screen_height - height) // 2
         self.geometry(f"{width}x{height}+{x}+{y}")
-        
+
         self.configure(fg_color=("#FFFFFF", "#1A1D24"))
-        
+
         # Modal configuration
         self.transient(parent)
         self.grab_set()
         self.focus_set()
-        
+
         # Accent strip
         accent_strip = ctk.CTkFrame(self, height=4, fg_color="#10B981", corner_radius=0)
         accent_strip.pack(fill="x", side="top")
-        
+
         self.setup_ui()
-        
+
     def setup_ui(self):
         # Card container
         card = ctk.CTkFrame(self, fg_color=("#FFFFFF", "#262930"), corner_radius=12, border_width=1, border_color=("#E5E7EB", "#374151"))
         card.pack(fill="both", expand=True, padx=20, pady=(15, 20))
-        
+
         # Title label
         lbl_title = ctk.CTkLabel(
-            card, 
-            text="📑 导出配置", 
+            card,
+            text="📑 导出配置",
             font=ctk.CTkFont(family="Microsoft YaHei", size=16, weight="bold"),
             text_color=("#111827", "#F9FAFB")
         )
         lbl_title.pack(anchor="w", padx=20, pady=(15, 10))
-        
+
         # Radio variable for export format selection
         self.export_format_var = ctk.StringVar(value="both")
-        
+
         # Options frame
         options_frame = ctk.CTkFrame(card, fg_color="transparent")
         options_frame.pack(fill="x", padx=20, pady=5)
-        
+
         # Radio buttons
         r_both = ctk.CTkRadioButton(
-            options_frame, 
-            text="同时导出 Markdown 与 Excel (推荐)", 
-            variable=self.export_format_var, 
+            options_frame,
+            text="同时导出 Markdown 与 Excel (推荐)",
+            variable=self.export_format_var,
             value="both",
             font=ctk.CTkFont(family="Microsoft YaHei", size=12)
         )
         r_both.pack(anchor="w", pady=6)
-        
+
         r_md = ctk.CTkRadioButton(
-            options_frame, 
-            text="仅导出 Markdown 报告 (*.md)", 
-            variable=self.export_format_var, 
+            options_frame,
+            text="仅导出 Markdown 报告 (*.md)",
+            variable=self.export_format_var,
             value="md",
             font=ctk.CTkFont(family="Microsoft YaHei", size=12)
         )
         r_md.pack(anchor="w", pady=6)
-        
+
         r_excel = ctk.CTkRadioButton(
-            options_frame, 
-            text="仅导出 Excel 数据归档 (*.xlsx)", 
-            variable=self.export_format_var, 
+            options_frame,
+            text="仅导出 Excel 数据归档 (*.xlsx)",
+            variable=self.export_format_var,
             value="excel",
             font=ctk.CTkFont(family="Microsoft YaHei", size=12)
         )
         r_excel.pack(anchor="w", pady=6)
-        
+
         # Divider line
         divider = ctk.CTkFrame(card, height=1, fg_color=("#E5E7EB", "#374151"))
         divider.pack(fill="x", padx=20, pady=10)
-        
+
         # Checkbox for cache details
         self.include_cache_var = ctk.BooleanVar(value=False)
         self.cb_cache = ctk.CTkCheckBox(
@@ -759,7 +764,7 @@ class ExportReportDialog(ctk.CTkToplevel):
             hover_color="#059669"
         )
         self.cb_cache.pack(anchor="w", padx=20, pady=5)
-        
+
         # If user selects only markdown, disable the cache details checkbox
         def on_format_change(*args):
             if self.export_format_var.get() == "md":
@@ -767,13 +772,13 @@ class ExportReportDialog(ctk.CTkToplevel):
                 self.include_cache_var.set(False)
             else:
                 self.cb_cache.configure(state="normal")
-                
+
         self.export_format_var.trace_add("write", on_format_change)
-        
+
         # Buttons frame
         buttons_frame = ctk.CTkFrame(card, fg_color="transparent")
         buttons_frame.pack(fill="x", side="bottom", padx=20, pady=15)
-        
+
         btn_cancel = ctk.CTkButton(
             buttons_frame,
             text="取消",
@@ -787,7 +792,7 @@ class ExportReportDialog(ctk.CTkToplevel):
             command=self.destroy
         )
         btn_cancel.pack(side="left")
-        
+
         btn_ok = ctk.CTkButton(
             buttons_frame,
             text="确定",
@@ -801,7 +806,7 @@ class ExportReportDialog(ctk.CTkToplevel):
             command=self.on_confirm
         )
         btn_ok.pack(side="right")
-        
+
     def on_confirm(self):
         fmt = self.export_format_var.get()
         include_cache = self.include_cache_var.get()
@@ -826,8 +831,8 @@ class ToolkitApp(ctk.CTk):
             pass
 
         self.title("PhonTracer Toolkit")
-        self.geometry("1000x660")
-        self.minsize(900, 600)
+        self.geometry("1100x760")
+        self.minsize(1000, 700)
 
         self.colors = {
             "bg": "#EEF2F6",
@@ -920,16 +925,17 @@ class ToolkitApp(ctk.CTk):
         icon_path = os.path.join("assets", "icons")
         if not os.path.exists(icon_path):
             icon_path = os.path.join(os.path.dirname(__file__), "assets", "icons")
-            
+
         self.icons = {}
         icon_files = {
             "audio": "audio_file.png", "cut": "cut.png", "batch": "batch.png",
             "eye": "eye.png", "list": "list.png", "plus": "plus.png",
             "play": "play.png", "save": "save.png", "check": "check.png",
-            "warning": "warning.png", "import": "import_file.png", 
-            "import_white": "import_white.png", "tab_batch": "tab_batch.png"
+            "warning": "warning.png", "import": "import_file.png",
+            "import_white": "import_white.png", "tab_batch": "tab_batch.png",
+            "pause": "pause.png", "copy": "copy_icon.png"
         }
-        
+
         def make_white(img):
             img = img.convert("RGBA")
             data = np.array(img)
@@ -943,12 +949,12 @@ class ToolkitApp(ctk.CTk):
             if os.path.exists(path):
                 img = Image.open(path)
                 # 对于按钮上使用的图标，我们统一生成白色版本以确保协调
-                if key in ["plus", "save", "check", "warning", "audio", "eye", "import_white", "tab_batch", "list"]:
+                if key in ["plus", "save", "check", "warning", "audio", "eye", "import_white", "tab_batch", "list", "pause", "copy"]:
                     img = make_white(img)
                 self.icons[key] = ctk.CTkImage(light_image=img, dark_image=img, size=(20, 20))
             else:
                 self.icons[key] = None
-        
+
         # 加载软件 Logo
         logo_path = os.path.join(os.path.dirname(__file__), "assets", "toolkit.png")
         if os.path.exists(logo_path):
@@ -1148,6 +1154,7 @@ class ToolkitApp(ctk.CTk):
         self.tab_merge_name = "音频合并（独立音频→长音频）"
         self.tab_split_name = "音频拆分（长音频→独立音频）"
         self.tab_project_name = "工程预览"
+        self.tab_script_name = "自定义脚本"
 
         self.tabview = ctk.CTkTabview(
             self.main_shell,
@@ -1168,14 +1175,15 @@ class ToolkitApp(ctk.CTk):
         self.tab_merge = self.tabview.add(self.tab_merge_name)
         self.tab_split = self.tabview.add(self.tab_split_name)
         self.tab_project = self.tabview.add(self.tab_project_name)
+        self.tab_script = self.tabview.add(self.tab_script_name)
 
-        for tab in (self.tab_merge, self.tab_split, self.tab_project):
+        for tab in (self.tab_merge, self.tab_split, self.tab_project, self.tab_script):
             tab.configure(fg_color=self.colors["surface"])
 
         # Patch segmented button: left-align, pill-shaped, wider, fix text colors
         sb = self.tabview._segmented_button
         # Configure overall size, pill shape (corner_radius), and doubled inner border (border_width=6)
-        sb.configure(width=480, height=40, corner_radius=20, border_width=6)
+        sb.configure(width=640, height=40, corner_radius=20, border_width=6)
         # Cleanly left-align the segmented button in the grid without stretching
         sb.grid_configure(sticky="w", padx=20, pady=(12, 6))
 
@@ -1183,7 +1191,7 @@ class ToolkitApp(ctk.CTk):
         orig_unsel = sb._unselect_button_by_value
         sb._select_button_by_value = lambda v: (orig_sel(v), sb._buttons_dict[v].configure(text_color="#FFFFFF") if v in sb._buttons_dict else None)
         sb._unselect_button_by_value = lambda v: (orig_unsel(v), sb._buttons_dict[v].configure(text_color="#000000") if v in sb._buttons_dict else None)
-        
+
         # Ensure initial tab text is white
         curr_val = sb.get()
         if curr_val in sb._buttons_dict:
@@ -1192,6 +1200,7 @@ class ToolkitApp(ctk.CTk):
         self.build_merge_tab()
         self.build_split_tab()
         self.build_project_tab()
+        self.build_script_tab()
 
         self.progress = ctk.CTkProgressBar(self, height=5, progress_color=self.colors["primary"], fg_color="#D8E0EA")
         self.progress.set(0)
@@ -1362,7 +1371,7 @@ class ToolkitApp(ctk.CTk):
     # ==========================
     # 交互回调与工具函数
     # ==========================
-    
+
     def on_files_dropped(self, files):
         paths = [self._decode_drop_path(f) for f in files]
         self.after(0, lambda p=paths: self._handle_dropped_files(p))
@@ -1457,7 +1466,7 @@ class ToolkitApp(ctk.CTk):
                         self.tree_merge.move(self._dragged_item, '', self.tree_merge.index(target))
                     else:
                         self.tree_merge.move(self._dragged_item, '', self.tree_merge.index(target) + 1)
-                
+
                 self.sync_merge_files_from_tree()
             del self._dragged_item
 
@@ -1552,7 +1561,7 @@ class ToolkitApp(ctk.CTk):
     def match_segments_to_wordlist(self):
         if not self.split_source:
             return messagebox.showwarning("提示", "请先选择长音频源文件")
-        
+
         self.validate_wordlist()
         if not self.wordlist:
             return messagebox.showwarning("提示", "字表为空，请先输入或导入字表")
@@ -1563,17 +1572,17 @@ class ToolkitApp(ctk.CTk):
                 snd = parselmouth.Sound(self.split_source)
                 vad_segs = macroscopic_vad(snd)
                 self.custom_segments = vad_segs
-                
+
                 msg = f"匹配完成！\n检测到音频段落: {len(vad_segs)} 个\n字表词汇: {len(self.wordlist)} 个"
                 if len(vad_segs) != len(self.wordlist):
                     msg += "\n\n注意：数量不一致，可能需要手动调整。"
-                
+
                 self.after(0, lambda: messagebox.showinfo("匹配结果", msg))
             except Exception as e:
                 self.after(0, lambda: messagebox.showerror("错误", f"匹配失败: {e}"))
             finally:
                 self.after(0, lambda: self.set_loading(False))
-        
+
         start_safe_thread(run)
 
     def set_loading(self, state, msg="", indeterminate=False):
@@ -1623,7 +1632,7 @@ class ToolkitApp(ctk.CTk):
             parent_main = os.path.join("..", "main.py")
             if os.path.exists(parent_main): target = parent_main
             else: target = None
-            
+
         if target:
             subprocess.Popen([sys.executable, target] + files)
         else:
@@ -1632,16 +1641,16 @@ class ToolkitApp(ctk.CTk):
     # ==========================
     # 可视化编辑器调用
     # ==========================
-    
+
     def open_visual_splitter(self):
         if not self.split_source:
             return messagebox.showwarning("提示", "请先选择长音频源文件")
-        
+
         def run():
             self.set_loading(True, "正在加载并检测音频区段...")
             try:
                 snd = parselmouth.Sound(self.split_source)
-                
+
                 if self.custom_segments:
                     existing_items = [{'id': i, 'label': f'#{i+1}', 'start': s, 'end': e} for i, (s, e) in enumerate(self.custom_segments)]
                     self.after(0, lambda: VisualSplitter(self, snd, {}, self.on_visual_split_confirm, existing_items=existing_items, wordlist=self.wordlist))
@@ -1652,7 +1661,7 @@ class ToolkitApp(ctk.CTk):
                 self.after(0, lambda: messagebox.showerror("错误", f"加载失败: {e}"))
             finally:
                 self.after(0, lambda: self.set_loading(False))
-                
+
         start_safe_thread(run)
 
     def on_visual_split_confirm(self, segments, is_update=False, deleted_count=0):
@@ -1668,15 +1677,15 @@ class ToolkitApp(ctk.CTk):
     # ==========================
     # 核心任务：合并
     # ==========================
-    
+
     def process_merge(self):
         if not self.merge_files: return messagebox.showwarning("提示", "请先添加音频文件")
         try: gap_sec = float(self.var_gap.get())
         except ValueError: return messagebox.showwarning("提示", "间隔时间必须为数字")
-        
+
         out_path = filedialog.asksaveasfilename(defaultextension=".wav", filetypes=[("WAV Audio", "*.wav")], title="保存合并后的音频")
         if not out_path: return
-        
+
         def run():
             self.set_loading(True, "正在合并音频...")
             try:
@@ -1684,7 +1693,7 @@ class ToolkitApp(ctk.CTk):
                 all_vals = []
                 gap_samples = int(target_sr * gap_sec)
                 gap_array = np.zeros(gap_samples)
-                
+
                 total = len(self.merge_files)
                 for i, path in enumerate(self.merge_files):
                     snd = parselmouth.Sound(path)
@@ -1693,64 +1702,64 @@ class ToolkitApp(ctk.CTk):
                     all_vals.append(snd.values[0])
                     all_vals.append(gap_array)
                     self.update_progress((i+1)/total)
-                    
+
                 if all_vals:
                     merged_vals = np.concatenate(all_vals[:-1])
                     merged_snd = parselmouth.Sound(np.array([merged_vals]), sampling_frequency=target_sr)
                     merged_snd.save(out_path, "WAV")
-                    
+
                 self.after(0, lambda: messagebox.showinfo("成功", f"合并完成！\n保存在: {out_path}"))
             except Exception as e:
                 self.after(0, lambda: messagebox.showerror("错误", f"合并失败:\n{str(e)}"))
             finally:
                 self.after(0, lambda: self.set_loading(False))
-                
+
         start_safe_thread(run)
 
     # ==========================
     # 核心任务：拆分
     # ==========================
-    
+
     def process_split(self, send_to_main=False):
         if not self.split_source: return messagebox.showwarning("提示", "请选择长音频源文件")
-        
+
         raw_text = self.txt_wordlist.get("1.0", tk.END)
         wordlist = parse_wordlist(raw_text)
         if not wordlist: return messagebox.showwarning("提示", "字表为空，请粘贴字表。")
-        
+
         try: buffer_sec = float(self.var_buffer.get())
         except ValueError: return messagebox.showwarning("提示", "缓冲时间必须为数字")
-        
+
         out_dir = filedialog.askdirectory(title="选择拆分后音频的保存文件夹")
         if not out_dir: return
-        
+
         do_trim = self.var_trim.get()
-        
+
         def run():
             self.set_loading(True, "正在分析并拆分音频...")
             try:
                 snd = parselmouth.Sound(self.split_source)
-                
+
                 # 优先使用可视化编辑器微调后的边界，否则跑自动 VAD
                 if self.custom_segments:
                     segs = self.custom_segments
                 else:
                     segs = macroscopic_vad(snd, expected_count=len(wordlist))
-                
+
                 if not segs:
                     self.after(0, lambda: messagebox.showwarning("警告", "未能在音频中检测到任何有效发音段！"))
                     return
-                
+
                 if len(segs) != len(wordlist):
                     pass # 容错机制：数量不匹配时，只提取匹配的最小部分
-                
+
                 total = min(len(segs), len(wordlist))
                 saved_files = []
-                
+
                 for i in range(total):
                     s, e = segs[i]
                     word = wordlist[i]
-                    
+
                     if do_trim:
                         part = snd.extract_part(from_time=s, to_time=e)
                         vals = part.values[0]
@@ -1760,29 +1769,29 @@ class ToolkitApp(ctk.CTk):
                         if len(valid_idx) > 0:
                             s = s + xs[valid_idx[0]]
                             e = s + xs[valid_idx[-1]]
-                            
+
                     s = max(0, s - buffer_sec)
                     e = min(snd.get_total_duration(), e + buffer_sec)
-                    
+
                     if e > s:
                         extract = snd.extract_part(from_time=s, to_time=e)
                         safe_word = re.sub(r'[\\/*?:"<>|]', "", word)
                         out_file = os.path.join(out_dir, f"{str(i+1).zfill(3)}_{safe_word}.wav")
                         extract.save(out_file, "WAV")
                         saved_files.append(out_file)
-                        
+
                     self.update_progress((i+1)/total)
-                
+
                 if send_to_main and saved_files:
                     self.after(0, lambda: self._send_files_to_main_app(saved_files))
                 else:
                     self.after(0, lambda: messagebox.showinfo("成功", f"成功拆分 {total} 段音频并保存到:\n{out_dir}"))
-                    
+
             except Exception as e:
                 self.after(0, lambda: messagebox.showerror("错误", f"拆分失败:\n{str(e)}"))
             finally:
                 self.after(0, lambda: self.set_loading(False))
-                
+
         start_safe_thread(run)
 
     def build_project_tab(self):
@@ -1857,6 +1866,584 @@ class ToolkitApp(ctk.CTk):
         self.preview_container.grid(row=1, column=0, sticky="nsew", padx=20, pady=(0, 20))
         self.show_placeholder()
 
+
+# ==========================================
+# ToolkitApp 自定义脚本相关方法
+# ==========================================
+
+    def build_script_tab(self):
+        # 初始化私有变量
+        self.project_data = None
+        self.project_namelist = []
+        self.selected_script_id = None
+        self.is_script_running = False
+        self.run_cancel_event = None
+        self.local_scripts = []
+
+        # 生成白色的 play 和 pause 图标
+        for icon_key, filename in [("play_white", "play.png"), ("pause_white", "pause.png")]:
+            try:
+                icon_path = os.path.join("assets", "icons", filename)
+                if not os.path.exists(icon_path):
+                    icon_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "icons", filename)
+                if os.path.exists(icon_path):
+                    from PIL import Image
+                    img = Image.open(icon_path).convert("RGBA")
+                    data = np.array(img)
+                    data[:, :, 0] = 255
+                    data[:, :, 1] = 255
+                    data[:, :, 2] = 255
+                    img_white = Image.fromarray(data)
+                    self.icons[icon_key] = ctk.CTkImage(light_image=img_white, dark_image=img_white, size=(20, 20))
+            except Exception:
+                pass
+
+        content = ctk.CTkFrame(self.tab_script, fg_color="transparent")
+        content.pack(fill=tk.BOTH, expand=True, padx=20, pady=18)
+        content.grid_columnconfigure(0, weight=0)
+        content.grid_columnconfigure(1, weight=1)
+        content.grid_rowconfigure(0, weight=1)
+
+        # ----------------------------------------------------
+        # 左栏：脚本列表与管理
+        # ----------------------------------------------------
+        left_panel = self._make_card(content, width=280)
+        left_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 16))
+        left_panel.pack_propagate(False)
+
+        self._section_header(left_panel, "脚本库", subtitle=None, icon_text="04")
+
+        # 搜索框
+        search_frame = ctk.CTkFrame(left_panel, fg_color="transparent")
+        search_frame.pack(fill=tk.X, padx=20, pady=(0, 5))
+        self.entry_script_search = ctk.CTkEntry(
+            search_frame,
+            placeholder_text="搜索脚本...",
+            height=36,
+            corner_radius=18,
+            font=ctk.CTkFont(family="Microsoft YaHei", size=13),
+            fg_color=("#F9FAFB", "#262930"),
+            border_color=("#D1D5DB", "#374151"),
+            text_color=("#111827", "#F9FAFB")
+        )
+        self.entry_script_search.pack(fill=tk.X)
+        self.entry_script_search.bind("<KeyRelease>", lambda e: self.load_scripts_to_tree())
+
+        # 类型过滤
+        self.combo_script_type = ctk.CTkOptionMenu(
+            left_panel,
+            values=["全部类型", "图表脚本", "数据处理脚本（暂未开放）"],
+            command=self.on_script_filter_changed,
+            fg_color=("#F3F4F6", "#374151"),
+            text_color=("#1F2937", "#E5E7EB"),
+            button_color=("#F3F4F6", "#374151"),
+            button_hover_color=("#E5E7EB", "#4B5563"),
+            height=32,
+            corner_radius=16
+        )
+        self.combo_script_type.pack(fill=tk.X, padx=20, pady=5)
+        _apply_custom_arrow(self.combo_script_type)
+
+        # 列表框
+        tree_frame = ctk.CTkFrame(left_panel, fg_color="transparent")
+        tree_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=5)
+
+        style = ttk.Style()
+        style.configure("Script.Treeview",
+                        font=("Microsoft YaHei", 11),
+                        rowheight=36,
+                        background="#FFFFFF",
+                        fieldbackground="#FFFFFF",
+                        foreground="#1F2937",
+                        borderwidth=0,
+                        relief="flat")
+        style.map("Script.Treeview", background=[('selected', '#3B82F6')], foreground=[('selected', '#FFFFFF')])
+
+        self.script_tree = ttk.Treeview(tree_frame, show="tree", selectmode="browse", style="Script.Treeview")
+        self.script_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # 自定义滚动条
+        script_scroll = ctk.CTkScrollbar(tree_frame, orientation="vertical", command=self.script_tree.yview, width=12)
+        script_scroll.pack(side=tk.RIGHT, fill=tk.Y, padx=1, pady=1)
+        self.script_tree.configure(yscrollcommand=script_scroll.set)
+        self.script_tree.bind("<<TreeviewSelect>>", self.on_script_selected)
+
+        # 常用操作按钮
+        act_frame1 = ctk.CTkFrame(left_panel, fg_color="transparent")
+        act_frame1.pack(fill=tk.X, padx=20, pady=5)
+        self._make_button(act_frame1, "新建", self.on_new_script, tone="primary", width=65, height=32).pack(side=tk.LEFT, padx=(0, 5))
+        self._make_button(act_frame1, "编辑", self.on_edit_script, tone="purple", width=65, height=32).pack(side=tk.LEFT, padx=(0, 5))
+        self._make_button(act_frame1, "删除", self.on_delete_script, tone="danger", width=65, height=32).pack(side=tk.LEFT)
+
+        act_frame2 = ctk.CTkFrame(left_panel, fg_color="transparent")
+        act_frame2.pack(fill=tk.X, padx=20, pady=(5, 20))
+        self._make_button(act_frame2, "导入脚本", self.on_import_script, tone="secondary", height=32).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 5))
+        self._make_button(act_frame2, "导出脚本", self.on_export_script, tone="secondary", height=32).pack(side=tk.LEFT, expand=True, fill=tk.X)
+
+        # ----------------------------------------------------
+        # 右栏：运行控制与预览
+        # ----------------------------------------------------
+        right_panel = self._make_card(content)
+        right_panel.grid(row=0, column=1, sticky="nsew", padx=(16, 0))
+
+        self._section_header(right_panel, "运行与输出", subtitle=None)
+
+        # 1. 脚本信息栏
+        info_frame = ctk.CTkFrame(right_panel, fg_color=self.colors["surface_soft"], corner_radius=10, border_width=1, border_color=self.colors["border"])
+        info_frame.pack(fill=tk.X, padx=20, pady=5)
+        info_frame.grid_columnconfigure(0, weight=1)
+
+        self.lbl_selected_script_name = ctk.CTkLabel(
+            info_frame,
+            text="当前脚本：未选择",
+            font=ctk.CTkFont(family=self.font_family, size=14, weight="bold"),
+            text_color=self.colors["text"],
+            anchor="w",
+            justify="left"
+        )
+        self.lbl_selected_script_name.grid(row=0, column=0, sticky="w", padx=15, pady=(10, 2))
+
+        self.lbl_selected_script_desc = ctk.CTkLabel(
+            info_frame,
+            text="描述：请从左侧列表中选择一个脚本，或者点击“新建”创建新脚本。",
+            font=self.font_small,
+            text_color=self.colors["muted"],
+            anchor="w",
+            justify="left",
+            wraplength=480
+        )
+        self.lbl_selected_script_desc.grid(row=1, column=0, sticky="w", padx=15, pady=(0, 10))
+
+        # 源码预览区
+        ctk.CTkLabel(info_frame, text="源码预览:", font=ctk.CTkFont(family=self.font_family, size=11, weight="bold"), text_color=self.colors["muted"]).grid(row=2, column=0, sticky="w", padx=15, pady=(0, 2))
+        self.txt_script_code_preview = ctk.CTkTextbox(
+            info_frame,
+            height=120,
+            font=ctk.CTkFont(family="Consolas", size=11),
+            wrap="none",
+            border_width=1,
+            border_color=("#D1D5DB", "#374151"),
+            fg_color=("#FFFFFF", "#262930"),
+            text_color=("#111827", "#F9FAFB")
+        )
+        self.txt_script_code_preview.grid(row=3, column=0, sticky="ew", padx=15, pady=(0, 15))
+        self.txt_script_code_preview.configure(state="disabled")
+
+        # 加速源码预览滚轮
+        def speed_up_preview_scroll(event):
+            scroll_units = int(-1 * (event.delta / 120) * 4)
+            self.txt_script_code_preview.yview_scroll(scroll_units, "units")
+            return "break"
+        self.txt_script_code_preview.bind("<MouseWheel>", speed_up_preview_scroll)
+        if hasattr(self.txt_script_code_preview, "_textbox"):
+            self.txt_script_code_preview._textbox.bind("<MouseWheel>", speed_up_preview_scroll)
+
+        # 2. 控制按钮 & 数据摘要
+        control_frame = ctk.CTkFrame(right_panel, fg_color="transparent")
+        control_frame.pack(fill=tk.X, padx=20, pady=5)
+
+        self.btn_run_script = self._make_button(control_frame, " 运行", self.run_current_script, tone="primary", image=self.icons.get("play_white"), height=36)
+        self.btn_run_script.pack(side=tk.LEFT, padx=(0, 10))
+
+        self.btn_stop_script = self._make_button(control_frame, " 停止", self.stop_current_script, tone="danger", image=self.icons.get("pause_white"), height=36)
+        self.btn_stop_script.pack(side=tk.LEFT, padx=(0, 10))
+        self.btn_stop_script.configure(state="disabled")
+
+        self.btn_copy_prompt = self._make_button(control_frame, " 复制 AI 脚本提示词", self.show_prompt_dialog, tone="purple", image=self.icons.get("copy"), height=36)
+        self.btn_copy_prompt.pack(side=tk.LEFT, padx=(0, 10))
+
+        self.lbl_script_proj_summary = ctk.CTkLabel(control_frame, text="数据状态: 未加载工程", font=self.font_small, text_color=self.colors["muted"], anchor="e", justify="right")
+        self.lbl_script_proj_summary.pack(side=tk.RIGHT, fill="x", expand=True)
+
+        # 3. 输出预览 & 日志区
+        output_frame = ctk.CTkFrame(right_panel, fg_color="transparent")
+        output_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=(5, 20))
+        output_frame.grid_columnconfigure(0, weight=2)
+        output_frame.grid_columnconfigure(1, weight=1)
+        output_frame.grid_rowconfigure(0, weight=1)
+
+        # 左侧大图表预览
+        preview_box = ctk.CTkFrame(output_frame, fg_color=self.colors["surface_soft"], corner_radius=10, border_width=1, border_color=self.colors["border"])
+        preview_box.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        self.lbl_chart_preview = ctk.CTkLabel(preview_box, text="暂无图表预览")
+        self.lbl_chart_preview.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        # 右侧日志输出
+        log_box = ctk.CTkFrame(output_frame, fg_color=self.colors["surface_soft"], corner_radius=10, border_width=1, border_color=self.colors["border"])
+        log_box.grid(row=0, column=1, sticky="nsew")
+        log_box.grid_rowconfigure(1, weight=1)
+        log_box.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(log_box, text="运行日志:", font=ctk.CTkFont(family=self.font_family, size=11, weight="bold"), text_color=self.colors["muted"]).grid(row=0, column=0, sticky="w", padx=10, pady=(5, 2))
+        self.txt_script_log = ctk.CTkTextbox(log_box, font=ctk.CTkFont(family="Consolas", size=11), fg_color="transparent")
+        self.txt_script_log.grid(row=1, column=0, sticky="nsew", padx=5, pady=(0, 5))
+        self.txt_script_log.configure(state="disabled")
+
+        # 加速运行日志滚轮
+        def speed_up_log_scroll(event):
+            scroll_units = int(-1 * (event.delta / 120) * 4)
+            self.txt_script_log.yview_scroll(scroll_units, "units")
+            return "break"
+        self.txt_script_log.bind("<MouseWheel>", speed_up_log_scroll)
+        if hasattr(self.txt_script_log, "_textbox"):
+            self.txt_script_log._textbox.bind("<MouseWheel>", speed_up_log_scroll)
+
+        # 刷新列表并选择第一个
+        self.load_scripts_to_tree()
+        children = self.script_tree.get_children()
+        if children:
+            self.script_tree.selection_set(children[0])
+
+    def load_scripts_to_tree(self):
+        from modules.script_manager import load_all_scripts
+        self.local_scripts = load_all_scripts()
+
+        # 清空树
+        for item in self.script_tree.get_children():
+            self.script_tree.delete(item)
+
+        search_term = self.entry_script_search.get().strip().lower()
+        filter_type = self.combo_script_type.get()
+
+        for s in self.local_scripts:
+            name = s.get("name", "未命名")
+            desc = s.get("description", "")
+            type_str = s.get("type", "chart")
+
+            # 过滤搜索
+            if search_term and search_term not in name.lower() and search_term not in desc.lower():
+                continue
+
+            # 过滤类型
+            if filter_type == "图表脚本" and type_str != "chart":
+                continue
+            elif filter_type == "数据处理脚本（暂未开放）" and type_str != "data_process":
+                continue
+
+            self.script_tree.insert("", tk.END, iid=s["id"], text=name)
+
+    def on_script_selected(self, event):
+        selected = self.script_tree.selection()
+        if not selected:
+            return
+        s_id = selected[0]
+        self.selected_script_id = s_id
+
+        script = next((s for s in self.local_scripts if s["id"] == s_id), None)
+        if script:
+            self.lbl_selected_script_name.configure(text=f"当前脚本：{script.get('name', '')}")
+            self.lbl_selected_script_desc.configure(text=f"描述：{script.get('description', '')}")
+
+            self.txt_script_code_preview.configure(state="normal")
+            self.txt_script_code_preview.delete("1.0", tk.END)
+            self.txt_script_code_preview.insert("1.0", script.get("code", ""))
+            self.txt_script_code_preview.configure(state="disabled")
+
+    def on_script_filter_changed(self, val):
+        self.load_scripts_to_tree()
+
+    def on_new_script(self):
+        default_template = '''def run(ctx):
+    # 1. 获取纳入分析的条目
+    items = ctx.dataset.included_items()
+    if not items:
+        # 生成提示空数据图表
+        fig, ax = ctx.plt.subplots(figsize=(6, 4))
+        ax.text(0.5, 0.5, "暂无分析数据", ha="center", va="center", fontsize=12, color="red")
+        ax.axis("off")
+        return ctx.figure(fig, filename="empty.png", title="无数据")
+
+    # 2. 在下方编写你的绘图逻辑
+    fig, ax = ctx.plt.subplots(figsize=(7, 5))
+    ax.grid(True, linestyle="--", alpha=0.5)
+
+    # 示例：遍历条目绘制 F0 曲线
+    for item in items[:10]: # 仅绘制前 10 条示例
+        pitch = ctx.dataset.pitch_points(item)
+        freqs = pitch.get("freqs", [])
+        valid_f = [f for f in freqs if f > 0]
+        if valid_f:
+            ax.plot(valid_f, label=item.get("label"))
+
+    ax.set_title("自定义 F0 曲线图", fontsize=14, fontweight="bold")
+    ax.set_xlabel("样本点", fontsize=12)
+    ax.set_ylabel("基频 F0 (Hz)", fontsize=12)
+
+    return ctx.figure(fig, filename="my_chart.png", title="我的自定义图表")
+'''
+        ScriptEditorDialog(self, script_id=None, script_name="新建自定义脚本", script_desc="自定义分析说明", script_code=default_template)
+
+    def on_edit_script(self):
+        selected = self.script_tree.selection()
+        if not selected:
+            return messagebox.showwarning("提示", "请先在左侧列表中选择要编辑的脚本。")
+        s_id = selected[0]
+        script = next((s for s in self.local_scripts if s["id"] == s_id), None)
+        if script:
+            ScriptEditorDialog(
+                self,
+                script_id=script["id"],
+                script_name=script.get("name", ""),
+                script_desc=script.get("description", ""),
+                script_code=script.get("code", ""),
+                script_type=script.get("type", "chart")
+            )
+
+    def on_delete_script(self):
+        selected = self.script_tree.selection()
+        if not selected:
+            return messagebox.showwarning("提示", "请先在列表中选择一个要删除的脚本。")
+        s_id = selected[0]
+
+        script = next((s for s in self.local_scripts if s["id"] == s_id), None)
+        if not script:
+            return
+
+        ans = messagebox.askyesno("确认删除", f"确认要删除脚本“{script['name']}”吗？")
+        if ans:
+            from modules.script_manager import delete_script
+            delete_script(s_id)
+            self.selected_script_id = None
+            self.lbl_selected_script_name.configure(text="当前脚本：未选择")
+            self.lbl_selected_script_desc.configure(text="描述：请从左侧列表中选择一个脚本，或者点击“新建”创建新脚本。")
+            self.txt_script_code_preview.configure(state="normal")
+            self.txt_script_code_preview.delete("1.0", tk.END)
+            self.txt_script_code_preview.configure(state="disabled")
+            self.load_scripts_to_tree()
+
+    def on_import_script(self):
+        file_path = filedialog.askopenfilename(filetypes=[("JSON Files", "*.json")])
+        if file_path:
+            from modules.script_manager import import_script
+            try:
+                new_s = import_script(file_path)
+                messagebox.showinfo("成功", f"成功导入脚本：{new_s['name']}")
+                self.load_scripts_to_tree()
+                self.script_tree.selection_set(new_s["id"])
+            except Exception as e:
+                messagebox.showerror("错误", f"导入失败：{e}")
+
+    def on_export_script(self):
+        selected = self.script_tree.selection()
+        if not selected:
+            return messagebox.showwarning("提示", "请先在列表中选择一个要导出的脚本。")
+        s_id = selected[0]
+
+        script = next((s for s in self.local_scripts if s["id"] == s_id), None)
+        if not script:
+            return
+
+        dest_path = filedialog.asksaveasfilename(
+            defaultextension=".json",
+            initialfile=f"{script['name']}.json",
+            filetypes=[("JSON Files", "*.json")]
+        )
+        if dest_path:
+            from modules.script_manager import export_script
+            try:
+                export_script(s_id, dest_path)
+                messagebox.showinfo("成功", f"脚本已成功导出至：\n{dest_path}")
+            except Exception as e:
+                messagebox.showerror("错误", f"导出失败：{e}")
+
+    def run_current_script(self):
+        code = self.txt_script_code_preview.get("1.0", tk.END)
+
+        # 1. 构造快照数据
+        if hasattr(self, 'loaded_teproj_path') and self.loaded_teproj_path:
+            from modules.script_api import build_dataset_snapshot
+            dataset_items = build_dataset_snapshot(self.loaded_teproj_path)
+        else:
+            dataset_items = []
+
+        self.is_script_running = True
+        self.btn_run_script.configure(state="disabled")
+        self.btn_stop_script.configure(state="normal")
+
+        self.txt_script_log.configure(state="normal")
+        self.txt_script_log.delete("1.0", tk.END)
+        self.txt_script_log.insert("1.0", "正在运行自定义脚本...\n")
+        self.txt_script_log.configure(state="disabled")
+
+        self.run_cancel_event = threading.Event()
+
+        def execute():
+            from modules.script_runner import run_custom_script
+            import matplotlib.pyplot as plt
+            plt.close('all') # 运行前清理图表
+
+            res, logs, err = run_custom_script(code, dataset_items, timeout=30, cancel_event=self.run_cancel_event)
+            self.after(0, lambda: self.on_script_finished(res, logs, err))
+
+        start_safe_thread(execute)
+
+    def stop_current_script(self):
+        if getattr(self, "run_cancel_event", None):
+            self.run_cancel_event.set()
+            self.txt_script_log.configure(state="normal")
+            self.txt_script_log.insert(tk.END, "\n已请求中止脚本运行，脚本会在下一次检查取消状态时结束。\n")
+            self.txt_script_log.configure(state="disabled")
+
+    def on_script_finished(self, res, logs, err):
+        self.is_script_running = False
+        self.btn_run_script.configure(state="normal")
+        self.btn_stop_script.configure(state="disabled")
+
+        self.txt_script_log.configure(state="normal")
+        self.txt_script_log.delete("1.0", tk.END)
+        if logs:
+            self.txt_script_log.insert("1.0", "=== 运行日志 ===\n" + "\n".join(logs) + "\n\n")
+
+        if err:
+            self.txt_script_log.insert(tk.END, f"运行失败：\n{err}\n")
+            self.lbl_chart_preview.configure(text="运行失败", image="")
+            self.txt_script_log.configure(state="disabled")
+            return
+
+        self.txt_script_log.insert(tk.END, "运行成功结束。\n")
+        self.txt_script_log.configure(state="disabled")
+
+        self.display_script_result(res)
+    def display_script_result(self, res):
+        from modules.script_api import FigureResult, TableResult
+
+        results = res if isinstance(res, list) else [res]
+
+        fig_res = next((r for r in results if isinstance(r, FigureResult)), None)
+        tbl_res = next((r for r in results if isinstance(r, TableResult)), None)
+
+        # 1. 渲染图表预览
+        if fig_res:
+            fig = fig_res.fig
+            import tempfile
+            temp_dir = os.path.join(os.path.expanduser("~"), ".phon_tracer", "temp")
+            os.makedirs(temp_dir, exist_ok=True)
+            temp_png = os.path.join(temp_dir, "script_run_chart.png")
+
+            try:
+                fig.savefig(temp_png, dpi=150, bbox_inches='tight')
+                img = Image.open(temp_png)
+
+                # 获取展示尺寸
+                w_avail = self.lbl_chart_preview.master.winfo_width() - 20
+                h_avail = self.lbl_chart_preview.master.winfo_height() - 20
+                if w_avail < 50: w_avail = 280
+                if h_avail < 50: h_avail = 200
+
+                img.thumbnail((w_avail, h_avail), Image.Resampling.LANCZOS)
+
+                from PIL import ImageTk
+                photo = ImageTk.PhotoImage(img)
+                self.lbl_chart_preview.configure(text="", image=photo)
+                self.lbl_chart_preview.image = photo
+            except Exception as e:
+                self.lbl_chart_preview.configure(text=f"无法加载图像预览：{e}", image="")
+        else:
+            self.lbl_chart_preview.configure(text="暂无图表预览", image="")
+
+        # 2. 归档运行历史到工程文件 project.json
+        if hasattr(self, 'loaded_teproj_path') and self.loaded_teproj_path and hasattr(self, 'project_data') and self.project_data:
+            import hashlib
+            from modules.version import __version__
+
+            code = self.txt_script_code_preview.get("1.0", tk.END).strip()
+            code_sha256 = hashlib.sha256(code.encode('utf-8')).hexdigest()
+            script_meta = next((s for s in self.local_scripts if s.get("id") == self.selected_script_id), {}) or {}
+            script_name = script_meta.get("name") or "未命名脚本"
+            script_desc = script_meta.get("description") or "绘图分析"
+            script_type = script_meta.get("type") or "chart"
+
+            outputs = []
+            if fig_res:
+                outputs.append({
+                    "type": "figure",
+                    "title": fig_res.title,
+                    "filename": fig_res.filename
+                })
+            if tbl_res:
+                outputs.append({
+                    "type": "table",
+                    "title": tbl_res.title,
+                    "filename": "custom_table.csv"
+                })
+
+            run_record = {
+                "script_id": self.selected_script_id or str(uuid.uuid4()),
+                "script_name": script_name,
+                "script_type": script_type,
+                "api_version": "1",
+                "software_version": __version__,
+                "code_sha256": code_sha256,
+                "code": code,
+                "used_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "user_goal": script_desc,
+                "status": "成功",
+                "outputs": outputs
+            }
+
+            if "custom_script_runs" not in self.project_data:
+                self.project_data["custom_script_runs"] = []
+
+            # 避免同一 SHA256 频繁追加入历史，做唯一性/最后一次覆盖，或直接追加
+            self.project_data["custom_script_runs"].append(run_record)
+
+            # 自动写回 zip 压缩包
+            self.save_project_data_back_to_teproj()
+
+    def save_project_data_back_to_teproj(self):
+        if not hasattr(self, 'loaded_teproj_path') or not self.loaded_teproj_path:
+            return
+        import tempfile
+        import zipfile
+        import json
+
+        zip_path = self.loaded_teproj_path
+        zip_dir = os.path.dirname(os.path.abspath(zip_path)) or "."
+        temp_fd, temp_path = tempfile.mkstemp(prefix=".script_update_", suffix=".teproj", dir=zip_dir)
+        os.close(temp_fd)
+        try:
+            with zipfile.ZipFile(zip_path, 'r') as yin:
+                with zipfile.ZipFile(temp_path, 'w', zipfile.ZIP_DEFLATED) as yout:
+                    for item in yin.infolist():
+                        if item.filename == 'project.json':
+                            continue
+                        yout.writestr(item, yin.read(item.filename))
+                    # 写入更新后的 project.json
+                    json_bytes = json.dumps(self.project_data, ensure_ascii=False, indent=2).encode('utf-8')
+                    yout.writestr('project.json', json_bytes)
+            read_project_metadata_from_archive(temp_path)
+            os.replace(temp_path, zip_path)
+        except Exception as e:
+            messagebox.showerror("错误", f"更新工程文件归档失败：{e}")
+        finally:
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except Exception:
+                    pass
+
+    def update_script_tab_project_summary(self):
+        if not hasattr(self, 'project_data') or not self.project_data:
+            self.lbl_script_proj_summary.configure(text="工程数据状态: 未加载工程", text_color=self.colors["muted"])
+            return
+
+        spk_count = len(self.project_data.get("speakers", {}))
+        item_count = 0
+        groups = set()
+        for spk in self.project_data.get("speakers", {}).values():
+            items = spk.get("items", {})
+            item_count += len(items)
+            for item in items.values():
+                g = item.get("group")
+                if g:
+                    groups.add(g)
+
+        summary_text = f"工程: {os.path.basename(self.loaded_teproj_path)}\n发音人数: {spk_count} | 条目总数: {item_count}\n声调分组数: {len(groups)} ({', '.join(sorted(list(groups))) if groups else '无'})"
+        self.lbl_script_proj_summary.configure(text=summary_text, text_color=self.colors["success"])
+
+    def show_prompt_dialog(self):
+        AIPromptDialog(self, self.project_data if hasattr(self, 'project_data') else None)
+
     def select_project_file(self):
         path = filedialog.askopenfilename(filetypes=[("PhonTracer Project", "*.teproj")])
         if path:
@@ -1913,18 +2500,18 @@ class ToolkitApp(ctk.CTk):
 
     def display_project_preview(self, project_data, namelist):
         self.clear_preview_container()
-        
+
         # Configure a custom smaller style for the project preview treeview
         style = ttk.Style()
-        style.configure("Proj.Treeview", 
-                        font=("Microsoft YaHei", 10), 
+        style.configure("Proj.Treeview",
+                        font=("Microsoft YaHei", 10),
                         rowheight=26,
                         background="#FFFFFF",
                         fieldbackground="#FFFFFF",
                         foreground="#1F2937",
                         borderwidth=0,
                         relief="flat")
-        style.configure("Proj.Treeview.Heading", 
+        style.configure("Proj.Treeview.Heading",
                         font=("Microsoft YaHei", 10, "bold"),
                         background="#F3F4F6",
                         foreground="#374151")
@@ -1937,47 +2524,47 @@ class ToolkitApp(ctk.CTk):
             scroll_content._parent_canvas.configure(yscrollincrement=8)
         except Exception:
             pass
-        
+
         # 1. Summary Card
         summary_frame = ctk.CTkFrame(scroll_content, fg_color="#FFFFFF", corner_radius=12, border_width=1, border_color="#E5E7EB")
         summary_frame.pack(fill=tk.X, padx=5, pady=5)
-        
+
         ctk.CTkLabel(summary_frame, text="📊 工程概览与资源统计", font=ctk.CTkFont(family="Microsoft YaHei", size=14, weight="bold"), text_color="#1E3A8A").pack(anchor="w", padx=15, pady=(10, 5))
-        
+
         sub_grid = ctk.CTkFrame(summary_frame, fg_color="transparent")
         sub_grid.pack(fill=tk.X, padx=5, pady=(0, 10))
         sub_grid.columnconfigure(0, weight=1)
         sub_grid.columnconfigure(1, weight=1)
-        
+
         # Left summary col (Meta)
         meta_frame = ctk.CTkFrame(sub_grid, fg_color="transparent")
         meta_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
         ctk.CTkLabel(meta_frame, text="【基本信息】", font=ctk.CTkFont(family="Microsoft YaHei", size=12, weight="bold"), text_color="#374151").grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=5)
-        
+
         version = project_data.get("version", "未知")
         speakers = project_data.get("speakers", {})
         active_speaker_id = project_data.get("active_speaker_id", "无")
         trunc_active_id = (active_speaker_id[:12] + "...") if len(active_speaker_id) > 15 else active_speaker_id
-        
+
         self.create_detail_row(meta_frame, 1, "工程格式版本:", version)
         self.create_detail_row(meta_frame, 2, "发音人数量:", str(len(speakers)))
         self.create_detail_row(meta_frame, 3, "默认选中发音人 ID:", trunc_active_id)
-        
+
         # Right summary col (Files)
         files_frame = ctk.CTkFrame(sub_grid, fg_color="transparent")
         files_frame.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
         ctk.CTkLabel(files_frame, text="【物理文件统计】", font=ctk.CTkFont(family="Microsoft YaHei", size=12, weight="bold"), text_color="#374151").grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=5)
-        
+
         audio_files = [f for f in namelist if f.startswith("audio/")]
         data_files = [f for f in namelist if f.startswith("data/")]
-        
+
         self.create_detail_row(files_frame, 1, "压缩包内文件总数:", str(len(namelist)))
         self.create_detail_row(files_frame, 2, "音频文件数 (audio/):", str(len(audio_files)))
         self.create_detail_row(files_frame, 3, "缓存数据数 (data/):", str(len(data_files)))
-        
+
         # 2. Speakers Detail Section
         ctk.CTkLabel(scroll_content, text="👥 发音人及数据分析明细", font=ctk.CTkFont(family="Microsoft YaHei", size=14, weight="bold"), text_color="#1F2937").pack(anchor="w", pady=(15, 5), padx=5)
-        
+
         if not speakers:
             no_spk_card = ctk.CTkFrame(scroll_content, fg_color="#FFFFFF", corner_radius=12, border_width=1, border_color="#E5E7EB")
             no_spk_card.pack(fill=tk.X, padx=5, pady=5)
@@ -1986,28 +2573,28 @@ class ToolkitApp(ctk.CTk):
 
         spk_tabview = ctk.CTkTabview(scroll_content, corner_radius=12, border_width=1, border_color="#E5E7EB", fg_color="#FFFFFF")
         spk_tabview.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        
+
         for s_id, spk in speakers.items():
             name = spk.get("name", "未命名")
             tab_title = name
             if s_id == active_speaker_id:
                 tab_title += " (当前选中)"
-            
+
             spk_tabview.add(tab_title)
             tab_frame = spk_tabview.tab(tab_title)
-            
+
             # Sub layout within each speaker tab
             top_row = ctk.CTkFrame(tab_frame, fg_color="transparent")
             top_row.pack(fill=tk.X, anchor="n", pady=5)
-            
+
             info_frame = ctk.CTkFrame(top_row, fg_color="#F3F4F6", corner_radius=8)
             info_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5), pady=5)
-            
+
             ctk.CTkLabel(info_frame, text="发音人与音频", font=ctk.CTkFont(family="Microsoft YaHei", size=12, weight="bold"), text_color="#111827").grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=5)
             tab_mode = spk.get("tab_mode", "未知模式")
             self.create_detail_row(info_frame, 1, "唯一标识符 (ID):", s_id)
             self.create_detail_row(info_frame, 2, "音频管理模式:", tab_mode)
-            
+
             if tab_mode == "单条长音频":
                 long_audio_path = spk.get("long_audio_path", "")
                 mac_segs = spk.get("current_macro_segments", [])
@@ -2017,11 +2604,11 @@ class ToolkitApp(ctk.CTk):
             else:
                 pending_batch_paths = spk.get("pending_batch_paths", [])
                 self.create_detail_row(info_frame, 3, "待导入音频数量:", str(len(pending_batch_paths)))
-            
+
             # Engine params frame
             param_frame = ctk.CTkFrame(top_row, fg_color="#F3F4F6", corner_radius=8)
             param_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(5, 0), pady=5)
-            
+
             ctk.CTkLabel(param_frame, text="分析引擎参数", font=ctk.CTkFont(family="Microsoft YaHei", size=12, weight="bold"), text_color="#111827").grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=5)
             last_params = spk.get("last_params", {})
             if last_params:
@@ -2030,15 +2617,15 @@ class ToolkitApp(ctk.CTk):
                 self.create_detail_row(param_frame, 3, "分析算法:", last_params.get('method', 'ac'))
             else:
                 ctk.CTkLabel(param_frame, text="无已存引擎参数", font=self.font_main, text_color="#6B7280").grid(row=1, column=0, columnspan=2, sticky="w", padx=10, pady=5)
-            
+
             # Bottom row: Word items Treeview
             items = spk.get("items", {})
-            
+
             table_frame = ctk.CTkFrame(tab_frame, fg_color="transparent")
             table_frame.pack(fill=tk.BOTH, expand=True, pady=(10, 5))
-            
+
             ctk.CTkLabel(table_frame, text=f"📋 解析出的字词条目 (共 {len(items)} 条)", font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), text_color="#374151").pack(anchor="w", pady=(0, 5))
-            
+
             if not items:
                 no_items_card = ctk.CTkFrame(table_frame, fg_color="#F3F4F6", corner_radius=8)
                 no_items_card.pack(fill=tk.X, pady=5)
@@ -2046,28 +2633,28 @@ class ToolkitApp(ctk.CTk):
             else:
                 tree_container = ctk.CTkFrame(table_frame, fg_color="transparent")
                 tree_container.pack(fill=tk.BOTH, expand=True)
-                
+
                 cols = ("idx", "word", "time", "cache")
                 tree = ttk.Treeview(tree_container, columns=cols, show="headings", height=8)
-                
+
                 tree.heading("idx", text="序号")
                 tree.heading("word", text="音节/字词")
                 tree.heading("time", text="时间区间 (s)")
                 tree.heading("cache", text="F0 缓存状态")
-                
+
                 tree.column("idx", width=60, anchor="center")
                 tree.column("word", width=120, anchor="center")
                 tree.column("time", width=220, anchor="center")
                 tree.column("cache", width=120, anchor="center")
-                
+
                 tree.configure(style="Proj.Treeview", takefocus=False)
-                
+
                 scrollbar = ctk.CTkScrollbar(tree_container, orientation="vertical", command=tree.yview)
                 tree.configure(yscrollcommand=scrollbar.set)
-                
+
                 tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
                 scrollbar.pack(side=tk.RIGHT, fill=tk.Y, padx=1, pady=1)
-                
+
                 # 滚动隔离：当鼠标悬浮在列表容器（包括列表和滚动条）上时，禁用父 scroll_content 的滚动绑定，允许 Treeview 完全原生滚动；离开时重新启用。
                 def on_enter_tree(e):
                     method = getattr(scroll_content, "_disable_all_bindings", None)
@@ -2076,7 +2663,7 @@ class ToolkitApp(ctk.CTk):
                             method()
                         except Exception:
                             pass
-                
+
                 def on_leave_tree(e):
                     x = tree_container.winfo_pointerx() - tree_container.winfo_rootx()
                     y = tree_container.winfo_pointery() - tree_container.winfo_rooty()
@@ -2089,42 +2676,44 @@ class ToolkitApp(ctk.CTk):
                                 method()
                             except Exception:
                                 pass
-                
+
                 tree_container.bind("<Enter>", on_enter_tree, add="+")
                 tree_container.bind("<Leave>", on_leave_tree, add="+")
                 tree.bind("<Enter>", on_enter_tree, add="+")
                 scrollbar.bind("<Enter>", on_enter_tree, add="+")
-                
+
                 for idx, (item_id, item) in enumerate(items.items(), 1):
                     label = item.get("label", "无")
                     start = item.get("start", 0.0)
                     end = item.get("end", 0.0)
                     time_str = f"{start:.3f}s ~ {end:.3f}s"
-                    
+
                     pitch_file = item.get("pitch_data_file", "")
                     has_pitch = "无"
                     if pitch_file and pitch_file in namelist:
                         has_pitch = "已缓存"
                     elif item.get("pitch_data") is not None:
                         has_pitch = "已缓存"
-                        
+
                     tree.insert("", tk.END, values=(idx, label, time_str, has_pitch))
 
     def load_project_file(self, path):
         if not os.path.exists(path):
             messagebox.showerror("错误", "工程文件不存在。")
             return
-            
+
         self.loaded_teproj_path = path
         self.lbl_proj_file.configure(
             text=f"已加载工程:\n{os.path.basename(path)}\n\n大小: {os.path.getsize(path) / (1024 * 1024):.2f} MB",
             text_color=self.colors["success"]
         )
-        
+
         self.show_loading_placeholder()
         def run():
             try:
                 project_data, namelist = read_project_metadata_from_archive(path)
+                self.project_data = project_data
+                self.project_namelist = namelist
                 self.after(0, lambda: self._finish_project_preview(project_data, namelist))
             except Exception as e:
                 self.after(0, lambda message=str(e): self._show_project_preview_error(message))
@@ -2135,6 +2724,7 @@ class ToolkitApp(ctk.CTk):
         self.display_project_preview(project_data, namelist)
         self.btn_convert_zip.configure(state="normal")
         self.btn_export_report.configure(state="normal")
+        self.update_script_tab_project_summary()
 
     def _show_project_preview_error(self, message):
         err_msg = f"❌ 无法解析工程文件: {message}"
@@ -2158,17 +2748,17 @@ class ToolkitApp(ctk.CTk):
         lines.append("               PHONTRACER 工程文件 (.teproj) 数据预览")
         lines.append("=" * 60)
         lines.append("")
-        
+
         # 1. Basic Info
         version = project_data.get("version", "未知")
         active_speaker_id = project_data.get("active_speaker_id", "无")
         speakers = project_data.get("speakers", {})
-        
+
         lines.append("【基本信息】")
         lines.append(f"  • 工程格式版本: {version}")
         lines.append(f"  • 发音人数量: {len(speakers)}")
         lines.append("")
-        
+
         # 2. Speakers & Detailed structure
         lines.append("【发音人及音频明细】")
         for s_id, spk in speakers.items():
@@ -2178,12 +2768,12 @@ class ToolkitApp(ctk.CTk):
             items = spk.get("items", {})
             pending_batch_paths = spk.get("pending_batch_paths", [])
             long_audio_path = spk.get("long_audio_path", "")
-            
+
             is_active = " (当前选中)" if s_id == active_speaker_id else ""
             lines.append(f"  ■ 发音人: {name}{is_active}")
             lines.append(f"    • 唯一标识符: {s_id}")
             lines.append(f"    • 音频管理模式: {tab_mode}")
-            
+
             if tab_mode == "单条长音频":
                 lines.append(f"    • 长音频文件: {long_audio_path or '无'}")
                 mac_segs = spk.get("current_macro_segments", [])
@@ -2192,14 +2782,14 @@ class ToolkitApp(ctk.CTk):
                 lines.append(f"    • 手动微调段数: {len(man_segs) if man_segs is not None else '未进行微调'}")
             else:
                 lines.append(f"    • 待导入音频数: {len(pending_batch_paths)}")
-                
+
             # Engine parameters
             if last_params:
                 lines.append("    • 分析引擎参数配置:")
                 lines.append(f"      - 基频范围 (F0 Range): {get_pitch_floor(last_params):.0f} Hz ~ {get_pitch_ceiling(last_params):.0f} Hz")
                 lines.append(f"      - 时序分析点数 (Points): {last_params.get('pts', 11)}")
                 lines.append(f"      - 分析算法: {last_params.get('method', 'ac')}")
-            
+
             lines.append(f"    • 解析出的字词条目 (共 {len(items)} 条):")
             if not items:
                 lines.append("      (暂无提取 of 字词条目数据)")
@@ -2207,45 +2797,45 @@ class ToolkitApp(ctk.CTk):
                 item_header = f"      {'序号':<4} | {pad_chinese('音节/字词', 12)} | {'时间区间 (s)':<22} | {pad_chinese('F0缓存状态', 10)}"
                 lines.append(item_header)
                 lines.append("      " + "-" * 56)
-                
+
                 for idx, (item_id, item) in enumerate(items.items(), 1):
                     label = item.get("label", "无")
                     start = item.get("start", 0.0)
                     end = item.get("end", 0.0)
-                    
+
                     pitch_file = item.get("pitch_data_file", "")
                     has_pitch = "无"
                     if pitch_file and pitch_file in namelist:
                         has_pitch = "已缓存"
                     elif item.get("pitch_data") is not None:
                         has_pitch = "已缓存"
-                        
+
                     idx_str = f"{idx:<4}"
                     label_col = pad_chinese(label, 12)
                     time_col = f"{start:7.3f}s ~ {end:7.3f}s"
                     has_pitch_col = pad_chinese(has_pitch, 10)
-                    
+
                     lines.append(f"      {idx_str} | {label_col} | {time_col} | {has_pitch_col}")
             lines.append("")
-            
+
         # 3. Archive file list overview
         lines.append("【工程压缩包物理文件清单】")
         lines.append(f"  • 压缩包内文件总数: {len(namelist)}")
-        
+
         audio_files = [f for f in namelist if f.startswith("audio/")]
         data_files = [f for f in namelist if f.startswith("data/")]
-        
+
         lines.append(f"  • 音频资源文件数 (audio/): {len(audio_files)}")
         lines.append(f"  • 基频数据缓存数 (data/): {len(data_files)}")
         lines.append("")
         lines.append("=" * 60)
-        
+
         return "\n".join(lines)
 
     def convert_project_to_zip(self):
         if not hasattr(self, 'loaded_teproj_path') or not self.loaded_teproj_path:
             return messagebox.showwarning("提示", "请先选择并加载 .teproj 文件")
-            
+
         default_name = os.path.splitext(os.path.basename(self.loaded_teproj_path))[0] + ".zip"
         zip_path = filedialog.asksaveasfilename(
             defaultextension=".zip",
@@ -2255,7 +2845,7 @@ class ToolkitApp(ctk.CTk):
         )
         if not zip_path:
             return
-            
+
         try:
             shutil.copy2(self.loaded_teproj_path, zip_path)
             messagebox.showinfo("转换成功", f"工程已成功另存为 ZIP 压缩包：\n{zip_path}")
@@ -2265,22 +2855,22 @@ class ToolkitApp(ctk.CTk):
     def show_export_report_dialog(self):
         if not hasattr(self, 'loaded_teproj_path') or not self.loaded_teproj_path:
             return messagebox.showwarning("提示", "请先选择并加载 .teproj 文件")
-            
+
         ExportReportDialog(self, self.execute_export_report)
 
     def execute_export_report(self, export_format, include_cache):
         output_dir = filedialog.askdirectory(title="选择报告导出保存目录")
         if not output_dir:
             return
-            
+
         from modules.report_generator import export_reports_from_teproj
-        
+
         def run():
             self.set_loading(True, "正在生成研究报告与数据档案...", indeterminate=True)
             try:
                 export_markdown = (export_format in ("both", "md"))
                 export_excel = (export_format in ("both", "excel"))
-                
+
                 exported_files, base_name = export_reports_from_teproj(
                     self.loaded_teproj_path,
                     output_dir,
@@ -2289,10 +2879,10 @@ class ToolkitApp(ctk.CTk):
                     include_cache_details=include_cache,
                     progress_callback=self.update_report_progress,
                 )
-                
+
                 filenames = [os.path.basename(f) for f in exported_files]
                 msg = f"报告已成功导出至以下文件：\n" + "\n".join([f"• {name}" for name in filenames])
-                
+
                 self.after(0, lambda: messagebox.showinfo("导出成功", msg))
             except Exception as e:
                 import traceback
@@ -2300,8 +2890,749 @@ class ToolkitApp(ctk.CTk):
                 self.after(0, lambda err_msg=str(e): messagebox.showerror("错误", f"导出失败：\n{err_msg}"))
             finally:
                 self.after(0, lambda: self.set_loading(False))
-                
+
         start_safe_thread(run)
+
+def _apply_custom_arrow(dropdown):
+    try:
+        orig_draw_arrow = dropdown._draw_engine.draw_dropdown_arrow
+
+        def custom_draw_arrow(*args, **kwargs):
+            old_method = dropdown._draw_engine.preferred_drawing_method
+            try:
+                dropdown._draw_engine.preferred_drawing_method = "polygon_shapes"
+                res = orig_draw_arrow(*args, **kwargs)
+                try:
+                    dropdown._canvas.itemconfigure("dropdown_arrow", width=2)
+                except Exception:
+                    pass
+                return res
+            finally:
+                dropdown._draw_engine.preferred_drawing_method = old_method
+
+        dropdown._draw_engine.draw_dropdown_arrow = custom_draw_arrow
+        dropdown._canvas.delete("dropdown_arrow")
+        dropdown._draw(no_color_updates=False)
+    except Exception:
+        pass
+
+
+class ScriptEditorDialog(ctk.CTkToplevel):
+    """
+    新建/编辑自定义脚本的弹出式对话框。
+    """
+    def __init__(self, parent, script_id=None, script_name="", script_desc="", script_code="", script_type="chart"):
+        super().__init__(parent)
+        self.parent = parent
+        self.script_id = script_id
+        self.script_type = script_type
+
+        self.title("新建自定义脚本" if not script_id else "编辑自定义脚本")
+        self.geometry("720x640")
+
+        # 居中显示
+        sw = self.winfo_screenwidth()
+        sh = self.winfo_screenheight()
+        x = (sw - 720) // 2
+        y = (sh - 640) // 2
+        self.geometry(f"720x640+{x}+{y}")
+        self.transient(parent)
+        self.grab_set()
+
+        self.configure(fg_color=("#F9FAFB", "#1A1D24"))
+
+        # 顶边条
+        accent_strip = ctk.CTkFrame(self, height=4, fg_color="#6366F1", corner_radius=0)
+        accent_strip.pack(fill="x", side="top")
+
+        content = ctk.CTkFrame(self, fg_color="transparent")
+        content.pack(fill="both", expand=True, padx=24, pady=18)
+
+        # 脚本名称
+        row_name = ctk.CTkFrame(content, fg_color="transparent")
+        row_name.pack(fill="x", pady=6)
+        ctk.CTkLabel(row_name, text="脚本名称:", font=parent.font_main, text_color=parent.colors["text"], width=70, anchor="w").pack(side="left")
+        self.entry_name = ctk.CTkEntry(
+            row_name,
+            height=36,
+            corner_radius=18,
+            font=ctk.CTkFont(family="Microsoft YaHei", size=13),
+            fg_color=("#F9FAFB", "#262930"),
+            border_color=("#D1D5DB", "#374151"),
+            text_color=("#111827", "#F9FAFB")
+        )
+        self.entry_name.insert(0, script_name)
+        self.entry_name.pack(side="left", fill="x", expand=True, padx=(5, 0))
+
+        # 功能说明
+        row_desc = ctk.CTkFrame(content, fg_color="transparent")
+        row_desc.pack(fill="x", pady=6)
+        ctk.CTkLabel(row_desc, text="功能说明:", font=parent.font_main, text_color=parent.colors["text"], width=70, anchor="w").pack(side="left")
+        self.entry_desc = ctk.CTkEntry(
+            row_desc,
+            height=36,
+            corner_radius=18,
+            font=ctk.CTkFont(family="Microsoft YaHei", size=13),
+            fg_color=("#F9FAFB", "#262930"),
+            border_color=("#D1D5DB", "#374151"),
+            text_color=("#111827", "#F9FAFB")
+        )
+        self.entry_desc.insert(0, script_desc)
+        self.entry_desc.pack(side="left", fill="x", expand=True, padx=(5, 0))
+
+        # 代码编辑区
+        ctk.CTkLabel(content, text="代码编辑区 (Python 3):", font=parent.font_main, text_color=parent.colors["text"]).pack(anchor="w", pady=(10, 4))
+        self.txt_code = ctk.CTkTextbox(
+            content,
+            font=ctk.CTkFont(family="Consolas", size=13),
+            wrap="none",
+            border_width=1,
+            border_color=("#D1D5DB", "#374151"),
+            fg_color=("#FFFFFF", "#262930"),
+            text_color=("#111827", "#F9FAFB")
+        )
+        self.txt_code.insert("1.0", script_code)
+        self.txt_code.pack(fill="both", expand=True, pady=(0, 10))
+
+        # 加速滚动
+        def speed_up_edit_scroll(event):
+            scroll_units = int(-1 * (event.delta / 120) * 4)
+            self.txt_code.yview_scroll(scroll_units, "units")
+            return "break"
+        self.txt_code.bind("<MouseWheel>", speed_up_edit_scroll)
+        if hasattr(self.txt_code, "_textbox"):
+            self.txt_code._textbox.bind("<MouseWheel>", speed_up_edit_scroll)
+
+        # 底部按钮区
+        btn_frame = ctk.CTkFrame(self, height=60, fg_color="transparent")
+        btn_frame.pack(fill="x", side="bottom", padx=24, pady=10)
+
+        btn_cancel = ctk.CTkButton(
+            btn_frame, text="取消", fg_color="#F3F4F6", text_color="#1F2937", hover_color="#E5E7EB",
+            font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), height=36, corner_radius=18,
+            command=self.destroy
+        )
+        btn_cancel.pack(side="left")
+
+        btn_save = ctk.CTkButton(
+            btn_frame, text="保存脚本", fg_color="#10B981", text_color="white", hover_color="#059669",
+            font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), height=36, corner_radius=18,
+            command=self.save_script
+        )
+        btn_save.pack(side="right")
+
+    def save_script(self):
+        name = self.entry_name.get().strip()
+        desc = self.entry_desc.get().strip()
+        code = self.txt_code.get("1.0", tk.END)
+
+        if not name:
+            return messagebox.showwarning("提示", "请输入脚本名称")
+
+        from modules.script_manager import save_script, load_all_scripts
+        new_id = save_script(self.script_id, name, desc, self.script_type, code)
+
+        self.parent.local_scripts = load_all_scripts()
+        self.parent.load_scripts_to_tree()
+        self.parent.script_tree.selection_set(new_id)
+
+        messagebox.showinfo("成功", "脚本保存成功！")
+        self.destroy()
+
+
+class AIPromptDialog(ctk.CTkToplevel):
+    """
+    生成 AI 提示词的引导式对话框。
+    """
+    def __init__(self, parent, project_data):
+        super().__init__(parent)
+        self.parent = parent
+        self.project_data = project_data
+
+        self.title("生成 AI 脚本提示词")
+        self.geometry("620x620")
+        self.resizable(True, True)
+
+        # 居中显示
+        sw = self.winfo_screenwidth()
+        sh = self.winfo_screenheight()
+        x = (sw - 620) // 2
+        y = (sh - 620) // 2
+        self.geometry(f"620x620+{x}+{y}")
+        self.transient(parent)
+        self.grab_set()
+
+        self.configure(fg_color=("#F9FAFB", "#1A1D24"))
+
+        # 顶边条
+        accent_strip = ctk.CTkFrame(self, height=4, fg_color="#6366F1", corner_radius=0)
+        accent_strip.pack(fill="x", side="top")
+
+        self.setup_ui()
+
+    def _section_label(self, parent, text):
+        lbl = ctk.CTkLabel(parent, text=text, font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), text_color="#374151")
+        lbl.pack(anchor="w", padx=10, pady=(15, 2))
+
+    def _make_option_menu(self, parent, values, variable, command=None):
+        combo = ctk.CTkOptionMenu(
+            parent,
+            values=values,
+            variable=variable,
+            command=command,
+            fg_color=("#F3F4F6", "#374151"),
+            text_color=("#1F2937", "#E5E7EB"),
+            button_color=("#F3F4F6", "#374151"),
+            button_hover_color=("#E5E7EB", "#4B5563"),
+            height=32,
+            corner_radius=16
+        )
+        combo.pack(fill="x", pady=2)
+        _apply_custom_arrow(combo)
+        return combo
+
+    def _make_textbox(self, parent, height=80, placeholder=None):
+        if placeholder:
+            ctk.CTkLabel(
+                parent,
+                text=placeholder,
+                font=ctk.CTkFont(family="Microsoft YaHei", size=11),
+                text_color="#64748B",
+                wraplength=520,
+                justify="left"
+            ).pack(anchor="w", padx=10, pady=(0, 2))
+        box = ctk.CTkTextbox(
+            parent,
+            height=height,
+            border_width=1,
+            border_color=("#D1D5DB", "#374151"),
+            fg_color=("#FFFFFF", "#262930"),
+            text_color=("#111827", "#F9FAFB")
+        )
+        box.pack(fill="x", padx=10, pady=5)
+        return box
+
+    def _textbox_value_without_placeholder(self, textbox, placeholder):
+        value = textbox.get("1.0", tk.END).strip()
+        if value == (placeholder or "").strip():
+            return ""
+        return value
+
+    def _on_prompt_tab_changed(self):
+        self.after(1, self._update_prompt_tab_text_colors)
+
+    def _update_prompt_tab_text_colors(self):
+        segmented = getattr(self.prompt_tabview, "_segmented_button", None)
+        buttons = getattr(segmented, "_buttons_dict", {}) if segmented is not None else {}
+        current = self.prompt_tabview.get() if hasattr(self, "prompt_tabview") else None
+        unselected_text = "#F9FAFB" if ctk.get_appearance_mode().lower() == "dark" else "#111827"
+        for name, button in buttons.items():
+            try:
+                button.configure(text_color="#FFFFFF" if name == current else unselected_text)
+            except Exception:
+                pass
+
+    def setup_ui(self):
+        # 底部固定按钮区（设为透明以融合背景，去掉白色块）
+        bottom_frame = ctk.CTkFrame(self, height=56, fg_color=("#F9FAFB", "#1A1D24"), corner_radius=0)
+        bottom_frame.pack(side="bottom", fill="x", pady=0)
+
+        # 滚动内容区
+        scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        scroll.pack(fill="both", expand=True, padx=20, pady=(15, 6))
+
+        self.prompt_tabview = ctk.CTkTabview(
+            scroll,
+            fg_color=("#FFFFFF", "#1F232B"),
+            segmented_button_fg_color=("#E5E7EB", "#2F3541"),
+            segmented_button_selected_color=("#6366F1", "#6366F1"),
+            segmented_button_selected_hover_color=("#4F46E5", "#4F46E5"),
+            segmented_button_unselected_color=("#E5E7EB", "#2F3541"),
+            segmented_button_unselected_hover_color=("#D1D5DB", "#374151"),
+            text_color=("#111827", "#F9FAFB"),
+            corner_radius=14,
+            command=self._on_prompt_tab_changed,
+        )
+        self.prompt_tabview.pack(fill="x", padx=0, pady=(0, 10))
+        manual_tab = self.prompt_tabview.add("参数选项")
+        target_tab = self.prompt_tabview.add("目标导向")
+        for tab in (manual_tab, target_tab):
+            tab.configure(fg_color="transparent")
+        self._update_prompt_tab_text_colors()
+
+        # 1-6. 下拉选单配置区（一行两个，共三行，节省空间）
+        # Row 1: 1. 脚本用途 & 2. 数据范围
+        row1 = ctk.CTkFrame(manual_tab, fg_color="transparent")
+        row1.pack(fill="x", pady=6)
+        row1.columnconfigure(0, weight=1, uniform="row1")
+        row1.columnconfigure(1, weight=1, uniform="row1")
+
+        # Col 1: 脚本用途
+        col1_1 = ctk.CTkFrame(row1, fg_color="transparent")
+        col1_1.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        ctk.CTkLabel(col1_1, text="1. 脚本用途", font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), text_color="#374151").pack(anchor="w", pady=(0, 2))
+        self.var_purpose = ctk.StringVar(value="绘制 F0 曲线图")
+        purposes = ["绘制 F0 曲线图", "绘制 F0 分布图", "绘制 F1/F2 元音空间图", "绘制共振峰轨迹图", "绘制异常/质量检查图", "自定义图表"]
+        self._make_option_menu(col1_1, purposes, self.var_purpose)
+
+        # Col 2: 数据范围
+        col1_2 = ctk.CTkFrame(row1, fg_color="transparent")
+        col1_2.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
+        ctk.CTkLabel(col1_2, text="2. 数据范围", font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), text_color="#374151").pack(anchor="w", pady=(0, 2))
+        self.var_scope = ctk.StringVar(value="只使用纳入分析的条目")
+        scopes = ["只使用纳入分析的条目", "包含已排除条目", "只使用当前发音人", "使用全部发音人", "只使用当前选中分组", "手动指定分组"]
+        self._make_option_menu(col1_2, scopes, self.var_scope, command=self.on_scope_change)
+
+        self.frame_custom_scope = ctk.CTkFrame(col1_2, fg_color="transparent")
+        self.entry_custom_scope = ctk.CTkEntry(
+            self.frame_custom_scope,
+            placeholder_text="输入指定的分组名称，多个以逗号分隔...",
+            height=36,
+            corner_radius=18,
+            font=ctk.CTkFont(family="Microsoft YaHei", size=13),
+            fg_color=("#F9FAFB", "#262930"),
+            border_color=("#D1D5DB", "#374151"),
+            text_color=("#111827", "#F9FAFB")
+        )
+        self.entry_custom_scope.pack(fill="x", pady=2)
+
+        # Row 2: 3. 分组方式 & 4. 图表形式
+        row2 = ctk.CTkFrame(manual_tab, fg_color="transparent")
+        row2.pack(fill="x", pady=6)
+        row2.columnconfigure(0, weight=1, uniform="row2")
+        row2.columnconfigure(1, weight=1, uniform="row2")
+
+        # Col 1: 分组方式
+        col2_1 = ctk.CTkFrame(row2, fg_color="transparent")
+        col2_1.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        ctk.CTkLabel(col2_1, text="3. 分组方式", font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), text_color="#374151").pack(anchor="w", pady=(0, 2))
+        self.var_grouping = ctk.StringVar(value="按声调/分组")
+        groupings = ["按声调/分组", "按发音人", "按音节位置", "按分析模式", "不分组", "自定义分组字段"]
+        self._make_option_menu(col2_1, groupings, self.var_grouping, command=self.on_grouping_change)
+
+        self.frame_custom_grouping = ctk.CTkFrame(col2_1, fg_color="transparent")
+        self.entry_custom_grouping = ctk.CTkEntry(
+            self.frame_custom_grouping,
+            placeholder_text="输入自定义的分组字典键名...",
+            height=36,
+            corner_radius=18,
+            font=ctk.CTkFont(family="Microsoft YaHei", size=13),
+            fg_color=("#F9FAFB", "#262930"),
+            border_color=("#D1D5DB", "#374151"),
+            text_color=("#111827", "#F9FAFB")
+        )
+        self.entry_custom_grouping.pack(fill="x", pady=2)
+
+        # Col 2: 图表形式
+        col2_2 = ctk.CTkFrame(row2, fg_color="transparent")
+        col2_2.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
+        ctk.CTkLabel(col2_2, text="4. 图表形式", font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), text_color="#374151").pack(anchor="w", pady=(0, 2))
+        self.var_chart_style = ctk.StringVar(value="折线图")
+        styles = ["折线图", "散点图", "箱线图", "小提琴图", "热力图", "轨迹图", "多子图分面", "自定义"]
+        self._make_option_menu(col2_2, styles, self.var_chart_style)
+
+        # Row 3: 5. 横轴 & 6. 纵轴
+        row3 = ctk.CTkFrame(manual_tab, fg_color="transparent")
+        row3.pack(fill="x", pady=6)
+        row3.columnconfigure(0, weight=1, uniform="row3")
+        row3.columnconfigure(1, weight=1, uniform="row3")
+
+        # Col 1: 横轴
+        col3_1 = ctk.CTkFrame(row3, fg_color="transparent")
+        col3_1.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        ctk.CTkLabel(col3_1, text="5. 横轴", font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), text_color="#374151").pack(anchor="w", pady=(0, 2))
+        self.var_xaxis = ctk.StringVar(value="归一化时间 0-1")
+        xaxes = ["归一化时间 0-1", "真实时间 秒", "采样点序号", "音节位置", "自定义"]
+        self._make_option_menu(col3_1, xaxes, self.var_xaxis)
+
+        # Col 2: 纵轴
+        col3_2 = ctk.CTkFrame(row3, fg_color="transparent")
+        col3_2.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
+        ctk.CTkLabel(col3_2, text="6. 纵轴", font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), text_color="#374151").pack(anchor="w", pady=(0, 2))
+        self.var_yaxis = ctk.StringVar(value="F0 Hz")
+        yaxes = ["F0 Hz", "F0 T 值", "F1 Hz", "F2 Hz", "时长", "自定义"]
+        self._make_option_menu(col3_2, yaxes, self.var_yaxis)
+
+        # 7. 统计处理
+        self._section_label(manual_tab, "7. 统计处理")
+        stats_frame = ctk.CTkFrame(manual_tab, fg_color="transparent")
+        stats_frame.pack(fill="x", padx=10, pady=5)
+
+        stats_options = ["绘制个体曲线", "绘制均值", "绘制中位数", "绘制标准差阴影", "绘制置信区间", "忽略 NaN", "过滤明显异常值"]
+        self.var_stats = {}
+        for idx, opt in enumerate(stats_options):
+            self.var_stats[opt] = ctk.BooleanVar(value=True if opt in ["绘制均值", "绘制标准差阴影", "忽略 NaN"] else False)
+            cb = ctk.CTkCheckBox(
+                stats_frame, text=opt, variable=self.var_stats[opt], height=24,
+                checkbox_width=18, checkbox_height=18,
+                corner_radius=1000,
+                fg_color=("#3B82F6", "#2563EB"), hover_color=("#9CA3AF", "#4B5563"), border_color=("#4B5563", "#9CA3AF"),
+                font=ctk.CTkFont(family="Microsoft YaHei", size=12)
+            )
+            cb.grid(row=idx//2, column=idx%2, sticky="w", padx=5, pady=4)
+
+        # 8. 输出要求
+        self._section_label(manual_tab, "8. 输出要求")
+        out_frame = ctk.CTkFrame(manual_tab, fg_color="transparent")
+        out_frame.pack(fill="x", padx=10, pady=5)
+
+        # 标题
+        ctk.CTkLabel(out_frame, text="图表标题:", font=ctk.CTkFont(family="Microsoft YaHei", size=12)).grid(row=0, column=0, sticky="w", pady=4)
+        self.entry_title = ctk.CTkEntry(
+            out_frame,
+            placeholder_text="例如：F0 均值图",
+            height=36,
+            corner_radius=18,
+            font=ctk.CTkFont(family="Microsoft YaHei", size=13),
+            fg_color=("#F9FAFB", "#262930"),
+            border_color=("#D1D5DB", "#374151"),
+            text_color=("#111827", "#F9FAFB")
+        )
+        self.entry_title.insert(0, "F0 分组均值折线图")
+        self.entry_title.grid(row=0, column=1, sticky="ew", padx=(10, 0), pady=4)
+
+        # 文件名
+        ctk.CTkLabel(out_frame, text="文件名:", font=ctk.CTkFont(family="Microsoft YaHei", size=12)).grid(row=1, column=0, sticky="w", pady=4)
+        self.entry_filename = ctk.CTkEntry(
+            out_frame,
+            placeholder_text="例如：contour.png",
+            height=36,
+            corner_radius=18,
+            font=ctk.CTkFont(family="Microsoft YaHei", size=13),
+            fg_color=("#F9FAFB", "#262930"),
+            border_color=("#D1D5DB", "#374151"),
+            text_color=("#111827", "#F9FAFB")
+        )
+        self.entry_filename.insert(0, "contour.png")
+        self.entry_filename.grid(row=1, column=1, sticky="ew", padx=(10, 0), pady=4)
+
+        # 复选框样式修改为一致的圆形
+        self.var_output_table = ctk.BooleanVar(value=False)
+        self.var_show_legend = ctk.BooleanVar(value=True)
+        self.var_use_chinese = ctk.BooleanVar(value=True)
+
+        cb_table = ctk.CTkCheckBox(
+            out_frame, text="同时输出数据表", variable=self.var_output_table, height=24,
+            checkbox_width=18, checkbox_height=18,
+            corner_radius=1000,
+            fg_color=("#3B82F6", "#2563EB"), hover_color=("#9CA3AF", "#4B5563"), border_color=("#4B5563", "#9CA3AF"),
+            font=ctk.CTkFont(family="Microsoft YaHei", size=12)
+        )
+        cb_table.grid(row=2, column=0, columnspan=2, sticky="w", pady=4)
+
+        cb_legend = ctk.CTkCheckBox(
+            out_frame, text="显示图例", variable=self.var_show_legend, height=24,
+            checkbox_width=18, checkbox_height=18,
+            corner_radius=1000,
+            fg_color=("#3B82F6", "#2563EB"), hover_color=("#9CA3AF", "#4B5563"), border_color=("#4B5563", "#9CA3AF"),
+            font=ctk.CTkFont(family="Microsoft YaHei", size=12)
+        )
+        cb_legend.grid(row=3, column=0, sticky="w", pady=4)
+
+        cb_chinese = ctk.CTkCheckBox(
+            out_frame, text="图中使用中文标签", variable=self.var_use_chinese, height=24,
+            checkbox_width=18, checkbox_height=18,
+            corner_radius=1000,
+            fg_color=("#3B82F6", "#2563EB"), hover_color=("#9CA3AF", "#4B5563"), border_color=("#4B5563", "#9CA3AF"),
+            font=ctk.CTkFont(family="Microsoft YaHei", size=12)
+        )
+        cb_chinese.grid(row=3, column=1, sticky="w", pady=4)
+
+        out_frame.grid_columnconfigure(1, weight=1)
+
+        # 9. 用户自定义需求
+        self._section_label(manual_tab, "9. 补充具体需求")
+        self.txt_custom = ctk.CTkTextbox(
+            manual_tab, height=80,
+            border_width=1,
+            border_color=("#D1D5DB", "#374151"),
+            fg_color=("#FFFFFF", "#262930"),
+            text_color=("#111827", "#F9FAFB")
+        )
+        self.txt_custom.pack(fill="x", padx=10, pady=5)
+
+        self._build_goal_oriented_tab(target_tab)
+
+        # 10. 提示词预览
+        self._section_label(scroll, "10. 提示词生成预览")
+        self.txt_preview = ctk.CTkTextbox(
+            scroll, height=150, font=ctk.CTkFont(family="Consolas", size=11),
+            border_width=1,
+            border_color=("#D1D5DB", "#374151"),
+            fg_color=("#FFFFFF", "#262930"),
+            text_color=("#111827", "#F9FAFB")
+        )
+        self.txt_preview.pack(fill="x", padx=10, pady=5)
+
+        # 加速 main dialog 滚动与内部文本框滚动
+        def _wheel_steps(delta, multiplier):
+            if delta == 0:
+                return 0
+            if abs(delta) >= 120:
+                return -int(delta / 120) * multiplier
+            return -1 * multiplier if delta > 0 else multiplier
+
+        def speed_up_main_scroll(event):
+            canvas = getattr(scroll, "_parent_canvas", None)
+            if canvas is not None:
+                delta = getattr(event, "delta", 0)
+                if delta != 0:
+                    try:
+                        canvas.configure(yscrollincrement=8)
+                    except Exception:
+                        pass
+                    steps = _wheel_steps(delta, 12)
+                    canvas.yview_scroll(steps, "units")
+                return "break"
+
+        def safe_mousewheel_bind(widget, handler):
+            try:
+                widget.bind("<MouseWheel>", handler, add="+")
+            except (NotImplementedError, tk.TclError, AttributeError):
+                for attr in ("_canvas", "_text_label", "_image_label"):
+                    child = getattr(widget, attr, None)
+                    if child is not None:
+                        try:
+                            child.bind("<MouseWheel>", handler, add="+")
+                        except (NotImplementedError, tk.TclError, AttributeError):
+                            pass
+
+        def bind_scroll_recursive(w):
+            if isinstance(w, ctk.CTkTextbox):
+                def speed_up_tb_scroll(event):
+                    delta = getattr(event, "delta", 0)
+                    if delta != 0:
+                        steps = _wheel_steps(delta, 8)
+                        w.yview_scroll(steps, "units")
+                    return "break"
+                safe_mousewheel_bind(w, speed_up_tb_scroll)
+                if hasattr(w, "_textbox"):
+                    safe_mousewheel_bind(w._textbox, speed_up_tb_scroll)
+                return
+
+            safe_mousewheel_bind(w, speed_up_main_scroll)
+            for child in w.winfo_children():
+                bind_scroll_recursive(child)
+
+        bind_scroll_recursive(scroll)
+
+        # 底部按钮 (padding 调小为 10，贴合底部并美化布局)
+        btn_cancel = ctk.CTkButton(
+            bottom_frame, text="取消", fg_color="#F3F4F6", text_color="#1F2937", hover_color="#E5E7EB",
+            font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), height=36, corner_radius=18,
+            command=self.destroy
+        )
+        btn_cancel.pack(side="left", padx=20, pady=10)
+
+        btn_preview = ctk.CTkButton(
+            bottom_frame, text="仅生成预览", fg_color="#E2E8F0", text_color="#1F2937", hover_color="#CBD5E1",
+            font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), height=36, corner_radius=18,
+            command=self.generate_preview
+        )
+        btn_preview.pack(side="left", padx=10, pady=10)
+
+        btn_copy = ctk.CTkButton(
+            bottom_frame, text="生成并复制提示词", fg_color="#6366F1", text_color="white", hover_color="#4F46E5",
+            font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), height=36, corner_radius=18,
+            command=self.generate_and_copy
+        )
+        btn_copy.pack(side="right", padx=20, pady=10)
+
+        # 初始打包隐藏
+        self.on_scope_change(self.var_scope.get())
+        self.on_grouping_change(self.var_grouping.get())
+
+    def _build_goal_oriented_tab(self, target_tab):
+        intro = ctk.CTkLabel(
+            target_tab,
+            text="这个页面按研究目标生成提示词。你只需要说明想解决什么问题，AI 会自己选择合适的图表形式和统计处理。",
+            font=ctk.CTkFont(family="Microsoft YaHei", size=12),
+            text_color="#64748B",
+            wraplength=520,
+            justify="left"
+        )
+        intro.pack(anchor="w", padx=10, pady=(8, 10))
+
+        row1 = ctk.CTkFrame(target_tab, fg_color="transparent")
+        row1.pack(fill="x", pady=6)
+        row1.columnconfigure(0, weight=1, uniform="target1")
+        row1.columnconfigure(1, weight=1, uniform="target1")
+
+        col_goal = ctk.CTkFrame(row1, fg_color="transparent")
+        col_goal.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        ctk.CTkLabel(col_goal, text="1. 想实现的目标", font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), text_color="#374151").pack(anchor="w", pady=(0, 2))
+        self.var_target_goal = ctk.StringVar(value="比较不同分组的声学差异")
+        target_goals = [
+            "比较不同分组的声学差异",
+            "比较不同发音人的差异",
+            "展示单个发音人的整体趋势",
+            "展示一个词或一组词的轨迹",
+            "寻找异常或质量问题",
+            "制作论文用汇总图",
+            "探索数据中的模式",
+            "自定义目标",
+        ]
+        self._make_option_menu(col_goal, target_goals, self.var_target_goal)
+
+        col_data = ctk.CTkFrame(row1, fg_color="transparent")
+        col_data.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
+        ctk.CTkLabel(col_data, text="2. 关注的数据", font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), text_color="#374151").pack(anchor="w", pady=(0, 2))
+        self.var_target_data = ctk.StringVar(value="使用全部纳入分析条目")
+        target_data = [
+            "使用全部纳入分析条目",
+            "只看某些分组",
+            "只看某些发音人",
+            "比较两个或多个条件",
+            "包含已排除条目做质量检查",
+            "自定义范围",
+        ]
+        self._make_option_menu(col_data, target_data, self.var_target_data)
+
+        row2 = ctk.CTkFrame(target_tab, fg_color="transparent")
+        row2.pack(fill="x", pady=6)
+        row2.columnconfigure(0, weight=1, uniform="target2")
+        row2.columnconfigure(1, weight=1, uniform="target2")
+
+        col_measure = ctk.CTkFrame(row2, fg_color="transparent")
+        col_measure.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        ctk.CTkLabel(col_measure, text="3. 主要观察指标", font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), text_color="#374151").pack(anchor="w", pady=(0, 2))
+        self.var_target_measure = ctk.StringVar(value="由 AI 根据目标选择")
+        measures = ["由 AI 根据目标选择", "F0 走势", "F0 分布", "F0 T 值", "F1/F2 空间", "共振峰轨迹", "时长", "多个指标组合"]
+        self._make_option_menu(col_measure, measures, self.var_target_measure)
+
+        col_output = ctk.CTkFrame(row2, fg_color="transparent")
+        col_output.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
+        ctk.CTkLabel(col_output, text="4. 输出风格", font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), text_color="#374151").pack(anchor="w", pady=(0, 2))
+        self.var_target_output = ctk.StringVar(value="优先生成一张清晰图表")
+        target_outputs = ["优先生成一张清晰图表", "图表和统计表都要", "多张分面图", "论文风格高分辨率图", "教学展示风格", "自定义输出"]
+        self._make_option_menu(col_output, target_outputs, self.var_target_output)
+
+        self._section_label(target_tab, "5. 具体目标")
+        self.placeholder_target_goal = "例如：我想比较阴平、阳平、上声、去声四组在归一化时间上的 F0 走势差异，最好能看出均值和组内离散程度。"
+        self.txt_target_goal = self._make_textbox(
+            target_tab,
+            height=90,
+            placeholder=self.placeholder_target_goal
+        )
+
+        self._section_label(target_tab, "6. 指定对象或筛选条件")
+        self.placeholder_target_scope = "例如：只看张三和李四；只看“实验组A”；排除已经标记忽略的条目。没有特殊限制可以留空。"
+        self.txt_target_scope = self._make_textbox(
+            target_tab,
+            height=70,
+            placeholder=self.placeholder_target_scope
+        )
+
+        self._section_label(target_tab, "7. 输出偏好")
+        self.placeholder_target_constraints = "例如：颜色要区分清楚；适合论文插图；图例放在右上；如果数据不足要在图里说明。"
+        self.txt_target_constraints = self._make_textbox(
+            target_tab,
+            height=70,
+            placeholder=self.placeholder_target_constraints
+        )
+
+    def on_scope_change(self, val):
+        if val == "手动指定分组":
+            self.frame_custom_scope.pack(fill="x")
+        else:
+            self.frame_custom_scope.pack_forget()
+
+    def on_grouping_change(self, val):
+        if val == "自定义分组字段":
+            self.frame_custom_grouping.pack(fill="x")
+        else:
+            self.frame_custom_grouping.pack_forget()
+
+    def generate_prompt_dict(self):
+        active_tab = self.prompt_tabview.get() if hasattr(self, "prompt_tabview") else "参数选项"
+        if active_tab == "目标导向":
+            goal_detail = self._textbox_value_without_placeholder(self.txt_target_goal, self.placeholder_target_goal)
+            scope_detail = self._textbox_value_without_placeholder(self.txt_target_scope, self.placeholder_target_scope)
+            constraints = self._textbox_value_without_placeholder(self.txt_target_constraints, self.placeholder_target_constraints)
+            target_goal = self.var_target_goal.get()
+            target_measure = self.var_target_measure.get()
+            target_output = self.var_target_output.get()
+            custom_lines = [
+                f"目标导向模式：{target_goal}",
+                f"关注数据：{self.var_target_data.get()}",
+                f"主要观察指标：{target_measure}",
+                f"输出风格：{target_output}",
+            ]
+            if goal_detail:
+                custom_lines.append(f"用户具体目标：{goal_detail}")
+            if scope_detail:
+                custom_lines.append(f"筛选条件或指定对象：{scope_detail}")
+            if constraints:
+                custom_lines.append(f"输出偏好：{constraints}")
+            return {
+                "prompt_mode": "目标导向",
+                "goal": target_goal,
+                "data_range": self.var_target_data.get(),
+                "group_by": "由 AI 根据目标自动选择",
+                "chart_style": "由 AI 根据目标自动选择",
+                "x_axis": "由 AI 根据目标自动选择",
+                "y_axis": target_measure,
+                "stats": ["由 AI 根据目标选择合适统计处理"],
+                "title": target_goal,
+                "filename": "goal_oriented_chart.png",
+                "output_table": target_output in ("图表和统计表都要", "论文风格高分辨率图"),
+                "show_legend": True,
+                "use_chinese": True,
+                "custom_desc": "\n".join(custom_lines),
+                "target_goal_detail": goal_detail,
+                "target_scope_detail": scope_detail,
+                "target_constraints": constraints,
+            }
+
+        stats_selected = [k for k, v in self.var_stats.items() if v.get()]
+
+        scope = self.var_scope.get()
+        if scope == "手动指定分组":
+            custom_grp = self.entry_custom_scope.get().strip()
+            scope = f"手动指定分组 ({custom_grp or '未指定'})"
+
+        grouping = self.var_grouping.get()
+        if grouping == "自定义分组字段":
+            custom_key = self.entry_custom_grouping.get().strip()
+            grouping = f"自定义分组字段 ({custom_key or '未指定'})"
+
+        selections = {
+            "prompt_mode": "参数选项",
+            "goal": self.var_purpose.get(),
+            "data_range": scope,
+            "group_by": grouping,
+            "chart_style": self.var_chart_style.get(),
+            "x_axis": self.var_xaxis.get(),
+            "y_axis": self.var_yaxis.get(),
+            "stats": stats_selected,
+            "title": self.entry_title.get().strip() or "自定义图表",
+            "filename": self.entry_filename.get().strip() or "custom_chart.png",
+            "output_table": self.var_output_table.get(),
+            "show_legend": self.var_show_legend.get(),
+            "use_chinese": self.var_use_chinese.get(),
+            "custom_desc": self.txt_custom.get("1.0", tk.END).strip()
+        }
+        return selections
+
+    def generate_preview(self):
+        from modules.script_prompt import generate_ai_prompt
+        selections = self.generate_prompt_dict()
+        prompt_text = generate_ai_prompt(self.project_data, selections)
+
+        self.txt_preview.delete("1.0", tk.END)
+        self.txt_preview.insert("1.0", prompt_text)
+
+    def generate_and_copy(self):
+        from modules.script_prompt import generate_ai_prompt
+        selections = self.generate_prompt_dict()
+        prompt_text = generate_ai_prompt(self.project_data, selections)
+
+        self.clipboard_clear()
+        self.clipboard_append(prompt_text)
+
+        messagebox.showinfo("成功", "AI 脚本提示词已成功生成并复制到剪贴板！")
+        self.destroy()
+
 
 if __name__ == "__main__":
     app = ToolkitApp()

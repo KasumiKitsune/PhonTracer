@@ -86,6 +86,7 @@ class PhoneticsApp:
         self.has_changes = False
         self.current_project_path = None
         self.active_chart_dialog = None
+        self.custom_script_runs = []
 
         # Shared ProcessPoolExecutor for performance optimization
         max_workers = min(os.cpu_count() or 4, 8)
