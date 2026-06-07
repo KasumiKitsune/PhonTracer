@@ -248,6 +248,12 @@ def run(ctx):
         self.assertIn("pandas", prompt)  # As a forbidden library
         self.assertIn("ctx.is_cancelled()", prompt)
         self.assertIn("不要使用 scipy.stats.gaussian_kde", prompt)
+        self.assertIn("项目数据说明与数据来源", prompt)
+        self.assertIn("分组及条目数", prompt)
+        self.assertIn("张三: 条目 1", prompt)
+        self.assertIn("syl_t_values", prompt)
+        self.assertIn("严禁为了比较声调/F0走势", prompt)
+        self.assertIn("不要把热力图当作主要统计结论", prompt)
 
     def test_generate_ai_prompt_goal_oriented(self):
         project_data = {
@@ -281,6 +287,9 @@ def run(ctx):
         self.assertIn("生成模式: 目标导向", prompt)
         self.assertIn("比较四个声调组的 F0 曲线走势", prompt)
         self.assertIn("由 AI 根据目标自动选择", prompt)
+        self.assertIn("推荐代码骨架", prompt)
+        self.assertIn("每组样本数", prompt)
+        self.assertIn("共享同一套颜色归一化范围", prompt)
 
     def test_project_manager_load_with_and_without_script_runs(self):
         # 1. Create a project without custom_script_runs
