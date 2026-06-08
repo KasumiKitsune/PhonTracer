@@ -97,6 +97,29 @@ class AcousticChartExporter:
                 group_counts[g] = group_counts.get(g, 0) + 1
             self.available_groups = sorted(list(group_counts.keys()))
 
+    def _get_f0_normalization_bounds(self, f0_values):
+        arr = np.asarray(f0_values, dtype=float)
+        arr = arr[np.isfinite(arr) & (arr > 0)]
+        if arr.size == 0:
+            return 75.0, 600.0
+
+        robust_arr = arr
+        if arr.size >= 8:
+            q1, q3 = np.percentile(arr, [25.0, 75.0])
+            iqr = q3 - q1
+            if iqr > 0:
+                low = q1 - 1.5 * iqr
+                high = q3 + 1.5 * iqr
+                filtered = arr[(arr >= low) & (arr <= high)]
+                if filtered.size >= max(8, int(arr.size * 0.5)):
+                    robust_arr = filtered
+
+        s_min = float(np.percentile(robust_arr, 5.0))
+        s_max = float(np.percentile(robust_arr, 95.0))
+        if s_max > s_min and s_min > 0:
+            return s_min, s_max
+        return 75.0, 600.0
+
     def _check_export_cancelled(self):
         cancel_event = getattr(self._render_runtime, "cancel_event", None)
         if cancel_event is not None and cancel_event.is_set():
@@ -319,11 +342,7 @@ class AcousticChartExporter:
 
                     speaker_f0_pool.extend([f for f in p_freqs if f > 0])
 
-            if speaker_f0_pool:
-                s_min = np.percentile(speaker_f0_pool, 5.0)
-                s_max = np.percentile(speaker_f0_pool, 95.0)
-            else:
-                s_min, s_max = 75.0, 600.0
+            s_min, s_max = self._get_f0_normalization_bounds(speaker_f0_pool)
 
             if s_max > s_min and s_min > 0:
                 log_s_min = math.log10(s_min)
@@ -338,9 +357,9 @@ class AcousticChartExporter:
                 valid = f_arr > 0
                 if np.any(valid):
                     if s_max > s_min and s_min > 0:
-                        norm_arr[valid] = np.clip(5 * (np.log10(f_arr[valid]) - log_s_min) / log_s_max_min, 0.0, 5.0)
+                        norm_arr[valid] = np.clip(5.0 * (np.log10(f_arr[valid]) - log_s_min) / log_s_max_min, 0.0, 5.0)
                     else:
-                        norm_arr[valid] = 3.0
+                        norm_arr[valid] = 2.5
                 return norm_arr
 
             speaker_data_entries = []
@@ -406,6 +425,113 @@ class AcousticChartExporter:
             ordered.append(value)
         return ordered
 
+    def _split_tone_pair(self, group):
+        text = str(group or "").replace("＋", "+").replace("/", "+").replace("、", "+")
+        if "+" not in text:
+            return None, None
+        parts = [part.strip() for part in text.split("+") if part.strip()]
+        if len(parts) < 2:
+            return None, None
+        return parts[0], parts[1]
+
+    def _is_two_syllable_tone_entry(self, entry):
+        front, back = self._split_tone_pair(entry.get("group", ""))
+        if not front or not back:
+            return False
+        return len(entry.get("syl_data", [])) == 2
+
+    def _has_tone_effect_time_data(self, data_entries):
+        fronts = set()
+        backs = set()
+        combos = set()
+        for entry in data_entries or []:
+            if not self._is_two_syllable_tone_entry(entry):
+                continue
+            front, back = self._split_tone_pair(entry.get("group", ""))
+            fronts.add(front)
+            backs.add(back)
+            combos.add((front, back))
+        return len(fronts) >= 2 and len(backs) >= 2 and len(combos) >= 4
+
+    def _get_tone_chart_type_values(self, data_entries=None):
+        values = ["声调轮廓图", "声调分布图", "时序密度图", "数据质量检查", "声调组别概览图"]
+        if data_entries is None:
+            data_entries = getattr(self, "_all_group_filter_entries", [])
+        if self._has_tone_effect_time_data(data_entries):
+            values.append("二字组调类效应时间进程")
+        return values
+
+    def _get_tone_overview_metric_values(self, is_integrated=False, data_entries=None):
+        values = ["均值热图 (Mean Map)"]
+        if is_integrated:
+            values.append("标准差热图 (SD Map)")
+        if data_entries is None:
+            data_entries = getattr(self, "_all_group_filter_entries", [])
+        if self._has_tone_effect_time_data(data_entries):
+            values.append("调类组合前后字均值热图")
+        return values
+
+    def _tone_effect_blank(self, message):
+        fig, ax = plt.subplots(figsize=(7.0, 4.4))
+        ax.text(0.5, 0.5, message, ha="center", va="center", fontsize=12, color="#374151")
+        ax.axis("off")
+        fig.tight_layout()
+        return fig
+
+    def _tone_effect_point_x(self, syl_index, point_index, point_count):
+        if point_count <= 1:
+            percent = 50.0
+        else:
+            percent = 5.0 + point_index * (90.0 / float(point_count - 1))
+        return percent if syl_index == 0 else 100.0 + percent
+
+    def _collect_tone_effect_time_rows(self, data_entries):
+        rows = []
+        for entry in data_entries:
+            if not self._is_two_syllable_tone_entry(entry):
+                continue
+            front, back = self._split_tone_pair(entry.get("group", ""))
+            syl_list = entry.get("normalized_syl_data") or entry.get("syl_data", [])
+            if len(syl_list) != 2:
+                continue
+            for syl_index in range(2):
+                _dur, points = syl_list[syl_index]
+                point_count = min(len(points), self.project_tree.app_state_params.get("pts", 11))
+                for point_index in range(point_count):
+                    try:
+                        value = float(points[point_index])
+                    except Exception:
+                        continue
+                    if not np.isfinite(value):
+                        continue
+                    rows.append({
+                        "front": front,
+                        "back": back,
+                        "syl": syl_index + 1,
+                        "x": self._tone_effect_point_x(syl_index, point_index, point_count),
+                        "value": value,
+                    })
+        return rows
+
+    def _residual_sse_for_tone_effect(self, y_values, columns):
+        design_columns = [[1.0 for _ in y_values]]
+        for values in columns:
+            unique = []
+            for value in values:
+                if value not in unique:
+                    unique.append(value)
+            for value in unique[1:]:
+                design_columns.append([1.0 if current == value else 0.0 for current in values])
+        design = np.asarray(design_columns, dtype=float).T
+        y = np.asarray(y_values, dtype=float)
+        fitted = np.linalg.lstsq(design, y, rcond=None)[0]
+        residual = y - design.dot(fitted)
+        return float(np.sum(residual * residual))
+
+    def _is_tone_combination_overview_metric(self):
+        metric_val = str(self.get_param('overview_metric', 'mean'))
+        return "调类组合" in metric_val or "combination" in metric_val.lower()
+
     def _build_overview_word_rows(self, data_entries):
         rows = []
         present_groups = self._ordered_unique(entry['group'] for entry in data_entries)
@@ -457,6 +583,7 @@ class AcousticChartExporter:
             self._is_overview_heatmap_chart(chart_type)
             and group_key == "label"
             and self.get_param('intention') == "附录图册 (完整数据)"
+            and not self._is_tone_combination_overview_metric()
         )
 
         state = {
@@ -472,7 +599,9 @@ class AcousticChartExporter:
             _, pages = self._build_overview_word_pages(data_entries)
             state['pages'] = pages
             state['total_pages'] = len(pages) if pages else 1
-        elif chart_type in ("formant_trajectory", "formant_density"):
+        elif chart_type == "overview_heatmap" and self._is_tone_combination_overview_metric():
+            state['total_pages'] = 1
+        elif chart_type in ("formant_trajectory", "formant_density", "tone_effect_time"):
             state['total_pages'] = 1
         else:
             state['total_pages'] = math.ceil(total_groups / 8) if total_groups > 0 else 1
@@ -516,7 +645,7 @@ class AcousticChartExporter:
                 current_page_rows = pagination_state['pages'][P] if P < len(pagination_state['pages']) else []
                 allowed_pairs = {row['row_id'] for row in current_page_rows}
                 data_entries = [e for e in data_entries if (e['group'], e['label']) in allowed_pairs]
-            elif chart_type in ("formant_trajectory", "formant_density"):
+            elif chart_type in ("formant_trajectory", "formant_density", "tone_effect_time"):
                 pass
             elif total_groups > page_size and not self._is_overview_heatmap_chart(chart_type):
                 truncated = True
@@ -540,6 +669,8 @@ class AcousticChartExporter:
             fig = self._plot_quality_check(data_entries)
         elif chart_type == "overview_heatmap":
             fig = self._plot_tone_overview_heatmap(data_entries, group_key, scale)
+        elif chart_type == "tone_effect_time":
+            fig = self._plot_tone_effect_time(data_entries)
         elif chart_type == "formant_overview_heatmap":
             fig = self._plot_formant_overview_heatmap(data_entries, group_key, scale)
         elif chart_type == "formant_space":
@@ -833,6 +964,8 @@ class AcousticChartExporter:
 
     def _plot_tone_overview_heatmap(self, data_entries, group_key, scale):
         metric_val = self.get_param('overview_metric', 'mean')
+        if "调类组合" in str(metric_val) or "combination" in str(metric_val).lower():
+            return self._plot_tone_combination_average_heatmap(data_entries)
         if metric_val in ("sd", "标准差热图 (SD Map)"):
             metric = "标准差热图 (SD Map)"
         else:
@@ -1015,6 +1148,71 @@ class AcousticChartExporter:
             title_text = f"{data_entries[0]['speaker_name']} - {title_text}"
         ax.set_title(title_text, fontsize=12, fontweight="bold", pad=15)
 
+        fig.tight_layout()
+        return fig
+
+    def _plot_tone_combination_average_heatmap(self, data_entries):
+        rows = self._collect_tone_effect_time_rows(data_entries)
+        if not rows:
+            return self._tone_effect_blank(
+                "没有可用于调类组合热图的二字组数据。\n请确认当前选择的组别来自二字组，并且组名形如“前字调类+后字调类”。"
+            )
+        if not self._has_tone_effect_time_data(data_entries):
+            return self._tone_effect_blank(
+                "调类组合热图数据不足。\n至少需要 2 个前字调类、2 个后字调类，以及 4 个可用调类组合。"
+            )
+
+        tones = []
+        for row in rows:
+            for tone in (row["front"], row["back"]):
+                if tone not in tones:
+                    tones.append(tone)
+        if not tones:
+            return self._tone_effect_blank("没有可识别的前后调类。")
+
+        grouped = {}
+        for row in rows:
+            key = (row["front"], row["back"], row["syl"])
+            grouped.setdefault(key, []).append(row["value"])
+
+        tone_index = {tone: index for index, tone in enumerate(tones)}
+        front_matrix = np.full((len(tones), len(tones)), np.nan)
+        back_matrix = np.full((len(tones), len(tones)), np.nan)
+        for key, values in grouped.items():
+            front, back, syl = key
+            if front not in tone_index or back not in tone_index:
+                continue
+            matrix = front_matrix if syl == 1 else back_matrix
+            matrix[tone_index[front], tone_index[back]] = float(sum(values) / len(values))
+
+        fig, axes = plt.subplots(1, 2, figsize=(14.5, 6.0))
+        try:
+            cmap = plt.colormaps.get_cmap("RdYlBu_r").copy()
+        except AttributeError:
+            cmap = plt.cm.get_cmap("RdYlBu_r").copy()
+        cmap.set_bad(color="white", alpha=0.0)
+
+        for axis, matrix, title in [
+            (axes[0], front_matrix, "前字平均五度值"),
+            (axes[1], back_matrix, "后字平均五度值"),
+        ]:
+            im = axis.imshow(matrix, vmin=0.0, vmax=5.0, cmap=cmap)
+            axis.set_xticks(range(len(tones)))
+            axis.set_yticks(range(len(tones)))
+            axis.set_xticklabels(tones)
+            axis.set_yticklabels(tones)
+            axis.set_xlabel("后字调类")
+            axis.set_ylabel("前字调类")
+            axis.set_title(title, fontsize=12, fontweight="bold")
+            for row_idx in range(matrix.shape[0]):
+                for col_idx in range(matrix.shape[1]):
+                    value = matrix[row_idx, col_idx]
+                    if np.isfinite(value):
+                        axis.text(col_idx, row_idx, f"{value:.2f}", ha="center", va="center", fontsize=9)
+            cbar = fig.colorbar(im, ax=axis, fraction=0.046, pad=0.04)
+            cbar.set_label("平均五度值")
+
+        fig.suptitle("调类组合的前后字平均五度值热图", fontsize=14, fontweight="bold")
         fig.tight_layout()
         return fig
 
@@ -1481,6 +1679,106 @@ class AcousticChartExporter:
             return fig
 
         fig, ax = plt.subplots()
+        return fig
+
+    def _plot_tone_effect_time(self, data_entries):
+        rows = self._collect_tone_effect_time_rows(data_entries)
+        if not rows:
+            return self._tone_effect_blank(
+                "没有可用于二字组调类效应分析的数据。\n请确认当前选择的组别来自二字组，并且组名形如“前字调类+后字调类”。"
+            )
+
+        fronts = {row["front"] for row in rows}
+        backs = {row["back"] for row in rows}
+        combos = {(row["front"], row["back"]) for row in rows}
+        if len(fronts) < 2 or len(backs) < 2 or len(combos) < 4:
+            return self._tone_effect_blank(
+                "二字组调类效应数据不足。\n至少需要 2 个前字调类、2 个后字调类，以及 4 个可用调类组合。"
+            )
+
+        combo_groups = {}
+        for row in rows:
+            key = (row["front"], row["back"], row["syl"], row["x"])
+            combo_groups.setdefault(key, []).append(row["value"])
+
+        combo_rows = []
+        for key, values in combo_groups.items():
+            front, back, syl, x = key
+            combo_rows.append({
+                "front": front,
+                "back": back,
+                "syl": syl,
+                "x": x,
+                "mean": float(sum(values) / len(values)),
+            })
+
+        time_groups = {}
+        for row in combo_rows:
+            key = (row["syl"], row["x"])
+            time_groups.setdefault(key, []).append(row)
+
+        effect_rows = []
+        for key, group_rows in time_groups.items():
+            fronts_at_time = [row["front"] for row in group_rows]
+            backs_at_time = [row["back"] for row in group_rows]
+            y_values = [row["mean"] for row in group_rows]
+            if len(y_values) < 4 or len(set(fronts_at_time)) < 2 or len(set(backs_at_time)) < 2:
+                continue
+
+            arr = np.asarray(y_values, dtype=float)
+            total = float(np.sum((arr - float(np.mean(arr))) ** 2))
+            if total <= 0:
+                continue
+
+            front_sse = self._residual_sse_for_tone_effect(y_values, [fronts_at_time])
+            back_sse = self._residual_sse_for_tone_effect(y_values, [backs_at_time])
+            additive_sse = self._residual_sse_for_tone_effect(y_values, [fronts_at_time, backs_at_time])
+            front_part = max(0.0, 0.5 * ((total - front_sse) + (back_sse - additive_sse)))
+            back_part = max(0.0, 0.5 * ((total - back_sse) + (front_sse - additive_sse)))
+            interaction = max(0.0, additive_sse)
+            denom = front_part + back_part + interaction
+            if denom <= 0:
+                continue
+
+            _syl, x = key
+            effect_rows.append({
+                "x": x,
+                "front": front_part / denom,
+                "back": back_part / denom,
+                "interaction": interaction / denom,
+            })
+
+        if not effect_rows:
+            return self._tone_effect_blank(
+                "当前组别无法估算调类效应时间进程。\n请增加前后调类组合覆盖，或检查所选组别是否过少。"
+            )
+
+        effect_rows.sort(key=lambda row: row["x"])
+        xs = [row["x"] for row in effect_rows]
+
+        fig, ax = plt.subplots(figsize=(11.2, 5.8))
+        ax.plot(xs, [row["front"] for row in effect_rows], label="前字调类", linewidth=2.4, color="#2563EB")
+        ax.plot(xs, [row["back"] for row in effect_rows], label="后字调类", linewidth=2.4, color="#EA580C")
+        ax.plot(xs, [row["interaction"] for row in effect_rows], label="交互项/残差", linewidth=2.4, color="#16A34A")
+        ax.axvline(100.0, color="#888888", linewidth=1.0, linestyle="--")
+        ax.set_xlim(0, 200)
+        ax.set_ylim(0, 1)
+        ax.set_xticks([5, 50, 95, 105, 150, 195])
+        ax.set_xticklabels(["前字5%", "前字50%", "前字95%", "后字5%", "后字50%", "后字95%"])
+        ax.set_xlabel("两字组归一化时间轴")
+        ax.set_ylabel("调类组合均值方差占比")
+        ax.set_title("二字组调类效应时间进程", fontsize=13, fontweight="bold")
+        ax.grid(True, linestyle="--", alpha=0.25, linewidth=0.8)
+        legend_kwargs = self._get_legend_kwargs()
+        legend_kwargs["fontsize"] = 9
+        ax.legend(**legend_kwargs)
+        if self.get_param('legend_outside', False):
+            loc_val = self.get_param('legend_loc', '右上')
+            if "右" in loc_val:
+                fig.subplots_adjust(right=0.82)
+            elif "left" in loc_val or "左" in loc_val:
+                fig.subplots_adjust(left=0.18)
+        fig.tight_layout()
         return fig
 
     def _plot_temporal_density(self, data_entries, group_key, scale="T 值", is_preview=True):
@@ -2016,7 +2314,7 @@ class AcousticChartExporter:
             self._report_export_progress(1.0, "当前任务完成")
             return
 
-        if len(unique_groups) > 8 and not self._is_overview_heatmap_chart(chart_type):
+        if len(unique_groups) > 8 and not self._is_overview_heatmap_chart(chart_type) and chart_type != "tone_effect_time":
             with _MATPLOTLIB_LOCK:
                 if ext == ".pdf":
                     self._export_paginated_pdf(out_path, data, group_key, scale)
@@ -3303,6 +3601,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
     def _init_group_filters(self):
         # Extract all unique group names across all speakers
         all_entries = self._extract_active_data(self.all_speakers if self.all_speakers else [self.active_speaker], filter_groups=False)
+        self._all_group_filter_entries = all_entries
         self.group_counts = {}
         for entry in all_entries:
             g = entry['group']
@@ -3517,7 +3816,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             default_type = "元音共振峰空间图"
             intention_values = ["论文主图 (清晰对比)", "附录图册 (完整数据)"]
         else:
-            type_values = ["声调轮廓图", "声调分布图", "时序密度图", "数据质量检查", "声调组别概览图"]
+            type_values = self._get_tone_chart_type_values()
             default_type = "声调轮廓图"
             intention_values = ["论文主图 (清晰对比)", "附录图册 (完整数据)", "数据诊断 (质量排查)"]
 
@@ -3866,6 +4165,10 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             self.dynamic_title.configure(text="⚙️ 声调组别概览图专有选项")
             self._build_overview_heatmap_settings()
             self.combo_groupby.set("按词语")
+        elif val == "二字组调类效应时间进程":
+            self.var_chart_type.set("tone_effect_time")
+            self.dynamic_title.configure(text="⚙️ 二字组调类效应时间进程")
+            self._build_tone_effect_time_settings()
         elif val == "元音共振峰空间图":
             self.var_chart_type.set("formant_space")
             self.dynamic_title.configure(text="⚙️ 元音空间图专有选项")
@@ -3917,11 +4220,11 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         # Dynamically adjust overview heatmap options if currently showing it
         if hasattr(self, 'combo_overview_metric') and self.combo_overview_metric.winfo_exists():
             is_integrated = ("整合" in val)
-            if is_integrated:
-                self.combo_overview_metric.configure(values=["均值热图 (Mean Map)", "标准差热图 (SD Map)"])
-            else:
+            metric_values = self._get_tone_overview_metric_values(is_integrated=is_integrated)
+            self.combo_overview_metric.configure(values=metric_values)
+            if self.combo_overview_metric.get() not in metric_values:
                 self.combo_overview_metric.set("均值热图 (Mean Map)")
-                self.combo_overview_metric.configure(values=["均值热图 (Mean Map)"])
+            self._on_overview_metric_changed(self.combo_overview_metric.get())
 
         self.update_preview()
 
@@ -4116,7 +4419,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
 
     def _on_overview_metric_changed(self, val):
         if hasattr(self, 'cb_show_deviation') and self.cb_show_deviation.winfo_exists():
-            if "标准差" in val:
+            if "标准差" in val or "调类组合" in val:
                 self.var_overview_show_deviation.set(False)
                 self.cb_show_deviation.configure(state="disabled")
             else:
@@ -4126,7 +4429,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
     def _build_overview_heatmap_settings(self):
         ctk.CTkLabel(self.dynamic_content_frame, text="热图展示维度:", font=self.font_small).pack(anchor="w", pady=(5, 2))
         is_integrated = (self.var_export_scope.get() == "integrated")
-        metric_values = ["均值热图 (Mean Map)", "标准差热图 (SD Map)"] if is_integrated else ["均值热图 (Mean Map)"]
+        metric_values = self._get_tone_overview_metric_values(is_integrated=is_integrated)
         self.combo_overview_metric = ctk.CTkOptionMenu(
             self.dynamic_content_frame, 
             values=metric_values, 
@@ -4300,6 +4603,20 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             self.var_density_f0_mode.set("minmax")
 
         self.trigger_preview_update()
+
+    def _build_tone_effect_time_settings(self):
+        text = (
+            "此图使用当前勾选的二字组声调组合，估算前字调类、后字调类与交互项/残差在时间轴上的占比。\n"
+            "请保留至少 2 个前字调类、2 个后字调类和 4 个调类组合。"
+        )
+        ctk.CTkLabel(
+            self.dynamic_content_frame,
+            text=text,
+            font=self.font_small,
+            justify="left",
+            wraplength=350,
+            text_color=("#374151", "#D1D5DB")
+        ).pack(anchor="w", pady=(5, 10))
 
     def _build_quality_settings(self):
         ctk.CTkLabel(self.dynamic_content_frame, text="数据质检视图类型:", font=self.font_small).pack(anchor="w", pady=(5, 2))
@@ -4508,7 +4825,11 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             total_groups = pagination_state['total_groups']
             total_pages = pagination_state['total_pages']
             is_paginated_heatmap = pagination_state['is_paginated_heatmap']
-            show_group_pagination = (total_groups > 8 and not self._is_overview_heatmap_chart(chart_type)) or is_paginated_heatmap
+            show_group_pagination = (
+                total_groups > 8
+                and not self._is_overview_heatmap_chart(chart_type)
+                and chart_type != "tone_effect_time"
+            ) or is_paginated_heatmap
             if show_group_pagination:
                 pady_val = (0, 4) if getattr(self, 'is_minimized', False) else (0, 10)
                 self.group_pagination_frame.grid(row=2, column=0, pady=pady_val)
@@ -4614,6 +4935,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
 
     def _update_group_filters(self):
         all_entries = self._extract_active_data(self.all_speakers if self.all_speakers else [self.active_speaker], filter_groups=False)
+        self._all_group_filter_entries = all_entries
         new_group_counts = {}
         for entry in all_entries:
             g = entry['group']
@@ -4632,6 +4954,24 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         self.group_checkbox_vars = new_group_checkbox_vars
 
         self._populate_groups_list()
+        if hasattr(self, "combo_type") and not self._is_formant_mode():
+            type_values = self._get_tone_chart_type_values(all_entries)
+            self.combo_type.configure(values=type_values)
+            if self.combo_type.get() not in type_values:
+                self.combo_type.set("声调轮廓图")
+                self._on_type_changed("声调轮廓图")
+        if hasattr(self, "combo_overview_metric") and not self._is_formant_mode():
+            try:
+                exists = self.combo_overview_metric.winfo_exists()
+            except Exception:
+                exists = True
+            if exists:
+                is_integrated = self.var_export_scope.get() == "integrated"
+                metric_values = self._get_tone_overview_metric_values(is_integrated=is_integrated, data_entries=all_entries)
+                self.combo_overview_metric.configure(values=metric_values)
+                if self.combo_overview_metric.get() not in metric_values:
+                    self.combo_overview_metric.set("均值热图 (Mean Map)")
+                self._on_overview_metric_changed(self.combo_overview_metric.get())
 
     def _on_format_changed(self, val):
         self._update_pixel_options_state()

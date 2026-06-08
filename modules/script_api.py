@@ -42,6 +42,30 @@ def configure_matplotlib_chinese_font():
         pass
 
 
+def get_f0_normalization_bounds(f0_values):
+    arr = np.asarray(f0_values, dtype=float)
+    arr = arr[np.isfinite(arr) & (arr > 0)]
+    if arr.size == 0:
+        return 75.0, 600.0
+
+    robust_arr = arr
+    if arr.size >= 8:
+        q1, q3 = np.percentile(arr, [25.0, 75.0])
+        iqr = q3 - q1
+        if iqr > 0:
+            low = q1 - 1.5 * iqr
+            high = q3 + 1.5 * iqr
+            filtered = arr[(arr >= low) & (arr <= high)]
+            if filtered.size >= max(8, int(arr.size * 0.5)):
+                robust_arr = filtered
+
+    s_min = float(np.percentile(robust_arr, 5.0))
+    s_max = float(np.percentile(robust_arr, 95.0))
+    if s_max > s_min and s_min > 0:
+        return s_min, s_max
+    return 75.0, 600.0
+
+
 class FigureResult:
     """
     表示脚本生成的图表结果。
@@ -207,11 +231,7 @@ def build_dataset_snapshot(teproj_path):
                                 pass
 
                 # 计算基准
-                if f0_pool:
-                    s_min = np.percentile(f0_pool, 5.0)
-                    s_max = np.percentile(f0_pool, 95.0)
-                else:
-                    s_min, s_max = 75.0, 600.0
+                s_min, s_max = get_f0_normalization_bounds(f0_pool)
 
                 if s_max > s_min and s_min > 0:
                     log_s_min = math.log10(s_min)
@@ -232,10 +252,10 @@ def build_dataset_snapshot(teproj_path):
                     for f in freqs:
                         if f > 0:
                             if s_max > s_min and s_min > 0:
-                                t = 1.0 + 4.0 * (math.log10(f) - log_s_min) / log_s_max_min
-                                t = max(1.0, min(5.0, t))
+                                t = 5.0 * (math.log10(f) - log_s_min) / log_s_max_min
+                                t = max(0.0, min(5.0, t))
                             else:
-                                t = 3.0
+                                t = 2.5
                             t_values.append(t)
                         else:
                             t_values.append(np.nan)

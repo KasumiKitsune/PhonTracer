@@ -10,6 +10,25 @@ class TestAcousticExporterFeatures(unittest.TestCase):
     def setUpClass(cls):
         cls.root = get_shared_root()
 
+    def _tone_effect_entry(self, group, front_level, back_level, label=None, speaker="Speaker 1"):
+        front_curve = [front_level, front_level + back_level * 0.15, back_level]
+        back_curve = [front_level * 0.35 + back_level * 0.65, back_level, back_level]
+        return {
+            'speaker_name': speaker,
+            'group': group,
+            'label': label or group,
+            'syl_data': [(0.5, front_curve), (0.5, back_curve)],
+            'normalized_syl_data': [(0.5, front_curve), (0.5, back_curve)],
+        }
+
+    def _tone_effect_dataset(self):
+        return [
+            self._tone_effect_entry("阴平+阴平", 4.7, 4.6),
+            self._tone_effect_entry("阴平+阳平", 4.7, 2.4),
+            self._tone_effect_entry("阳平+阴平", 2.3, 4.6),
+            self._tone_effect_entry("阳平+阳平", 2.3, 2.4),
+        ]
+
     def test_exporter_dialog_init_and_variables(self):
         # Mock tree panel and active speaker
         project_tree = MagicMock()
@@ -76,6 +95,132 @@ class TestAcousticExporterFeatures(unittest.TestCase):
 
             # Clean up top level window
             dlg.destroy()
+
+    def test_tone_effect_time_type_only_available_for_two_syllable_tone_pairs(self):
+        project_tree = MagicMock()
+        project_tree.app_state_params = {'pts': 3}
+        exporter = AcousticChartExporter(project_tree=project_tree)
+
+        single_syllable_data = [{
+            'speaker_name': 'Speaker 1',
+            'group': '阴平',
+            'label': '妈',
+            'syl_data': [(0.5, [4.0, 4.2, 4.1])],
+            'normalized_syl_data': [(0.5, [4.0, 4.2, 4.1])],
+        }]
+        self.assertNotIn("二字组调类效应时间进程", exporter._get_tone_chart_type_values(single_syllable_data))
+
+        two_syllable_data = self._tone_effect_dataset()
+        self.assertIn("二字组调类效应时间进程", exporter._get_tone_chart_type_values(two_syllable_data))
+
+    def test_f0_normalization_bounds_ignore_octave_tail(self):
+        project_tree = MagicMock()
+        exporter = AcousticChartExporter(project_tree=project_tree)
+        normal_band = np.linspace(95.0, 150.0, 120)
+        octave_tail = np.linspace(430.0, 580.0, 18)
+        raw_values = np.concatenate([normal_band, octave_tail])
+
+        _s_min, s_max = exporter._get_f0_normalization_bounds(raw_values)
+
+        self.assertLess(s_max, 160.0)
+
+    def test_tone_effect_time_plot_draws_three_effect_curves(self):
+        project_tree = MagicMock()
+        project_tree.app_state_params = {'pts': 3}
+        exporter = AcousticChartExporter(project_tree=project_tree)
+        exporter.params = {'chart_type': 'tone_effect_time', 'legend_loc': '右上'}
+
+        fig = exporter.generate_plot(self._tone_effect_dataset(), is_preview=False)
+        labels = [line.get_label() for line in fig.axes[0].get_lines()]
+
+        self.assertIn("前字调类", labels)
+        self.assertIn("后字调类", labels)
+        self.assertIn("交互项/残差", labels)
+
+    def test_tone_effect_time_respects_selected_group_subset_data(self):
+        project_tree = MagicMock()
+        project_tree.app_state_params = {'pts': 3}
+        exporter = AcousticChartExporter(project_tree=project_tree)
+
+        full_data = self._tone_effect_dataset()
+        subset_data = [entry for entry in full_data if entry['group'] in {"阴平+阴平", "阴平+阳平"}]
+
+        self.assertTrue(exporter._has_tone_effect_time_data(full_data))
+        self.assertFalse(exporter._has_tone_effect_time_data(subset_data))
+
+    def test_tone_effect_time_export_does_not_paginate_many_groups(self):
+        project_tree = MagicMock()
+        project_tree.app_state_params = {'pts': 3}
+        exporter = AcousticChartExporter(project_tree=project_tree)
+        exporter.params = {'chart_type': 'tone_effect_time', 'groupby': 'group', 'scale': 't_value'}
+        large_data = []
+        for idx in range(12):
+            front = "阴平" if idx % 2 == 0 else "阳平"
+            back = "阴平" if idx % 3 == 0 else "阳平"
+            large_data.append(self._tone_effect_entry(f"{front}+{back}-{idx}", 4.5 if front == "阴平" else 2.2, 4.4 if back == "阴平" else 2.1))
+
+        exporter._export_paginated_images = MagicMock()
+        exporter._export_paginated_pdf = MagicMock()
+        exporter.generate_plot = MagicMock(return_value=MagicMock())
+        exporter._save_figure = MagicMock()
+
+        exporter._export_dataset(large_data, 'tone_effect.png', '.png')
+
+        exporter._export_paginated_images.assert_not_called()
+        exporter._export_paginated_pdf.assert_not_called()
+        exporter.generate_plot.assert_called_once()
+        exporter._save_figure.assert_called_once()
+
+    def test_tone_overview_metric_values_include_combination_heatmap_for_two_syllables(self):
+        project_tree = MagicMock()
+        project_tree.app_state_params = {'pts': 3}
+        exporter = AcousticChartExporter(project_tree=project_tree)
+
+        single_syllable_data = [{
+            'speaker_name': 'Speaker 1',
+            'group': '阴平',
+            'label': '妈',
+            'syl_data': [(0.5, [4.0, 4.2, 4.1])],
+            'normalized_syl_data': [(0.5, [4.0, 4.2, 4.1])],
+        }]
+        self.assertNotIn("调类组合前后字均值热图", exporter._get_tone_overview_metric_values(data_entries=single_syllable_data))
+        self.assertIn("调类组合前后字均值热图", exporter._get_tone_overview_metric_values(data_entries=self._tone_effect_dataset()))
+
+    def test_tone_overview_combination_heatmap_draws_front_and_back_matrices(self):
+        project_tree = MagicMock()
+        project_tree.app_state_params = {'pts': 3}
+        exporter = AcousticChartExporter(project_tree=project_tree)
+        exporter.params = {'overview_metric': '调类组合前后字均值热图'}
+
+        fig = exporter._plot_tone_overview_heatmap(self._tone_effect_dataset(), "group", "T 值")
+
+        self.assertEqual(len(fig.axes[0].images), 1)
+        self.assertEqual(len(fig.axes[1].images), 1)
+        self.assertIn("前字平均五度值", fig.axes[0].get_title())
+        self.assertIn("后字平均五度值", fig.axes[1].get_title())
+
+    def test_tone_overview_combination_heatmap_disables_appendix_pagination(self):
+        project_tree = MagicMock()
+        project_tree.app_state_params = {'pts': 3}
+        exporter = AcousticChartExporter(project_tree=project_tree)
+        exporter.params = {
+            'chart_type': 'overview_heatmap',
+            'groupby': '按词语',
+            'intention': '附录图册 (完整数据)',
+            'overview_metric': '调类组合前后字均值热图',
+        }
+
+        large_data = []
+        combos = self._tone_effect_dataset()
+        for idx in range(12):
+            entry = dict(combos[idx % len(combos)])
+            entry['label'] = f"词{idx}"
+            large_data.append(entry)
+
+        state = exporter._get_group_pagination_state(large_data, 'overview_heatmap', '按词语')
+
+        self.assertFalse(state['is_paginated_heatmap'])
+        self.assertEqual(state['total_pages'], 1)
 
     def test_overview_heatmap_plot(self):
         project_tree = MagicMock()
