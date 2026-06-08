@@ -147,6 +147,20 @@ def build_dataset_snapshot(teproj_path):
                 return []
             project_data = json.loads(raw.decode("utf-8"))
 
+            # Create a lookup mapping from decoded (correct) filenames to original ZIP members
+            namelist_map = {}
+            for name in zf.namelist():
+                try:
+                    decoded = name.encode('cp437').decode('gbk')
+                except Exception:
+                    try:
+                        decoded = name.encode('cp437').decode('utf-8')
+                    except Exception:
+                        decoded = name
+                decoded_norm = decoded.replace("\\", "/")
+                namelist_map[decoded_norm] = name
+                namelist_map[name.replace("\\", "/")] = name
+
             speakers = project_data.get("speakers", {})
             items_snapshot = []
 
@@ -163,28 +177,34 @@ def build_dataset_snapshot(teproj_path):
                 # 批量读取并预载 npz 缓存
                 for item_id, item in items.items():
                     pitch_file = item.get("pitch_data_file")
-                    if pitch_file and pitch_file in zf.namelist():
-                        try:
-                            with zf.open(pitch_file) as pf:
-                                data = np.load(pf)
-                                xs = data["xs"].tolist()
-                                freqs = data["freqs"].tolist()
-                                loaded_pitches[item_id] = (xs, freqs)
-                                f0_pool.extend([f for f in freqs if f > 0])
-                        except Exception:
-                            pass
+                    if pitch_file:
+                        pitch_file_norm = pitch_file.replace("\\", "/")
+                        real_pitch_file = namelist_map.get(pitch_file_norm)
+                        if real_pitch_file:
+                            try:
+                                with zf.open(real_pitch_file) as pf:
+                                    data = np.load(pf)
+                                    xs = data["xs"].tolist()
+                                    freqs = data["freqs"].tolist()
+                                    loaded_pitches[item_id] = (xs, freqs)
+                                    f0_pool.extend([f for f in freqs if f > 0])
+                            except Exception:
+                                pass
 
                     formant_file = item.get("formant_data_file")
-                    if formant_file and formant_file in zf.namelist():
-                        try:
-                            with zf.open(formant_file) as ff:
-                                data = np.load(ff)
-                                xs = data["xs"].tolist()
-                                f1 = data["f1"].tolist()
-                                f2 = data["f2"].tolist()
-                                loaded_formants[item_id] = (xs, f1, f2)
-                        except Exception:
-                            pass
+                    if formant_file:
+                        formant_file_norm = formant_file.replace("\\", "/")
+                        real_formant_file = namelist_map.get(formant_file_norm)
+                        if real_formant_file:
+                            try:
+                                with zf.open(real_formant_file) as ff:
+                                    data = np.load(ff)
+                                    xs = data["xs"].tolist()
+                                    f1 = data["f1"].tolist()
+                                    f2 = data["f2"].tolist()
+                                    loaded_formants[item_id] = (xs, f1, f2)
+                            except Exception:
+                                pass
 
                 # 计算基准
                 if f0_pool:
@@ -212,8 +232,8 @@ def build_dataset_snapshot(teproj_path):
                     for f in freqs:
                         if f > 0:
                             if s_max > s_min and s_min > 0:
-                                t = 5.0 * (math.log10(f) - log_s_min) / log_s_max_min
-                                t = max(0.0, min(5.0, t))
+                                t = 1.0 + 4.0 * (math.log10(f) - log_s_min) / log_s_max_min
+                                t = max(1.0, min(5.0, t))
                             else:
                                 t = 3.0
                             t_values.append(t)
