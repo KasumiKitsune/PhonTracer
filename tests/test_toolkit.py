@@ -96,5 +96,52 @@ class TestToolkitTeprojTab(unittest.TestCase):
             
         mock_msgbox.showinfo.assert_called_once()
 
+    @patch('toolkit.ctk.CTk')
+    @patch('toolkit.messagebox')
+    def test_display_script_result_deduplication(self, mock_msgbox, mock_ctk):
+        # We need a mock of ToolkitApp
+        app = MagicMock(spec=ToolkitApp)
+        app.selected_script_id = "test_id"
+        app.local_scripts = [{"id": "test_id", "name": "Test Script", "description": "Desc", "type": "chart"}]
+        app.get_script_output_dir = MagicMock(return_value=self.temp_dir)
+        app.append_script_log = MagicMock()
+        app._safe_script_output_name = MagicMock(side_effect=lambda name, fallback: name or fallback)
+        app._unique_path = MagicMock(side_effect=lambda folder, filename: os.path.join(folder, filename))
+        app.show_script_figure_at = MagicMock()
+        
+        # Mock configure_matplotlib_chinese_font and modules.script_api classes
+        with patch('modules.script_api.configure_matplotlib_chinese_font') as mock_font:
+            # Create mock FigureResult objects
+            fig_png = MagicMock()
+            fig_res_png = MagicMock()
+            fig_res_png.fig = fig_png
+            fig_res_png.filename = "chart.png"
+            fig_res_png.title = "Chart Title"
+            
+            fig_svg = MagicMock()
+            fig_res_svg = MagicMock()
+            fig_res_svg.fig = fig_svg
+            fig_res_svg.filename = "chart.svg"
+            fig_res_svg.title = "Chart Title"
+
+            # Execute display_script_result
+            from modules.script_api import FigureResult
+            with patch('toolkit.isinstance', side_effect=lambda obj, cls: True if (cls == FigureResult) else isinstance(obj, cls)):
+                ToolkitApp.display_script_result(app, [fig_res_png, fig_res_svg])
+            
+            # Verify fig.savefig was called on both
+            fig_png.savefig.assert_called_once()
+            fig_svg.savefig.assert_called_once()
+            
+            # Verify that self.script_figure_results only contains one preview item (the PNG one)
+            self.assertEqual(len(app.script_figure_results), 1)
+            self.assertEqual(app.script_figure_results[0]["filename"], "chart.png")
+            self.assertEqual(app.script_figure_results[0]["ext"], ".png")
+            
+            # Verify the preview_path is the same as output_path (no temp preview files)
+            self.assertEqual(app.script_figure_results[0]["preview_path"], app.script_figure_results[0]["output_path"])
+
+
 if __name__ == '__main__':
     unittest.main()
+

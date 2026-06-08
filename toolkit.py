@@ -2184,8 +2184,12 @@ class ToolkitApp(ctk.CTk):
         )
         self.btn_script_next_fig.grid(row=0, column=2, sticky="e")
         self.script_preview_nav.grid_remove()
-        self.lbl_chart_preview = ctk.CTkLabel(preview_box, text="暂无图表预览")
+        self.lbl_chart_preview = ctk.CTkLabel(preview_box, text="暂无图表预览", cursor="hand2")
         self.lbl_chart_preview.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
+        self.lbl_chart_preview.bind("<Button-1>", self.on_chart_preview_clicked)
+        if hasattr(self.lbl_chart_preview, "_label"):
+            self.lbl_chart_preview._label.bind("<Button-1>", self.on_chart_preview_clicked)
+
 
         # 右侧日志输出
         log_box = ctk.CTkFrame(output_frame, fg_color=self.colors["surface_soft"], corner_radius=10, border_width=1, border_color=self.colors["border"])
@@ -2562,6 +2566,27 @@ class ToolkitApp(ctk.CTk):
         except Exception:
             pass
 
+    def on_chart_preview_clicked(self, event):
+        figures = getattr(self, "script_figure_results", [])
+        if not figures:
+            return
+        idx = getattr(self, "current_script_figure_index", 0)
+        if 0 <= idx < len(figures):
+            path = figures[idx]["output_path"]
+            if os.path.exists(path):
+                import subprocess
+                import sys
+                try:
+                    if sys.platform == "win32":
+                        os.startfile(path)
+                    elif sys.platform == "darwin":
+                        subprocess.Popen(["open", path])
+                    else:
+                        subprocess.Popen(["xdg-open", path])
+                except Exception as e:
+                    messagebox.showerror("打开失败", f"无法使用系统程序打开图像：{e}")
+
+
     def show_prev_script_figure(self):
         self.show_script_figure_at(getattr(self, "current_script_figure_index", 0) - 1)
 
@@ -2581,19 +2606,23 @@ class ToolkitApp(ctk.CTk):
         item = figures[index]
 
         try:
-            with Image.open(item["preview_path"]) as src:
-                img = src.convert("RGBA")
+            ext = os.path.splitext(item["preview_path"])[1].lower()
+            if ext in (".svg", ".pdf"):
+                self._update_chart_preview(f"该图表为 {ext.upper()} 格式，无法在软件内预览。\n请点击右侧“打开目录”按钮查看原图。", None)
+            else:
+                with Image.open(item["preview_path"]) as src:
+                    img = src.convert("RGBA")
 
-            w_avail = self.lbl_chart_preview.master.winfo_width() - 28
-            h_avail = self.lbl_chart_preview.master.winfo_height() - 64
-            if w_avail < 80:
-                w_avail = 480
-            if h_avail < 80:
-                h_avail = 320
-            img.thumbnail((w_avail, h_avail), Image.Resampling.LANCZOS)
+                w_avail = self.lbl_chart_preview.master.winfo_width() - 28
+                h_avail = self.lbl_chart_preview.master.winfo_height() - 64
+                if w_avail < 80:
+                    w_avail = 480
+                if h_avail < 80:
+                    h_avail = 320
+                img.thumbnail((w_avail, h_avail), Image.Resampling.LANCZOS)
 
-            ctk_image = ctk.CTkImage(light_image=img, dark_image=img, size=img.size)
-            self._update_chart_preview("", ctk_image)
+                ctk_image = ctk.CTkImage(light_image=img, dark_image=img, size=img.size)
+                self._update_chart_preview("", ctk_image)
         except Exception as e:
             self._update_chart_preview(f"无法加载图像预览：{e}", None)
 
@@ -2622,14 +2651,12 @@ class ToolkitApp(ctk.CTk):
         script_type = script_meta.get("type") or "chart"
 
         output_dir = None
-        preview_dir = None
         output_records = []
         self.script_figure_results = []
         self.current_script_figure_index = 0
 
         if figure_results or table_results:
             output_dir = self.get_script_output_dir(script_name)
-            preview_dir = self.get_script_preview_dir(output_dir)
             self.script_output_dir = output_dir
             if hasattr(self, "btn_open_script_output"):
                 self.btn_open_script_output.configure(state="normal")
@@ -2641,6 +2668,7 @@ class ToolkitApp(ctk.CTk):
 
         configure_matplotlib_chinese_font()
 
+        preview_candidates = []
         saved_figs = set()
         for idx, fig_res in enumerate(figure_results, start=1):
             filename = self._safe_script_output_name(fig_res.filename or f"custom_chart_{idx}.png", f"custom_chart_{idx}.png")
@@ -2667,21 +2695,31 @@ class ToolkitApp(ctk.CTk):
                 continue
 
             fig_id = id(fig_res.fig)
-            if fig_id not in saved_figs:
-                saved_figs.add(fig_id)
-                preview_path = self._unique_path(preview_dir, f"preview_{idx}_{os.path.splitext(os.path.basename(output_path))[0]}.png")
-                try:
-                    fig_res.fig.savefig(preview_path, dpi=150, bbox_inches="tight")
-                    item = {
-                        "result": fig_res,
-                        "output_path": output_path,
-                        "preview_path": preview_path,
-                        "title": fig_res.title,
-                        "filename": os.path.basename(output_path),
-                    }
-                    self.script_figure_results.append(item)
-                except Exception as e:
-                    self.append_script_log(f"图表 {idx} 预览生成失败：{e}\n")
+            root_name, file_ext = os.path.splitext(os.path.basename(output_path))
+            preview_candidates.append({
+                "result": fig_res,
+                "output_path": output_path,
+                "preview_path": output_path,  # 直接预览已存原图
+                "title": fig_res.title,
+                "filename": os.path.basename(output_path),
+                "basename": root_name,
+                "ext": file_ext.lower(),
+                "fig_id": fig_id
+            })
+
+        # 过滤 SVG 同名重复预览：若存在 PNG/JPG 则排除 SVG 预览
+        png_basenames = {c["basename"] for c in preview_candidates if c["ext"] in (".png", ".jpg", ".jpeg")}
+        
+        filtered_results = []
+        seen_fig_ids = set()
+        for c in preview_candidates:
+            if c["ext"] == ".svg" and c["basename"] in png_basenames:
+                continue
+            if c["fig_id"] not in seen_fig_ids:
+                seen_fig_ids.add(c["fig_id"])
+            filtered_results.append(c)
+
+        self.script_figure_results = filtered_results
 
         for idx, tbl_res in enumerate(table_results, start=1):
             import csv
@@ -2712,6 +2750,7 @@ class ToolkitApp(ctk.CTk):
             self._update_chart_preview("暂无图表预览", None)
             if hasattr(self, "script_preview_nav"):
                 self.script_preview_nav.grid_remove()
+
 
         # 2. 按用户确认归档运行历史到工程文件 project.json
         if hasattr(self, 'loaded_teproj_path') and self.loaded_teproj_path and hasattr(self, 'project_data') and self.project_data:
