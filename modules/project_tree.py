@@ -890,6 +890,8 @@ class ProjectTreePanel:
         self.text_preview = ctk.CTkTextbox(frame_preview, font=self.font_code, corner_radius=8, fg_color="#F9FAFB", text_color="#1F2937", border_width=1, border_color="#E5E7EB")
         self.text_preview.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
         self.text_preview.configure(state='disabled')
+        if hasattr(self.text_preview, "_textbox"):
+            self.text_preview._textbox.configure(spacing1=0, spacing2=0, spacing3=0)
 
     def _debounce_zebra_stripes(self, event=None):
         if hasattr(self, '_zebra_timer') and self._zebra_timer:
@@ -1428,6 +1430,49 @@ class ProjectTreePanel:
             warnings_text = "\n".join(warnings)
             text = f"{warnings_text}\n\n{text}"
 
+        # Process F0 data column format to be aligned for continuous vertical coloring
+        lines = text.splitlines()
+        f0_values = []
+        if mode != 'formant':
+            for line in lines:
+                parts = line.split()
+                if len(parts) == 2:
+                    try:
+                        t_val = float(parts[0])
+                        f0_val = float(parts[1])
+                        if f0_val > 0.0:
+                            f0_values.append(f0_val)
+                    except ValueError:
+                        pass
+
+        if f0_values:
+            f0_min = min(f0_values)
+            f0_max = max(f0_values)
+            if f0_max == f0_min:
+                f0_max = f0_min + 1.0
+        else:
+            f0_min = 0.0
+            f0_max = 1.0
+
+        formatted_lines = []
+        for line in lines:
+            if mode != 'formant':
+                parts = line.split()
+                if len(parts) == 2:
+                    try:
+                        t_val = float(parts[0])
+                        f0_val = float(parts[1])
+                        # Format line to align the second column at exactly character index 12
+                        # parts[0] is time (formatted to left-aligned width 10)
+                        # parts[1] is F0 (formatted to left-aligned width 12)
+                        formatted_line = f"{parts[0]:<10}  {parts[1]:<12}"
+                        formatted_lines.append(formatted_line)
+                        continue
+                    except ValueError:
+                        pass
+            formatted_lines.append(line)
+        text = "\n".join(formatted_lines)
+
         self.text_preview.configure(state='normal')
         self.text_preview.delete('1.0', tk.END)
         self.text_preview.insert(tk.END, text)
@@ -1436,6 +1481,29 @@ class ProjectTreePanel:
         self.text_preview.tag_config("fatal_msg", foreground="#EF4444")
         self.text_preview.tag_config("warning_msg", foreground="#F59E0B")
         self.text_preview.tag_config("tip_msg", foreground="#3B82F6")
+
+        # Configure the 21-step red-blue-gray gradient palette
+        if mode != 'formant':
+            blue_rgb = (30, 64, 175)
+            gray_rgb = (243, 244, 246)
+            red_rgb = (185, 28, 28)
+            for i in range(21):
+                r = i / 20.0
+                if r < 0.5:
+                    t = r * 2.0
+                    bg_r = int(blue_rgb[0] + t * (gray_rgb[0] - blue_rgb[0]))
+                    bg_g = int(blue_rgb[1] + t * (gray_rgb[1] - blue_rgb[1]))
+                    bg_b = int(blue_rgb[2] + t * (gray_rgb[2] - blue_rgb[2]))
+                else:
+                    t = (r - 0.5) * 2.0
+                    bg_r = int(gray_rgb[0] + t * (red_rgb[0] - gray_rgb[0]))
+                    bg_g = int(gray_rgb[1] + t * (red_rgb[1] - gray_rgb[1]))
+                    bg_b = int(gray_rgb[2] + t * (red_rgb[2] - gray_rgb[2]))
+                bg_hex = f"#{bg_r:02X}{bg_g:02X}{bg_b:02X}"
+                # Calculate relative luminance to decide foreground color (white or dark gray)
+                lum = 0.299 * bg_r + 0.587 * bg_g + 0.114 * bg_b
+                fg_hex = "#FFFFFF" if lum < 130 else "#1F2937"
+                self.text_preview.tag_config(f"f0_grad_{i}", background=bg_hex, foreground=fg_hex)
 
         lines = text.splitlines()
         for line_idx, line in enumerate(lines, start=1):
@@ -1446,7 +1514,6 @@ class ProjectTreePanel:
             elif line.startswith("[提示]"):
                 self.text_preview.tag_add("tip_msg", f"{line_idx}.0", f"{line_idx}.end")
             else:
-                mode = getattr(self, 'app_state_params', {}).get('analysis_mode', 'f0')
                 if mode == 'formant':
                     start_offset = 0
                     while True:
@@ -1459,15 +1526,19 @@ class ProjectTreePanel:
                         start_offset = idx + 2
                 else:
                     parts = line.split()
-                    if len(parts) == 2 and parts[1] == "0.000000":
-                        first_len = len(parts[0])
-                        sub_str = line[first_len:]
-                        f0_start_offset = sub_str.find("0.000000")
-                        if f0_start_offset != -1:
-                            start_char = first_len + f0_start_offset
-                            pos_start = f"{line_idx}.{start_char}"
-                            pos_end = f"{line_idx}.{start_char + 8}"
-                            self.text_preview.tag_add("zero", pos_start, pos_end)
+                    if len(parts) == 2:
+                        try:
+                            t_val = float(parts[0])
+                            f0_val = float(parts[1])
+                            if f0_val > 0.0:
+                                ratio = (f0_val - f0_min) / (f0_max - f0_min)
+                                ratio = max(0.0, min(1.0, ratio))
+                                grad_idx = int(ratio * 20.0 + 0.5)
+                                self.text_preview.tag_add(f"f0_grad_{grad_idx}", f"{line_idx}.12", f"{line_idx}.24")
+                            else:
+                                self.text_preview.tag_add("zero", f"{line_idx}.12", f"{line_idx}.20")
+                        except ValueError:
+                            pass
 
         self.text_preview.configure(state='disabled')
 
