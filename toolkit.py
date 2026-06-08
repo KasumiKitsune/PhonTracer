@@ -63,6 +63,105 @@ if sys.platform == "win32":
 # UI 自定义组件
 # ==========================================
 
+class CTkScriptList(ctk.CTkScrollableFrame):
+    """
+    A custom scrollable list utilizing CustomTkinter buttons for modern look-and-feel.
+    Items have rounded corners, bolder text when selected, and smooth hover effects.
+    """
+    def __init__(self, master, font_family="Microsoft YaHei", colors=None, **kwargs):
+        super().__init__(master, fg_color="transparent", **kwargs)
+        self.font_family = font_family
+        self.colors = colors or {
+            "primary": "#2563EB",
+            "primary_hover": "#1D4ED8",
+            "text": "#17202A",
+        }
+        self.buttons = {} # iid -> button
+        self._selected_id = None
+        self._select_callback = None
+
+    def get_children(self):
+        return list(self.buttons.keys())
+
+    def selection(self):
+        if self._selected_id is not None:
+            return (self._selected_id,)
+        return ()
+
+    def selection_set(self, iid):
+        if iid not in self.buttons:
+            return
+        
+        # Deselect old
+        if self._selected_id in self.buttons:
+            old_btn = self.buttons[self._selected_id]
+            old_btn.configure(
+                fg_color="transparent",
+                text_color=self.colors.get("text", "#17202A"),
+                hover_color=("#F3F4F6", "#262930"),
+                font=ctk.CTkFont(family=self.font_family, size=13, weight="normal")
+            )
+        
+        self._selected_id = iid
+        
+        # Select new
+        new_btn = self.buttons[iid]
+        new_btn.configure(
+            fg_color=self.colors.get("primary", "#2563EB"),
+            text_color="#FFFFFF",
+            hover_color=self.colors.get("primary_hover", "#1D4ED8"),
+            font=ctk.CTkFont(family=self.font_family, size=13, weight="bold")
+        )
+        
+        if self._select_callback:
+            class MockEvent:
+                def __init__(self, widget):
+                    self.widget = widget
+            self._select_callback(MockEvent(self))
+
+    def delete(self, iid):
+        if iid in self.buttons:
+            self.buttons[iid].destroy()
+            del self.buttons[iid]
+        if self._selected_id == iid:
+            self._selected_id = None
+
+    def insert(self, parent, index, iid, text):
+        btn = ctk.CTkButton(
+            self,
+            text=text,
+            anchor="w",
+            height=36,
+            corner_radius=8,
+            fg_color="transparent",
+            text_color=self.colors.get("text", "#17202A"),
+            hover_color=("#F1F5F9", "#262930"),
+            font=ctk.CTkFont(family=self.font_family, size=13, weight="normal"),
+            command=lambda: self.selection_set(iid)
+        )
+        # Force column configuration so the text always starts at a fixed left margin (12px)
+        # and doesn't get centered or shifted due to empty column weights in CTkButton's default grid.
+        btn.grid_columnconfigure(0, weight=0, minsize=12)
+        btn.grid_columnconfigure(1, weight=0, minsize=0)
+        btn.grid_columnconfigure(2, weight=0, minsize=0)
+        btn.grid_columnconfigure(3, weight=0)
+        btn.grid_columnconfigure(4, weight=1, minsize=12)
+        
+        # Configure inner label anchor to 'w' so that if the button is narrower than the text,
+        # the text is clipped on the right and never on the left.
+        if btn._text_label is not None:
+            btn._text_label.configure(anchor="w", justify="left")
+
+        btn.pack(fill=tk.X, pady=2, padx=2)
+        self.buttons[iid] = btn
+
+    def bind(self, event_name, callback, add=None):
+        if event_name == "<<TreeviewSelect>>":
+            self._select_callback = callback
+        else:
+            super().bind(event_name, callback, add)
+
+
 class CTkReleaseButton(ctk.CTkButton):
     """
     自定义按钮类，将 command 触发时机从“按下”改为“松开且在按钮范围内”。
@@ -1960,24 +2059,8 @@ class ToolkitApp(ctk.CTk):
         tree_frame = ctk.CTkFrame(left_panel, fg_color="transparent")
         tree_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=5)
 
-        style = ttk.Style()
-        style.configure("Script.Treeview",
-                        font=("Microsoft YaHei", 11),
-                        rowheight=36,
-                        background="#FFFFFF",
-                        fieldbackground="#FFFFFF",
-                        foreground="#1F2937",
-                        borderwidth=0,
-                        relief="flat")
-        style.map("Script.Treeview", background=[('selected', '#3B82F6')], foreground=[('selected', '#FFFFFF')])
-
-        self.script_tree = ttk.Treeview(tree_frame, show="tree", selectmode="browse", style="Script.Treeview")
-        self.script_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        # 自定义滚动条
-        script_scroll = ctk.CTkScrollbar(tree_frame, orientation="vertical", command=self.script_tree.yview, width=12)
-        script_scroll.pack(side=tk.RIGHT, fill=tk.Y, padx=1, pady=1)
-        self.script_tree.configure(yscrollcommand=script_scroll.set)
+        self.script_tree = CTkScriptList(tree_frame, font_family=self.font_family, colors=self.colors)
+        self.script_tree.pack(fill=tk.BOTH, expand=True)
         self.script_tree.bind("<<TreeviewSelect>>", self.on_script_selected)
 
         # 常用操作按钮
@@ -2068,9 +2151,6 @@ class ToolkitApp(ctk.CTk):
         self.btn_open_script_output.pack(side=tk.LEFT, padx=(0, 10))
         self.btn_open_script_output.configure(state="disabled")
 
-        self.lbl_script_proj_summary = ctk.CTkLabel(control_frame, text="数据状态: 未加载工程", font=self.font_small, text_color=self.colors["muted"], anchor="e", justify="right")
-        self.lbl_script_proj_summary.pack(side=tk.RIGHT, fill="x", expand=True)
-
         # 3. 输出预览 & 日志区
         output_frame = ctk.CTkFrame(right_panel, fg_color="transparent")
         output_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=(5, 20))
@@ -2113,9 +2193,30 @@ class ToolkitApp(ctk.CTk):
         log_box.grid_rowconfigure(1, weight=1)
         log_box.grid_columnconfigure(0, weight=1)
 
-        ctk.CTkLabel(log_box, text="运行日志:", font=ctk.CTkFont(family=self.font_family, size=11, weight="bold"), text_color=self.colors["muted"]).grid(row=0, column=0, sticky="w", padx=10, pady=(5, 2))
+        log_header_frame = ctk.CTkFrame(log_box, fg_color="transparent")
+        log_header_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=(5, 2))
+
+        log_title_lbl = ctk.CTkLabel(log_header_frame, text="运行日志:", font=ctk.CTkFont(family=self.font_family, size=11, weight="bold"), text_color=self.colors["muted"])
+        log_title_lbl.pack(side=tk.LEFT, anchor="w")
+
+        # 复制按钮
+        self.btn_copy_log = ctk.CTkButton(
+            log_header_frame,
+            text="复制",
+            width=40,
+            height=20,
+            font=ctk.CTkFont(family=self.font_family, size=10),
+            corner_radius=4,
+            fg_color=self.colors["primary_soft"],
+            text_color=self.colors["primary"],
+            hover_color=self.colors["border_strong"],
+            command=self.copy_log_to_clipboard
+        )
+        self.btn_copy_log.pack(side=tk.RIGHT, padx=(5, 0))
+
         self.txt_script_log = ctk.CTkTextbox(log_box, font=ctk.CTkFont(family="Consolas", size=11), fg_color="transparent")
         self.txt_script_log.grid(row=1, column=0, sticky="nsew", padx=5, pady=(0, 5))
+        self.txt_script_log.insert(tk.END, "数据状态: 未加载工程\n")
         self.txt_script_log.configure(state="disabled")
 
         # 加速运行日志滚轮
@@ -2132,6 +2233,31 @@ class ToolkitApp(ctk.CTk):
         children = self.script_tree.get_children()
         if children:
             self.script_tree.selection_set(children[0])
+
+    def copy_log_to_clipboard(self):
+        try:
+            log_text = self.txt_script_log.get("1.0", tk.END).strip()
+            self.clipboard_clear()
+            self.clipboard_append(log_text)
+            self.update()
+            
+            self.btn_copy_log.configure(
+                text="✔已复制",
+                fg_color=self.colors["success_soft"],
+                text_color=self.colors["success"]
+            )
+            def reset():
+                try:
+                    self.btn_copy_log.configure(
+                        text="复制",
+                        fg_color=self.colors["primary_soft"],
+                        text_color=self.colors["primary"]
+                    )
+                except Exception:
+                    pass
+            self.after(1000, reset)
+        except Exception as e:
+            messagebox.showerror("错误", f"复制失败：{e}")
 
     def load_scripts_to_tree(self):
         from modules.script_manager import load_all_scripts
@@ -2315,12 +2441,18 @@ class ToolkitApp(ctk.CTk):
         self.run_cancel_event = threading.Event()
 
         def execute():
-            from modules.script_runner import run_custom_script
-            import matplotlib.pyplot as plt
-            plt.close('all') # 运行前清理图表
+            try:
+                from modules.script_runner import run_custom_script
+                import matplotlib.pyplot as plt
+                plt.close('all') # 运行前清理图表
 
-            res, logs, err = run_custom_script(code, dataset_items, timeout=30, cancel_event=self.run_cancel_event)
-            self.after(0, lambda: self.on_script_finished(res, logs, err))
+                res, logs, err = run_custom_script(code, dataset_items, timeout=30, cancel_event=self.run_cancel_event)
+                self.after(0, lambda: self.on_script_finished(res, logs, err))
+            except Exception as e:
+                import traceback
+                tb = traceback.format_exc()
+                err_msg = f"发生意外错误：\n{e}\n\n堆栈信息：\n{tb}"
+                self.after(0, lambda: self.on_script_finished(None, [], err_msg))
 
         start_safe_thread(execute)
 
@@ -2663,8 +2795,11 @@ class ToolkitApp(ctk.CTk):
                     pass
 
     def update_script_tab_project_summary(self):
+        self.txt_script_log.configure(state="normal")
+        self.txt_script_log.delete("1.0", tk.END)
         if not hasattr(self, 'project_data') or not self.project_data:
-            self.lbl_script_proj_summary.configure(text="工程数据状态: 未加载工程", text_color=self.colors["muted"])
+            self.txt_script_log.insert(tk.END, "工程数据状态: 未加载工程\n")
+            self.txt_script_log.configure(state="disabled")
             return
 
         spk_count = len(self.project_data.get("speakers", {}))
@@ -2679,7 +2814,8 @@ class ToolkitApp(ctk.CTk):
                     groups.add(g)
 
         summary_text = f"工程: {os.path.basename(self.loaded_teproj_path)}\n发音人数: {spk_count} | 条目总数: {item_count}\n声调分组数: {len(groups)} ({', '.join(sorted(list(groups))) if groups else '无'})"
-        self.lbl_script_proj_summary.configure(text=summary_text, text_color=self.colors["success"])
+        self.txt_script_log.insert(tk.END, "=== 工程数据状态 ===\n" + summary_text + "\n")
+        self.txt_script_log.configure(state="disabled")
 
     def show_prompt_dialog(self):
         AIPromptDialog(self, self.project_data if hasattr(self, 'project_data') else None)
@@ -2857,7 +2993,7 @@ class ToolkitApp(ctk.CTk):
             top_row.pack(fill=tk.X, anchor="n", pady=5)
 
             info_frame = ctk.CTkFrame(top_row, fg_color="#F3F4F6", corner_radius=8)
-            info_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5), pady=5)
+            info_frame.pack(fill=tk.X, expand=True, pady=(0, 5))
 
             ctk.CTkLabel(info_frame, text="发音人与音频", font=ctk.CTkFont(family="Microsoft YaHei", size=12, weight="bold"), text_color="#111827").grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=5)
             tab_mode = spk.get("tab_mode", "未知模式")
@@ -2876,7 +3012,7 @@ class ToolkitApp(ctk.CTk):
 
             # Engine params frame
             param_frame = ctk.CTkFrame(top_row, fg_color="#F3F4F6", corner_radius=8)
-            param_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(5, 0), pady=5)
+            param_frame.pack(fill=tk.X, expand=True, pady=(5, 0))
 
             ctk.CTkLabel(param_frame, text="分析引擎参数", font=ctk.CTkFont(family="Microsoft YaHei", size=12, weight="bold"), text_color="#111827").grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=5)
             last_params = spk.get("last_params", {})
@@ -3323,6 +3459,8 @@ class AIPromptDialog(ctk.CTkToplevel):
         super().__init__(parent)
         self.parent = parent
         self.project_data = project_data
+        self.colors = parent.colors
+        self.font_family = getattr(parent, "font_family", "Microsoft YaHei")
 
         self.title("生成 AI 脚本提示词")
         self.geometry("620x620")
@@ -3629,7 +3767,27 @@ class AIPromptDialog(ctk.CTkToplevel):
         self._build_goal_oriented_tab(target_tab)
 
         # 10. 提示词预览
-        self._section_label(scroll, "10. 提示词生成预览")
+        preview_header = ctk.CTkFrame(scroll, fg_color="transparent")
+        preview_header.pack(fill="x", padx=10, pady=(15, 2))
+
+        preview_title = ctk.CTkLabel(preview_header, text="10. 提示词生成预览", font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), text_color="#374151")
+        preview_title.pack(side="left", anchor="w")
+
+        # 复制按钮
+        self.btn_copy_prompt_preview = ctk.CTkButton(
+            preview_header,
+            text="复制",
+            width=40,
+            height=20,
+            font=ctk.CTkFont(family=self.font_family, size=10),
+            corner_radius=4,
+            fg_color=self.colors["primary_soft"],
+            text_color=self.colors["primary"],
+            hover_color=self.colors["border_strong"],
+            command=self.copy_prompt_preview
+        )
+        self.btn_copy_prompt_preview.pack(side="right", padx=(5, 0))
+
         self.txt_preview = ctk.CTkTextbox(
             scroll, height=150, font=ctk.CTkFont(family="Consolas", size=11),
             border_width=1,
@@ -3699,19 +3857,12 @@ class AIPromptDialog(ctk.CTkToplevel):
         )
         btn_cancel.pack(side="left", padx=20, pady=10)
 
-        btn_preview = ctk.CTkButton(
-            bottom_frame, text="仅生成预览", fg_color="#E2E8F0", text_color="#1F2937", hover_color="#CBD5E1",
-            font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), height=36, corner_radius=18,
-            command=self.generate_preview
-        )
-        btn_preview.pack(side="left", padx=10, pady=10)
-
-        btn_copy = ctk.CTkButton(
-            bottom_frame, text="生成并复制提示词", fg_color="#6366F1", text_color="white", hover_color="#4F46E5",
+        self.btn_copy = ctk.CTkButton(
+            bottom_frame, text="生成提示词", fg_color="#6366F1", text_color="white", hover_color="#4F46E5",
             font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), height=36, corner_radius=18,
             command=self.generate_and_copy
         )
-        btn_copy.pack(side="right", padx=20, pady=10)
+        self.btn_copy.pack(side="right", padx=20, pady=10)
 
         # 初始打包隐藏
         self.on_scope_change(self.var_scope.get())
@@ -3889,6 +4040,32 @@ class AIPromptDialog(ctk.CTkToplevel):
         }
         return selections
 
+    def copy_prompt_preview(self):
+        try:
+            prompt_text = self.txt_preview.get("1.0", tk.END).strip()
+            self.clipboard_clear()
+            self.clipboard_append(prompt_text)
+            self.update()
+            
+            if hasattr(self, "btn_copy_prompt_preview"):
+                self.btn_copy_prompt_preview.configure(
+                    text="✔已复制",
+                    fg_color=self.colors.get("success_soft", "#D1FAE5"),
+                    text_color=self.colors.get("success", "#10B981")
+                )
+                def reset():
+                    try:
+                        self.btn_copy_prompt_preview.configure(
+                            text="复制",
+                            fg_color=self.colors.get("primary_soft", "#DBEAFE"),
+                            text_color=self.colors.get("primary", "#2563EB")
+                        )
+                    except Exception:
+                        pass
+                self.after(1000, reset)
+        except Exception as e:
+            messagebox.showerror("错误", f"复制失败：{e}")
+
     def generate_preview(self):
         from modules.script_prompt import generate_ai_prompt
         selections = self.generate_prompt_dict()
@@ -3902,11 +4079,32 @@ class AIPromptDialog(ctk.CTkToplevel):
         selections = self.generate_prompt_dict()
         prompt_text = generate_ai_prompt(self.project_data, selections)
 
-        self.clipboard_clear()
-        self.clipboard_append(prompt_text)
+        self.txt_preview.delete("1.0", tk.END)
+        self.txt_preview.insert("1.0", prompt_text)
 
-        messagebox.showinfo("成功", "AI 脚本提示词已成功生成并复制到剪贴板！")
-        self.destroy()
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(prompt_text)
+            self.update()
+            
+            if hasattr(self, "btn_copy"):
+                self.btn_copy.configure(
+                    text="✔已生成并复制",
+                    fg_color=self.colors.get("success", "#10B981"),
+                    hover_color=self.colors.get("success_hover", "#059669")
+                )
+                def reset():
+                    try:
+                        self.btn_copy.configure(
+                            text="生成提示词",
+                            fg_color="#6366F1",
+                            hover_color="#4F46E5"
+                        )
+                    except Exception:
+                        pass
+                self.after(1000, reset)
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
