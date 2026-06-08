@@ -25,6 +25,7 @@
 !assets/**
 !tests/**
 !.github/**
+!工作流/Toolkit脚本/**
 
 # 5. [已移除 example/ 白名单]
 
