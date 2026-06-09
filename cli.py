@@ -185,6 +185,11 @@ Type 'help' or '?' to list commands. Use 'agent_guide' for AI operating rules.
         self.original_stdout = sys.stdout
         self.project_manager = ProjectManager(self)
 
+    def onecmd(self, line):
+        if isinstance(line, str):
+            line = line.replace('\\', '/')
+        return super().onecmd(line)
+
     def _emit(self, success=True, message="", **payload):
         data = {"success": success}
         if message:
@@ -388,7 +393,13 @@ Type 'help' or '?' to list commands. Use 'agent_guide' for AI operating rules.
                             self.params[k] = v.lower() in ('true', '1', 'yes')
                         elif k in ('pts', 'pitch_floor', 'pitch_ceiling', 'formant_count'):
                             self.params[k] = int(v)
-                        elif k in ('analysis_mode', 'formant_sample_strategy'):
+                        elif k == 'analysis_mode':
+                            val_str = str(v).lower().strip()
+                            if val_str not in ('f0', 'formant'):
+                                print(json.dumps({"success": False, "error": f"Invalid value for analysis_mode: must be 'f0' or 'formant'"}))
+                                return
+                            self.params[k] = val_str
+                        elif k == 'formant_sample_strategy':
                             self.params[k] = str(v)
                         elif k in ('formant_max_hz', 'formant_window_length', 'formant_pre_emphasis'):
                             self.params[k] = float(v)
@@ -432,7 +443,7 @@ Type 'help' or '?' to list commands. Use 'agent_guide' for AI operating rules.
 AI 操作守则：优先只使用本 CLI。除非用户明确要求，不要直接编辑源码、移动/删除文件、
 不要绕过 CLI 去操作工程数据。需要说明时，请先用 `status`、`list_items`、`agent_guide` 确认。
 
-PhonTracer 是一款高精度的声学声调格局分析工具。
+PhonTracer 是一款高精度的声学声调/共振峰格局分析工具。
 
 --- 工作流生命周期 ---
 1. 导入音频：
@@ -440,10 +451,12 @@ PhonTracer 是一款高精度的声学声调格局分析工具。
      `load_long <音频路径>`
    - 导入批量独立短音频文件：
      `load_batch <路径1> <路径2> ...`
-2. 导入字词表（进行音节切分/匹配）：
+2. 导入字词表或 TextGrid（进行音节切分/匹配）：
    - `apply_wordlist <字词表路径> [匹配模式]`
-     * 字词表格式：支持按分组名、回车或Tab分隔（例如："组1\n演讲\n工作"）。
+     * 字词表格式：支持按分组名、回车或Tab分隔（例如："组1\\n演讲\\n工作"）。
      * 匹配模式：'fuzzy'（模糊文件名匹配，默认）或 'order'（按物理顺序匹配）。
+   - `apply_textgrid <TextGrid路径>` (仅长音频模式下使用，导入 TextGrid 音段并对齐)
+   - `batch_textgrid_import <TextGrid文件或目录...>` (导入多个 TextGrid 并与已有独立音频做文件名自动匹配)
 3. 微调边界或声学提取参数：
    - 精细修正某个音节的自动 VAD 时间边界：
      `modify_bounds <音节ID> <开始时间> <结束时间>`
@@ -451,13 +464,15 @@ PhonTracer 是一款高精度的声学声调格局分析工具。
      `modify_params <音节ID> pitch_floor=30 voicing_threshold=0.20`
    - 使用最新修改的全局参数，重新批量计算整个项目的所有项：
      `recalculate`
-4. 数据导出：
+4. 数据导出与报告：
    - `export <格式> <输出路径> [规则] [目标范围] [高级参数=值 ...]`
      * 支持的导出格式：txt, xlsx, line_chart, kde, wav, merged_wav, textgrid, contour (声调轮廓图), distribution (声调分布图), density (时序密度图), quality (数据质量检查), overview_heatmap (声调组别概览图)
      * 共振峰专有导出格式：formant_table (共振峰数据表), formant_space (元音舌位图), formant_trajectory (共振峰时序轨迹图), formant_density (共振峰密度分布图), formant_overview_heatmap (共振峰组别概览图)
+   - `report_export <路径.teproj> <输出目录> [md|excel|both] [include_cache=true|false]`
+     * 导出完整项目的方法学研究报告和科学数据归档文件。
 
 --- 声学参数与调优指南 ---
-* analysis_mode: 分析模式，可选 'pitch' (基频模式) 或 'formant' (共振峰模式，默认：'pitch')
+* analysis_mode: 分析模式，可选 'f0' (基频/声调模式) 或 'formant' (共振峰模式，默认：'f0')
 * pts: 等分插值采样点数（默认：11）
 * db: VAD 切分能量落差阈值（默认：60.0）
 * skip_front: 排除声母时长，避免声母辅音浊化干扰（默认：0.0）
@@ -480,7 +495,21 @@ PhonTracer 是一款高精度的声学声调格局分析工具。
 - `recalculate`: 基于全局最新参数，批量重算整个项目。
 - `detect_f0 [apply_preset]`: 自动估算发音人的 F0 分布并给出保守/推荐/精细范围。可直接应用预设（conservative, recommended, fine）。
 - `project_export <路径.teproj>` / `project_import <路径.teproj>`: 导出或导入完整工程。
+- `project_save`: 保存工程数据到工作区。
 - `autosave on|off|now`: 开启、关闭或立即执行工程自动保存。
+- `project_preview <路径.teproj>`: 预览并展示 teproj 工程内部数据明细与发音人摘要。
+- `project_convert_zip <路径.teproj> <目标.zip>`: 将工程包另存为普通 ZIP 压缩包。
+- `batch_textgrid_import <TextGrid文件或目录...>`: 批量导入 TextGrid 并与已有独立音频做文件名自动匹配。
+- `import_batch_and_export <音频与TextGrid目录> <输出.teproj>`: 一键批量导入并导出为 teproj 工程。
+- `report_export <路径.teproj> <输出目录> [md|excel|both] [include_cache=true|false]`: 导出项目研究方法报告与数据档案。
+- `list_scripts`: 查看自定义脚本库列表。
+- `script_info <脚本ID>`: 查看特定脚本的代码与说明。
+- `run_script <脚本ID>`: 运行指定的自定义脚本。
+- `script_save <脚本ID|new> <名称> <说明> <类型:chart> <代码文件路径>`: 新建或保存自定义脚本。
+- `script_delete <脚本ID>`: 删除自定义脚本。
+- `script_import <脚本JSON路径>`: 导入自定义脚本。
+- `script_export <脚本ID> <目标JSON路径>`: 导出自定义脚本。
+- `script_prompt [键=值 ...]` (别名 `generate_prompt`): 交互式生成 AI 自定义脚本提示词。
 - `tool_merge <输出.wav> <间隔秒> <音频1> <音频2> ...`: 拼接多个短音频。
 - `tool_split <长音频> <字表.txt> <输出目录> [缓冲秒] [trim]`: 按字表拆分长音频。
 - `tool_sort_batch <字表.txt> [音频路径...]`: 按字表模糊排序独立音频。
@@ -496,7 +525,7 @@ AI operating rule: prefer this CLI as the control surface. Unless the user clear
 asks for it, do not edit source files, move/delete files, or bypass the CLI to
 change project data. Use `status`, `list_items`, and `agent_guide` to orient first.
 
-PhonTracer is a high-accuracy acoustic tone analysis tool.
+PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
 
 --- WORKFLOW LIFECYCLE ---
 1. Load Audio:
@@ -504,10 +533,12 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
      `load_long <filepath>`
    - For multiple isolated sound files:
      `load_batch <file1> <file2> ...`
-2. Apply Wordlist (Syllable Segmenting):
+2. Apply Wordlist or TextGrid (Syllable Segmenting):
    - `apply_wordlist <wordlist_filepath> [match_mode]`
-     * Wordlist structure: Tab/Newline grouped words (e.g., "组1\n演讲\n工作").
+     * Wordlist structure: Tab/Newline grouped words (e.g., "group1\\nword1\\nword2").
      * match_mode: 'fuzzy' (fuzzy filename matching) or 'order' (strict order matching).
+   - `apply_textgrid <textgrid_filepath>` (long audio mode: segment and align by TextGrid)
+   - `batch_textgrid_import <tg_file_or_dir...>` (batch audio mode: import and match TextGrids to audios)
 3. Fine-Tune boundaries or acoustic parameters:
    - To fine-tune VAD time boundaries of a specific syllable:
      `modify_bounds <item_id> <start> <end>`
@@ -515,14 +546,16 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
      `modify_params <item_id> pitch_floor=30 voicing_threshold=0.20`
    - To recalculate all items globally with updated global parameters:
      `recalculate`
-4. Export:
+4. Export and Reports:
    - `export <format> <output_file> [rule] [target] [key=val ...]`
      * format: txt, xlsx, line_chart, kde, wav, merged_wav, textgrid, contour, distribution, density, quality, overview_heatmap
      * formant formats: formant_table (Excel table), formant_space (vowel chart), formant_trajectory (trajectory), formant_density (density), formant_overview_heatmap (group heatmap)
+   - `report_export <path.teproj> <out_dir> [md|excel|both] [include_cache=true|false]`
+     * Export research methodologies reports and data archives.
 
 --- CURRENT CONFIG & SCHEMAS ---
 - Global parameters (modifiable via `set_params`):
-  * analysis_mode: Analysis mode, 'pitch' or 'formant' (default: 'pitch')
+  * analysis_mode: Analysis mode, 'f0' or 'formant' (default: 'f0')
   * pts: Number of interpolation points (default: 11)
   * db: VAD energy threshold (default: 60.0)
   * skip_front: Avoid segmenting consonant onset duration (default: 0.0)
@@ -545,7 +578,21 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
 - `recalculate`: Recalculate VAD boundaries & F0 curves globally.
 - `detect_f0 [apply_preset]`: Estimate speaker F0 distribution and get conservative/recommended/fine range suggestions. Can apply preset directly (conservative, recommended, fine).
 - `project_export <path.teproj>` / `project_import <path.teproj>`: Save or load a full project.
+- `project_save`: Save project data to workspace.
 - `autosave on|off|now`: Enable, disable, or immediately run project autosave.
+- `project_preview <path.teproj>`: Preview metadata and speaker details of a teproj project file.
+- `project_convert_zip <path.teproj> <dest.zip>`: Save teproj archive as a standard ZIP file.
+- `batch_textgrid_import <tg_file_or_dir...>`: Import multiple TextGrids and match them to batch audios.
+- `import_batch_and_export <folder_path> <output.teproj>`: One-step import folder and export to teproj.
+- `report_export <path.teproj> <out_dir> [md|excel|both] [include_cache]`: Export research methods report and data archives.
+- `list_scripts`: List all custom scripts in library.
+- `script_info <script_id>`: Show info and source code of a script.
+- `run_script <script_id>`: Run a custom script.
+- `script_save <id|new> <name> <description> <type> <code_file_path>`: Save/create a custom script.
+- `script_delete <script_id>`: Delete a custom script.
+- `script_import <json_path>`: Import a custom script from a JSON file.
+- `script_export <script_id> <dest_json_path>`: Export a custom script to a JSON file.
+- `script_prompt [key=val ...]` (alias `generate_prompt`): Interactively generate AI prompt for custom script writing.
 - `tool_merge <output.wav> <gap_sec> <audio1> <audio2> ...`: Merge short audios.
 - `tool_split <long_audio> <wordlist.txt> <output_dir> [buffer_sec] [trim]`: Split long audio by wordlist.
 - `tool_sort_batch <wordlist.txt> [audio_paths...]`: Fuzzy-sort batch audio paths by wordlist.
@@ -557,7 +604,7 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
 
     def do_agent_guide(self, arg):
         """
-        Show operating rules for AI agents.
+        Show operating rules and workflow paths for AI agents.
         Usage: agent_guide
         """
         self._emit(
@@ -567,13 +614,55 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
                 "你不是来写自动化脚本的，只能作为 PhonTracer CLI 操作者工作。",
                 "每次只能输入一个 PhonTracer CLI 内置命令。",
                 "必须等待并阅读返回结果后再决定下一步，禁止提前生成命令清单或一次性灌入多条命令。",
-                "禁止创建或运行任何额外脚本文件，包括 .bat、.cmd、.ps1、.py、.r、.praat、.js、.vbs 等任何外部脚本或命令。",
+                "禁止创建或运行任何额外脚本文件来绕过 CLI，包括 .bat、.cmd、.ps1、.py 等外部自动化脚本（但可以在用户指导下使用内置的 script_save 保存和 run_script 运行 PhonTracer 内置自定义脚本）。",
                 "如果 CLI 返回 success:false、出现警告、路径不匹配、音频和字表无法确认对应关系，或当前 AI 工具无法稳定交互运行 CLI，必须立即停止并向用户说明情况，等待用户确认。",
                 "最终必须先 project_export 导出完整 .teproj 工程包，确保可复现；然后再按用户要求导出 xlsx/TextGrid/wav/图表等结果文件。"
             ],
+            task_paths={
+                "process_long_audio_from_scratch": {
+                    "description": "从零开始导入并处理单条长音频",
+                    "steps": [
+                        "1. load_long <filepath> (加载长音频)",
+                        "2. apply_wordlist <wordlist_filepath> (切分音节) 或 apply_textgrid <textgrid_filepath>",
+                        "3. status / list_items warnings (检查切分状态/警告)",
+                        "4. modify_bounds / modify_params (可选：对特定项微调边界或参数)",
+                        "5. recalculate (如果进行了微调或全局参数修改，重算全部)",
+                        "6. project_export <output.teproj> (导出完整工程，供用户和后续复现)",
+                        "7. export <format> <output_path> (根据需求导出所需图表或数据表)"
+                    ]
+                },
+                "inspect_and_adjust_existing_project": {
+                    "description": "加载已有 teproj 工程并进行检查/修改/导出",
+                    "steps": [
+                        "1. project_import <filepath.teproj> (载入工程)",
+                        "2. status / list_items (评估已有音节状态)",
+                        "3. set_params / modify_bounds / modify_params (进行参数调优或手动校对)",
+                        "4. recalculate (如果做了调整，执行全局重新计算)",
+                        "5. project_export <filepath.teproj> (再次导出工程以保存进度)",
+                        "6. export <format> <output_path> (导出最终研究产物)"
+                    ]
+                },
+                "batch_textgrid_import_workflow": {
+                    "description": "批量短音频与批量 TextGrid 对齐后在工程中继续分析",
+                    "steps": [
+                        "1. load_batch <audio_paths...> (加载所有音频文件)",
+                        "2. batch_textgrid_import <textgrid_paths...> (导入所有对应的 TextGrid 并与音频做文件名对齐)",
+                        "3. status / list_items (检查匹配和基频提取警告)",
+                        "4. project_export <filepath.teproj> (保存为 .teproj 工程)"
+                    ]
+                },
+                "run_custom_scripts": {
+                    "description": "运行项目中的自定义 Python 脚本",
+                    "steps": [
+                        "1. project_import <filepath.teproj> (导入工程以确保上下文加载)",
+                        "2. list_scripts (查看已保存/内置脚本库)",
+                        "3. script_info <script_id> (检查特定脚本的元信息与代码安全)",
+                        "4. run_script <script_id> (运行脚本并查看生成的数据与图表)"
+                    ]
+                }
+            },
             next_steps=["status", "help", "list_items all"]
         )
-
 
     def do_speakers(self, arg):
         """
@@ -3749,6 +3838,509 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
             tb = traceback.format_exc()
             self._emit(False, error=f"执行发生意外错误: {e}", traceback=tb)
 
+    def do_batch_textgrid_import(self, arg):
+        """
+        Import multiple TextGrid files to match currently loaded batch audios.
+        Usage: batch_textgrid_import <tg_file_or_dir1> [tg_file_or_dir2 ...]
+        """
+        if self.mode != 'batch' or not self.batch_paths:
+            self._emit(False, error="This command requires batch mode with loaded audio paths. Use load_batch first.")
+            return
+
+        args = shlex.split(arg)
+        if not args:
+            self._emit(False, error="Usage: batch_textgrid_import <tg_file_or_dir1> [tg_file_or_dir2 ...]")
+            return
+
+        import os
+        tg_files = []
+        for path in args:
+            if os.path.isdir(path):
+                for f in os.listdir(path):
+                    if f.lower().endswith('.textgrid'):
+                        tg_files.append(os.path.join(path, f))
+            elif os.path.isfile(path) and path.lower().endswith('.textgrid'):
+                tg_files.append(path)
+            else:
+                self._emit(False, error=f"Invalid file or directory path, or not a TextGrid: {path}")
+                return
+
+        if not tg_files:
+            self._emit(False, error="No TextGrid files found from the arguments.")
+            return
+
+        import re
+        def natural_sort_key(s):
+            return [int(text) if text.isdigit() else text.lower()
+                    for text in re.split('([0-9]+)', s)]
+
+        sorted_audios = sorted(self.batch_paths, key=natural_sort_key)
+        sorted_tgs = sorted(tg_files, key=natural_sort_key)
+
+        matched_audio_to_tg = self._match_audio_to_textgrid(sorted_audios, sorted_tgs)
+        
+        # Clear existing items for the active speaker and compute new ones
+        self.items.clear()
+        self._process_speaker_batch_items(self.current_speaker, sorted_audios, matched_audio_to_tg, self.params)
+
+        # Recompute groups list
+        seen_groups = []
+        for item in self.items.values():
+            g = item.get('group', '导入内容')
+            if g not in seen_groups:
+                seen_groups.append(g)
+        self.groups = seen_groups
+
+        self._after_state_change("batch_textgrid_import")
+        
+        matched_count = sum(1 for ap in sorted_audios if ap in matched_audio_to_tg)
+        self._emit(
+            True,
+            f"Successfully matched and imported {matched_count} TextGrid files for {len(sorted_audios)} audios.",
+            matched_count=matched_count,
+            total_audios=len(sorted_audios)
+        )
+
+    def do_report_export(self, arg):
+        """
+        Export research reports from a .teproj project.
+        Usage: report_export <teproj_path> <out_dir> [format: md|excel|both] [include_cache: true|false]
+        Default format: both, default include_cache: true
+        """
+        args = shlex.split(arg)
+        if len(args) < 2:
+            self._emit(False, error="Usage: report_export <teproj_path> <out_dir> [format: md|excel|both] [include_cache: true|false]")
+            return
+
+        teproj_path = args[0]
+        out_dir = args[1]
+        fmt = 'both'
+        inc_cache = True
+
+        for item in args[2:]:
+            item_lower = item.lower().strip()
+            if '=' in item_lower:
+                k, v = item_lower.split('=', 1)
+                k = k.strip()
+                v = v.strip()
+                if k == 'format':
+                    fmt = v
+                elif k in ('include_cache', 'cache'):
+                    inc_cache = v in ('true', '1', 'yes')
+            elif item_lower in ('true', 'false', '1', '0', 'yes', 'no'):
+                inc_cache = item_lower in ('true', '1', 'yes')
+            elif item_lower in ('md', 'excel', 'both'):
+                fmt = item_lower
+            elif item_lower == 'include_cache' or item_lower == 'cache':
+                inc_cache = True
+            elif item_lower == 'no-cache':
+                inc_cache = False
+
+        if not os.path.exists(teproj_path):
+            self._emit(False, error=f"File not found: {teproj_path}")
+            return
+
+        if not os.path.exists(out_dir):
+            try:
+                os.makedirs(out_dir, exist_ok=True)
+            except Exception as e:
+                self._emit(False, error=f"Failed to create output directory: {e}")
+                return
+
+        if fmt not in ('md', 'excel', 'both'):
+            self._emit(False, error=f"Invalid format: {fmt}. Must be md, excel, or both")
+            return
+
+        from modules.report_generator import export_reports_from_teproj
+        try:
+            export_markdown = (fmt in ("both", "md"))
+            export_excel = (fmt in ("both", "excel"))
+            exported_files, base_name = export_reports_from_teproj(
+                teproj_path,
+                out_dir,
+                export_markdown=export_markdown,
+                export_excel=export_excel,
+                include_cache_details=inc_cache
+            )
+            self._emit(
+                True,
+                f"Successfully exported research reports to {out_dir}",
+                files=[os.path.basename(f) for f in exported_files]
+            )
+        except Exception as e:
+            self._emit(False, error=str(e))
+
+    def do_project_preview(self, arg):
+        """
+        Show a text preview of the contents of a .teproj project file.
+        Usage: project_preview <teproj_path> [format=text|json]
+        """
+        args = shlex.split(arg)
+        if not args:
+            self._emit(False, error="Usage: project_preview <teproj_path> [format=text|json]")
+            return
+
+        teproj_path = args[0]
+        fmt = 'json'
+        for item in args[1:]:
+            if '=' in item:
+                k, v = item.split('=', 1)
+                k = k.lower().strip()
+                v = v.strip().lower()
+                if k == 'format':
+                    fmt = v
+            else:
+                val = item.lower().strip()
+                if val in ('text', 'json'):
+                    fmt = val
+
+        if not os.path.exists(teproj_path):
+            self._emit(False, error=f"File not found: {teproj_path}")
+            return
+
+        from modules.project_manager import read_project_metadata_from_archive
+        from modules.report_generator import get_pitch_floor, get_pitch_ceiling
+
+        try:
+            project_data, namelist = read_project_metadata_from_archive(teproj_path)
+            
+            def pad_chinese(text, width):
+                text_len = len(text)
+                chinese_len = sum(1 for char in text if ord(char) > 127)
+                padding = width - text_len - chinese_len
+                if padding <= 0:
+                    return text
+                return text + " " * padding
+
+            lines = []
+            lines.append("=" * 60)
+            lines.append("               PHONTRACER 工程文件 (.teproj) 数据预览")
+            lines.append("=" * 60)
+            lines.append("")
+
+            # 1. Basic Info
+            version = project_data.get("version", "未知")
+            active_speaker_id = project_data.get("active_speaker_id", "无")
+            speakers = project_data.get("speakers", {})
+
+            lines.append("【基本信息】")
+            lines.append(f"  • 工程格式版本: {version}")
+            lines.append(f"  • 发音人数量: {len(speakers)}")
+            lines.append("")
+
+            summary = {
+                "version": version,
+                "active_speaker_id": active_speaker_id,
+                "speaker_count": len(speakers),
+                "speakers": [],
+                "file_count": len(namelist)
+            }
+
+            # 2. Speakers & Detailed structure
+            lines.append("【发音人及音频明细】")
+            for s_id, spk in speakers.items():
+                name = spk.get("name", "未命名")
+                tab_mode = spk.get("tab_mode", "未知模式")
+                last_params = spk.get("last_params", {})
+                items = spk.get("items", {})
+                pending_batch_paths = spk.get("pending_batch_paths", [])
+                long_audio_path = spk.get("long_audio_path", "")
+
+                is_active = " (当前选中)" if s_id == active_speaker_id else ""
+                lines.append(f"  ■ 发音人: {name}{is_active}")
+                lines.append(f"    • 唯一标识符: {s_id}")
+                lines.append(f"    • 音频管理模式: {tab_mode}")
+
+                summary["speakers"].append({
+                    "id": s_id,
+                    "name": name,
+                    "tab_mode": tab_mode,
+                    "item_count": len(items),
+                    "is_active": s_id == active_speaker_id
+                })
+
+                if tab_mode == "单条长音频":
+                    lines.append(f"    • 长音频文件: {os.path.basename(long_audio_path) if long_audio_path else '无'}")
+                    mac_segs = spk.get("current_macro_segments", [])
+                    man_segs = spk.get("manual_segments", [])
+                    lines.append(f"    • 自动分段数量: {len(mac_segs)}")
+                    lines.append(f"    • 手动微调段数: {len(man_segs) if man_segs is not None else '未进行微调'}")
+                else:
+                    lines.append(f"    • 待导入音频数: {len(pending_batch_paths)}")
+
+                # Engine parameters
+                if last_params:
+                    lines.append("    • 分析引擎参数配置:")
+                    lines.append(f"      - 基频范围 (F0 Range): {get_pitch_floor(last_params):.0f} Hz ~ {get_pitch_ceiling(last_params):.0f} Hz")
+                    lines.append(f"      - 时序分析点数 (Points): {last_params.get('pts', 11)}")
+                    lines.append(f"      - 分析算法: {last_params.get('method', 'ac')}")
+
+                lines.append(f"    • 解析出的字词条目 (共 {len(items)} 条):")
+                if not items:
+                    lines.append("      (暂无提取的字词条目数据)")
+                else:
+                    item_header = f"      {'序号':<4} | {pad_chinese('音节/字词', 12)} | {'时间区间 (s)':<22} | {pad_chinese('F0缓存状态', 10)}"
+                    lines.append(item_header)
+                    lines.append("      " + "-" * 56)
+
+                    for idx, (item_id, item) in enumerate(items.items(), 1):
+                        label = item.get("label", "无")
+                        start = item.get("start", 0.0)
+                        end = item.get("end", 0.0)
+
+                        pitch_file = item.get("pitch_data_file", "")
+                        has_pitch = "无"
+                        if pitch_file and pitch_file in namelist:
+                            has_pitch = "已缓存"
+                        elif item.get("pitch_data") is not None:
+                            has_pitch = "已缓存"
+
+                        idx_str = f"{idx:<4}"
+                        label_col = pad_chinese(label, 12)
+                        time_col = f"{start:7.3f}s ~ {end:7.3f}s"
+                        has_pitch_col = pad_chinese(has_pitch, 10)
+
+                        lines.append(f"      {idx_str} | {label_col} | {time_col} | {has_pitch_col}")
+                lines.append("")
+
+            # 3. Archive file list overview
+            lines.append("【工程压缩包物理文件清单】")
+            lines.append(f"  • 压缩包内文件总数: {len(namelist)}")
+
+            audio_files = [f for f in namelist if f.startswith("audio/")]
+            data_files = [f for f in namelist if f.startswith("data/")]
+
+            lines.append(f"  • 音频资源文件数 (audio/): {len(audio_files)}")
+            lines.append(f"  • 基频数据缓存数 (data/): {len(data_files)}")
+            lines.append("")
+            lines.append("=" * 60)
+
+            preview_text = "\n".join(lines)
+            if fmt == 'text':
+                print(preview_text)
+            else:
+                self._emit(True, "Project preview retrieved.", preview_text=preview_text, summary=summary)
+        except Exception as e:
+            self._emit(False, error=str(e))
+
+    def do_project_convert_zip(self, arg):
+        """
+        Convert/copy a .teproj project file to a standard .zip archive.
+        Usage: project_convert_zip <teproj_path> <dest_zip_path>
+        """
+        args = shlex.split(arg)
+        if len(args) != 2:
+            self._emit(False, error="Usage: project_convert_zip <teproj_path> <dest_zip_path>")
+            return
+
+        teproj_path, dest_zip_path = args[0], args[1]
+        if not os.path.exists(teproj_path):
+            self._emit(False, error=f"File not found: {teproj_path}")
+            return
+
+        try:
+            import shutil
+            shutil.copy2(teproj_path, dest_zip_path)
+            self._emit(True, f"Project successfully copied/converted to ZIP archive: {dest_zip_path}", path=dest_zip_path)
+        except Exception as e:
+            self._emit(False, error=str(e))
+
+    def do_script_save(self, arg):
+        """
+        Save or create a custom script.
+        Usage: script_save <id_or_new> <name> <description> <type> <code_file_path>
+        Use 'new' for creating a new script.
+        """
+        args = shlex.split(arg)
+        if len(args) != 5:
+            self._emit(False, error="Usage: script_save <id_or_new> <name> <description> <type> <code_file_path>")
+            return
+
+        script_id = None if args[0].lower() == 'new' else args[0]
+        name, description, script_type, code_file_path = args[1], args[2], args[3], args[4]
+
+        if not os.path.exists(code_file_path):
+            self._emit(False, error=f"Code file not found: {code_file_path}")
+            return
+
+        try:
+            with open(code_file_path, 'r', encoding='utf-8') as f:
+                code_content = f.read()
+
+            from modules.script_manager import save_script
+            saved_id = save_script(script_id, name, description, script_type, code_content)
+            self._emit(True, f"Script saved successfully.", id=saved_id)
+        except Exception as e:
+            self._emit(False, error=str(e))
+
+    def do_script_delete(self, arg):
+        """
+        Delete a custom script.
+        Usage: script_delete <script_id>
+        """
+        args = shlex.split(arg)
+        if not args:
+            self._emit(False, error="Usage: script_delete <script_id>")
+            return
+
+        script_id = args[0]
+        try:
+            from modules.script_manager import delete_script
+            success = delete_script(script_id)
+            if success:
+                self._emit(True, f"Script {script_id} deleted successfully.", id=script_id)
+            else:
+                self._emit(False, error=f"Script ID {script_id} not found in user library.")
+        except Exception as e:
+            self._emit(False, error=str(e))
+
+    def do_script_import(self, arg):
+        """
+        Import a custom script from a JSON file.
+        Usage: script_import <json_path>
+        """
+        args = shlex.split(arg)
+        if not args:
+            self._emit(False, error="Usage: script_import <json_path>")
+            return
+
+        json_path = args[0]
+        if not os.path.exists(json_path):
+            self._emit(False, error=f"JSON file not found: {json_path}")
+            return
+
+        try:
+            from modules.script_manager import import_script
+            imported_script = import_script(json_path)
+            self._emit(True, "Script imported successfully.", script={
+                "id": imported_script.get("id"),
+                "name": imported_script.get("name")
+            })
+        except Exception as e:
+            self._emit(False, error=str(e))
+
+    def do_script_export(self, arg):
+        """
+        Export a custom script to a JSON file.
+        Usage: script_export <script_id> <dest_json_path>
+        """
+        args = shlex.split(arg)
+        if len(args) != 2:
+            self._emit(False, error="Usage: script_export <script_id> <dest_json_path>")
+            return
+
+        script_id, dest_json_path = args[0], args[1]
+        try:
+            from modules.script_manager import export_script
+            export_script(script_id, dest_json_path)
+            self._emit(True, f"Script exported successfully to {dest_json_path}.", id=script_id, path=dest_json_path)
+        except Exception as e:
+            self._emit(False, error=str(e))
+
+    def _build_project_data_dict(self):
+        project_data = {
+            "active_speaker_id": self.speaker_manager.active_speaker_id,
+            "speakers": {}
+        }
+        for spk_id, spk in self.speaker_manager.speakers.items():
+            spk_data = {
+                "name": spk.name,
+                "tab_mode": getattr(spk, 'tab_mode', "多条独立音频"),
+                "long_audio_path": getattr(spk, 'long_audio_path', None),
+                "pending_batch_paths": spk.pending_batch_paths,
+                "last_params": spk.last_params,
+                "items": {}
+            }
+            for item_id, item in spk.items.items():
+                item_dict = {
+                    "label": item.get("label"),
+                    "group": item.get("group"),
+                    "is_excluded": item.get("is_excluded", False),
+                    "analysis_mode": item.get("analysis_mode", spk.last_params.get("analysis_mode", "f0")),
+                    "pitch_data": item.get("pitch_data"),
+                    "formant_data": item.get("formant_data"),
+                    "pitch_data_file": item.get("pitch_data_file"),
+                    "formant_data_file": item.get("formant_data_file"),
+                }
+                spk_data["items"][item_id] = item_dict
+            project_data["speakers"][spk_id] = spk_data
+        return project_data
+
+    def do_script_prompt(self, arg):
+        """
+        Generate AI prompt for writing a custom script.
+        Usage: script_prompt [key=value ...]
+        Valid keys: purpose, data_range, group_by, chart_style, x_axis, y_axis, stats, title, filename, output_table, show_legend, use_chinese, custom_desc
+        Example: script_prompt purpose="绘制 F1/F2 元音空间图" chart_style="散点图" stats="忽略 NaN"
+        """
+        args = shlex.split(arg)
+        selections = {
+            "prompt_mode": "参数选项",
+            "goal": "绘制 F0 曲线图",
+            "data_range": "只使用纳入分析的条目",
+            "group_by": "按声调/分组",
+            "chart_style": "折线图",
+            "x_axis": "归一化时间 0-1",
+            "y_axis": "F0 Hz",
+            "stats": ["绘制均值", "绘制标准差阴影", "忽略 NaN"],
+            "title": "自定义图表",
+            "filename": "custom_chart.png",
+            "output_table": False,
+            "show_legend": True,
+            "use_chinese": True,
+            "custom_desc": ""
+        }
+        
+        fmt = 'json'
+        clean_args = []
+        for kv in args:
+            if '=' in kv:
+                k, v = kv.split('=', 1)
+                k = k.strip().lower()
+                if k == 'format':
+                    fmt = v.strip().lower()
+                else:
+                    clean_args.append(kv)
+            else:
+                val = kv.lower().strip()
+                if val in ('text', 'json'):
+                    fmt = val
+                else:
+                    clean_args.append(kv)
+
+        for kv in clean_args:
+            if '=' in kv:
+                k, v = kv.split('=', 1)
+                k = k.strip()
+                if k == 'purpose':
+                    selections['goal'] = v
+                elif k == 'stats':
+                    selections['stats'] = [s.strip() for s in v.split(',') if s.strip()]
+                elif k in ('output_table', 'show_legend', 'use_chinese'):
+                    selections[k] = v.lower() in ('true', '1', 'yes')
+                elif k in ('data_range', 'group_by', 'chart_style', 'x_axis', 'y_axis', 'title', 'filename', 'custom_desc'):
+                    selections[k] = v
+                else:
+                    self._emit(False, error=f"Unknown key: {k}")
+                    return
+            else:
+                self._emit(False, error=f"Invalid parameter format: {kv}")
+                return
+        
+        from modules.script_prompt import generate_ai_prompt
+        project_data = self._build_project_data_dict()
+        try:
+            prompt_text = generate_ai_prompt(project_data, selections)
+            if fmt == 'text':
+                print(prompt_text)
+            else:
+                self._emit(True, "AI prompt generated successfully.", prompt_text=prompt_text)
+        except Exception as e:
+            self._emit(False, error=str(e))
+
+    def do_generate_prompt(self, arg):
+        """Alias for script_prompt."""
+        self.do_script_prompt(arg)
 
     def do_log(self, arg):
         """
@@ -4213,7 +4805,11 @@ def main(argv=None):
             # If non-option args are provided, treat them as one CLI command and run once.
             # Example: PhonTracerCLI.exe status
             if not first_arg.startswith("-"):
-                command_line = " ".join(argv)
+                import shlex
+                if len(argv) == 1 and " " in argv[0]:
+                    command_line = argv[0]
+                else:
+                    command_line = shlex.join(argv)
                 cli.onecmd(command_line)
                 return 0
             print(json.dumps({
