@@ -12,6 +12,7 @@
 !.gitignore
 !README.md
 !README_REVISION_GUIDE.md
+!PAPER_USAGE_GUIDE.md
 !requirements.txt
 !main.py
 !cli.py

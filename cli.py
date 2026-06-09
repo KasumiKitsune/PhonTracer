@@ -3430,6 +3430,325 @@ PhonTracer is a high-accuracy acoustic tone analysis tool.
         except Exception as e:
             self._emit(False, error=str(e))
 
+    def do_list_scripts(self, arg):
+        """
+        List all available custom and builtin scripts.
+        Usage: list_scripts
+        """
+        try:
+            from modules.script_manager import load_all_scripts
+            scripts = load_all_scripts()
+            res_list = []
+            for s in scripts:
+                res_list.append({
+                    "id": s.get("id"),
+                    "name": s.get("name"),
+                    "description": s.get("description"),
+                    "type": s.get("type", "chart")
+                })
+            self._emit(True, "Scripts loaded successfully.", scripts=res_list)
+        except Exception as e:
+            self._emit(False, error=str(e))
+
+    def do_script_info(self, arg):
+        """
+        Get details and code of a specific script by ID or Name.
+        Usage: script_info <script_id_or_name>
+        """
+        arg_norm = arg.replace('\\', '/')
+        args = shlex.split(arg_norm)
+        if not args:
+            self._emit(False, error="Requires script ID or name")
+            return
+            
+        target = args[0].strip()
+        try:
+            from modules.script_manager import load_all_scripts
+            scripts = load_all_scripts()
+            
+            # Find by ID first, then by Name (case-insensitive)
+            found = None
+            for s in scripts:
+                if s.get("id") == target:
+                    found = s
+                    break
+            if not found:
+                for s in scripts:
+                    if s.get("name", "").lower() == target.lower():
+                        found = s
+                        break
+            
+            if found:
+                self._emit(True, "Script details retrieved.", script={
+                    "id": found.get("id"),
+                    "name": found.get("name"),
+                    "description": found.get("description"),
+                    "type": found.get("type", "chart"),
+                    "code": found.get("code")
+                })
+            else:
+                self._emit(False, error=f"Script not found: {target}")
+        except Exception as e:
+            self._emit(False, error=str(e))
+
+    def do_run_script(self, arg):
+        """
+        Run a script by ID, Name, or local python file path.
+        Usage: run_script <script_id_or_name_or_file_path> [key=value ...]
+        Parameters:
+          timeout=30       Execution timeout in seconds (default 30)
+          archive=true     Archive run history in active project (default true)
+          desc="Goal"      User goal description for archiving (default "CLI script execution")
+          name="Name"      Custom script name for archiving (default "CLI script")
+        """
+        import re
+        import uuid
+        import hashlib
+        import datetime
+        
+        arg_norm = arg.replace('\\', '/')
+        args = shlex.split(arg_norm)
+        if not args:
+            self._emit(False, error="Requires script ID, name, or file path")
+            return
+            
+        target = args[0].strip()
+        
+        # Parse extra key-value parameters
+        kwargs = {}
+        for item in args[1:]:
+            if '=' in item:
+                k, v = item.split('=', 1)
+                kwargs[k.strip().lower()] = v.strip()
+                
+        # Parse standard parameter defaults
+        try:
+            timeout = float(kwargs.get("timeout", 30))
+        except ValueError:
+            self._emit(False, error="timeout must be a number")
+            return
+            
+        archive = kwargs.get("archive", "true").lower() in ("true", "1", "yes", "y")
+        script_desc = kwargs.get("desc", kwargs.get("user_goal", "CLI script execution"))
+        script_name = kwargs.get("name", "CLI script")
+        script_type = "chart"
+        script_id = None
+        
+        code = None
+        # Determine code source: check if target is file
+        if target.lower().endswith(".py") or os.path.exists(target):
+            if not os.path.exists(target):
+                self._emit(False, error=f"File not found: {target}")
+                return
+            try:
+                with open(target, "r", encoding="utf-8") as f:
+                    code = f.read()
+                script_name = os.path.basename(target)
+                script_id = str(hashlib.sha256(code.encode('utf-8')).hexdigest()[:16])
+            except Exception as e:
+                self._emit(False, error=f"Failed to read script file: {e}")
+                return
+        else:
+            try:
+                from modules.script_manager import load_all_scripts
+                scripts = load_all_scripts()
+                found = None
+                for s in scripts:
+                    if s.get("id") == target:
+                        found = s
+                        break
+                if not found:
+                    for s in scripts:
+                        if s.get("name", "").lower() == target.lower():
+                            found = s
+                            break
+                if found:
+                    code = found.get("code")
+                    script_name = found.get("name")
+                    script_id = found.get("id")
+                    script_type = found.get("type", "chart")
+                    if not script_desc or script_desc == "CLI script execution":
+                        script_desc = found.get("description", "CLI script execution")
+                else:
+                    self._emit(False, error=f"Script target '{target}' not found as a file or registered script.")
+                    return
+            except Exception as e:
+                self._emit(False, error=str(e))
+                return
+                
+        # Build dataset snapshot
+        dataset_items = []
+        has_active_project = False
+        temp_path = None
+        try:
+            # We can check if any speakers exist to know if there's project data to snapshot
+            if self.speaker_manager.get_all_speakers():
+                has_active_project = True
+                import tempfile
+                # Export to a temp path
+                fd, temp_path = tempfile.mkstemp(suffix=".teproj")
+                os.close(fd)
+                
+                # Make sure all items are loaded in memory so they get exported correctly
+                orig_active_id = self.speaker_manager.active_speaker_id
+                try:
+                    for spk in self.speaker_manager.get_all_speakers():
+                        self.speaker_manager.set_active_speaker(spk.id)
+                        for item in spk.items.values():
+                            self._ensure_item_loaded(item)
+                finally:
+                    if orig_active_id:
+                        self.speaker_manager.set_active_speaker(orig_active_id)
+                        
+                ok = self.project_manager.export_project(temp_path)
+                if ok:
+                    from modules.script_api import build_dataset_snapshot
+                    dataset_items = build_dataset_snapshot(temp_path)
+                else:
+                    self._emit(False, error="Failed to export project state to temporary file for snapshotting.")
+                    return
+        except Exception as e:
+            self._emit(False, error=f"Failed to prepare project snapshot: {e}")
+            return
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except Exception:
+                    pass
+                    
+        # Run custom script
+        try:
+            from modules.script_runner import run_custom_script
+            import matplotlib.pyplot as plt
+            plt.close('all')
+            
+            res, logs, err = run_custom_script(code, dataset_items, timeout=timeout)
+            
+            if err:
+                self._emit(False, error=err, logs=logs)
+                return
+                
+            # Process success results
+            from modules.script_api import FigureResult, TableResult
+            
+            results = res if isinstance(res, list) else [res]
+            figure_results = [r for r in results if isinstance(r, FigureResult)]
+            table_results = [r for r in results if isinstance(r, TableResult)]
+            
+            # Inline _safe_script_output_name
+            def safe_name(name, fallback="output"):
+                raw = str(name or fallback).strip()
+                raw = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", raw)
+                raw = re.sub(r"\s+", "_", raw)
+                raw = raw.strip("._ ")
+                return raw[:80] or fallback
+                
+            # Setup output folder
+            custom_out_dir = kwargs.get("output_dir", kwargs.get("out_dir"))
+            if custom_out_dir:
+                unique_folder = os.path.abspath(custom_out_dir)
+                os.makedirs(unique_folder, exist_ok=True)
+            else:
+                base_out_dir = os.path.join(os.path.expanduser("~"), ".phon_tracer", "script_outputs")
+                safe_script_name = safe_name(script_name, "script")
+                stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                folder = os.path.join(base_out_dir, f"{stamp}_{safe_script_name}")
+                suffix = 2
+                unique_folder = folder
+                while os.path.exists(unique_folder):
+                    unique_folder = f"{folder}_{suffix}"
+                    suffix += 1
+                os.makedirs(unique_folder, exist_ok=True)
+            
+            output_records = []
+            
+            # Helper to get unique filename in folder
+            def unique_path(folder, filename):
+                base, ext_ = os.path.splitext(filename)
+                p = os.path.join(folder, filename)
+                idx = 2
+                while os.path.exists(p):
+                    p = os.path.join(folder, f"{base}_{idx}{ext_}")
+                    idx += 1
+                return p
+                
+            # Save figures
+            for idx, fig_res in enumerate(figure_results, start=1):
+                fn = safe_name(fig_res.filename or f"custom_chart_{idx}.png", f"custom_chart_{idx}.png")
+                r, ext = os.path.splitext(fn)
+                if not ext:
+                    fn = f"{fn}.png"
+                elif ext.lower() not in {".png", ".jpg", ".jpeg", ".svg", ".pdf"}:
+                    fn = f"{r}.png"
+                out_path = unique_path(unique_folder, fn)
+                try:
+                    fig_res.fig.savefig(out_path, dpi=300, bbox_inches="tight")
+                    output_records.append({
+                        "type": "figure",
+                        "title": fig_res.title,
+                        "filename": os.path.basename(out_path),
+                        "saved_path": out_path,
+                    })
+                    logs.append(f"图表 {idx} 已保存：{out_path}")
+                except Exception as e:
+                    logs.append(f"图表 {idx} 保存失败：{e}")
+                    
+            # Save tables
+            for idx, tbl_res in enumerate(table_results, start=1):
+                import csv
+                tbl_name = safe_name(tbl_res.title or f"custom_table_{idx}", f"custom_table_{idx}")
+                out_path = unique_path(unique_folder, f"{tbl_name}.csv")
+                try:
+                    with open(out_path, "w", encoding="utf-8-sig", newline="") as f:
+                        writer = csv.writer(f)
+                        writer.writerow(list(tbl_res.columns or []))
+                        writer.writerows(tbl_res.rows or [])
+                    output_records.append({
+                        "type": "table",
+                        "title": tbl_res.title,
+                        "filename": os.path.basename(out_path),
+                        "saved_path": out_path,
+                    })
+                    logs.append(f"表格 {idx} 已保存：{out_path}")
+                except Exception as e:
+                    logs.append(f"表格 {idx} 保存失败：{e}")
+                    
+            # If archiving is requested and project is active
+            if archive and has_active_project:
+                code_sha256 = hashlib.sha256(code.encode('utf-8')).hexdigest()
+                run_record = {
+                    "script_id": script_id or str(uuid.uuid4()),
+                    "script_name": script_name,
+                    "script_type": script_type,
+                    "api_version": "1",
+                    "software_version": __version__,
+                    "code_sha256": code_sha256,
+                    "code": code,
+                    "used_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "user_goal": script_desc,
+                    "status": "成功",
+                    "outputs": output_records
+                }
+                
+                # Add to app's custom_script_runs (or initialize if needed)
+                if not hasattr(self, "custom_script_runs") or self.custom_script_runs is None:
+                    self.custom_script_runs = []
+                self.custom_script_runs.append(run_record)
+                
+                # Save project workspace
+                try:
+                    self.project_manager.save_to_workspace()
+                    logs.append("本次脚本运行记录已存入当前工程。")
+                except Exception as e:
+                    logs.append(f"警告: 脚本记录存入当前工程失败: {e}")
+                    
+            self._emit(True, "脚本执行完成", logs=logs, output_dir=unique_folder, outputs=output_records)
+        except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
+            self._emit(False, error=f"执行发生意外错误: {e}", traceback=tb)
+
 
     def do_log(self, arg):
         """
