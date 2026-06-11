@@ -721,7 +721,7 @@ class PhoneticsApp:
         self._make_scrollable_auto(left_scrollable)
 
         btn_kwargs_primary = {"corner_radius": 20, "height": 38, "font": self.font_main,
-                              "fg_color": "#3B82F6", "hover_color": "#2563EB", "text_color": "white"}
+                              "fg_color": "#2563EB", "hover_color": "#1D4ED8", "text_color": "white"}
         btn_kwargs_secondary = {"corner_radius": 20, "height": 38, "font": self.font_main,
                                 "fg_color": "#E5E7EB", "text_color": "#1F2937", "hover_color": "#D1D5DB"}
 
@@ -743,7 +743,7 @@ class PhoneticsApp:
         self.lbl_status.pack(pady=(5, 5), expand=True)
 
         self.progress_bar = ctk.CTkProgressBar(status_container, height=6, corner_radius=10,
-                                               progress_color="#3B82F6", fg_color="#E5E7EB")
+                                               progress_color="#2563EB", fg_color="#E5E7EB")
         self.progress_bar.set(0)
 
 
@@ -813,13 +813,20 @@ class PhoneticsApp:
 
         switch_row = ctk.CTkFrame(self.speaker_frame, fg_color="transparent")
         switch_row.pack(fill=tk.X, padx=15, pady=(0, 10))
-        self.switch_unified_wordlist = ctk.CTkSwitch(switch_row, text="统一字表", font=self.font_main, width=60)
+        self.switch_unified_wordlist = ctk.CTkSwitch(
+            switch_row, text="统一字表", font=self.font_main, width=60,
+            progress_color="#2563EB", button_hover_color="#1D4ED8"
+        )
         self.switch_unified_wordlist.pack(side=tk.LEFT)
         self.switch_unified_wordlist.select()
 
 
-        self.tabview = ctk.CTkTabview(left_scrollable, height=170, corner_radius=12, fg_color="white",
-                                      segmented_button_selected_color="#3B82F6", segmented_button_fg_color="#F3F4F6")
+        self.tabview = ctk.CTkTabview(
+            left_scrollable, height=170, corner_radius=12, fg_color="white",
+            segmented_button_selected_color="#2563EB",
+            segmented_button_selected_hover_color="#1D4ED8",
+            segmented_button_fg_color="#F3F4F6"
+        )
         self.tabview.pack(fill=tk.X, pady=(0, 10))
         self.tabview._segmented_button.configure(corner_radius=20)
 
@@ -834,8 +841,8 @@ class PhoneticsApp:
             self.mode_frame,
             values=["声调/F0", "共振峰/F1-F2"],
             command=self.on_analysis_mode_change,
-            selected_color="#3B82F6",
-            selected_hover_color="#2563EB",
+            selected_color="#2563EB",
+            selected_hover_color="#1D4ED8",
             fg_color="#F3F4F6",
             unselected_color="#F3F4F6",
             unselected_hover_color="#E5E7EB",
@@ -908,7 +915,7 @@ class PhoneticsApp:
         lbl_pts = ctk.CTkLabel(row_pts, text=" 等分点 (N):", image=self.icons.get("points"), compound="left", text_color="#374151", font=self.font_main)
         lbl_pts.pack(side=tk.LEFT)
         self.slider_pts = ctk.CTkSlider(row_pts, from_=5, to=20, number_of_steps=15, width=100, height=16,
-                                        button_color="#3B82F6", button_hover_color="#2563EB", progress_color="#3B82F6",
+                                        button_color="#2563EB", button_hover_color="#1D4ED8", progress_color="#2563EB",
                                         command=lambda v: self._on_slider_change(v, self.entry_points, 'pts'))
         self.slider_pts.set(self.last_params['pts'])
         self.slider_pts.pack(side=tk.LEFT, padx=10)
@@ -922,7 +929,7 @@ class PhoneticsApp:
         lbl_db = ctk.CTkLabel(row_db, text=" 能量落差:", image=self.icons.get("energy"), compound="left", text_color="#374151", font=self.font_main)
         lbl_db.pack(side=tk.LEFT)
         self.slider_db = ctk.CTkSlider(row_db, from_=10, to=100, number_of_steps=90, width=100, height=16,
-                                       button_color="#3B82F6", button_hover_color="#2563EB", progress_color="#3B82F6",
+                                       button_color="#2563EB", button_hover_color="#1D4ED8", progress_color="#2563EB",
                                        command=lambda v: self._on_slider_change(v, self.entry_drop_db, 'db'))
         self.slider_db.set(self.last_params['db'])
         self.slider_db.pack(side=tk.LEFT, padx=10)
@@ -936,7 +943,7 @@ class PhoneticsApp:
         lbl_dur = ctk.CTkLabel(row_dur, text=" 排除声母:", image=self.icons.get("duration"), compound="left", text_color="#374151", font=self.font_main)
         lbl_dur.pack(side=tk.LEFT)
         self.slider_dur = ctk.CTkSlider(row_dur, from_=0.00, to=0.15, number_of_steps=15, width=100, height=16,
-                                        button_color="#3B82F6", button_hover_color="#2563EB", progress_color="#3B82F6",
+                                        button_color="#2563EB", button_hover_color="#1D4ED8", progress_color="#2563EB",
                                         command=lambda v: self._on_slider_change(v, self.entry_min_dur, 'skip_front'))
         self.slider_dur.set(self.last_params['skip_front'])
         self.slider_dur.pack(side=tk.LEFT, padx=10)
@@ -1093,7 +1100,7 @@ class PhoneticsApp:
         # 全局应用按钮 (固定在底部)
         self.btn_apply_all = CTkReleaseButton(sidebar_frame, text="  全局应用", image=self.icons.get("check_white"), compound="left",
                                               command=self.recalculate_all_audio, corner_radius=20, height=44, font=self.font_title,
-                                              fg_color="#3B82F6", hover_color="#2563EB")
+                                              fg_color="#2563EB", hover_color="#1D4ED8")
         self.btn_apply_all.pack(fill=tk.X, pady=(10, 15))
 
         # 实例化右侧树状面板 (先于中间面板初始化以确保正确的 pack 顺序)
@@ -1132,7 +1139,7 @@ class PhoneticsApp:
 
         def run():
             try:
-                self.root.after(0, lambda: self.set_status(f"正在读取音频: {item['label']}...", "#3B82F6", "status_loading"))
+                self.root.after(0, lambda: self.set_status(f"正在读取音频: {item['label']}...", "#2563EB", "status_loading"))
 
                 snd = parselmouth.Sound(item['path'])
                 pitch_data = extract_f0(snd, self.last_params)
@@ -1373,7 +1380,7 @@ class PhoneticsApp:
         self.progress_bar.set(val)
 
     def start_loading(self, text="正在处理..."):
-        self.set_status(text, "#3B82F6", "status_loading")
+        self.set_status(text, "#2563EB", "status_loading")
         self.progress_bar.set(0)
         if self.progress_bar.winfo_manager() == "":
             self.progress_bar.pack(fill=tk.X, padx=(0, 15), pady=(0, 8))
@@ -1517,7 +1524,7 @@ class PhoneticsApp:
         self.root.after(100, lambda: scrollbar.set(*scrollbar.get()))
 
     def setup_entry_behavior(self, entry, param_key):
-        def on_enter(e): entry.configure(border_color="#3B82F6", border_width=2)
+        def on_enter(e): entry.configure(border_color="#2563EB", border_width=2)
         def on_leave(e):
             if self.root.focus_get() != entry:
                 entry.configure(border_color=["#979DA2", "#565B5E"], border_width=1)
@@ -2231,7 +2238,7 @@ class PhoneticsApp:
 
         def run():
             try:
-                self.root.after(0, lambda: self.set_status("正在更新当前项...", "#3B82F6", "status_loading"))
+                self.root.after(0, lambda: self.set_status("正在更新当前项...", "#2563EB", "status_loading"))
                 worker_params = dict(self.last_params)
                 if param_overrides:
                     worker_params.update(param_overrides)
@@ -3104,8 +3111,8 @@ class PhoneticsApp:
             messagebox.showinfo("成功", "AI 整理提示词已复制！\n您可以前往 ChatGPT / 豆包 / DeepSeek 等平台粘贴使用。", parent=dlg)
 
         btn_import = ctk.CTkButton(toolbar, text=" 导入词表文件", image=self.icons.get("import_white"), compound="left",
-                                   width=120, height=28, corner_radius=14, fg_color="#3B82F6", text_color="white",
-                                   hover_color="#2563EB", command=load_txt)
+                                   width=120, height=28, corner_radius=14, fg_color="#2563EB", text_color="white",
+                                   hover_color="#1D4ED8", command=load_txt)
         btn_import.pack(side=tk.LEFT)
 
         def load_textgrid():
@@ -3283,7 +3290,7 @@ class PhoneticsApp:
 
             text_box.tag_config("group_title", foreground="#2563EB")
             text_box.tag_config("word_item", foreground="#10B981")
-            text_box.tag_config("separator", foreground="#3B82F6")
+            text_box.tag_config("separator", foreground="#2563EB")
             text_box.tag_config("excluded", foreground="#9CA3AF")
             text_box.tag_raise("separator")
             text_box.tag_raise("excluded")
@@ -4148,7 +4155,7 @@ class PhoneticsApp:
                     def process_independent_item(idx_item):
                         idx, item = idx_item
                         self.root.after(0, lambda v=((idx + 1) / len(valid_items)): self.set_progress(v))
-                        self.root.after(0, lambda name=item['label'], cur_idx=idx+1, tot=len(valid_items): self.set_status(f"正在分析 F0 ({cur_idx}/{tot}): {name}...", "#3B82F6", "status_loading"))
+                        self.root.after(0, lambda name=item['label'], cur_idx=idx+1, tot=len(valid_items): self.set_status(f"正在分析 F0 ({cur_idx}/{tot}): {name}...", "#2563EB", "status_loading"))
 
                         item_snd = item.get('snd')
                         if item_snd is None:
@@ -4887,7 +4894,7 @@ class RenameSpeakerDialog(ctk.CTkToplevel):
         self.grab_set()
 
         # Top stripe
-        accent_strip = ctk.CTkFrame(self, height=4, fg_color="#3B82F6", corner_radius=0)
+        accent_strip = ctk.CTkFrame(self, height=4, fg_color="#2563EB", corner_radius=0)
         accent_strip.pack(fill="x", side="top")
 
         # Content frame

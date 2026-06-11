@@ -29,6 +29,46 @@ class TestAcousticExporterFeatures(unittest.TestCase):
             self._tone_effect_entry("阳平+阳平", 2.3, 2.4),
         ]
 
+    def test_group_filter_bulk_actions_only_touch_visible_groups(self):
+        class FakeTextVar:
+            def __init__(self, value=""):
+                self.value = value
+
+            def get(self):
+                return self.value
+
+        class FakeBoolVar:
+            def __init__(self, value=False):
+                self.value = value
+
+            def get(self):
+                return self.value
+
+            def set(self, value):
+                self.value = bool(value)
+
+        dlg = AcousticChartExportDialog.__new__(AcousticChartExportDialog)
+        dlg.search_group_var = FakeTextVar("阳")
+        dlg.entry_min_count = FakeTextVar("0")
+        dlg.available_groups = ["阴平", "阳平", "阳去", "上声"]
+        dlg.group_counts = {"阴平": 10, "阳平": 12, "阳去": 8, "上声": 5}
+        dlg.group_checkbox_vars = {name: FakeBoolVar(False) for name in dlg.available_groups}
+        dlg._on_group_filter_changed = MagicMock()
+
+        self.assertEqual(dlg._visible_group_names(), ["阳平", "阳去"])
+
+        dlg._select_all_groups()
+        self.assertFalse(dlg.group_checkbox_vars["阴平"].get())
+        self.assertTrue(dlg.group_checkbox_vars["阳平"].get())
+        self.assertTrue(dlg.group_checkbox_vars["阳去"].get())
+        self.assertFalse(dlg.group_checkbox_vars["上声"].get())
+
+        dlg._reverse_groups()
+        self.assertFalse(dlg.group_checkbox_vars["阳平"].get())
+        self.assertFalse(dlg.group_checkbox_vars["阳去"].get())
+        self.assertFalse(dlg.group_checkbox_vars["阴平"].get())
+        self.assertFalse(dlg.group_checkbox_vars["上声"].get())
+
     def test_exporter_dialog_init_and_variables(self):
         # Mock tree panel and active speaker
         project_tree = MagicMock()

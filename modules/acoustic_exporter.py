@@ -3221,7 +3221,7 @@ class AcousticChartExporter:
             checkbox_width=18,
             checkbox_height=18,
             corner_radius=1000,
-            fg_color=("#3B82F6", "#2563EB"),
+            fg_color=(self.ui_primary, self.ui_primary_hover),
             hover_color=("#9CA3AF", "#4B5563"),
             border_color=("#4B5563", "#9CA3AF"),
             command=self.update_preview
@@ -3237,7 +3237,7 @@ class AcousticChartExporter:
             checkbox_width=18, 
             checkbox_height=18,
             corner_radius=1000,
-            fg_color=("#3B82F6", "#2563EB"), 
+            fg_color=(self.ui_primary, self.ui_primary_hover),
             hover_color=("#9CA3AF", "#4B5563"), 
             border_color=("#4B5563", "#9CA3AF"),
             command=self.update_preview
@@ -3253,7 +3253,7 @@ class AcousticChartExporter:
             checkbox_width=18, 
             checkbox_height=18,
             corner_radius=1000,
-            fg_color=("#3B82F6", "#2563EB"), 
+            fg_color=(self.ui_primary, self.ui_primary_hover),
             hover_color=("#9CA3AF", "#4B5563"), 
             border_color=("#4B5563", "#9CA3AF"),
             command=self.update_preview
@@ -3268,7 +3268,7 @@ class AcousticChartExporter:
             checkbox_width=18,
             checkbox_height=18,
             corner_radius=1000,
-            fg_color=("#3B82F6", "#2563EB"),
+            fg_color=(self.ui_primary, self.ui_primary_hover),
             hover_color=("#9CA3AF", "#4B5563"),
             border_color=("#4B5563", "#9CA3AF"),
             command=self.update_preview
@@ -3298,7 +3298,7 @@ class AcousticChartExporter:
             checkbox_width=18,
             checkbox_height=18,
             corner_radius=1000,
-            fg_color=("#3B82F6", "#2563EB"),
+            fg_color=(self.ui_primary, self.ui_primary_hover),
             hover_color=("#9CA3AF", "#4B5563"),
             border_color=("#4B5563", "#9CA3AF"),
             command=self.update_preview
@@ -3333,7 +3333,7 @@ class AcousticChartExporter:
             checkbox_width=18, 
             checkbox_height=18,
             corner_radius=1000,
-            fg_color=("#3B82F6", "#2563EB"), 
+            fg_color=(self.ui_primary, self.ui_primary_hover),
             hover_color=("#9CA3AF", "#4B5563"), 
             border_color=("#4B5563", "#9CA3AF"),
             command=self.update_preview
@@ -3349,7 +3349,7 @@ class AcousticChartExporter:
             checkbox_width=18, 
             checkbox_height=18,
             corner_radius=1000,
-            fg_color=("#3B82F6", "#2563EB"), 
+            fg_color=(self.ui_primary, self.ui_primary_hover),
             hover_color=("#9CA3AF", "#4B5563"), 
             border_color=("#4B5563", "#9CA3AF"),
             command=self.update_preview
@@ -3446,6 +3446,11 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
 
         # Color Palette
         self.colors = ['#2563EB', '#DC2626', '#16A34A', '#9333EA', '#EA580C', '#0891B2', '#CA8A04', '#6366F1']
+        self.ui_primary = "#2563EB"
+        self.ui_primary_hover = "#1D4ED8"
+        self.ui_primary_soft = "#DBEAFE"
+        self.ui_row_even = ("#FFFFFF", "#1E293B")
+        self.ui_row_odd = ("#F8FAFC", "#263244")
 
         # Load active speaker's data items as default fallback
         self.sm = getattr(self.app, 'speaker_manager', None)
@@ -3712,17 +3717,23 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
 
         self.switch_live_refresh = ctk.CTkSwitch(
             self.bottom_frame, text="实时刷新", variable=self.var_live_refresh,
-            font=self.font_main, command=self._on_live_refresh_toggle
+            font=self.font_main, progress_color=self.ui_primary,
+            button_hover_color=self.ui_primary_hover, command=self._on_live_refresh_toggle
         )
         self.switch_live_refresh.pack(side=tk.LEFT, padx=10)
 
         self.switch_high_precision = ctk.CTkSwitch(
             self.bottom_frame, text="高渲染精细度", variable=self.var_high_precision,
-            font=self.font_main, command=self.update_preview
+            font=self.font_main, progress_color=self.ui_primary,
+            button_hover_color=self.ui_primary_hover, command=self.update_preview
         )
         self.switch_high_precision.pack(side=tk.LEFT, padx=10)
 
-        self.btn_export = ctk.CTkButton(self.bottom_frame, text="💾 导出", width=120, height=38, corner_radius=19, font=self.font_title, command=self.on_confirm)
+        self.btn_export = ctk.CTkButton(
+            self.bottom_frame, text="💾 导出", width=120, height=38, corner_radius=19,
+            font=self.font_title, fg_color=self.ui_primary,
+            hover_color=self.ui_primary_hover, command=self.on_confirm
+        )
         self.btn_export.pack(side=tk.RIGHT, padx=5)
 
         # Hidden by default, only packed in floating mode
@@ -3910,7 +3921,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             card2, text="显示在图表主体的外侧", variable=self.var_legend_outside,
             font=self.font_small, checkbox_width=18, checkbox_height=18,
             corner_radius=1000,
-            fg_color=("#3B82F6", "#2563EB"), hover_color=("#9CA3AF", "#4B5563"), border_color=("#4B5563", "#9CA3AF"),
+            fg_color=(self.ui_primary, self.ui_primary_hover), hover_color=("#9CA3AF", "#4B5563"), border_color=("#4B5563", "#9CA3AF"),
             command=self.update_preview
         )
         self.cb_legend_outside.grid(row=5, column=0, columnspan=2, sticky="w", padx=15, pady=(0, 15))
@@ -4002,11 +4013,13 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         # Select All & Invert buttons packed to the right of the search entry
         ctk.CTkButton(
             search_btn_row, text="全选", width=55, height=26, corner_radius=13,
+            fg_color=self.ui_primary, hover_color=self.ui_primary_hover,
             font=self.font_small, command=self._select_all_groups
         ).pack(side=tk.LEFT, padx=2)
 
         ctk.CTkButton(
             search_btn_row, text="反选", width=55, height=26, corner_radius=13,
+            fg_color=self.ui_primary, hover_color=self.ui_primary_hover,
             font=self.font_small, command=self._reverse_groups
         ).pack(side=tk.LEFT, padx=2)
 
@@ -4347,46 +4360,82 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
     def _toggle_groups_sorting(self):
         self.sort_by_count = not getattr(self, 'sort_by_count', False)
         if self.sort_by_count:
-            self.btn_toggle_sort.configure(fg_color=("#3B82F6", "#2563EB"), text_color="white")
+            self.btn_toggle_sort.configure(fg_color=(self.ui_primary, self.ui_primary_hover), text_color="white")
         else:
             self.btn_toggle_sort.configure(fg_color=("#E5E7EB", "#374151"), text_color=("#374151", "#E5E7EB"))
         self._populate_groups_list()
 
-    def _populate_groups_list(self):
-        for w in self.filter_scroll.winfo_children():
-            w.destroy()
-
-        search_query = self.search_group_var.get().strip().lower()
+    def _visible_group_names(self):
+        search_query = self.search_group_var.get().strip().lower() if hasattr(self, "search_group_var") else ""
 
         min_count = 0
         try:
             val_str = self.entry_min_count.get().strip()
             if val_str:
                 min_count = int(val_str)
-        except ValueError:
+        except (ValueError, AttributeError):
             pass
 
         if getattr(self, 'sort_by_count', False):
             groups_to_draw = sorted(self.available_groups, key=lambda g: self.group_counts.get(g, 0), reverse=True)
         else:
-            groups_to_draw = self.available_groups
+            groups_to_draw = list(self.available_groups)
 
-        for g in groups_to_draw:
-            count = self.group_counts.get(g, 0)
+        visible_groups = []
+        for group_name in groups_to_draw:
+            count = self.group_counts.get(group_name, 0)
             if count < min_count:
                 continue
-            if search_query and search_query not in g.lower():
+            if search_query and search_query not in group_name.lower():
                 continue
+            visible_groups.append(group_name)
+        return visible_groups
+
+    def _populate_groups_list(self):
+        for w in self.filter_scroll.winfo_children():
+            w.destroy()
+
+        self.visible_group_names = self._visible_group_names()
+        row_frame = None
+        row_col = 0
+        row_index = -1
+
+        def new_row():
+            nonlocal row_frame, row_col, row_index
+            row_index += 1
+            row_col = 0
+            row_frame = ctk.CTkFrame(
+                self.filter_scroll,
+                fg_color=self.ui_row_even if row_index % 2 == 0 else self.ui_row_odd,
+                corner_radius=8
+            )
+            row_frame.pack(fill=tk.X, padx=4, pady=1)
+            row_frame.grid_columnconfigure(0, weight=1, uniform="group_filter")
+            row_frame.grid_columnconfigure(1, weight=1, uniform="group_filter")
+            return row_frame
+
+        for g in self.visible_group_names:
+            count = self.group_counts.get(g, 0)
+            is_short_name = len(str(g)) <= 7
+            if row_frame is None or row_col >= 2 or not is_short_name:
+                new_row()
 
             var = self.group_checkbox_vars[g]
             cb = ctk.CTkCheckBox(
-                self.filter_scroll, text=f"{g} ({count}项)", variable=var,
+                row_frame, text=f"{g} ({count}项)", variable=var,
                 font=self.font_small, checkbox_width=18, checkbox_height=18,
                 corner_radius=1000,
-                fg_color=("#3B82F6", "#2563EB"), hover_color=("#9CA3AF", "#4B5563"), border_color=("#4B5563", "#9CA3AF"),
+                fg_color=(self.ui_primary, self.ui_primary_hover),
+                hover_color=("#9CA3AF", "#4B5563"),
+                border_color=("#4B5563", "#9CA3AF"),
                 command=self._on_group_filter_changed
             )
-            cb.pack(anchor="w", padx=10, pady=3)
+            if is_short_name:
+                cb.grid(row=0, column=row_col, sticky="w", padx=10, pady=4)
+                row_col += 1
+            else:
+                cb.grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=4)
+                row_col = 2
 
         self._bind_filter_scroll_wheel_recursive(self.filter_scroll)
 
@@ -4396,13 +4445,19 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         self.trigger_preview_update()
 
     def _select_all_groups(self):
-        for var in self.group_checkbox_vars.values():
-            var.set(True)
+        visible_groups = getattr(self, "visible_group_names", None) or self._visible_group_names()
+        for group_name in visible_groups:
+            var = self.group_checkbox_vars.get(group_name)
+            if var is not None:
+                var.set(True)
         self._on_group_filter_changed()
 
     def _reverse_groups(self):
-        for var in self.group_checkbox_vars.values():
-            var.set(not var.get())
+        visible_groups = getattr(self, "visible_group_names", None) or self._visible_group_names()
+        for group_name in visible_groups:
+            var = self.group_checkbox_vars.get(group_name)
+            if var is not None:
+                var.set(not var.get())
         self._on_group_filter_changed()
 
     def _select_high_frequency_groups(self):
