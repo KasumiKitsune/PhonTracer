@@ -3608,7 +3608,8 @@ class AIPromptDialog(ctk.CTkToplevel):
         self.prompt_tabview.pack(fill="x", padx=0, pady=(0, 10))
         manual_tab = self.prompt_tabview.add("参数选项")
         target_tab = self.prompt_tabview.add("目标导向")
-        for tab in (manual_tab, target_tab):
+        agent_tab = self.prompt_tabview.add("Agent协作")
+        for tab in (manual_tab, target_tab, agent_tab):
             tab.configure(fg_color="transparent")
         self._update_prompt_tab_text_colors()
 
@@ -3804,6 +3805,7 @@ class AIPromptDialog(ctk.CTkToplevel):
         self.txt_custom.pack(fill="x", padx=10, pady=5)
 
         self._build_goal_oriented_tab(target_tab)
+        self._build_agent_tab(agent_tab)
 
         # 10. 提示词预览
         preview_header = ctk.CTkFrame(scroll, fg_color="transparent")
@@ -3996,6 +3998,52 @@ class AIPromptDialog(ctk.CTkToplevel):
             placeholder=self.placeholder_target_constraints
         )
 
+    def _build_agent_tab(self, agent_tab):
+        intro = ctk.CTkLabel(
+            agent_tab,
+            text="这个页面会把 AI 设定成协作 Agent：先询问研究目的并推荐图表，等你确认后再输出 Toolkit 可运行代码。",
+            font=ctk.CTkFont(family="Microsoft YaHei", size=12),
+            text_color="#64748B",
+            wraplength=520,
+            justify="left"
+        )
+        intro.pack(anchor="w", padx=10, pady=(8, 10))
+
+        row1 = ctk.CTkFrame(agent_tab, fg_color="transparent")
+        row1.pack(fill="x", pady=6)
+        row1.columnconfigure(0, weight=1, uniform="agent1")
+        row1.columnconfigure(1, weight=1, uniform="agent1")
+
+        col_detail = ctk.CTkFrame(row1, fg_color="transparent")
+        col_detail.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        ctk.CTkLabel(col_detail, text="1. 提示词详略", font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), text_color="#374151").pack(anchor="w", pady=(0, 2))
+        self.var_agent_detail = ctk.StringVar(value="精简")
+        self._make_option_menu(col_detail, ["精简", "详细"], self.var_agent_detail)
+
+        col_count = ctk.CTkFrame(row1, fg_color="transparent")
+        col_count.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
+        ctk.CTkLabel(col_count, text="2. 推荐图表数量", font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), text_color="#374151").pack(anchor="w", pady=(0, 2))
+        self.var_agent_chart_count = ctk.StringVar(value="5")
+        self._make_option_menu(col_count, ["3", "5", "6"], self.var_agent_chart_count)
+
+        row2 = ctk.CTkFrame(agent_tab, fg_color="transparent")
+        row2.pack(fill="x", pady=6)
+        row2.columnconfigure(0, weight=1)
+
+        col_summary = ctk.CTkFrame(row2, fg_color="transparent")
+        col_summary.grid(row=0, column=0, sticky="nsew")
+        ctk.CTkLabel(col_summary, text="3. 工程摘要", font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), text_color="#374151").pack(anchor="w", pady=(0, 2))
+        self.var_agent_summary = ctk.StringVar(value="包含精简工程摘要")
+        self._make_option_menu(col_summary, ["包含精简工程摘要", "不附带工程摘要"], self.var_agent_summary)
+
+        self._section_label(agent_tab, "4. 给 Agent 的额外提示")
+        self.placeholder_agent_extra = "可选。例如：优先考虑论文图；先帮我判断哪些图适合当前工程；不要推荐结构类图表，除非数据里真的有结构字段。"
+        self.txt_agent_extra = self._make_textbox(
+            agent_tab,
+            height=110,
+            placeholder=self.placeholder_agent_extra
+        )
+
     def on_scope_change(self, val):
         if val == "手动指定分组":
             self.frame_custom_scope.pack(fill="x")
@@ -4010,6 +4058,28 @@ class AIPromptDialog(ctk.CTkToplevel):
 
     def generate_prompt_dict(self):
         active_tab = self.prompt_tabview.get() if hasattr(self, "prompt_tabview") else "参数选项"
+        if active_tab == "Agent协作":
+            extra = self._textbox_value_without_placeholder(self.txt_agent_extra, self.placeholder_agent_extra)
+            return {
+                "prompt_mode": "Agent协作",
+                "goal": "让 AI 先询问目的、推荐图表、再写 Toolkit 脚本",
+                "data_range": "由用户与 Agent 对话确认",
+                "group_by": "由 Agent 根据目标推荐",
+                "chart_style": "由 Agent 推荐多种候选",
+                "x_axis": "由 Agent 根据图表类型决定",
+                "y_axis": "由 Agent 根据图表类型决定",
+                "stats": ["由 Agent 推荐并在用户确认后落实"],
+                "title": "Agent 协作脚本",
+                "filename": "agent_chart.png",
+                "output_table": False,
+                "show_legend": True,
+                "use_chinese": True,
+                "custom_desc": extra,
+                "agent_detail_level": self.var_agent_detail.get(),
+                "agent_chart_count": self.var_agent_chart_count.get(),
+                "agent_include_project_summary": self.var_agent_summary.get() == "包含精简工程摘要",
+            }
+
         if active_tab == "目标导向":
             goal_detail = self._textbox_value_without_placeholder(self.txt_target_goal, self.placeholder_target_goal)
             scope_detail = self._textbox_value_without_placeholder(self.txt_target_scope, self.placeholder_target_scope)

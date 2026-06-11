@@ -254,6 +254,8 @@ def run(ctx):
         self.assertIn("syl_t_values", prompt)
         self.assertIn("严禁为了比较声调/F0走势", prompt)
         self.assertIn("不要把热力图当作主要统计结论", prompt)
+        self.assertIn("复刻参考图的图表类型、变量关系、统计口径、布局和视觉表达方式", prompt)
+        self.assertIn("严禁照抄参考图里的数值", prompt)
 
     def test_generate_ai_prompt_goal_oriented(self):
         project_data = {
@@ -290,6 +292,75 @@ def run(ctx):
         self.assertIn("推荐代码骨架", prompt)
         self.assertIn("每组样本数", prompt)
         self.assertIn("共享同一套颜色归一化范围", prompt)
+        self.assertIn("复刻参考图的图表类型、变量关系、统计口径、布局和视觉表达方式", prompt)
+
+    def test_generate_ai_prompt_agent_mode(self):
+        items = {}
+        for idx in range(25):
+            items[f"item_{idx}"] = {
+                "label": f"词{idx}",
+                "group": f"组{idx:02d}",
+                "analysis_mode": "f0",
+            }
+        project_data = {
+            "speakers": {
+                "spk_1": {
+                    "name": "张三",
+                    "items": items,
+                }
+            }
+        }
+        selections = {
+            "prompt_mode": "Agent协作",
+            "agent_detail_level": "详细",
+            "agent_chart_count": "5",
+            "agent_include_project_summary": True,
+            "custom_desc": "优先考虑论文图，不要无端消耗 token。",
+        }
+        prompt = generate_ai_prompt(project_data, selections)
+        self.assertIn("自定义图表脚本 Agent", prompt)
+        self.assertIn("第一轮回复不要直接输出代码", prompt)
+        self.assertIn("主动猜测用户可能的目的", prompt)
+        self.assertIn("推荐 5 种图表候选", prompt)
+        self.assertIn("用户选择图表或明确目标之后，再进入代码阶段", prompt)
+        self.assertIn("def run(ctx)", prompt)
+        self.assertIn("ctx.figure", prompt)
+        self.assertIn("pandas", prompt)
+        self.assertIn("结构类图表", prompt)
+        self.assertIn("其余 5 类已省略", prompt)
+        self.assertIn("优先考虑论文图", prompt)
+        self.assertIn("文档级脚本说明", prompt)
+        self.assertIn("项目数据说明与数据来源", prompt)
+        self.assertIn("推荐代码骨架", prompt)
+        self.assertIn("复刻参考图的图表类型、变量关系、统计口径、布局和视觉表达方式", prompt)
+        self.assertIn("严禁照抄参考图里的数值", prompt)
+
+    def test_generate_ai_prompt_agent_compact_is_still_specific(self):
+        project_data = {
+            "speakers": {
+                "spk_1": {
+                    "name": "张三",
+                    "items": {
+                        "item_1": {
+                            "label": "ma1",
+                            "group": "阴平",
+                            "analysis_mode": "f0",
+                        }
+                    },
+                }
+            }
+        }
+        selections = {
+            "prompt_mode": "Agent协作",
+            "agent_detail_level": "精简",
+            "agent_chart_count": "3",
+            "agent_include_project_summary": True,
+        }
+        prompt = generate_ai_prompt(project_data, selections)
+        self.assertIn("使用精简说明：推荐图表时给出字段、统计口径、风险和适用场景", prompt)
+        self.assertIn("推荐 3 种图表候选", prompt)
+        self.assertIn("参考图表", prompt)
+        self.assertNotIn("文档级脚本说明", prompt)
 
     def test_project_manager_load_with_and_without_script_runs(self):
         # 1. Create a project without custom_script_runs
