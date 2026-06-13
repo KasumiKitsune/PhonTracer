@@ -34,7 +34,12 @@ class TestCliAdvancedExport(unittest.TestCase):
                 },
                 'warnings': [],
                 'success': True,
-                'path': 'dummy.wav'
+                'path': 'dummy.wav',
+                'wordlist_version': 'v2',
+                'item_tags': ['目标词', '单字'],
+                'group_tags': ['主测试'],
+                'item_meta': {'结构': '单字'},
+                'metadata_source': '人工填写',
             },
             "item_2": {
                 'label': 'ba',
@@ -48,7 +53,12 @@ class TestCliAdvancedExport(unittest.TestCase):
                 },
                 'warnings': [],
                 'success': True,
-                'path': 'dummy.wav'
+                'path': 'dummy.wav',
+                'wordlist_version': 'v2',
+                'item_tags': ['填充词', '单字'],
+                'group_tags': ['对照'],
+                'item_meta': {'结构': '单字'},
+                'metadata_source': 'AI推断，需人工复核',
             }
         }
         self.speaker.last_params = {
@@ -122,6 +132,54 @@ class TestCliAdvancedExport(unittest.TestCase):
         self.assertEqual(params.get('scale'), 't_value')
         self.assertEqual(params.get('groupby'), 'speaker')
         self.assertEqual(params.get('selected_groups'), 'T1')
+        self.assertTrue(os.path.exists(out_file))
+
+    def test_cli_export_parses_chart_group_rule(self):
+        out_file = f"{self.test_dir}/test_chart_group_rule.png"
+        cmd_arg = f"contour {out_file} chart_group=item_tag:目标词,填充词"
+
+        real_exporter = None
+        orig_exporter = AcousticChartExporter
+
+        def spy_create(*args, **kwargs):
+            nonlocal real_exporter
+            real_exporter = orig_exporter(*args, **kwargs)
+            return real_exporter
+
+        with patch('cli.AcousticChartExporter', side_effect=spy_create):
+            self.cli.do_export(cmd_arg)
+
+        self.assertIsNotNone(real_exporter)
+        self.assertEqual(real_exporter.params.get('chart_group_rule'), {
+            'source': 'item_tags',
+            'tag_mode': 'each',
+            'selected_values': ['目标词', '填充词'],
+            'field_name': '',
+        })
+        self.assertTrue(os.path.exists(out_file))
+
+    def test_cli_export_parses_chart_group_meta_rule(self):
+        out_file = f"{self.test_dir}/test_chart_group_meta.png"
+        cmd_arg = f"contour {out_file} chart_group=meta:结构"
+
+        real_exporter = None
+        orig_exporter = AcousticChartExporter
+
+        def spy_create(*args, **kwargs):
+            nonlocal real_exporter
+            real_exporter = orig_exporter(*args, **kwargs)
+            return real_exporter
+
+        with patch('cli.AcousticChartExporter', side_effect=spy_create):
+            self.cli.do_export(cmd_arg)
+
+        self.assertIsNotNone(real_exporter)
+        self.assertEqual(real_exporter.params.get('chart_group_rule'), {
+            'source': 'item_meta',
+            'tag_mode': 'each',
+            'selected_values': [],
+            'field_name': '结构',
+        })
         self.assertTrue(os.path.exists(out_file))
 
     def test_cli_export_accepts_generic_rule_target_positions(self):

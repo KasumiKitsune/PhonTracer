@@ -2,6 +2,7 @@ import math
 import os
 import threading
 import queue
+from collections import Counter
 import numpy as np
 import parselmouth
 import matplotlib
@@ -64,6 +65,7 @@ class AcousticChartExporter:
         self.colors = ['#2563EB', '#DC2626', '#16A34A', '#9333EA', '#EA580C', '#0891B2', '#CA8A04', '#6366F1']
         self._speaker_data_cache = {}
         self._force_live_extract = False
+        self.chart_group_rule = self._default_chart_group_rule()
 
         # Load active speaker's data items as default fallback
         self.sm = getattr(self.app, 'speaker_manager', None)
@@ -186,6 +188,7 @@ class AcousticChartExporter:
             'chart_type': lambda: getattr(self, 'var_chart_type').get() if hasattr(self, 'var_chart_type') else None,
             'export_scope': lambda: getattr(self, 'var_export_scope').get() if hasattr(self, 'var_export_scope') else None,
             'groupby': lambda: getattr(self, 'combo_groupby').get() if hasattr(self, 'combo_groupby') else None,
+            'chart_group_rule': lambda: dict(getattr(self, 'chart_group_rule', self._default_chart_group_rule())),
             'scale': lambda: getattr(self, 'combo_scale').get() if hasattr(self, 'combo_scale') else None,
             'format': lambda: getattr(self, 'combo_format').get() if hasattr(self, 'combo_format') else None,
             'intention': lambda: getattr(self, 'combo_intention').get() if hasattr(self, 'combo_intention') else None,
@@ -287,16 +290,20 @@ class AcousticChartExporter:
         return kwargs
 
     # --- CORE DATA EXTRACTION ENGINE ---
-    def _extract_active_data(self, speakers_list, filter_groups=True):
+    def _extract_active_data(self, speakers_list, filter_groups=True, apply_chart_grouping=True):
         analysis_mode = self.project_tree.app_state_params.get('analysis_mode', 'f0')
         if analysis_mode == 'formant':
-            return self._extract_active_formant_data(speakers_list, filter_groups=filter_groups)
+            return self._extract_active_formant_data(
+                speakers_list,
+                filter_groups=filter_groups,
+                apply_chart_grouping=apply_chart_grouping,
+            )
         num_points = self.project_tree.app_state_params.get('pts', 11)
         data_entries = []
 
         for speaker in speakers_list:
             if not getattr(self, '_force_live_extract', False) and hasattr(self, '_speaker_data_cache') and speaker in self._speaker_data_cache:
-                data_entries.extend(self._speaker_data_cache[speaker])
+                data_entries.extend([self._attach_entry_group_defaults(e) for e in self._speaker_data_cache[speaker]])
                 continue
 
             orig_items = self.project_tree.items
@@ -330,6 +337,8 @@ class AcousticChartExporter:
                     speaker_items_temp.append({
                         'speaker_name': speaker.name,
                         'group': grp_name,
+                        'wordlist_group': grp_name,
+                        'chart_group': grp_name,
                         'label': item.get('label', ''),
                         'total_dur': total_dur,
                         'syl_data': syl_data,
@@ -337,7 +346,8 @@ class AcousticChartExporter:
                         'raw_freqs': p_freqs,
                         'active_ratio': active_ratio,
                         'warnings': warnings,
-                        'raw_item': item
+                        'raw_item': item,
+                        **self._item_wordlist_metadata(item),
                     })
 
                     speaker_f0_pool.extend([f for f in p_freqs if f > 0])
@@ -371,12 +381,21 @@ class AcousticChartExporter:
 
                 entry['normalized_syl_data'] = normalized_syl_data
                 entry['normalized_raw_freqs'] = _normalize_freqs(entry['raw_freqs'])
-                speaker_data_entries.append(entry)
+                speaker_data_entries.append(self._attach_entry_group_defaults(entry))
 
             self.project_tree.items = orig_items
             if hasattr(self, '_speaker_data_cache'):
                 self._speaker_data_cache[speaker] = speaker_data_entries
             data_entries.extend(speaker_data_entries)
+
+        if apply_chart_grouping:
+            data_entries = self._apply_chart_grouping(data_entries)
+        else:
+            data_entries = self._apply_chart_grouping(
+                data_entries,
+                rule=self._default_chart_group_rule(),
+                preserve_original_group=True,
+            )
 
         if filter_groups:
             selected_groups = self.get_param('selected_groups', None)
@@ -425,6 +444,238 @@ class AcousticChartExporter:
             ordered.append(value)
         return ordered
 
+    def _default_chart_group_rule(self):
+        return {
+            "source": "default",
+            "tag_mode": "each",
+            "selected_values": [],
+            "field_name": "",
+        }
+
+    def _normalize_chart_group_rule(self, rule=None):
+        base = self._default_chart_group_rule()
+        if isinstance(rule, dict):
+            base.update(rule)
+        source = str(base.get("source") or "default")
+        if source not in {
+            "default", "item_tags", "group_tags", "item_meta",
+            "metadata_source", "label", "speaker_name"
+        }:
+            source = "default"
+        tag_mode = str(base.get("tag_mode") or "each")
+        if tag_mode not in {"each", "contains", "filter_default"}:
+            tag_mode = "each"
+        selected_values = base.get("selected_values") or []
+        if isinstance(selected_values, str):
+            selected_values = [v.strip() for v in selected_values.split(",") if v.strip()]
+        selected_values = [str(v).strip() for v in selected_values if str(v).strip()]
+        return {
+            "source": source,
+            "tag_mode": tag_mode,
+            "selected_values": self._ordered_unique(selected_values),
+            "field_name": str(base.get("field_name") or "").strip(),
+        }
+
+    def _get_chart_group_rule(self):
+        return self._normalize_chart_group_rule(self.get_param("chart_group_rule", None))
+
+    def _entry_wordlist_group(self, entry):
+        return entry.get("wordlist_group") or entry.get("group") or "未分组"
+
+    def _item_wordlist_metadata(self, item):
+        item_meta = item.get("item_meta") or {}
+        if not isinstance(item_meta, dict):
+            item_meta = {}
+        return {
+            "wordlist_version": item.get("wordlist_version", "v1"),
+            "wordlist_title": item.get("wordlist_title", ""),
+            "item_note": item.get("item_note", ""),
+            "item_tags": list(item.get("item_tags", []) or []),
+            "item_aliases": list(item.get("item_aliases", []) or []),
+            "item_meta": dict(item_meta),
+            "group_note": item.get("group_note", ""),
+            "group_tags": list(item.get("group_tags", []) or []),
+            "metadata_source": item.get("metadata_source", ""),
+        }
+
+    def _attach_entry_group_defaults(self, entry):
+        copied = dict(entry)
+        base_group = copied.get("wordlist_group") or copied.get("group") or "未分组"
+        copied["wordlist_group"] = base_group
+        copied.setdefault("chart_group", copied.get("group", base_group))
+        copied.setdefault("item_tags", [])
+        copied.setdefault("group_tags", [])
+        copied.setdefault("item_meta", {})
+        copied.setdefault("metadata_source", "")
+        copied.setdefault("item_note", "")
+        copied.setdefault("group_note", "")
+        copied.setdefault("wordlist_version", "v1")
+        copied.setdefault("wordlist_title", "")
+        copied.setdefault("item_aliases", [])
+        return copied
+
+    def _entry_tag_values(self, entry, source):
+        values = entry.get(source) or []
+        if isinstance(values, str):
+            values = [v.strip() for v in values.replace("；", ",").replace("、", ",").split(",")]
+        return self._ordered_unique([str(v).strip() for v in values if str(v).strip()])
+
+    def _resolve_chart_groups_for_entry(self, entry, rule=None):
+        rule = self._normalize_chart_group_rule(rule)
+        source = rule["source"]
+        base_group = self._entry_wordlist_group(entry)
+        missing = "未标注"
+
+        if source == "default":
+            return [base_group], True
+        if source == "label":
+            return [str(entry.get("label") or missing)], True
+        if source == "speaker_name":
+            return [str(entry.get("speaker_name") or missing)], True
+        if source == "metadata_source":
+            return [str(entry.get("metadata_source") or missing)], True
+        if source == "item_meta":
+            field_name = rule.get("field_name", "")
+            if not field_name:
+                return [base_group], True
+            item_meta = entry.get("item_meta") or {}
+            value = item_meta.get(field_name, "") if isinstance(item_meta, dict) else ""
+            value = str(value).strip() if value is not None else ""
+            return [value or missing], True
+
+        if source in {"item_tags", "group_tags"}:
+            tags = self._entry_tag_values(entry, source)
+            selected = set(rule.get("selected_values") or [])
+            tag_mode = rule.get("tag_mode", "each")
+            if tag_mode == "contains":
+                target = next(iter(rule.get("selected_values") or []), "")
+                if not target:
+                    return [base_group], True
+                return ([f"包含：{target}"] if target in tags else [f"不包含：{target}"]), True
+            if tag_mode == "filter_default":
+                if selected and not selected.intersection(tags):
+                    return [], False
+                return [base_group], True
+
+            values = [tag for tag in tags if not selected or tag in selected]
+            if not values:
+                if selected:
+                    return [], False
+                values = [missing]
+            return values, True
+
+        return [base_group], True
+
+    def _chart_grouping_preserves_original_group(self):
+        return str(self.get_param("chart_type", "")) == "tone_effect_time"
+
+    def _apply_chart_grouping(self, data_entries, rule=None, preserve_original_group=None):
+        rule = self._get_chart_group_rule() if rule is None else self._normalize_chart_group_rule(rule)
+        preserve_original_group = (
+            self._chart_grouping_preserves_original_group()
+            if preserve_original_group is None else bool(preserve_original_group)
+        )
+        grouped_entries = []
+        for raw_entry in data_entries or []:
+            entry = self._attach_entry_group_defaults(raw_entry)
+            base_group = self._entry_wordlist_group(entry)
+            group_values, include_entry = self._resolve_chart_groups_for_entry(entry, rule)
+            if not include_entry:
+                continue
+            if preserve_original_group:
+                group_values = [base_group]
+            for group_value in group_values:
+                copied = dict(entry)
+                chart_group = str(group_value or "未标注")
+                copied["wordlist_group"] = base_group
+                copied["chart_group"] = chart_group
+                copied["group"] = base_group if preserve_original_group else chart_group
+                grouped_entries.append(copied)
+        return grouped_entries
+
+    def _collect_chart_grouping_options(self, data_entries=None):
+        if data_entries is None:
+            data_entries = getattr(self, "_all_base_group_filter_entries", None)
+        if data_entries is None:
+            try:
+                data_entries = self._extract_active_data(
+                    self.all_speakers if self.all_speakers else [self.active_speaker],
+                    filter_groups=False,
+                    apply_chart_grouping=False,
+                )
+            except Exception:
+                data_entries = []
+
+        item_tags = Counter()
+        group_tags = Counter()
+        meta_values = {}
+        metadata_sources = Counter()
+        for entry in data_entries or []:
+            entry = self._attach_entry_group_defaults(entry)
+            item_tags.update(self._entry_tag_values(entry, "item_tags"))
+            group_tags.update(self._entry_tag_values(entry, "group_tags"))
+            metadata_source = str(entry.get("metadata_source") or "").strip()
+            if metadata_source:
+                metadata_sources[metadata_source] += 1
+            item_meta = entry.get("item_meta") or {}
+            if isinstance(item_meta, dict):
+                for key, value in item_meta.items():
+                    key = str(key).strip()
+                    value = str(value).strip() if value is not None else ""
+                    if not key:
+                        continue
+                    meta_values.setdefault(key, Counter())[value or "未标注"] += 1
+        return {
+            "item_tags": item_tags,
+            "group_tags": group_tags,
+            "item_meta": meta_values,
+            "metadata_source": metadata_sources,
+        }
+
+    def _chart_group_counts_for_rule(self, rule=None, data_entries=None, preserve_original_group=False):
+        if data_entries is None:
+            data_entries = getattr(self, "_all_base_group_filter_entries", [])
+        grouped_entries = self._apply_chart_grouping(
+            data_entries,
+            rule=rule,
+            preserve_original_group=preserve_original_group,
+        )
+        counts = Counter()
+        for entry in grouped_entries:
+            counts[entry.get("group") or "未标注"] += 1
+        return counts
+
+    def _format_chart_group_rule_summary(self, rule=None):
+        rule = self._normalize_chart_group_rule(rule)
+        source = rule["source"]
+        selected = rule.get("selected_values") or []
+        values_text = "、".join(selected[:3])
+        if len(selected) > 3:
+            values_text += f" 等 {len(selected)} 项"
+        if source == "default":
+            return "按默认组"
+        if source == "item_tags":
+            if rule.get("tag_mode") == "contains":
+                return f"词项标签：包含/不包含 {values_text or '未选择'}"
+            if rule.get("tag_mode") == "filter_default":
+                return f"筛选词项标签：{values_text or '全部'}"
+            return f"按词项标签：{values_text or '全部'}"
+        if source == "group_tags":
+            if rule.get("tag_mode") == "contains":
+                return f"组标签：包含/不包含 {values_text or '未选择'}"
+            if rule.get("tag_mode") == "filter_default":
+                return f"筛选组标签：{values_text or '全部'}"
+            return f"按组标签：{values_text or '全部'}"
+        if source == "item_meta":
+            return f"按自定义字段：{rule.get('field_name') or '未选择'}"
+        if source == "metadata_source":
+            return "按复核状态"
+        if source == "label":
+            return "按词项"
+        if source == "speaker_name":
+            return "按发音人"
+        return "按默认组"
+
     def _split_tone_pair(self, group):
         text = str(group or "").replace("＋", "+").replace("/", "+").replace("、", "+")
         if "+" not in text:
@@ -435,7 +686,7 @@ class AcousticChartExporter:
         return parts[0], parts[1]
 
     def _is_two_syllable_tone_entry(self, entry):
-        front, back = self._split_tone_pair(entry.get("group", ""))
+        front, back = self._split_tone_pair(self._entry_wordlist_group(entry))
         if not front or not back:
             return False
         return len(entry.get("syl_data", [])) == 2
@@ -447,7 +698,7 @@ class AcousticChartExporter:
         for entry in data_entries or []:
             if not self._is_two_syllable_tone_entry(entry):
                 continue
-            front, back = self._split_tone_pair(entry.get("group", ""))
+            front, back = self._split_tone_pair(self._entry_wordlist_group(entry))
             fronts.add(front)
             backs.add(back)
             combos.add((front, back))
@@ -490,7 +741,7 @@ class AcousticChartExporter:
         for entry in data_entries:
             if not self._is_two_syllable_tone_entry(entry):
                 continue
-            front, back = self._split_tone_pair(entry.get("group", ""))
+            front, back = self._split_tone_pair(self._entry_wordlist_group(entry))
             syl_list = entry.get("normalized_syl_data") or entry.get("syl_data", [])
             if len(syl_list) != 2:
                 continue
@@ -2287,7 +2538,8 @@ class AcousticChartExporter:
 
     def _export_dataset(self, data, out_path, ext):
         self._check_export_cancelled()
-        self._report_export_progress(0.05, "正在准备导出数据...")
+        rule_summary = self._format_chart_group_rule_summary(self.get_param("chart_group_rule", None))
+        self._report_export_progress(0.05, f"正在按{rule_summary}准备导出数据...")
         chart_type = self.get_param('chart_type', 'contour')
         groupby = self.get_param('groupby', 'group')
         group_key = self._get_group_key(groupby)
@@ -2331,13 +2583,13 @@ class AcousticChartExporter:
                 plt.close(fig)
         self._report_export_progress(1.0, "当前任务完成")
 
-    def _extract_active_formant_data(self, speakers_list, filter_groups=True):
+    def _extract_active_formant_data(self, speakers_list, filter_groups=True, apply_chart_grouping=True):
         num_points = self.project_tree.app_state_params.get('pts', 11)
         data_entries = []
 
         for speaker in speakers_list:
             if not getattr(self, '_force_live_extract', False) and hasattr(self, '_speaker_data_cache') and speaker in self._speaker_data_cache:
-                data_entries.extend(self._speaker_data_cache[speaker])
+                data_entries.extend([self._attach_entry_group_defaults(e) for e in self._speaker_data_cache[speaker]])
                 continue
 
             orig_items = self.project_tree.items
@@ -2390,19 +2642,31 @@ class AcousticChartExporter:
                     speaker_data_entries.append({
                         'speaker_name': speaker.name,
                         'group': grp_name,
+                        'wordlist_group': grp_name,
+                        'chart_group': grp_name,
                         'label': label,
                         'syl_formants': syl_formants,
                         'raw_xs': item['formant_data'].get('xs', []),
                         'raw_f1': item['formant_data'].get('f1', []),
                         'raw_f2': item['formant_data'].get('f2', []),
                         'warnings': warnings,
-                        'raw_item': item
+                        'raw_item': item,
+                        **self._item_wordlist_metadata(item),
                     })
 
             self.project_tree.items = orig_items
             if hasattr(self, '_speaker_data_cache'):
-                self._speaker_data_cache[speaker] = speaker_data_entries
+                self._speaker_data_cache[speaker] = [self._attach_entry_group_defaults(e) for e in speaker_data_entries]
             data_entries.extend(speaker_data_entries)
+
+        if apply_chart_grouping:
+            data_entries = self._apply_chart_grouping(data_entries)
+        else:
+            data_entries = self._apply_chart_grouping(
+                data_entries,
+                rule=self._default_chart_group_rule(),
+                preserve_original_group=True,
+            )
 
         if filter_groups:
             selected_groups = self.get_param('selected_groups', None)
@@ -3605,6 +3869,11 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
 
     def _init_group_filters(self):
         # Extract all unique group names across all speakers
+        self._all_base_group_filter_entries = self._extract_active_data(
+            self.all_speakers if self.all_speakers else [self.active_speaker],
+            filter_groups=False,
+            apply_chart_grouping=False,
+        )
         all_entries = self._extract_active_data(self.all_speakers if self.all_speakers else [self.active_speaker], filter_groups=False)
         self._all_group_filter_entries = all_entries
         self.group_counts = {}
@@ -3901,22 +4170,47 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         if self._is_formant_mode():
             self.combo_scale.configure(state="disabled")
 
-        # Row 3 Labels
-        ctk.CTkLabel(card2, text="图例位置:", font=self.font_small).grid(row=3, column=0, sticky="w", padx=(15, 5), pady=(5, 2))
-        ctk.CTkLabel(card2, text="图像导出格式:", font=self.font_small).grid(row=3, column=1, sticky="w", padx=(5, 15), pady=(5, 2))
+        # Row 3: compact custom grouping rule
+        ctk.CTkLabel(card2, text="图表分组:", font=self.font_small).grid(row=3, column=0, columnspan=2, sticky="w", padx=15, pady=(0, 2))
+        group_rule_bar = ctk.CTkFrame(card2, fg_color=("#F8FAFC", "#263244"), border_width=1, border_color=("#E5E7EB", "#475569"), corner_radius=16)
+        group_rule_bar.grid(row=4, column=0, columnspan=2, sticky="ew", padx=15, pady=(0, 10))
+        group_rule_bar.grid_columnconfigure(0, weight=1)
+        self.lbl_chart_group_rule = ctk.CTkLabel(
+            group_rule_bar,
+            text=self._format_chart_group_rule_summary(self.chart_group_rule),
+            font=self.font_small,
+            text_color=("#374151", "#E5E7EB"),
+            anchor="w",
+        )
+        self.lbl_chart_group_rule.grid(row=0, column=0, sticky="ew", padx=(12, 6), pady=5)
+        ctk.CTkButton(
+            group_rule_bar,
+            text="规则",
+            width=58,
+            height=24,
+            corner_radius=12,
+            font=self.font_small,
+            fg_color=(self.ui_primary, self.ui_primary_hover),
+            hover_color=self.ui_primary_hover,
+            command=self._open_chart_group_rule_dialog,
+        ).grid(row=0, column=1, padx=(0, 5), pady=5)
 
-        # Row 4 OptionMenus
+        # Row 5 Labels
+        ctk.CTkLabel(card2, text="图例位置:", font=self.font_small).grid(row=5, column=0, sticky="w", padx=(15, 5), pady=(5, 2))
+        ctk.CTkLabel(card2, text="图像导出格式:", font=self.font_small).grid(row=5, column=1, sticky="w", padx=(5, 15), pady=(5, 2))
+
+        # Row 6 OptionMenus
         self.combo_legend_loc = ctk.CTkOptionMenu(card2, values=["右上", "右下", "左上", "左下"], command=lambda _: self.update_preview(), **self.dropdown_kwargs)
         self.combo_legend_loc.set("右上")
-        self.combo_legend_loc.grid(row=4, column=0, sticky="ew", padx=(15, 5), pady=(0, 10))
+        self.combo_legend_loc.grid(row=6, column=0, sticky="ew", padx=(15, 5), pady=(0, 10))
         self._apply_custom_arrow(self.combo_legend_loc)
 
         self.combo_format = ctk.CTkOptionMenu(card2, values=["PNG 图片 (.png)", "SVG 矢量图 (.svg)", "PDF 文档 (.pdf)"], command=self._on_format_changed, **self.dropdown_kwargs)
         self.combo_format.set("PNG 图片 (.png)")
-        self.combo_format.grid(row=4, column=1, sticky="ew", padx=(5, 15), pady=(0, 10))
+        self.combo_format.grid(row=6, column=1, sticky="ew", padx=(5, 15), pady=(0, 10))
         self._apply_custom_arrow(self.combo_format)
 
-        # Row 5 CheckBox
+        # Row 7 CheckBox
         self.cb_legend_outside = ctk.CTkCheckBox(
             card2, text="显示在图表主体的外侧", variable=self.var_legend_outside,
             font=self.font_small, checkbox_width=18, checkbox_height=18,
@@ -3924,7 +4218,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             fg_color=(self.ui_primary, self.ui_primary_hover), hover_color=("#9CA3AF", "#4B5563"), border_color=("#4B5563", "#9CA3AF"),
             command=self.update_preview
         )
-        self.cb_legend_outside.grid(row=5, column=0, columnspan=2, sticky="w", padx=15, pady=(0, 15))
+        self.cb_legend_outside.grid(row=7, column=0, columnspan=2, sticky="w", padx=15, pady=(0, 15))
 
         # --- CARD 2.5: Image Size & Pixels Settings ---
         card_size = ctk.CTkFrame(self.left_scroll, fg_color=("#FFFFFF", "#1E293B"), border_width=1, border_color=("#E5E7EB", "#475569"), corner_radius=12)
@@ -3994,7 +4288,8 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         self.card_filter = ctk.CTkFrame(self.left_scroll, fg_color=("#FFFFFF", "#1E293B"), border_width=1, border_color=("#E5E7EB", "#475569"), corner_radius=12)
         self.card_filter.pack(fill=tk.X, **card_padding)
 
-        ctk.CTkLabel(self.card_filter, text="🎯 组别筛选器", font=self.font_title).pack(anchor="w", padx=15, pady=(10, 5))
+        self.lbl_group_filter_title = ctk.CTkLabel(self.card_filter, text="🎯 当前图表组筛选", font=self.font_title)
+        self.lbl_group_filter_title.pack(anchor="w", padx=15, pady=(10, 5))
 
         # Search Entry & Buttons Row
         search_btn_row = ctk.CTkFrame(self.card_filter, fg_color="transparent")
@@ -4004,7 +4299,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         self.search_group_var.trace_add("write", lambda *args: self._filter_groups_list())
 
         self.entry_search_group = ctk.CTkEntry(
-            search_btn_row, placeholder_text="搜索组别...", textvariable=self.search_group_var,
+            search_btn_row, placeholder_text="搜索当前图表组...", textvariable=self.search_group_var,
             font=self.font_small, height=32, fg_color="white", text_color="#1F2937",
             border_width=1, border_color="#E5E7EB", corner_radius=16
         )
@@ -4151,6 +4446,296 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         for child in widget.winfo_children():
             self._bind_left_scroll_wheel_recursive(child)
 
+    def _update_chart_group_rule_label(self):
+        if hasattr(self, "lbl_chart_group_rule"):
+            text = self._format_chart_group_rule_summary(self.chart_group_rule)
+            groupby_text = self.combo_groupby.get() if hasattr(self, "combo_groupby") else ""
+            rule_active = self.chart_group_rule.get("source") != "default"
+            if self._chart_grouping_preserves_original_group() and rule_active:
+                text += "（当前图表仅作为筛选条件）"
+            elif groupby_text in {"按词语", "按单字/音节", "按发音人"} and rule_active:
+                text += "（当前绘图维度会保留专用分类）"
+            self.lbl_chart_group_rule.configure(text=text)
+
+    def _apply_chart_group_rule_from_ui(self, rule):
+        self.chart_group_rule = self._normalize_chart_group_rule(rule)
+        self.current_preview_page = 0
+        self.current_group_page = 0
+        self._update_chart_group_rule_label()
+        self._update_group_filters()
+        self._on_group_filter_changed()
+
+    def _open_chart_group_rule_dialog(self):
+        options = self._collect_chart_grouping_options()
+        current_rule = self._normalize_chart_group_rule(self.chart_group_rule)
+
+        source_to_label = {
+            "default": "默认组",
+            "item_tags": "词项标签",
+            "group_tags": "组标签",
+            "item_meta": "自定义字段",
+            "metadata_source": "复核状态",
+            "label": "词项",
+            "speaker_name": "发音人",
+        }
+        label_to_source = {label: source for source, label in source_to_label.items()}
+        mode_to_label = {
+            "each": "每个选中标签一组",
+            "contains": "包含/不包含指定标签",
+            "filter_default": "筛选标签后仍按默认组",
+        }
+        label_to_mode = {label: mode for mode, label in mode_to_label.items()}
+
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("图表分组规则")
+        dialog.geometry("680x620")
+        dialog.resizable(False, False)
+        dialog.transient(self)
+        dialog.grab_set()
+
+        outer = ctk.CTkFrame(dialog, fg_color=("#F8FAFC", "#111827"))
+        outer.pack(fill=tk.BOTH, expand=True)
+
+        card = ctk.CTkFrame(
+            outer,
+            fg_color=("#FFFFFF", "#1E293B"),
+            border_width=1,
+            border_color=("#E5E7EB", "#475569"),
+            corner_radius=18,
+        )
+        card.pack(fill=tk.BOTH, expand=True, padx=18, pady=18)
+        card.grid_columnconfigure(0, weight=1)
+        card.grid_columnconfigure(1, weight=1)
+        card.grid_rowconfigure(5, weight=1)
+
+        ctk.CTkLabel(card, text="图表分组规则", font=ctk.CTkFont(family="Microsoft YaHei", size=18, weight="bold")).grid(
+            row=0, column=0, columnspan=2, sticky="w", padx=20, pady=(18, 4)
+        )
+        ctk.CTkLabel(
+            card,
+            text="选择图表如何生成组别。默认不会改动字表组；标签分组更适合探索，自定义字段更适合正式比较。",
+            font=self.font_small,
+            text_color=("#6B7280", "#CBD5E1"),
+            wraplength=600,
+            justify="left",
+        ).grid(row=1, column=0, columnspan=2, sticky="w", padx=20, pady=(0, 14))
+
+        source_var = ctk.StringVar(value=source_to_label.get(current_rule["source"], "默认组"))
+        mode_var = ctk.StringVar(value=mode_to_label.get(current_rule["tag_mode"], mode_to_label["each"]))
+        meta_fields = sorted(options.get("item_meta", {}).keys())
+        initial_field = current_rule.get("field_name") if current_rule.get("field_name") in meta_fields else (meta_fields[0] if meta_fields else "")
+        field_var = ctk.StringVar(value=initial_field or "无可用字段")
+
+        ctk.CTkLabel(card, text="分组来源", font=self.font_small).grid(row=2, column=0, sticky="w", padx=(20, 8), pady=(0, 3))
+        ctk.CTkLabel(card, text="标签模式 / 字段", font=self.font_small).grid(row=2, column=1, sticky="w", padx=(8, 20), pady=(0, 3))
+
+        source_menu = ctk.CTkOptionMenu(
+            card,
+            values=list(source_to_label.values()),
+            variable=source_var,
+            **self.dropdown_kwargs,
+        )
+        source_menu.grid(row=3, column=0, sticky="ew", padx=(20, 8), pady=(0, 10))
+        self._apply_custom_arrow(source_menu)
+
+        mode_menu = ctk.CTkOptionMenu(card, values=list(mode_to_label.values()), variable=mode_var, **self.dropdown_kwargs)
+        mode_menu.grid(row=3, column=1, sticky="ew", padx=(8, 20), pady=(0, 10))
+        self._apply_custom_arrow(mode_menu)
+
+        field_menu = ctk.CTkOptionMenu(card, values=meta_fields or ["无可用字段"], variable=field_var, **self.dropdown_kwargs)
+        field_menu.grid(row=4, column=1, sticky="ew", padx=(8, 20), pady=(0, 10))
+        self._apply_custom_arrow(field_menu)
+
+        values_panel = ctk.CTkFrame(card, fg_color=("#F8FAFC", "#263244"), corner_radius=14)
+        values_panel.grid(row=5, column=0, sticky="nsew", padx=(20, 8), pady=(0, 14))
+        values_panel.grid_rowconfigure(1, weight=1)
+        values_panel.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(values_panel, text="参与标签", font=self.font_title).grid(row=0, column=0, sticky="w", padx=14, pady=(12, 4))
+        values_scroll = ctk.CTkScrollableFrame(values_panel, fg_color="transparent", height=230)
+        values_scroll.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
+
+        preview_panel = ctk.CTkFrame(card, fg_color=("#F8FAFC", "#263244"), corner_radius=14)
+        preview_panel.grid(row=5, column=1, sticky="nsew", padx=(8, 20), pady=(0, 14))
+        preview_panel.grid_rowconfigure(2, weight=1)
+        preview_panel.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(preview_panel, text="分组预览", font=self.font_title).grid(row=0, column=0, sticky="w", padx=14, pady=(12, 4))
+        preview_hint = ctk.CTkLabel(preview_panel, text="", font=self.font_small, text_color=("#6B7280", "#CBD5E1"), anchor="w")
+        preview_hint.grid(row=1, column=0, sticky="ew", padx=14, pady=(0, 4))
+        preview_scroll = ctk.CTkScrollableFrame(preview_panel, fg_color="transparent", height=230)
+        preview_scroll.grid(row=2, column=0, sticky="nsew", padx=8, pady=(0, 8))
+
+        selected_vars = {}
+
+        def current_source():
+            return label_to_source.get(source_var.get(), "default")
+
+        def current_mode():
+            return label_to_mode.get(mode_var.get(), "each")
+
+        def build_rule():
+            selected = [name for name, var in selected_vars.items() if var.get()]
+            if current_mode() == "contains" and selected:
+                selected = selected[:1]
+            return self._normalize_chart_group_rule({
+                "source": current_source(),
+                "tag_mode": current_mode(),
+                "selected_values": selected,
+                "field_name": field_var.get() if field_var.get() != "无可用字段" else "",
+            })
+
+        def candidate_tags():
+            source = current_source()
+            if source == "item_tags":
+                return options.get("item_tags", Counter())
+            if source == "group_tags":
+                return options.get("group_tags", Counter())
+            return Counter()
+
+        def refresh_preview():
+            for child in preview_scroll.winfo_children():
+                child.destroy()
+            rule = build_rule()
+            counts = self._chart_group_counts_for_rule(rule)
+            if not counts:
+                ctk.CTkLabel(
+                    preview_scroll,
+                    text="当前规则没有匹配到可绘制条目。",
+                    font=self.font_small,
+                    text_color=("#6B7280", "#CBD5E1"),
+                ).pack(anchor="w", padx=8, pady=8)
+                preview_hint.configure(text="0 组")
+                return
+            ordered = sorted(counts.items(), key=lambda item: (-item[1], str(item[0])))
+            hint = f"{len(ordered)} 组 | {sum(counts.values())} 项"
+            if len(ordered) > 8:
+                hint += " | 论文主图建议筛选到 8 组以内"
+            preview_hint.configure(text=hint)
+            for idx, (name, count) in enumerate(ordered[:24]):
+                row = ctk.CTkFrame(
+                    preview_scroll,
+                    fg_color=("#FFFFFF", "#1E293B") if idx % 2 == 0 else ("#EEF2FF", "#334155"),
+                    corner_radius=10,
+                )
+                row.pack(fill=tk.X, padx=4, pady=3)
+                ctk.CTkLabel(row, text=str(name), font=self.font_small, anchor="w").pack(side=tk.LEFT, fill=tk.X, expand=True, padx=10, pady=6)
+                ctk.CTkLabel(row, text=f"{count} 项", font=self.font_small, text_color=("#2563EB", "#93C5FD")).pack(side=tk.RIGHT, padx=10, pady=6)
+            if len(ordered) > 24:
+                ctk.CTkLabel(
+                    preview_scroll,
+                    text=f"还有 {len(ordered) - 24} 组未显示，可用左侧筛选器继续控制。",
+                    font=self.font_small,
+                    text_color=("#6B7280", "#CBD5E1"),
+                ).pack(anchor="w", padx=8, pady=6)
+
+        def refresh_values():
+            for child in values_scroll.winfo_children():
+                child.destroy()
+            selected_vars.clear()
+            source = current_source()
+            if source not in {"item_tags", "group_tags"}:
+                ctk.CTkLabel(
+                    values_scroll,
+                    text="该来源会按实际取值自动分组，不需要选择标签。",
+                    font=self.font_small,
+                    text_color=("#6B7280", "#CBD5E1"),
+                    wraplength=250,
+                    justify="left",
+                ).pack(anchor="w", padx=10, pady=8)
+                refresh_preview()
+                return
+
+            tags = candidate_tags()
+            if not tags:
+                ctk.CTkLabel(
+                    values_scroll,
+                    text="当前工程没有可用标签。",
+                    font=self.font_small,
+                    text_color=("#6B7280", "#CBD5E1"),
+                ).pack(anchor="w", padx=10, pady=8)
+                refresh_preview()
+                return
+
+            selected_now = set(current_rule.get("selected_values", [])) if source == current_rule.get("source") else set()
+            for tag, count in sorted(tags.items(), key=lambda item: (-item[1], str(item[0]))):
+                var = ctk.BooleanVar(value=(not selected_now or tag in selected_now))
+                selected_vars[tag] = var
+                row = ctk.CTkCheckBox(
+                    values_scroll,
+                    text=f"{tag} ({count}项)",
+                    variable=var,
+                    font=self.font_small,
+                    checkbox_width=18,
+                    checkbox_height=18,
+                    corner_radius=1000,
+                    fg_color=(self.ui_primary, self.ui_primary_hover),
+                    hover_color=("#9CA3AF", "#4B5563"),
+                    border_color=("#4B5563", "#9CA3AF"),
+                    command=refresh_preview,
+                )
+                row.pack(anchor="w", padx=10, pady=4)
+            refresh_preview()
+
+        def refresh_mode_state(*_):
+            source = current_source()
+            if source in {"item_tags", "group_tags"}:
+                mode_menu.configure(values=list(mode_to_label.values()), state="normal")
+                if mode_var.get() not in mode_to_label.values():
+                    mode_var.set(mode_to_label["each"])
+            else:
+                mode_menu.configure(values=["按字段值分组"], state="disabled")
+                mode_var.set("按字段值分组")
+            if source == "item_meta":
+                field_menu.configure(state="normal")
+                if field_var.get() == "无可用字段" and meta_fields:
+                    field_var.set(meta_fields[0])
+            else:
+                field_menu.configure(state="disabled")
+            refresh_values()
+
+        source_menu.configure(command=lambda _=None: refresh_mode_state())
+        mode_menu.configure(command=lambda _=None: refresh_preview())
+        field_menu.configure(command=lambda _=None: refresh_preview())
+        refresh_mode_state()
+
+        button_row = ctk.CTkFrame(card, fg_color="transparent")
+        button_row.grid(row=6, column=0, columnspan=2, sticky="ew", padx=20, pady=(0, 18))
+        button_row.grid_columnconfigure(0, weight=1)
+        ctk.CTkButton(
+            button_row,
+            text="恢复默认",
+            width=110,
+            height=32,
+            corner_radius=16,
+            font=self.font_small,
+            fg_color=("#E5E7EB", "#374151"),
+            text_color=("#374151", "#E5E7EB"),
+            hover_color=("#D1D5DB", "#4B5563"),
+            command=lambda: (self._apply_chart_group_rule_from_ui(self._default_chart_group_rule()), dialog.destroy()),
+        ).grid(row=0, column=0, sticky="w")
+        ctk.CTkButton(
+            button_row,
+            text="取消",
+            width=90,
+            height=32,
+            corner_radius=16,
+            font=self.font_small,
+            fg_color=("#E5E7EB", "#374151"),
+            text_color=("#374151", "#E5E7EB"),
+            hover_color=("#D1D5DB", "#4B5563"),
+            command=dialog.destroy,
+        ).grid(row=0, column=1, padx=(8, 8))
+        ctk.CTkButton(
+            button_row,
+            text="应用规则",
+            width=110,
+            height=32,
+            corner_radius=16,
+            font=self.font_main,
+            fg_color=(self.ui_primary, self.ui_primary_hover),
+            hover_color=self.ui_primary_hover,
+            command=lambda: (self._apply_chart_group_rule_from_ui(build_rule()), dialog.destroy()),
+        ).grid(row=0, column=2)
+
     def _on_type_changed(self, val):
         self.current_group_page = 0
         # Update dynamic options card UI based on chart type selection
@@ -4201,6 +4786,8 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             self.combo_groupby.set("按词语")
 
         self._bind_left_scroll_wheel_recursive(self.dynamic_content_frame)
+        self._update_chart_group_rule_label()
+        self._update_group_filters()
         self.update_preview()
 
     def _on_scope_changed(self, val):
@@ -4243,6 +4830,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
 
     def _on_groupby_changed(self, val):
         self.current_group_page = 0
+        self._update_chart_group_rule_label()
         self.update_preview()
 
     def _on_intention_changed(self, val):
@@ -4715,7 +5303,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
 
     def _snapshot_render_params(self):
         keys = [
-            'chart_type', 'export_scope', 'groupby', 'scale', 'format',
+            'chart_type', 'export_scope', 'groupby', 'chart_group_rule', 'scale', 'format',
             'contour_x', 'contour_content', 'contour_facet',
             'dist_type', 'dist_style',
             'density_bw', 'density_f0_mode', 'density_facet',
@@ -4916,6 +5504,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
                 self.group_pagination_frame.grid_forget()
 
             params_snapshot = self._snapshot_render_params()
+            rule_summary = self._format_chart_group_rule_summary(params_snapshot.get("chart_group_rule"))
             cancel_event = threading.Event()
             progress_queue = queue.Queue()
             self._preview_cancel_event = cancel_event
@@ -4930,7 +5519,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
                     )
                     with _MATPLOTLIB_LOCK:
                         self._check_export_cancelled()
-                        progress_queue.put(("progress", {"progress": 0.10, "message": "正在准备图表数据..."}))
+                        progress_queue.put(("progress", {"progress": 0.10, "message": f"正在按{rule_summary}准备图表数据..."}))
                         fig = self.generate_plot(data, is_preview=True)
                         self._check_export_cancelled()
                     progress_queue.put(("progress", {"progress": 0.95, "message": "正在生成预览画布..."}))
@@ -4989,6 +5578,12 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             self._force_live_extract = False
 
     def _update_group_filters(self):
+        base_entries = self._extract_active_data(
+            self.all_speakers if self.all_speakers else [self.active_speaker],
+            filter_groups=False,
+            apply_chart_grouping=False,
+        )
+        self._all_base_group_filter_entries = base_entries
         all_entries = self._extract_active_data(self.all_speakers if self.all_speakers else [self.active_speaker], filter_groups=False)
         self._all_group_filter_entries = all_entries
         new_group_counts = {}
@@ -5010,7 +5605,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
 
         self._populate_groups_list()
         if hasattr(self, "combo_type") and not self._is_formant_mode():
-            type_values = self._get_tone_chart_type_values(all_entries)
+            type_values = self._get_tone_chart_type_values(base_entries)
             self.combo_type.configure(values=type_values)
             if self.combo_type.get() not in type_values:
                 self.combo_type.set("声调轮廓图")

@@ -29,6 +29,93 @@ class TestAcousticExporterFeatures(unittest.TestCase):
             self._tone_effect_entry("阳平+阳平", 2.3, 2.4),
         ]
 
+    def _grouping_exporter(self):
+        project_tree = MagicMock()
+        project_tree.app_state_params = {'pts': 11}
+        return AcousticChartExporter(project_tree=project_tree)
+
+    def test_chart_group_rule_defaults_to_original_group(self):
+        exporter = self._grouping_exporter()
+        entries = [
+            {"group": "阴平", "label": "妈", "item_tags": ["目标词"], "item_meta": {"结构": "单字"}},
+            {"group": "阳平", "label": "麻", "item_tags": ["填充词"], "item_meta": {"结构": "单字"}},
+        ]
+
+        grouped = exporter._apply_chart_grouping(entries)
+
+        self.assertEqual([entry["group"] for entry in grouped], ["阴平", "阳平"])
+        self.assertEqual(grouped[0]["wordlist_group"], "阴平")
+        self.assertEqual(grouped[0]["chart_group"], "阴平")
+
+    def test_chart_group_rule_can_group_by_item_tags_and_duplicate_multitag_items(self):
+        exporter = self._grouping_exporter()
+        entries = [
+            {"group": "阴平", "label": "妈", "item_tags": ["目标词", "单字"]},
+            {"group": "阳平", "label": "麻", "item_tags": ["填充词"]},
+        ]
+        rule = {"source": "item_tags", "tag_mode": "each", "selected_values": ["目标词", "单字"]}
+
+        grouped = exporter._apply_chart_grouping(entries, rule=rule)
+
+        self.assertEqual([entry["group"] for entry in grouped], ["目标词", "单字"])
+        self.assertEqual([entry["label"] for entry in grouped], ["妈", "妈"])
+        self.assertEqual({entry["wordlist_group"] for entry in grouped}, {"阴平"})
+
+    def test_chart_group_rule_uses_current_dialog_rule_when_rule_is_not_passed(self):
+        exporter = self._grouping_exporter()
+        exporter.chart_group_rule = {"source": "item_tags", "tag_mode": "each", "selected_values": ["目标词"]}
+        entries = [
+            {"group": "阴平", "label": "妈", "item_tags": ["目标词"]},
+            {"group": "阳平", "label": "麻", "item_tags": ["填充词"]},
+        ]
+
+        grouped = exporter._apply_chart_grouping(entries)
+
+        self.assertEqual([entry["group"] for entry in grouped], ["目标词"])
+
+    def test_chart_group_rule_can_filter_by_tag_but_keep_default_group(self):
+        exporter = self._grouping_exporter()
+        entries = [
+            {"group": "阴平", "label": "妈", "item_tags": ["目标词"]},
+            {"group": "阳平", "label": "麻", "item_tags": ["填充词"]},
+        ]
+        rule = {"source": "item_tags", "tag_mode": "filter_default", "selected_values": ["目标词"]}
+
+        grouped = exporter._apply_chart_grouping(entries, rule=rule)
+
+        self.assertEqual(len(grouped), 1)
+        self.assertEqual(grouped[0]["group"], "阴平")
+        self.assertEqual(grouped[0]["label"], "妈")
+
+    def test_chart_group_rule_can_group_by_custom_item_meta_field(self):
+        exporter = self._grouping_exporter()
+        entries = [
+            {"group": "阴平", "label": "妈", "item_meta": {"结构": "单字"}},
+            {"group": "阳平", "label": "妈妈", "item_meta": {"结构": "双字"}},
+            {"group": "上声", "label": "马", "item_meta": {}},
+        ]
+        rule = {"source": "item_meta", "field_name": "结构"}
+
+        grouped = exporter._apply_chart_grouping(entries, rule=rule)
+
+        self.assertEqual([entry["group"] for entry in grouped], ["单字", "双字", "未标注"])
+
+    def test_tone_effect_time_preserves_original_group_when_custom_rule_is_active(self):
+        exporter = self._grouping_exporter()
+        exporter.params = {
+            "chart_type": "tone_effect_time",
+            "chart_group_rule": {"source": "item_tags", "tag_mode": "each", "selected_values": ["目标词"]},
+        }
+        entries = [
+            {"group": "阴平+阳平", "label": "妈妈", "item_tags": ["目标词"]},
+        ]
+
+        grouped = exporter._apply_chart_grouping(entries)
+
+        self.assertEqual(grouped[0]["group"], "阴平+阳平")
+        self.assertEqual(grouped[0]["wordlist_group"], "阴平+阳平")
+        self.assertEqual(grouped[0]["chart_group"], "阴平+阳平")
+
     def test_group_filter_bulk_actions_only_touch_visible_groups(self):
         class FakeTextVar:
             def __init__(self, value=""):

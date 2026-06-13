@@ -1912,6 +1912,8 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
         Example: export wav scratch/output_dir 0.1 separate
         Example: export contour output.svg integrated scale=hz groupby=label facet=group
         Example: export density output.png integrated normalization=speaker facet=group
+        Example: export contour output.png integrated chart_group=item_tag:目标词,填充词
+        Example: export contour output.png integrated chart_group=meta:结构
         """
         args = shlex.split(arg)
         if len(args) < 2:
@@ -1932,6 +1934,62 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                 'export_scope': 'active',  # default target
             }
 
+            def parse_chart_group_rule(value):
+                text = str(value or "").strip()
+                lowered = text.lower()
+                if lowered in ("default", "group", "原始组", "默认组"):
+                    return {"source": "default", "tag_mode": "each", "selected_values": [], "field_name": ""}
+                if lowered in ("review", "metadata_source", "复核状态"):
+                    return {"source": "metadata_source", "tag_mode": "each", "selected_values": [], "field_name": ""}
+                if lowered in ("label", "word", "词项"):
+                    return {"source": "label", "tag_mode": "each", "selected_values": [], "field_name": ""}
+                if lowered in ("speaker", "speaker_name", "发音人"):
+                    return {"source": "speaker_name", "tag_mode": "each", "selected_values": [], "field_name": ""}
+
+                if ":" in text:
+                    prefix, rest = text.split(":", 1)
+                else:
+                    prefix, rest = text, ""
+                prefix = prefix.strip().lower().replace("-", "_")
+                rest = rest.strip()
+                values = [v.strip() for v in rest.replace("；", ",").replace("、", ",").split(",") if v.strip()]
+
+                source_aliases = {
+                    "item_tag": "item_tags",
+                    "item_tags": "item_tags",
+                    "tag": "item_tags",
+                    "tags": "item_tags",
+                    "词项标签": "item_tags",
+                    "标签": "item_tags",
+                    "group_tag": "group_tags",
+                    "group_tags": "group_tags",
+                    "组标签": "group_tags",
+                    "meta": "item_meta",
+                    "field": "item_meta",
+                    "item_meta": "item_meta",
+                    "自定义字段": "item_meta",
+                    "字段": "item_meta",
+                    "contains_item_tag": "item_tags",
+                    "contains_group_tag": "group_tags",
+                    "filter_item_tag": "item_tags",
+                    "filter_group_tag": "group_tags",
+                }
+                source = source_aliases.get(prefix)
+                if not source:
+                    raise ValueError(f"Unsupported chart_group rule: {text}")
+
+                tag_mode = "each"
+                if prefix.startswith("contains_"):
+                    tag_mode = "contains"
+                elif prefix.startswith("filter_"):
+                    tag_mode = "filter_default"
+
+                if source == "item_meta":
+                    field_name = rest or (values[0] if values else "")
+                    return {"source": "item_meta", "tag_mode": "each", "selected_values": [], "field_name": field_name}
+
+                return {"source": source, "tag_mode": tag_mode, "selected_values": values, "field_name": ""}
+
             # Gather positional args and key-value pairs
             pos_args = []
             for item in args[2:]:
@@ -1950,6 +2008,13 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                             k = 'density_facet'
                         elif fmt == 'contour':
                             k = 'contour_facet'
+                    elif k in ('chart_group', 'chart_group_rule', 'group_rule'):
+                        k = 'chart_group_rule'
+                        try:
+                            v = parse_chart_group_rule(v)
+                        except ValueError as exc:
+                            print(json.dumps({"success": False, "error": str(exc)}))
+                            return
                     params[k] = v
                 else:
                     pos_args.append(item)
