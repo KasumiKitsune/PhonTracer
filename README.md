@@ -21,7 +21,7 @@
 
 ---
 
-### 📷 界面预览
+### <img src="https://img.icons8.com/material-rounded/24/000000/camera.png" width="20" style="vertical-align: middle;"/> 界面预览
 
 <table width="100%">
   <tr>
