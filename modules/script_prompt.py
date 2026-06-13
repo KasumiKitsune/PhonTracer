@@ -27,6 +27,99 @@ def _format_sequence(values, empty="无", limit=None):
     return ", ".join(values)
 
 
+def _iter_project_items(project_data):
+    if not project_data or not isinstance(project_data, dict):
+        return
+    speakers = project_data.get("speakers", {})
+    if not isinstance(speakers, dict):
+        return
+    for spk in speakers.values():
+        if not isinstance(spk, dict):
+            continue
+        items = spk.get("items", {})
+        if isinstance(items, dict):
+            iterable = items.values()
+        elif isinstance(items, list):
+            iterable = items
+        else:
+            iterable = []
+        for item in iterable:
+            if isinstance(item, dict):
+                yield item
+
+
+def _looks_like_v2_wordlist_item(item):
+    return (
+        item.get("wordlist_version") == "v2"
+        or bool(item.get("wordlist_title"))
+        or bool(item.get("item_tags"))
+        or bool(item.get("group_tags"))
+        or bool(item.get("item_meta"))
+        or bool(item.get("item_note"))
+        or bool(item.get("group_note"))
+        or bool(item.get("item_aliases"))
+    )
+
+
+def _build_wordlist_metadata_summary(items, limit=16):
+    v2_count = 0
+    titles = Counter()
+    item_tags = Counter()
+    group_tags = Counter()
+    meta_keys = Counter()
+    metadata_sources = Counter()
+    item_note_count = 0
+    group_note_count = 0
+    alias_count = 0
+    meta_item_count = 0
+
+    for item in items:
+        if not _looks_like_v2_wordlist_item(item):
+            continue
+        v2_count += 1
+        title = item.get("wordlist_title")
+        if title:
+            titles[str(title)] += 1
+        for tag in item.get("item_tags", []) or []:
+            if str(tag).strip():
+                item_tags[str(tag).strip()] += 1
+        for tag in item.get("group_tags", []) or []:
+            if str(tag).strip():
+                group_tags[str(tag).strip()] += 1
+        item_meta = item.get("item_meta") or {}
+        if isinstance(item_meta, dict) and item_meta:
+            meta_item_count += 1
+            for key in item_meta.keys():
+                if str(key).strip():
+                    meta_keys[str(key).strip()] += 1
+        if item.get("metadata_source"):
+            metadata_sources[str(item.get("metadata_source"))] += 1
+        if item.get("item_note"):
+            item_note_count += 1
+        if item.get("group_note"):
+            group_note_count += 1
+        if item.get("item_aliases"):
+            alias_count += 1
+
+    if not v2_count:
+        return (
+            "- 高级字表元数据: 当前工程未检测到 v2 字表字段；"
+            "如果用户想按标签、结构或实验条件分析，请先确认工程是否使用高级字表导入。"
+        )
+
+    return (
+        f"- 高级字表元数据: v2 条目 {v2_count}；"
+        f"字表标题: {_format_counter(titles, limit=limit)}；"
+        f"复核状态: {_format_counter(metadata_sources, limit=limit)}；"
+        f"带词项备注 {item_note_count}；带组备注 {group_note_count}；"
+        f"带别名 {alias_count}；带自定义字段 {meta_item_count}\n"
+        f"- 可用于脚本筛选/分组的高级字表字段: "
+        f"词项标签 {{{_format_counter(item_tags, limit=limit)}}}；"
+        f"组标签 {{{_format_counter(group_tags, limit=limit)}}}；"
+        f"自定义字段 {{{_format_counter(meta_keys, limit=limit)}}}"
+    )
+
+
 def _build_project_summary(
     project_data,
     max_speaker_names=None,
@@ -43,6 +136,7 @@ def _build_project_summary(
     speaker_lines = []
     pitch_cache_count = 0
     formant_cache_count = 0
+    all_items = []
 
     if project_data and isinstance(project_data, dict):
         speakers = project_data.get("speakers", {})
@@ -55,7 +149,20 @@ def _build_project_summary(
             spk_modes = Counter()
             spk_excluded = 0
 
-            for item in items.values():
+            if isinstance(items, dict):
+                item_values = items.values()
+                item_len = len(items)
+            elif isinstance(items, list):
+                item_values = items
+                item_len = len(items)
+            else:
+                item_values = []
+                item_len = 0
+
+            for item in item_values:
+                if not isinstance(item, dict):
+                    continue
+                all_items.append(item)
                 item_count += 1
                 if item.get("is_excluded", False):
                     excluded_count += 1
@@ -75,7 +182,7 @@ def _build_project_summary(
                     formant_cache_count += 1
 
             speaker_lines.append(
-                f"  - {name}: 条目 {len(items)}，排除 {spk_excluded}，"
+                f"  - {name}: 条目 {item_len}，排除 {spk_excluded}，"
                 f"分组 {{{_format_counter(spk_groups, limit=max_speaker_groups)}}}，模式 {{{_format_counter(spk_modes)}}}"
             )
 
@@ -91,6 +198,7 @@ def _build_project_summary(
         f"- 分组及条目数: {_format_counter(groups, limit=max_groups)}\n"
         f"- 分析模式分布: {_format_counter(modes)}\n"
         f"- 已缓存基频条目估计: {pitch_cache_count}；已缓存共振峰条目估计: {formant_cache_count}\n"
+        f"{_build_wordlist_metadata_summary(all_items)}\n"
         f"- 发音人明细:\n{speaker_detail}"
     )
 
@@ -108,6 +216,7 @@ def _build_agent_detail_appendix():
 一、代码输出协议
 - 只有在用户确认目标和图表候选之后，才进入代码阶段。
 - 代码阶段只输出可以直接运行的 Python 代码，不要输出解释性文字，不要使用 Markdown 代码块。
+- 脚本源码开头必须先写两行注释，格式固定为 `# 脚本名称：...` 和 `# 功能说明：...`，方便 Toolkit 粘贴后自动填入脚本元信息。
 - 脚本必须定义 `def run(ctx):` 作为统一入口。
 - 推荐返回 `ctx.figure(fig, filename="xxx.png", title="中文标题")`。
 - 如果用户明确需要统计表，可返回 `[ctx.figure(...), ctx.table(...)]`。
@@ -146,6 +255,13 @@ def _build_agent_detail_appendix():
 - syl_data: F0 的音节级 11 点采样结果，list，每个元素形如 (duration, f0_values)
 - syl_t_values: F0 的音节级 11 点五度标度结果，list，每个元素为当前音节内对齐后的 11 个 T 值
 - syl_formants: 共振峰的音节级采样结果，常见键包括 syllable_index、char、bounds、times、f1、f2
+- wordlist_version: 字表版本，v2 表示来自高级字表
+- wordlist_title: 高级字表名称
+- group_note / item_note: 组备注、词项备注
+- group_tags / item_tags: 高级字表标签列表，适合筛选“目标词”“填充词”“对照组”“变调”等条件
+- item_aliases: 词项别名列表，可用于图上显示名或兼容不同命名
+- item_meta: 高级字表自定义字段字典，例如 item.get("item_meta", {}).get("结构")
+- metadata_source: 元数据来源或复核状态，例如“人工填写”“AI推断，需人工复核”“已人工复核”
 
 五、字段语义和常见陷阱
 - pitch.xs / pitch.freqs / pitch.t_values 是原始基频轨迹点，时间轴不保证已经按音节对齐，也不保证不同条目之间长度相同。
@@ -155,6 +271,8 @@ def _build_agent_detail_appendix():
 - 如果目标是画元音空间或共振峰图，优先使用 syl_formants 或 ctx.dataset.formant_points(item)，并过滤非有限值、F1<=0、F2<=0、F2<=F1 的点。
 - item.group 是分组真相；不要根据 label 末尾数字自行推断声调，除非用户明确要求。
 - item.is_excluded 为 True 的条目默认不参与分析，除非用户明确选择“使用全部条目”或要做质量检查。
+- v2 高级字表字段是用户的实验设计元数据；如果用户要求按“标签、结构、实验条件、目标词/填充词、是否复核”分析，优先使用 group_tags、item_tags、item_meta 和 metadata_source。
+- 如果 metadata_source 是“AI推断，需人工复核”，默认应在日志或图表注释中说明，必要时先询问用户是否排除未复核条目。
 - 如果用户给出参考图表，请只复刻图表类型、变量关系、统计口径、布局和视觉表达方式；严禁照抄参考图里的数值、样本标签、数据点或结论。
 
 六、推荐分析范式
@@ -179,8 +297,13 @@ def _build_agent_detail_appendix():
    - 如果跨男女声比较原始 Hz，必须谨慎；更推荐 T 值或分发音人子图
    - 如果使用 Hz，请至少按 speaker_name 分面或在图例中区分发音人
 5. 结构类图表：
-   - 只有当 item 快照中真的存在结构字段时才通用
-   - 如果工程快照没有结构字段，必须请用户提供结构分类映射，不要在脚本里硬编码 Demo 词表
+   - 优先检查 item["item_meta"] 是否存在“结构”“实验条件”“词频等级”“语义类”等字段
+   - 如果工程快照没有相应字段，必须请用户提供分类映射，不要在脚本里硬编码 Demo 词表
+6. 高级字表标签图表：
+   - 如果用户想只分析目标词，可过滤 `"目标词" in item.get("item_tags", [])`
+   - 如果用户想比较实验组/对照组，可优先看 group_tags 或 item_tags
+   - 如果用户想按自定义字段分组，可用 `(item.get("item_meta") or {}).get("字段名")`
+   - 如果含有未复核 AI 推断字段，应把 metadata_source 纳入日志或统计表
 
 七、ctx 提供的辅助方法
 - ctx.dataset.items: 获取所有条目快照
@@ -202,6 +325,8 @@ def _build_agent_detail_appendix():
 
 九、推荐代码骨架（按目标改写，不要机械照抄无关部分）
 
+# 脚本名称：自定义图表
+# 功能说明：用当前工程数据生成目标图表并记录统计口径
 def run(ctx):
     np = ctx.np
     plt = ctx.plt
@@ -301,7 +426,7 @@ def _build_agent_prompt(project_data, selections):
    - 主要统计口径；
    - 可能的误用风险。
 6. 用户选择图表或明确目标之后，再进入代码阶段。
-7. 代码阶段只输出可以直接运行的 Python 代码，不要输出解释文字，不要使用 Markdown 代码块。
+7. 代码阶段只输出可以直接运行的 Python 代码，不要输出解释文字，不要使用 Markdown 代码块；代码第一行必须是 `# 脚本名称：...`，第二行必须是 `# 功能说明：...`。
 8. {REFERENCE_CHART_RULE}
 
 回复风格：
@@ -314,6 +439,7 @@ def _build_agent_prompt(project_data, selections):
 {project_summary}
 {extra_section}
 Toolkit 自定义脚本硬性接口：
+- 最终脚本必须以两行元信息注释开头：`# 脚本名称：...`、`# 功能说明：...`。
 - 最终脚本必须定义 `def run(ctx):`。
 - 数据来自 `ctx.dataset.items`，通常优先使用 `ctx.dataset.included_items()`。
 - 图表用 `ctx.figure(fig, filename="xxx.png", title="中文标题")` 返回。
@@ -341,6 +467,10 @@ Toolkit 自定义脚本硬性接口：
 - `syl_t_values`：F0 的音节级 11 点五度标度，适合跨发音人比较声调走势。
 - `formant`：原始共振峰轨迹，包含 `xs`、`f1`、`f2`。
 - `syl_formants`：音节级共振峰采样，适合元音空间或 F1/F2 轨迹。
+- 高级字表字段：`wordlist_version`、`wordlist_title`、`group_note`、`group_tags`、`item_note`、`item_tags`、`item_aliases`、`item_meta`、`metadata_source`。
+- `item_tags` / `group_tags` 是标签列表，适合筛选目标词、填充词、对照组、变调等研究条件。
+- `item_meta` 是自定义字段字典，例如 `(item.get("item_meta") or {{}}).get("结构")`，适合按结构、实验条件、词频等级、语义类等字段分组。
+- `metadata_source` 标记元数据是否来自 AI 推断；如果是“AI推断，需人工复核”，默认提醒用户或在日志中说明。
 
 图表推荐规则：
 - 比较声调/F0 走势：优先推荐分组均值曲线，使用 `syl_t_values`；如果用户强调 Hz，再用 `syl_data`。
@@ -349,10 +479,12 @@ Toolkit 自定义脚本硬性接口：
 - 元音空间：推荐 F2-F1 散点或均值中心图，过滤非有限值、F1<=0、F2<=0、F2<=F1，并反转传统元音空间坐标轴。
 - 共振峰轨迹：优先用 `syl_formants`，标注音节位置或时间点。
 - 质量检查：推荐缺失率、异常值、时长/F0 范围、排除条目分布等诊断图。
-- 结构类图表：只有当快照中真的存在结构字段时才通用；否则必须先请用户提供结构分类映射，不要在代码里硬编码 Demo 词表。
+- 结构类图表：优先检查 `item_meta` 是否真的存在结构字段；否则必须先请用户提供结构分类映射，不要在代码里硬编码 Demo 词表。
+- 高级字表分析：如果工程摘要显示有词项标签、组标签或自定义字段，要主动推荐“按标签筛选”“按自定义字段分组”“未复核字段质量检查”等候选。
 - 参考图表：如果用户给出参考图表，先询问要复刻哪些方面，例如图形类型、变量关系、分面方式、配色、统计区间、标注风格；只能用当前工程数据重画，不能照抄参考图的数据和结论。
 
 最终写代码时必须遵守：
+- 代码开头必须先写两行注释：第一行 `# 脚本名称：简短中文脚本名`，第二行 `# 功能说明：一句话说明分析目的和输出`。
 - 没有数据时返回一张写有“没有可用数据”的空图，不要崩溃。
 - 图表标题、坐标轴、图例、日志都用中文。
 - 图上标注样本数 n、使用字段和统计口径。
@@ -432,8 +564,14 @@ def generate_ai_prompt(project_data, selections):
 
 请只输出可以直接运行的 Python 代码，不要输出任何解释性的文字或 Markdown 标记（不要包裹在 ```python 中）。
 
+代码开头必须先写两行注释，第一行为脚本名称，第二行为功能说明，格式固定如下，便于 Toolkit 粘贴后自动解析：
+# 脚本名称：{title}
+# 功能说明：{user_goal}
+
 脚本必须定义 run(ctx) 函数作为统一入口：
 
+# 脚本名称：{title}
+# 功能说明：{user_goal}
 def run(ctx):
     # 你的代码实现
     ...
@@ -491,6 +629,14 @@ def run(ctx):
   - times: 当前音节采样时间点
   - f1: 当前音节 F1 采样值
   - f2: 当前音节 F2 采样值
+- 高级字表 v2 元数据字段：
+  - wordlist_version: 字表版本，v2 表示来自高级字表
+  - wordlist_title: 高级字表名称
+  - group_note / item_note: 组备注、词项备注
+  - group_tags / item_tags: 标签列表，可用于筛选目标词、填充词、对照组、变调等条件
+  - item_aliases: 词项别名列表
+  - item_meta: 自定义字段字典，例如 item.get("item_meta", {{}}).get("结构")
+  - metadata_source: 元数据来源或复核状态，例如“人工填写”“AI推断，需人工复核”“已人工复核”
 
 字段语义和常见陷阱：
 - pitch.xs / pitch.freqs / pitch.t_values 是原始基频轨迹点，时间轴不保证已经按音节对齐，也不保证不同条目之间长度相同。
@@ -500,6 +646,8 @@ def run(ctx):
 - 如果目标是画元音空间或共振峰图，优先使用 syl_formants 或 ctx.dataset.formant_points(item)，并过滤非有限值、F1<=0、F2<=0、F2<=F1 的点。
 - item.group 是分组真相；不要根据 label 末尾数字自行推断声调，除非用户明确要求。
 - item.is_excluded 为 True 的条目默认不参与分析，除非用户明确选择“使用全部条目”。
+- v2 高级字表字段是用户的实验设计元数据；如果用户要求按标签、结构、实验条件、目标词/填充词或复核状态分析，优先使用 group_tags、item_tags、item_meta、metadata_source。
+- 如果 metadata_source 是“AI推断，需人工复核”，默认在日志或图表注释中说明，必要时先提醒用户是否排除未复核条目。
 - {REFERENCE_CHART_RULE}
 
 推荐分析范式：
@@ -523,7 +671,12 @@ def run(ctx):
 4. 多发音人比较：
    - 如果跨男女声比较原始 Hz，必须谨慎；更推荐 T 值或分发音人子图
    - 如果使用 Hz，请至少按 speaker_name 分面或在图例中区分发音人
-5. 输出格式：
+5. 高级字表字段分析：
+   - 只分析目标词：过滤 `"目标词" in item.get("item_tags", [])`
+   - 比较实验组/对照组：优先看 `group_tags` 或 `item_tags`
+   - 按结构、实验条件、词频等级、语义类分组：使用 `(item.get("item_meta") or {{}}).get("字段名")`
+   - 质量检查：统计 `metadata_source`，单独列出“AI推断，需人工复核”的条目比例
+6. 输出格式：
    - 结构化选项里的文件名和格式优先级高于补充需求。
    - 如果输出文件名是 png 且用户只要求“一张清晰图表”，只返回一个 ctx.figure(...png)。
    - 只有当用户非常明确要求“同时导出 PNG 和 SVG”时，才返回同一 figure 的两个结果，并使用同一个基础文件名的 .png / .svg。
@@ -549,6 +702,8 @@ ctx 提供的辅助方法：
 
 推荐代码骨架（请按目标改写，不要机械照抄无关部分）：
 
+# 脚本名称：{title}
+# 功能说明：{user_goal}
 def run(ctx):
     np = ctx.np
     plt = ctx.plt

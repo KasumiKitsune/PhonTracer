@@ -255,6 +255,15 @@ class TestProjectTreeUI(unittest.TestCase):
 
         self.assertEqual(self.panel._get_item_info_text(item), "有效帧率低+2")
 
+    def test_wordlist_tags_do_not_occupy_tree_info_column(self):
+        """高级字表标签不占用右侧状态列，状态列继续服务警告与忽略原因"""
+        item = {
+            'item_tags': ["目标词", "单字"],
+            'warnings': ["[警告] F0 检测失败"],
+        }
+
+        self.assertEqual(self.panel._get_item_info_text(item), "F0检测失败")
+
     def test_filter_all_button_cycles_between_all_and_ignored(self):
         """Test all-items button toggles between all and ignored states"""
         state = {'value': '全部'}

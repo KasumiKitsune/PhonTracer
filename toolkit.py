@@ -12,6 +12,60 @@ import encodings.cp437
 import gc
 import queue
 
+SCRIPT_EDITOR_DEFAULT_NAME = "新建自定义脚本"
+SCRIPT_EDITOR_DEFAULT_DESC = "自定义分析说明"
+SCRIPT_META_NAME_KEYS = ("脚本名称", "脚本名", "名称")
+SCRIPT_META_DESC_KEYS = ("功能说明", "脚本说明", "功能", "说明")
+
+
+def _parse_script_meta_comment_line(line):
+    text = line.strip()
+    if not text.startswith("#"):
+        return None, ""
+    text = text[1:].strip()
+    if not text:
+        return None, ""
+
+    match = re.match(r"^([^:：\-—]+)\s*[:：\-—]\s*(.+)$", text)
+    if not match:
+        return None, ""
+
+    key = match.group(1).strip()
+    value = match.group(2).strip()
+    if key in SCRIPT_META_NAME_KEYS:
+        return "name", value
+    if key in SCRIPT_META_DESC_KEYS:
+        return "description", value
+    return None, ""
+
+
+def parse_script_metadata_comments(code):
+    """
+    从脚本开头两行元信息注释中解析脚本名称和功能说明。
+    期望格式：
+    # 脚本名称：声调均值曲线
+    # 功能说明：按分组绘制 F0 均值和离散区间
+    """
+    metadata = {"name": "", "description": ""}
+    if not code:
+        return metadata
+
+    seen_comment_count = 0
+    for raw_line in code.splitlines():
+        if not raw_line.strip() and seen_comment_count == 0:
+            continue
+        if seen_comment_count >= 2:
+            break
+        key, value = _parse_script_meta_comment_line(raw_line)
+        if key is None:
+            break
+        if value:
+            metadata[key] = value
+        seen_comment_count += 1
+
+    return metadata
+
+
 # Keep-alive list to prevent temporary CTkFont objects from being garbage collected on background threads
 _keep_alive_fonts = []
 _original_ctkfont = ctk.CTkFont
@@ -45,6 +99,8 @@ import json
 from modules.data_utils import fuzzy_match_word_to_path
 from modules.project_manager import read_project_metadata_from_archive
 from modules.report_generator import get_pitch_floor, get_pitch_ceiling
+from modules.wordlist_editor import VisualWordlistEditor
+from modules.wordlist_v2 import ADVANCED_WORDLIST_AGENT_PROMPT, document_to_v1_text, flatten_wordlist_document, load_wordlist_document
 
 try:
     import sounddevice as sd
@@ -918,9 +974,10 @@ class ExportReportDialog(ctk.CTkToplevel):
 # ==========================================
 
 class ToolkitApp(ctk.CTk):
-    def __init__(self):
+    def __init__(self, startup_files=None):
         self._ui_thread_id = threading.get_ident()
         self.gui_queue = queue.Queue()
+        self._startup_files_list = self._normalize_startup_files(sys.argv[1:] if startup_files is None else startup_files)
         super().__init__()
         self.process_gui_queue()
         ctk.set_appearance_mode("Light")
@@ -999,6 +1056,48 @@ class ToolkitApp(ctk.CTk):
 
         # 关闭窗口级文件拖拽导入（windnd），规避 Windows + Tk 下偶发的 GIL 崩溃。
         self.window_drop_enabled = False
+        self.after(80, self._open_startup_wordlist_if_any)
+
+    @staticmethod
+    def _normalize_startup_files(files):
+        cleaned = []
+        if not files:
+            return None
+        for raw in files:
+            if not raw:
+                continue
+            path = str(raw).strip().strip('"\'')
+            if path.lower().startswith("file://"):
+                try:
+                    from urllib.parse import unquote, urlparse
+                    parsed = urlparse(path)
+                    path = unquote(parsed.path or "")
+                    if re.match(r"^/[A-Za-z]:", path):
+                        path = path[1:]
+                except Exception:
+                    pass
+            if path:
+                cleaned.append(os.path.normpath(path))
+        return cleaned or None
+
+    @classmethod
+    def _find_startup_wordlist_file(cls, files):
+        for path in cls._normalize_startup_files(files) or []:
+            abs_path = os.path.abspath(path)
+            if abs_path.lower().endswith(".ptwl"):
+                return abs_path
+        return None
+
+    def _open_startup_wordlist_if_any(self):
+        path = self._find_startup_wordlist_file(getattr(self, "_startup_files_list", None))
+        if not path or not os.path.exists(path):
+            return
+        try:
+            doc = load_wordlist_document(path)
+            self.wordlist_editor.set_document(doc, path=path)
+            self.tabview.set(self.tab_wordlist_name)
+        except Exception as e:
+            messagebox.showerror("打开高级字表失败", f"无法打开启动传入的高级字表：\n{e}")
 
     def after(self, ms, func=None, *args):
         if func is not None and getattr(self, "_ui_thread_id", None) is not None and threading.get_ident() != self._ui_thread_id:
@@ -1252,6 +1351,7 @@ class ToolkitApp(ctk.CTk):
 
         self.tab_merge_name = "音频合并（独立音频→长音频）"
         self.tab_split_name = "音频拆分（长音频→独立音频）"
+        self.tab_wordlist_name = "字表编辑器"
         self.tab_project_name = "工程预览"
         self.tab_script_name = "自定义脚本"
 
@@ -1273,16 +1373,17 @@ class ToolkitApp(ctk.CTk):
 
         self.tab_merge = self.tabview.add(self.tab_merge_name)
         self.tab_split = self.tabview.add(self.tab_split_name)
+        self.tab_wordlist = self.tabview.add(self.tab_wordlist_name)
         self.tab_project = self.tabview.add(self.tab_project_name)
         self.tab_script = self.tabview.add(self.tab_script_name)
 
-        for tab in (self.tab_merge, self.tab_split, self.tab_project, self.tab_script):
+        for tab in (self.tab_merge, self.tab_split, self.tab_wordlist, self.tab_project, self.tab_script):
             tab.configure(fg_color=self.colors["surface"])
 
         # Patch segmented button: left-align, pill-shaped, wider, fix text colors
         sb = self.tabview._segmented_button
         # Configure overall size, pill shape (corner_radius), and doubled inner border (border_width=6)
-        sb.configure(width=640, height=40, corner_radius=20, border_width=6)
+        sb.configure(width=820, height=40, corner_radius=20, border_width=6)
         # Cleanly left-align the segmented button in the grid without stretching
         sb.grid_configure(sticky="w", padx=20, pady=(12, 6))
 
@@ -1298,6 +1399,7 @@ class ToolkitApp(ctk.CTk):
 
         self.build_merge_tab()
         self.build_split_tab()
+        self.build_wordlist_tab()
         self.build_project_tab()
         self.build_script_tab()
 
@@ -1417,7 +1519,8 @@ class ToolkitApp(ctk.CTk):
         word_header.grid(row=0, column=0, sticky="ew", padx=20, pady=(18, 12))
         word_header.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(word_header, text="字表文本", font=self.font_title, text_color=self.colors["text"]).grid(row=0, column=0, sticky="w")
-        self._make_button(word_header, "导入字表", self.import_wordlist, tone="primary", image=self.icons.get("import_white"), width=126).grid(row=0, column=1, sticky="e")
+        self._make_button(word_header, "同步编辑器", self.sync_wordlist_from_editor, tone="secondary", width=112).grid(row=0, column=1, sticky="e", padx=(0, 8))
+        self._make_button(word_header, "导入字表", self.import_wordlist, tone="primary", image=self.icons.get("import_white"), width=126).grid(row=0, column=2, sticky="e")
 
         self.txt_wordlist = ctk.CTkTextbox(
             word_card,
@@ -1581,23 +1684,29 @@ class ToolkitApp(ctk.CTk):
         if not self.merge_files:
             return messagebox.showwarning("提示", "合并列表为空，请先添加音频文件")
 
-        path = filedialog.askopenfilename(filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")])
+        path = filedialog.askopenfilename(filetypes=[("Supported Files", "*.txt *.csv *.ptwl"), ("Text/CSV Files", "*.txt *.csv"), ("高级字表", "*.ptwl"), ("All Files", "*.*")])
         if not path:
             return
 
         try:
-            with open(path, 'r', encoding='utf-8') as f:
-                text = f.read()
+            if path.lower().endswith(".ptwl"):
+                doc = load_wordlist_document(path)
+                _groups, flat_words, _records = flatten_wordlist_document(doc)
+                text = document_to_v1_text(doc)
+            else:
+                with open(path, 'r', encoding='utf-8') as f:
+                    text = f.read()
+                flat_words = parse_wordlist(text)
         except UnicodeDecodeError:
             try:
                 with open(path, 'r', encoding='gbk') as f:
                     text = f.read()
+                flat_words = parse_wordlist(text)
             except Exception:
                 return messagebox.showerror("错误", "读取文件失败")
         except Exception:
             return messagebox.showerror("错误", "读取文件失败")
 
-        flat_words = parse_wordlist(text)
         if not flat_words:
             return messagebox.showwarning("提示", "字表解析结果为空")
 
@@ -1633,11 +1742,17 @@ class ToolkitApp(ctk.CTk):
             self.custom_segments = None
 
     def import_wordlist(self):
-        path = filedialog.askopenfilename(filetypes=[("Text/CSV Files", "*.txt *.csv"), ("All Files", "*.*")])
+        path = filedialog.askopenfilename(filetypes=[("Supported Files", "*.txt *.csv *.ptwl"), ("Text/CSV Files", "*.txt *.csv"), ("高级字表", "*.ptwl"), ("All Files", "*.*")])
         if not path: return
         try:
-            with open(path, 'r', encoding='utf-8') as f:
-                text = f.read()
+            if path.lower().endswith(".ptwl"):
+                doc = load_wordlist_document(path)
+                text = document_to_v1_text(doc)
+                if hasattr(self, "wordlist_editor"):
+                    self.wordlist_editor.set_document(doc, path=path)
+            else:
+                with open(path, 'r', encoding='utf-8') as f:
+                    text = f.read()
         except UnicodeDecodeError:
             try:
                 with open(path, 'r', encoding='gbk') as f:
@@ -1892,6 +2007,90 @@ class ToolkitApp(ctk.CTk):
                 self.after(0, lambda: self.set_loading(False))
 
         start_safe_thread(run)
+
+    def build_wordlist_tab(self):
+        content = ctk.CTkFrame(self.tab_wordlist, fg_color="transparent")
+        content.pack(fill=tk.BOTH, expand=True, padx=20, pady=18)
+        content.grid_columnconfigure(0, weight=1)
+        content.grid_rowconfigure(0, weight=1)
+
+        editor_card = self._make_card(content)
+        editor_card.grid(row=0, column=0, sticky="nsew")
+        editor_card.grid_rowconfigure(0, weight=1)
+        editor_card.grid_columnconfigure(0, weight=1)
+        self.wordlist_editor = VisualWordlistEditor(
+            editor_card,
+            colors=self.colors,
+            font_family=self.font_family,
+            bottom_actions=[
+                ("复制 Agent 提示词", self.copy_wordlist_agent_prompt, "warning"),
+                ("同步到拆分", self.sync_wordlist_from_editor, "purple"),
+            ],
+        )
+        self.wordlist_editor.grid(row=0, column=0, sticky="nsew", padx=14, pady=14)
+
+    def copy_wordlist_agent_prompt(self):
+        prompt = ADVANCED_WORDLIST_AGENT_PROMPT
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(prompt)
+            messagebox.showinfo("成功", "高级字表 Agent 提示词已复制。")
+        except Exception as e:
+            messagebox.showerror("错误", f"复制失败：{e}")
+
+    def open_wordlist_editor_ptwl(self):
+        path = self.wordlist_editor.load_ptwl_dialog()
+        if path:
+            self.tabview.set(self.tab_wordlist_name)
+
+    def import_v1_into_wordlist_editor(self):
+        path = filedialog.askopenfilename(filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")])
+        if not path:
+            return
+        try:
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    text = f.read()
+            except UnicodeDecodeError:
+                with open(path, "r", encoding="gbk") as f:
+                    text = f.read()
+            self.wordlist_editor.import_v1_text(text)
+            self.tabview.set(self.tab_wordlist_name)
+        except Exception as e:
+            messagebox.showerror("错误", f"导入普通字表失败：{e}")
+
+    def import_csv_into_wordlist_editor(self):
+        path = filedialog.askopenfilename(filetypes=[("CSV Files", "*.csv"), ("All Files", "*.*")])
+        if not path:
+            return
+        try:
+            try:
+                with open(path, "r", encoding="utf-8-sig") as f:
+                    text = f.read()
+            except UnicodeDecodeError:
+                with open(path, "r", encoding="gbk") as f:
+                    text = f.read()
+            self.wordlist_editor.import_csv_text(text)
+            self.tabview.set(self.tab_wordlist_name)
+        except Exception as e:
+            messagebox.showerror("错误", f"导入 CSV 失败：{e}")
+
+    def export_wordlist_editor_v1(self):
+        self.wordlist_editor.export_v1_dialog()
+
+    def sync_wordlist_from_editor(self):
+        if not hasattr(self, "wordlist_editor"):
+            return messagebox.showwarning("提示", "字表编辑器尚未初始化。")
+        doc = self.wordlist_editor.get_document()
+        _groups, flat_words, _records = flatten_wordlist_document(doc)
+        if not flat_words:
+            return messagebox.showwarning("提示", "字表编辑器中没有可同步的词项。")
+        text = document_to_v1_text(doc)
+        self.txt_wordlist.delete("1.0", tk.END)
+        self.txt_wordlist.insert("1.0", text)
+        self.validate_wordlist()
+        self.tabview.set(self.tab_split_name)
+        messagebox.showinfo("完成", f"已同步 {len(flat_words)} 个词项到拆分页。")
 
     def build_project_tab(self):
         content = ctk.CTkFrame(self.tab_project, fg_color="transparent")
@@ -2312,35 +2511,13 @@ class ToolkitApp(ctk.CTk):
         self.load_scripts_to_tree()
 
     def on_new_script(self):
-        default_template = '''def run(ctx):
-    # 1. 获取纳入分析的条目
-    items = ctx.dataset.included_items()
-    if not items:
-        # 生成提示空数据图表
-        fig, ax = ctx.plt.subplots(figsize=(6, 4))
-        ax.text(0.5, 0.5, "暂无分析数据", ha="center", va="center", fontsize=12, color="red")
-        ax.axis("off")
-        return ctx.figure(fig, filename="empty.png", title="无数据")
-
-    # 2. 在下方编写你的绘图逻辑
-    fig, ax = ctx.plt.subplots(figsize=(7, 5))
-    ax.grid(True, linestyle="--", alpha=0.5)
-
-    # 示例：遍历条目绘制 F0 曲线
-    for item in items[:10]: # 仅绘制前 10 条示例
-        pitch = ctx.dataset.pitch_points(item)
-        freqs = pitch.get("freqs", [])
-        valid_f = [f for f in freqs if f > 0]
-        if valid_f:
-            ax.plot(valid_f, label=item.get("label"))
-
-    ax.set_title("自定义 F0 曲线图", fontsize=14, fontweight="bold")
-    ax.set_xlabel("样本点", fontsize=12)
-    ax.set_ylabel("基频 F0 (Hz)", fontsize=12)
-
-    return ctx.figure(fig, filename="my_chart.png", title="我的自定义图表")
-'''
-        ScriptEditorDialog(self, script_id=None, script_name="新建自定义脚本", script_desc="自定义分析说明", script_code=default_template)
+        ScriptEditorDialog(
+            self,
+            script_id=None,
+            script_name=SCRIPT_EDITOR_DEFAULT_NAME,
+            script_desc=SCRIPT_EDITOR_DEFAULT_DESC,
+            script_code=""
+        )
 
     def on_edit_script(self):
         selected = self.script_tree.selection()
@@ -3376,6 +3553,9 @@ class ScriptEditorDialog(ctk.CTkToplevel):
         self.parent = parent
         self.script_id = script_id
         self.script_type = script_type
+        self._auto_filled_name = ""
+        self._auto_filled_desc = ""
+        self._metadata_parse_after_id = None
 
         self.title("新建自定义脚本" if not script_id else "编辑自定义脚本")
         self.geometry("720x640")
@@ -3443,6 +3623,8 @@ class ScriptEditorDialog(ctk.CTkToplevel):
         )
         self.txt_code.insert("1.0", script_code)
         self.txt_code.pack(fill="both", expand=True, pady=(0, 10))
+        self._bind_metadata_autofill()
+        self._schedule_script_metadata_parse()
 
         # 加速滚动
         def speed_up_edit_scroll(event):
@@ -3470,6 +3652,44 @@ class ScriptEditorDialog(ctk.CTkToplevel):
             command=self.save_script
         )
         btn_save.pack(side="right")
+
+    def _bind_metadata_autofill(self):
+        events = ("<<Paste>>", "<KeyRelease>")
+        for event_name in events:
+            self.txt_code.bind(event_name, self._schedule_script_metadata_parse, add="+")
+            if hasattr(self.txt_code, "_textbox"):
+                self.txt_code._textbox.bind(event_name, self._schedule_script_metadata_parse, add="+")
+
+    def _schedule_script_metadata_parse(self, _event=None):
+        if self._metadata_parse_after_id:
+            try:
+                self.after_cancel(self._metadata_parse_after_id)
+            except Exception:
+                pass
+        self._metadata_parse_after_id = self.after(80, self._autofill_metadata_from_code)
+
+    def _replace_entry_text(self, entry, text):
+        entry.delete(0, tk.END)
+        entry.insert(0, text)
+
+    def _can_autofill_field(self, entry, default_text, last_auto_text):
+        current = entry.get().strip()
+        return current in ("", default_text, last_auto_text)
+
+    def _autofill_metadata_from_code(self):
+        self._metadata_parse_after_id = None
+        code = self.txt_code.get("1.0", tk.END)
+        metadata = parse_script_metadata_comments(code)
+
+        name = metadata.get("name", "").strip()
+        if name and self._can_autofill_field(self.entry_name, SCRIPT_EDITOR_DEFAULT_NAME, self._auto_filled_name):
+            self._replace_entry_text(self.entry_name, name)
+            self._auto_filled_name = name
+
+        desc = metadata.get("description", "").strip()
+        if desc and self._can_autofill_field(self.entry_desc, SCRIPT_EDITOR_DEFAULT_DESC, self._auto_filled_desc):
+            self._replace_entry_text(self.entry_desc, desc)
+            self._auto_filled_desc = desc
 
     def save_script(self):
         name = self.entry_name.get().strip()

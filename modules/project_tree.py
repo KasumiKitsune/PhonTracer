@@ -555,6 +555,7 @@ class ItemPropertiesDialog(ctk.CTkToplevel):
 
         # Add sections
         self._add_section(scroll, "基本信息", self._data_summary_rows())
+        self._add_section(scroll, "字表元数据", self._wordlist_rows())
         self._add_section(scroll, "边界与切分", self._boundary_rows())
         self._add_section(scroll, "声学参数", self._acoustic_rows())
 
@@ -655,6 +656,21 @@ class ItemPropertiesDialog(ctk.CTkToplevel):
             ("字符边界", self._fmt_sequence(self.item.get('chars_bounds'))),
         ]
 
+    def _wordlist_rows(self):
+        meta = self.item.get('item_meta') or {}
+        meta_text = "；".join([f"{k}={v}" for k, v in meta.items()]) if isinstance(meta, dict) else str(meta)
+        return [
+            ("字表版本", self.item.get('wordlist_version', 'v1')),
+            ("字表名称", self.item.get('wordlist_title', '')),
+            ("组备注", self.item.get('group_note', '')),
+            ("组 tag", "；".join(str(v) for v in (self.item.get('group_tags', []) or []))),
+            ("词项备注", self.item.get('item_note', '')),
+            ("词项 tag", "；".join(str(v) for v in (self.item.get('item_tags', []) or []))),
+            ("别名", "；".join(str(v) for v in (self.item.get('item_aliases', []) or []))),
+            ("元数据来源", self.item.get('metadata_source', '')),
+            ("自定义字段", meta_text),
+        ]
+
     def _acoustic_rows(self):
         return [
             ("基频下限", self._value_with_source('pitch_floor', 75.0)),
@@ -707,6 +723,7 @@ class ItemPropertiesDialog(ctk.CTkToplevel):
     def _copy_to_clipboard(self):
         sections = [
             ("【基本信息】", self._data_summary_rows()),
+            ("【字表元数据】", self._wordlist_rows()),
             ("【边界与切分】", self._boundary_rows()),
             ("【声学参数】", self._acoustic_rows())
         ]

@@ -1071,12 +1071,23 @@ def write_excel_archive(teproj_path: str, state: Dict[str, Any], output_xlsx_pat
                 if diffs and not is_excluded:
                     param_exception_rows.append([spk_name, group, item_id, label, ", ".join(diffs)])
 
+                item_meta = item.get("item_meta") or {}
+                item_meta_text = "；".join([f"{k}={v}" for k, v in item_meta.items()]) if isinstance(item_meta, dict) else str(item_meta)
                 item_detail_rows.append([spk_name, group, item_id, label, item.get("path", "无"), item_mode,
                                          "是" if is_excluded else "否",
                                          item_floor if item_floor != majority_floor else "同多数",
                                          item_ceiling if item_ceiling != majority_ceiling else "同多数",
                                          item_thresh if item_thresh != majority_thresh else "同多数",
-                                         "已排除" if is_excluded else ("局部参数偏离" if diffs else "同发音人多数值")])
+                                         "已排除" if is_excluded else ("局部参数偏离" if diffs else "同发音人多数值"),
+                                         item.get("wordlist_version", "v1"),
+                                         item.get("wordlist_title", ""),
+                                         item.get("group_note", ""),
+                                         "；".join(str(v) for v in (item.get("group_tags", []) or [])),
+                                         item.get("item_note", ""),
+                                         "；".join(str(v) for v in (item.get("item_tags", []) or [])),
+                                         "；".join(str(v) for v in (item.get("item_aliases", []) or [])),
+                                         item.get("metadata_source", ""),
+                                         item_meta_text])
 
                 macro_start = item.get("macro_start", 0.0)
                 macro_end = item.get("macro_end", 0.0)
@@ -1443,7 +1454,7 @@ def write_excel_archive(teproj_path: str, state: Dict[str, Any], output_xlsx_pat
     ws_summary.fit_to_pages(1, 2)
     write_sheet("工程概览", ["概览指标", "指标取值"], overview_rows)
     write_sheet("发音人参数", ["发音人姓名", "分析模式", "时序点数", "F0下限", "F0上限", "清浊阈值", "声能跌落", "排除声母", "共振峰分析上限", "追踪个数", "窗长", "预加重", "策略"], speaker_params_rows)
-    write_sheet("条目明细", ["发音人", "组别", "条目ID", "标签", "路径", "模式", "是否排除", "定制下限", "定制上限", "定制阈值", "参数状态"], item_detail_rows)
+    write_sheet("条目明细", ["发音人", "组别", "条目ID", "标签", "路径", "模式", "是否排除", "定制下限", "定制上限", "定制阈值", "参数状态", "字表版本", "字表名称", "组备注", "组tag", "词项备注", "词项tag", "别名", "元数据来源", "自定义字段"], item_detail_rows)
     write_sheet("词级边界", ["发音人", "组别", "ID", "标签", "是否排除", "宏起点", "宏终点", "自起点", "自终点", "采样起点", "采样终点", "时长", "边界状态"], word_boundary_rows)
     write_sheet("字级边界", ["发音人", "组别", "ID", "标签", "是否排除", "序号", "音节", "字起点", "字终点", "切分点", "切分状态"], char_boundary_rows)
     write_sheet("局部参数差异", ["发音人", "组别", "ID", "标签", "差异详情"], param_exception_rows)
@@ -1455,6 +1466,7 @@ def write_excel_archive(teproj_path: str, state: Dict[str, Any], output_xlsx_pat
     write_sheet("字段说明", ["工作表", "字段", "定义"], [
         ["工程概览", "SHA-256", "归档文件唯一性校验码，用于确认报告对应的工程版本。"],
         ["条目明细", "参数状态", "说明条目是否沿用发音人多数参数，或存在局部参数偏离。"],
+        ["条目明细", "字表元数据字段", "高级字表 v2 导入时保存的组备注、词项备注、tag、别名和自定义字段。"],
         ["词级边界", "宏起点/宏终点", "待分析音频宏范围。"],
         ["词级边界", "自起点/自终点", "自动检测后的原始边界。"],
         ["词级边界", "采样起点/采样终点", "最终进入声学采样的采用边界。"],

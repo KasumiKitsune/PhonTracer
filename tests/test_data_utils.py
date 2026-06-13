@@ -4,6 +4,18 @@ import numpy as np
 import parselmouth
 
 from modules.data_utils import parse_wordlist, fuzzy_match_word_to_path, has_cjk, split_into_syllables
+from modules.wordlist_v2 import (
+    AI_REVIEW_STATUS,
+    apply_record_metadata,
+    build_document_from_csv_text,
+    build_document_from_v1_text,
+    document_to_csv_text,
+    flatten_wordlist_document,
+    load_wordlist_document,
+    mark_ai_fields_reviewed,
+    save_wordlist_document,
+    validate_wordlist_document,
+)
 
 def test_parse_wordlist_basic():
     raw_text = """
@@ -299,5 +311,61 @@ def test_parse_wordlist_bom():
     flat_words_tk = parse_wordlist_tk(raw_text)
     assert flat_words_tk == ["字1", "字2"]
 
+
+def test_wordlist_v2_roundtrip_ptwl(tmp_path):
+    doc = build_document_from_v1_text("【阴平】\n八 吧", title="声调字表")
+    doc["groups"][0]["note"] = "高平调材料"
+    doc["groups"][0]["tags"] = ["阴平"]
+    doc["groups"][0]["items"][0]["note"] = "目标项"
+    doc["groups"][0]["items"][0]["tags"] = ["目标词"]
+    doc["groups"][0]["items"][0]["aliases"] = ["ba1"]
+    doc["groups"][0]["items"][0]["meta"] = {"拼音": "ba1", "声调": "阴平", "韵母": "a"}
+
+    out_path = tmp_path / "wordlist.ptwl"
+    save_wordlist_document(doc, out_path)
+    loaded = load_wordlist_document(out_path)
+
+    groups, flat_words, records = flatten_wordlist_document(loaded)
+    assert groups[0]["group"] == "阴平"
+    assert flat_words == ["八", "吧"]
+    assert records[0]["item_note"] == "目标项"
+    assert records[0]["item_tags"] == ["目标词"]
+    assert records[0]["item_meta"]["拼音"] == "ba1"
+
+
+def test_wordlist_v2_csv_import_export_and_metadata():
+    csv_text = """组名,组备注,组标签,词项,词项备注,标签,别名,拼音,声调,韵母,复核状态,结构
+阴平,高平调材料,阴平,八,目标项,目标词,ba1,ba1,阴平,a,AI推断，需人工复核,单字
+阴平,高平调材料,阴平,吧,填充项,填充词,ba,ba1,阴平,a,人工填写,单字
+"""
+    doc = build_document_from_csv_text(csv_text, title="CSV 字表")
+    warnings = validate_wordlist_document(doc, expected_count=2)
+    assert any("AI 推断信息" in w for w in warnings)
+
+    _groups, flat_words, records = flatten_wordlist_document(doc)
+    assert flat_words == ["八", "吧"]
+    assert records[0]["item_meta"]["结构"] == "单字"
+
+    item = {"label": "八", "group": "阴平"}
+    apply_record_metadata(item, records[0])
+    assert item["wordlist_version"] == "v2"
+    assert item["item_aliases"] == ["ba1"]
+    assert item["metadata_source"] == AI_REVIEW_STATUS
+
+    exported = document_to_csv_text(doc)
+    assert "组名,组备注,组标签,词项,词项备注,标签" in exported
+    assert "结构" in exported
+    assert "目标词" in exported
+
+    reviewed = mark_ai_fields_reviewed(doc)
+    assert reviewed["groups"][0]["items"][0]["metadata_source"] == "已人工复核"
+
+
+def test_wordlist_v2_csv_export_omits_legacy_phonology_columns_when_empty():
+    doc = build_document_from_v1_text("【目标词】\n妈 麻", title="无音系列字表")
+    exported = document_to_csv_text(doc)
+    header = exported.splitlines()[0]
+
+    assert header == "组名,组备注,组标签,词项,词项备注,标签,别名,复核状态"
 
 

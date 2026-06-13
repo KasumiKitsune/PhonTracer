@@ -256,6 +256,8 @@ def run(ctx):
         self.assertIn("不要把热力图当作主要统计结论", prompt)
         self.assertIn("复刻参考图的图表类型、变量关系、统计口径、布局和视觉表达方式", prompt)
         self.assertIn("严禁照抄参考图里的数值", prompt)
+        self.assertIn("# 脚本名称：测试图表", prompt)
+        self.assertIn("# 功能说明：绘制 F0 曲线图", prompt)
 
     def test_generate_ai_prompt_goal_oriented(self):
         project_data = {
@@ -293,6 +295,8 @@ def run(ctx):
         self.assertIn("每组样本数", prompt)
         self.assertIn("共享同一套颜色归一化范围", prompt)
         self.assertIn("复刻参考图的图表类型、变量关系、统计口径、布局和视觉表达方式", prompt)
+        self.assertIn("# 脚本名称：比较不同分组的声学差异", prompt)
+        self.assertIn("# 功能说明：比较不同分组的声学差异", prompt)
 
     def test_generate_ai_prompt_agent_mode(self):
         items = {}
@@ -334,6 +338,8 @@ def run(ctx):
         self.assertIn("推荐代码骨架", prompt)
         self.assertIn("复刻参考图的图表类型、变量关系、统计口径、布局和视觉表达方式", prompt)
         self.assertIn("严禁照抄参考图里的数值", prompt)
+        self.assertIn("# 脚本名称：", prompt)
+        self.assertIn("# 功能说明：", prompt)
 
     def test_generate_ai_prompt_agent_compact_is_still_specific(self):
         project_data = {
@@ -361,6 +367,49 @@ def run(ctx):
         self.assertIn("推荐 3 种图表候选", prompt)
         self.assertIn("参考图表", prompt)
         self.assertNotIn("文档级脚本说明", prompt)
+
+    def test_generate_ai_prompt_exposes_v2_wordlist_metadata(self):
+        project_data = {
+            "speakers": {
+                "spk_1": {
+                    "name": "张三",
+                    "items": {
+                        "item_1": {
+                            "label": "妈",
+                            "group": "阴平",
+                            "analysis_mode": "f0",
+                            "wordlist_version": "v2",
+                            "wordlist_title": "声调综合测试高级字表",
+                            "item_tags": ["目标词", "单字"],
+                            "group_tags": ["主测试"],
+                            "item_meta": {"结构": "单字", "实验条件": "声调基线"},
+                            "metadata_source": "AI推断，需人工复核",
+                        }
+                    },
+                }
+            }
+        }
+        agent_prompt = generate_ai_prompt(project_data, {
+            "prompt_mode": "Agent协作",
+            "agent_detail_level": "精简",
+            "agent_chart_count": "3",
+            "agent_include_project_summary": True,
+        })
+        self.assertIn("高级字表元数据: v2 条目 1", agent_prompt)
+        self.assertIn("声调综合测试高级字表", agent_prompt)
+        self.assertIn("目标词 (1条)", agent_prompt)
+        self.assertIn("实验条件 (1条)", agent_prompt)
+        self.assertIn("高级字表字段", agent_prompt)
+        self.assertIn("item_meta", agent_prompt)
+        self.assertIn("metadata_source", agent_prompt)
+
+        normal_prompt = generate_ai_prompt(project_data, {
+            "prompt_mode": "参数选项",
+            "goal": "按高级字表标签统计",
+        })
+        self.assertIn("高级字表 v2 元数据字段", normal_prompt)
+        self.assertIn("group_tags / item_tags", normal_prompt)
+        self.assertIn("item_meta", normal_prompt)
 
     def test_project_manager_load_with_and_without_script_runs(self):
         # 1. Create a project without custom_script_runs

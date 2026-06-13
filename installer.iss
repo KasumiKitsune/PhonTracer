@@ -1,8 +1,8 @@
 ; Inno Setup Script for PhonTracer Suite
-; 命令行编译命令示例: iscc /DMyAppVersion="v1.4.1" installer.iss
+; 命令行编译命令示例: iscc /DMyAppVersion="v1.2.5" installer.iss
 
 #ifndef MyAppVersion
-  #define MyAppVersion "v1.4.1"
+  #define MyAppVersion "v1.2.5"
 #endif
 
 #define MyAppName "PhonTracer"
@@ -13,6 +13,9 @@
 #define MyAppAssocName "PhonTracer Project"
 #define MyAppAssocExt ".teproj"
 #define MyAppAssocKey "PhonTracer.Document"
+#define WordlistAssocName "PhonTracer Advanced Wordlist"
+#define WordlistAssocExt ".ptwl"
+#define WordlistAssocKey "PhonTracer.Wordlist"
 
 [Setup]
 ; AppId 作为应用的唯一标识。请勿在其他安装包中复用此 AppId
@@ -54,6 +57,16 @@ Root: HKA; Subkey: "Software\Classes\{#MyAppAssocKey}\DefaultIcon"; ValueType: s
 Root: HKA; Subkey: "Software\Classes\{#MyAppAssocKey}\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""
 Root: HKA; Subkey: "Software\Classes\Applications\{#MyAppExeName}\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""
 Root: HKA; Subkey: "Software\Classes\Applications\{#MyAppExeName}\SupportedTypes"; ValueType: string; ValueName: "{#MyAppAssocExt}"; ValueData: ""
+
+; 注册高级字表文件关联后缀 .ptwl，并在双击时通过 Toolkit 字表编辑器打开
+Root: HKA; Subkey: "Software\Classes\{#WordlistAssocExt}"; ValueType: string; ValueName: ""; ValueData: "{#WordlistAssocKey}"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\{#WordlistAssocExt}"; ValueType: string; ValueName: "Content Type"; ValueData: "application/vnd.phontracer.wordlist"; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\{#WordlistAssocExt}\OpenWithProgids"; ValueType: string; ValueName: "{#WordlistAssocKey}"; ValueData: ""; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\{#WordlistAssocKey}"; ValueType: string; ValueName: ""; ValueData: "{#WordlistAssocName}"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\{#WordlistAssocKey}\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\_internal\assets\ptwl.ico"",0"
+Root: HKA; Subkey: "Software\Classes\{#WordlistAssocKey}\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#ToolkitExeName}"" ""%1"""
+Root: HKA; Subkey: "Software\Classes\Applications\{#ToolkitExeName}\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#ToolkitExeName}"" ""%1"""
+Root: HKA; Subkey: "Software\Classes\Applications\{#ToolkitExeName}\SupportedTypes"; ValueType: string; ValueName: "{#WordlistAssocExt}"; ValueData: ""
 
 [Icons]
 ; 在开始菜单中创建快捷方式

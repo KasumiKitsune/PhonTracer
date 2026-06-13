@@ -5,7 +5,7 @@ import json
 import zipfile
 import tempfile
 import shutil
-from toolkit import ToolkitApp
+from toolkit import ToolkitApp, parse_script_metadata_comments
 
 class TestToolkitTeprojTab(unittest.TestCase):
     def setUp(self):
@@ -142,6 +142,42 @@ class TestToolkitTeprojTab(unittest.TestCase):
             self.assertEqual(app.script_figure_results[0]["preview_path"], app.script_figure_results[0]["output_path"])
 
 
+class TestScriptEditorMetadata(unittest.TestCase):
+    def test_parse_script_metadata_comments(self):
+        code = """# 脚本名称：F0 声调均值曲线
+# 功能说明：按声调分组绘制 11 点对齐 T 值均值曲线
+def run(ctx):
+    pass
+"""
+        metadata = parse_script_metadata_comments(code)
+
+        self.assertEqual(metadata["name"], "F0 声调均值曲线")
+        self.assertEqual(metadata["description"], "按声调分组绘制 11 点对齐 T 值均值曲线")
+
+    def test_parse_script_metadata_comments_gracefully_falls_back(self):
+        metadata = parse_script_metadata_comments("def run(ctx):\n    pass\n")
+
+        self.assertEqual(metadata["name"], "")
+        self.assertEqual(metadata["description"], "")
+
+
+class TestToolkitStartupWordlist(unittest.TestCase):
+    def test_ptwl_startup_path_normalization_and_detection(self):
+        files = ToolkitApp._normalize_startup_files(['"file:///C:/Users/Sager/Desktop/wordlist.ptwl"'])
+        self.assertEqual(files, [os.path.normpath("C:/Users/Sager/Desktop/wordlist.ptwl")])
+        found = ToolkitApp._find_startup_wordlist_file(files)
+        self.assertEqual(found, os.path.abspath(os.path.normpath("C:/Users/Sager/Desktop/wordlist.ptwl")))
+
+    def test_installer_registers_ptwl_icon_and_toolkit_open_command(self):
+        source = open("installer.iss", "r", encoding="utf-8").read()
+        self.assertIn('#define WordlistAssocExt ".ptwl"', source)
+        self.assertIn('#define WordlistAssocKey "PhonTracer.Wordlist"', source)
+        self.assertIn('application/vnd.phontracer.wordlist', source)
+        self.assertIn('_internal\\assets\\ptwl.ico', source)
+        self.assertIn('{#WordlistAssocKey}\\shell\\open\\command', source)
+        self.assertIn('{#ToolkitExeName}"" ""%1', source)
+        self.assertTrue(os.path.exists(os.path.join("assets", "ptwl.ico")))
+
+
 if __name__ == '__main__':
     unittest.main()
-

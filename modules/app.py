@@ -15,6 +15,14 @@ import queue
 # 导入拆分后的模块
 from .ui_widgets import CTkReleaseButton, ToolTip
 from .data_utils import parse_wordlist, fuzzy_match_word_to_path, split_into_syllables, has_cjk
+from .wordlist_v2 import (
+    ADVANCED_WORDLIST_AGENT_PROMPT,
+    apply_record_metadata,
+    document_to_v1_text,
+    flatten_wordlist_document,
+    load_wordlist_document,
+    validate_wordlist_document,
+)
 from .audio_core import core_microscopic_vowel_nucleus, batch_process_worker, macroscopic_vad, check_audio_segments, long_process_worker, recalculate_bounds_fast, auto_split_inner_word, extract_f0, batch_process_worker_with_textgrid
 from .visual_splitter import VisualSplitter
 from .spectrogram_panel import SpectrogramPanel
@@ -375,8 +383,33 @@ class PhoneticsApp:
 
         txt_files = [p for p in decoded_paths if p.lower().endswith(('.txt', '.csv'))]
         tg_files = [p for p in decoded_paths if p.lower().endswith('.textgrid')]
+        ptwl_files = [p for p in decoded_paths if p.lower().endswith('.ptwl')]
+        active_doc = getattr(self, 'active_import_wordlist_document', None)
+
+        def clear_active_doc():
+            if isinstance(active_doc, dict):
+                active_doc["doc"] = None
+
+        if ptwl_files:
+            path = ptwl_files[0]
+            try:
+                doc = load_wordlist_document(path)
+                _groups, flat_words, _records = flatten_wordlist_document(doc)
+                if not flat_words:
+                    messagebox.showwarning("提示", "高级字表中没有可导入的词项。", parent=self.active_import_dlg)
+                    return
+                text = document_to_v1_text(doc)
+                if isinstance(active_doc, dict):
+                    active_doc["doc"] = doc
+                self.active_import_textbox.delete("1.0", tk.END)
+                self.active_import_textbox.insert("1.0", text)
+                self.active_import_update_stats()
+            except Exception as e:
+                messagebox.showerror("错误", f"读取高级字表失败: {e}", parent=self.active_import_dlg)
+            return
 
         if tg_files:
+            clear_active_doc()
             if self.active_import_mode == 'batch':
                 if len(tg_files) > 1 or len(self.pending_batch_paths) == 1:
                     dlg = self.active_import_dlg
@@ -477,6 +510,7 @@ class PhoneticsApp:
                 messagebox.showerror("错误", f"解析 TextGrid 失败: {e}", parent=self.active_import_dlg)
 
         elif txt_files:
+            clear_active_doc()
             path = txt_files[0]
             try:
                 try:
@@ -490,7 +524,7 @@ class PhoneticsApp:
             except Exception as e:
                 messagebox.showerror("错误", f"读取文件失败: {e}", parent=self.active_import_dlg)
         else:
-            messagebox.showwarning("提示", "拖入的文件类型不支持，请拖入 .txt 或 .TextGrid 文件。", parent=self.active_import_dlg)
+            messagebox.showwarning("提示", "拖入的文件类型不支持，请拖入 .txt、.ptwl 或 .TextGrid 文件。", parent=self.active_import_dlg)
 
     def on_files_dropped(self, files):
         # 仅将文件压入队列，彻底不涉及 Tkinter UI 的 Tcl 调用
@@ -580,16 +614,16 @@ class PhoneticsApp:
                             self.pending_batch_paths = [path]
                             self.lbl_batch_files.configure(text=f"已选 1 个文件 (从拖拽)", text_color="#2563EB")
                             self.lbl_status.configure(text="独立音频就绪", text_color="#10B981")
-                            if getattr(self, 'switch_unified_wordlist', None) and self.switch_unified_wordlist.get() and getattr(self, 'global_wordlist_text', None):
-                                self.process_batch_with_wordlist(self.global_wordlist_text, match_mode=getattr(self, 'global_wordlist_match_mode', 'fuzzy'))
+                            if self._has_unified_wordlist():
+                                self._process_unified_wordlist('batch', match_mode='fuzzy')
                         else:
                             self.tabview.set("单条长音频")
                             self.pending_long_snd = snd
                             self.long_audio_path = path
                             self.lbl_long_file.configure(text=audio_name + " (从拖拽)", text_color="#2563EB")
                             self.lbl_status.configure(text="长音频就绪", text_color="#10B981")
-                            if getattr(self, 'switch_unified_wordlist', None) and self.switch_unified_wordlist.get() and getattr(self, 'global_wordlist_text', None):
-                                self.process_long_with_wordlist(self.global_wordlist_text)
+                            if self._has_unified_wordlist():
+                                self._process_unified_wordlist('long')
                     self.root.after(0, update_ui)
                 except Exception as e:
                     self.root.after(0, self.stop_loading)
@@ -2427,8 +2461,8 @@ class PhoneticsApp:
                         self.speaker_manager.rename_speaker(self.speaker_manager.active_speaker_id, audio_name)
                         self._update_speaker_dropdown()
                         self.speaker_option_var.set(audio_name)
-                    if getattr(self, 'switch_unified_wordlist', None) and self.switch_unified_wordlist.get() and getattr(self, 'global_wordlist_text', None):
-                        self.process_long_with_wordlist(self.global_wordlist_text)
+                    if self._has_unified_wordlist():
+                        self._process_unified_wordlist('long')
                 self.root.after(0, done)
             except Exception as e:
                 self.root.after(0, lambda: self.stop_loading(f"加载失败: {e}"))
@@ -2649,8 +2683,30 @@ class PhoneticsApp:
         deleted_msg = f"\n由于您删除了音频段，后续字表已自动向前顺延对齐。" if deleted_count else ""
         messagebox.showinfo("提示", f"手动微调已应用，时间边界已更新。{deleted_msg}")
 
-    def process_long_with_wordlist(self, raw_text):
-        groups, flat_words = parse_wordlist(raw_text)
+    def _prepare_wordlist_payload(self, raw_text="", wordlist_document=None):
+        if wordlist_document is not None:
+            return flatten_wordlist_document(wordlist_document)
+        groups, flat_words = parse_wordlist(raw_text or "")
+        return groups, flat_words, [None] * len(flat_words)
+
+    def _has_unified_wordlist(self):
+        if not (getattr(self, 'switch_unified_wordlist', None) and self.switch_unified_wordlist.get()):
+            return False
+        return bool(getattr(self, 'global_wordlist_document', None) or getattr(self, 'global_wordlist_text', None))
+
+    def _process_unified_wordlist(self, mode, match_mode='fuzzy'):
+        doc = getattr(self, 'global_wordlist_document', None)
+        if mode == 'batch':
+            self.process_batch_with_wordlist(
+                getattr(self, 'global_wordlist_text', ''),
+                match_mode=getattr(self, 'global_wordlist_match_mode', match_mode),
+                wordlist_document=doc,
+            )
+        else:
+            self.process_long_with_wordlist(getattr(self, 'global_wordlist_text', ''), wordlist_document=doc)
+
+    def process_long_with_wordlist(self, raw_text, wordlist_document=None):
+        groups, flat_words, metadata_records = self._prepare_wordlist_payload(raw_text, wordlist_document)
         if not flat_words: return
 
         def run():
@@ -2680,6 +2736,7 @@ class PhoneticsApp:
             word_idx = 0
             for grp in groups:
                 for word in grp['items']:
+                    metadata_record = metadata_records[word_idx] if word_idx < len(metadata_records) else None
                     if word_idx < len(macro_segments):
                         ms, me = macro_segments[word_idx]
 
@@ -2701,13 +2758,14 @@ class PhoneticsApp:
                                 'word': word, 'group': grp['group'], 'ms': ms, 'me': me,
                                 'snd_values': snd_values, 'snd_sf': snd_sf,
                                 'pitch_xs': sliced_xs, 'pitch_freqs': sliced_freqs,
-                                'missing': False
+                                'missing': False,
+                                'metadata_record': metadata_record
                             })
                         else:
-                            tasks.append({'word': word, 'group': grp['group'], 'missing': True})
+                            tasks.append({'word': word, 'group': grp['group'], 'missing': True, 'metadata_record': metadata_record})
                         word_idx += 1
                     else:
-                        tasks.append({'word': word, 'group': grp['group'], 'missing': True})
+                        tasks.append({'word': word, 'group': grp['group'], 'missing': True, 'metadata_record': metadata_record})
 
             # 多进程执行
             with concurrent.futures.ProcessPoolExecutor(max_workers=min(os.cpu_count() or 4, 8)) as executor:
@@ -2754,7 +2812,7 @@ class PhoneticsApp:
                         has_empty = res.get('has_empty_data', False)
                         img = self.tk_icons.get('warning', '') if has_empty else ''
                         iid = self.tree_panel.tree.insert(gid, tk.END, text=res['word'], tags=('item',), image=img)
-                        self.items[iid] = {
+                        item_data = {
                             'label': res['word'], 'group': res['group'], 'snd': snd, 'pitch_data': global_pitch_data,
                             'macro_start': res['ms'], 'macro_end': res['me'],
                             'start': res['mis'], 'end': res['mie'],
@@ -2779,10 +2837,12 @@ class PhoneticsApp:
                             'has_empty_data': res.get('has_empty_data', False),
                             'import_index': idx
                         }
+                        self.items[iid] = apply_record_metadata(item_data, res.get('metadata_record'))
                         self.tree_panel.update_item_icon(iid)
                     else:
                         iid = self.tree_panel.tree.insert(gid, tk.END, text=res['word'] + " (缺失)", tags=('item',))
-                        self.items[iid] = {'label': res['word'], 'group': res['group'], 'snd': None, 'start': None, 'end': None, 'inner_splits': [], 'import_index': idx}
+                        item_data = {'label': res['word'], 'group': res['group'], 'snd': None, 'start': None, 'end': None, 'inner_splits': [], 'import_index': idx}
+                        self.items[iid] = apply_record_metadata(item_data, res.get('metadata_record'))
 
                 self.stop_loading("长音频切分完成")
                 self.tree_panel.select_first_item()
@@ -2803,8 +2863,8 @@ class PhoneticsApp:
         self.lbl_status.configure(text="独立音频就绪，正在后台分析...", text_color="#10B981")
         self.mark_modified()
         self.start_background_batch_processing(paths)
-        if getattr(self, 'switch_unified_wordlist', None) and self.switch_unified_wordlist.get() and getattr(self, 'global_wordlist_text', None):
-            self.root.after(100, lambda: self.process_batch_with_wordlist(self.global_wordlist_text, match_mode=getattr(self, 'global_wordlist_match_mode', 'fuzzy')))
+        if self._has_unified_wordlist():
+            self.root.after(100, lambda: self._process_unified_wordlist('batch', match_mode='fuzzy'))
 
     def start_background_batch_processing(self, paths):
         def run():
@@ -2894,8 +2954,10 @@ class PhoneticsApp:
             self.root.after(0, finalize)
         threading.Thread(target=run, daemon=True).start()
 
-    def _build_batch_tasks(self, groups, match_mode):
+    def _build_batch_tasks(self, groups, match_mode, metadata_records=None):
         tasks = []
+        metadata_records = metadata_records or []
+        record_idx = 0
         if match_mode == 'fuzzy':
             # 自然排序：确保 1, 2, 10 的顺序
             def natural_sort_key(s):
@@ -2908,24 +2970,28 @@ class PhoneticsApp:
             for grp in groups:
                 group_name = grp['group']
                 for word in grp['items']:
+                    metadata_record = metadata_records[record_idx] if record_idx < len(metadata_records) else None
                     idx = fuzzy_match_word_to_path(word, sorted_paths, used_indices=list(used_indices))
                     if idx is not None:
                         path = sorted_paths[idx]
                         used_indices.add(idx)
-                        tasks.append({'word': word, 'group': group_name, 'path': path, 'missing': False})
+                        tasks.append({'word': word, 'group': group_name, 'path': path, 'missing': False, 'metadata_record': metadata_record})
                     else:
-                        tasks.append({'word': word, 'group': group_name, 'missing': True})
+                        tasks.append({'word': word, 'group': group_name, 'missing': True, 'metadata_record': metadata_record})
+                    record_idx += 1
         else:
             path_idx = 0
             for grp in groups:
                 group_name = grp['group']
                 for word in grp['items']:
+                    metadata_record = metadata_records[record_idx] if record_idx < len(metadata_records) else None
                     if path_idx < len(self.pending_batch_paths):
                         path = self.pending_batch_paths[path_idx]
-                        tasks.append({'word': word, 'group': group_name, 'path': path, 'missing': False})
+                        tasks.append({'word': word, 'group': group_name, 'path': path, 'missing': False, 'metadata_record': metadata_record})
                         path_idx += 1
                     else:
-                        tasks.append({'word': word, 'group': group_name, 'missing': True})
+                        tasks.append({'word': word, 'group': group_name, 'missing': True, 'metadata_record': metadata_record})
+                    record_idx += 1
         return tasks
 
     def _process_batch_tasks(self, tasks, params, trim):
@@ -3016,7 +3082,7 @@ class PhoneticsApp:
                 img = self.tk_icons.get('warning', '') if has_empty else ''
                 self.tree_panel.tree.insert(gid, tk.END, iid=iid, text=display, tags=('item',), image=img)
 
-                self.items[iid] = res
+                self.items[iid] = apply_record_metadata(res, tasks[i].get('metadata_record'))
                 res['is_user_specified_structure'] = '/' in res['label']
                 self.tree_panel.update_item_icon(iid)
                 matched_count += 1
@@ -3024,14 +3090,15 @@ class PhoneticsApp:
                 suffix = " (未匹配)" if match_mode == 'fuzzy' else " (缺失)"
                 iid = f"missing_{res['label']}_{id(res)}"
                 self.tree_panel.tree.insert(gid, tk.END, iid=iid, text=res['label'] + suffix, tags=('item',))
-                self.items[iid] = {'label': res['label'], 'group': res['group'], 'snd': None, 'start': None, 'end': None, 'inner_splits': [], 'import_index': i}
+                item_data = {'label': res['label'], 'group': res['group'], 'snd': None, 'start': None, 'end': None, 'inner_splits': [], 'import_index': i}
+                self.items[iid] = apply_record_metadata(item_data, tasks[i].get('metadata_record'))
 
         self.stop_loading(f"并行处理完成: {matched_count}/{total}")
         self.tree_panel.select_first_item()
         self._maybe_refresh_formants_after_import()
 
-    def process_batch_with_wordlist(self, raw_text, match_mode='order'):
-        groups, flat_words = parse_wordlist(raw_text)
+    def process_batch_with_wordlist(self, raw_text, match_mode='order', wordlist_document=None):
+        groups, flat_words, metadata_records = self._prepare_wordlist_payload(raw_text, wordlist_document)
         if not flat_words: return
 
         def run():
@@ -3039,7 +3106,7 @@ class PhoneticsApp:
             self.root.after(0, self.tree_panel.clear_all)
             total = len(flat_words)
 
-            tasks = self._build_batch_tasks(groups, match_mode)
+            tasks = self._build_batch_tasks(groups, match_mode, metadata_records=metadata_records)
 
             params = self._build_worker_params()
             trim = self.switch_trim_silence.get()
@@ -3054,7 +3121,29 @@ class PhoneticsApp:
             self.root.after(0, finalize)
         threading.Thread(target=run, daemon=True).start()
 
+    def _copy_v2_agent_prompt(self, parent):
+        prompt = ADVANCED_WORDLIST_AGENT_PROMPT
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(prompt)
+            messagebox.showinfo("成功", "高级字表 Agent 提示词已复制。", parent=parent)
+        except Exception as e:
+            messagebox.showerror("错误", f"复制失败：{e}", parent=parent)
+
+    def _open_wordlist_dialog_v2(self, mode):
+        return self.open_text_dialog_legacy(mode)
+
     def open_text_dialog(self, mode):
+        if self._has_active_chart_dialog():
+            messagebox.showwarning("提示", "图表编辑器已打开，修改图表期间禁止更改/导入字表。")
+            return
+        if mode == 'long' and not self.pending_long_snd:
+            return messagebox.showwarning("提示", "请先导入一条长音频。")
+        if mode == 'batch' and not self.pending_batch_paths:
+            return messagebox.showwarning("提示", "请先选择独立音频。")
+        return self.open_text_dialog_legacy(mode)
+
+    def open_text_dialog_legacy(self, mode):
         if self._has_active_chart_dialog():
             messagebox.showwarning("提示", "图表编辑器已打开，修改图表期间禁止更改/导入字表。")
             return
@@ -3080,6 +3169,7 @@ class PhoneticsApp:
         # 1. 顶部工具栏 (导入文件 / 复制AI提示词)
         toolbar = ctk.CTkFrame(dlg, fg_color="transparent")
         toolbar.pack(fill=tk.X, padx=20, pady=(15, 0))
+        active_wordlist_document = {"doc": None}
 
         def load_txt():
             path = filedialog.askopenfilename(filetypes=[
@@ -3089,6 +3179,7 @@ class PhoneticsApp:
                 ("All Files", "*.*")
             ])
             if not path: return
+            active_wordlist_document["doc"] = None
             try:
                 if path.lower().endswith('.textgrid'):
                     from modules.data_utils import extract_wordlist_from_textgrid
@@ -3100,6 +3191,26 @@ class PhoneticsApp:
                         with open(path, 'r', encoding='gbk') as f: text = f.read()
             except Exception as e:
                 return messagebox.showerror("错误", f"读取文件失败: {e}", parent=dlg)
+            text_box.delete("1.0", tk.END)
+            text_box.insert("1.0", text)
+            update_stats()
+
+        def load_v2_wordlist():
+            path = filedialog.askopenfilename(filetypes=[
+                ("PhonTracer 高级字表", "*.ptwl"),
+                ("All Files", "*.*")
+            ])
+            if not path:
+                return
+            try:
+                doc = load_wordlist_document(path)
+                _groups, flat_words, _records = flatten_wordlist_document(doc)
+                if not flat_words:
+                    return messagebox.showwarning("提示", "高级字表中没有可导入的词项。", parent=dlg)
+                text = document_to_v1_text(doc)
+            except Exception as e:
+                return messagebox.showerror("错误", f"读取高级字表失败: {e}", parent=dlg)
+            active_wordlist_document["doc"] = doc
             text_box.delete("1.0", tk.END)
             text_box.insert("1.0", text)
             update_stats()
@@ -3116,6 +3227,7 @@ class PhoneticsApp:
         btn_import.pack(side=tk.LEFT)
 
         def load_textgrid():
+            active_wordlist_document["doc"] = None
             if mode == 'batch':
                 paths = filedialog.askopenfilenames(filetypes=[("TextGrid Files", "*.TextGrid"), ("All Files", "*.*")])
                 if not paths: return
@@ -3338,7 +3450,12 @@ class PhoneticsApp:
                             start_char = idx + len(w)
                 current_line_idx += 1
 
-        text_box.bind("<KeyRelease>", update_stats)
+        def on_text_changed(event=None):
+            active_wordlist_document["doc"] = None
+            update_stats(event)
+
+        text_box.bind("<KeyRelease>", on_text_changed)
+        text_box.bind("<<Paste>>", lambda event: (active_wordlist_document.__setitem__("doc", None), self.root.after(10, update_stats)))
 
 
         # 4. 匹配参数区
@@ -3354,6 +3471,7 @@ class PhoneticsApp:
         def process():
             raw_text = text_box.get("1.0", tk.END)
             groups, flat_words = parse_wordlist(raw_text)
+            wordlist_document = active_wordlist_document["doc"]
 
             if not flat_words:
                 return messagebox.showwarning("提示", "未识别到任何数据项，请检查文本格式。")
@@ -3373,11 +3491,22 @@ class PhoneticsApp:
                         if not messagebox.askyesno("数量不匹配警告", f"您刚才手动切分了 {seg_count} 个片段，但字表内包含 {word_count} 个项。\n\n数量不一致将导致音频与文本错位，是否继续强制提取？"):
                             return
 
+            if wordlist_document is not None:
+                expected_count = None
+                if mode == 'batch':
+                    expected_count = len(self.pending_batch_paths)
+                elif mode == 'long' and hasattr(self, 'manual_segments') and self.manual_segments:
+                    expected_count = len(self.manual_segments)
+                warnings = validate_wordlist_document(wordlist_document, expected_count=expected_count)
+                if warnings and not messagebox.askyesno("高级字表检查提醒", "\n".join(warnings[:12]) + ("\n..." if len(warnings) > 12 else "") + "\n\n是否继续导入？", parent=dlg):
+                    return
+
+            self.global_wordlist_document = wordlist_document
             self.global_wordlist_text = raw_text
             if mode == 'batch': self.global_wordlist_match_mode = match_mode_var.get()
             dlg.destroy()
-            if mode == 'long': self.process_long_with_wordlist(raw_text)
-            else: self.process_batch_with_wordlist(raw_text, match_mode=match_mode_var.get())
+            if mode == 'long': self.process_long_with_wordlist(raw_text, wordlist_document=wordlist_document)
+            else: self.process_batch_with_wordlist(raw_text, match_mode=match_mode_var.get(), wordlist_document=wordlist_document)
 
         # 底部按钮栏
         btn_row = ctk.CTkFrame(dlg, fg_color="transparent")
@@ -3388,6 +3517,11 @@ class PhoneticsApp:
                                       hover_color="#7C3AED", command=load_textgrid, font=self.font_main)
         btn_import_tg.pack(side=tk.LEFT)
 
+        btn_import_v2 = ctk.CTkButton(btn_row, text="导入高级字表",
+                                      width=130, height=40, corner_radius=20, fg_color="#10B981", text_color="white",
+                                      hover_color="#059669", command=load_v2_wordlist, font=self.font_main)
+        btn_import_v2.pack(side=tk.LEFT, padx=(10, 0))
+
         CTkReleaseButton(btn_row, text="开始匹配提取", command=process, corner_radius=20, height=40, font=self.font_main).pack(side=tk.RIGHT)
 
         # 初始触发一次统计
@@ -3397,6 +3531,7 @@ class PhoneticsApp:
         self.active_import_textbox = text_box
         self.active_import_update_stats = update_stats
         self.active_import_mode = mode
+        self.active_import_wordlist_document = active_wordlist_document
 
         try:
             import windnd
