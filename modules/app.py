@@ -553,8 +553,8 @@ class PhoneticsApp:
             ProjectImportPreviewDialog(self.root, self, path)
             return
 
-        # Check for wordlist files (.txt, .csv, .textgrid)
-        wordlist_files = [p for p in decoded_paths if p.lower().endswith(('.txt', '.csv', '.textgrid'))]
+        # 检查字表文件（.txt、.csv、.ptwl、.TextGrid）
+        wordlist_files = [p for p in decoded_paths if p.lower().endswith(('.txt', '.csv', '.ptwl', '.textgrid'))]
         if wordlist_files:
             self.mark_modified()
             current_tab = self.tabview.get()
@@ -580,7 +580,7 @@ class PhoneticsApp:
 
         audio_paths = [p for p in decoded_paths if p.lower().endswith(('.wav', '.mp3'))]
         if not audio_paths:
-            messagebox.showwarning("提示", "拖入的文件中没有支持的音频文件 (.wav, .mp3)、工程文件 (.teproj) 或字表文件 (.txt, .csv)")
+            messagebox.showwarning("提示", "拖入的文件中没有支持的音频文件 (.wav, .mp3)、工程文件 (.teproj) 或字表文件 (.txt, .csv, .ptwl)")
             return
 
         self.mark_modified()
@@ -1285,7 +1285,7 @@ class PhoneticsApp:
         item.pop('has_empty_data', None)
 
         pitch = item.get('pitch_data', item.get('pitch'))
-        mac_s, mac_e = item['macro_start'], item['macro_end']
+        mac_s, mac_e = self._get_item_base_boundaries(item)
 
         def run():
             try:
@@ -1853,6 +1853,42 @@ class PhoneticsApp:
     def _mode_state_key(self, mode):
         return f"_mode_state_{mode}"
 
+    @staticmethod
+    def _finite_float_or_none(value):
+        if value is None:
+            return None
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not np.isfinite(number):
+            return None
+        return number
+
+    def _first_finite_item_value(self, item, keys, default=None):
+        for key in keys:
+            number = self._finite_float_or_none(item.get(key))
+            if number is not None:
+                return number
+        return default
+
+    def _get_valid_macro_bounds(self, item):
+        macro_start = self._finite_float_or_none(item.get('macro_start'))
+        macro_end = self._finite_float_or_none(item.get('macro_end'))
+        if macro_start is None or macro_end is None or macro_end <= macro_start:
+            return None
+        return macro_start, macro_end
+
+    def _get_item_base_boundaries(self, item):
+        base_start = self._first_finite_item_value(item, ('macro_start', 'start', 'raw_start'), 0.0)
+        base_end = self._first_finite_item_value(item, ('macro_end', 'end', 'raw_end'), base_start + 0.01)
+        if base_end <= base_start:
+            base_start = self._first_finite_item_value(item, ('start', 'raw_start'), base_start)
+            base_end = self._first_finite_item_value(item, ('end', 'raw_end'), base_start + 0.01)
+        if base_end <= base_start:
+            base_end = base_start + 0.01
+        return base_start, base_end
+
     def _save_item_mode_state(self, item, mode):
         fields = ('start', 'end', 'raw_start', 'raw_end', 'inner_splits', 'chars_bounds', 'split_warnings', 'split_confidence')
         state = {}
@@ -1870,11 +1906,7 @@ class PhoneticsApp:
                 if field in state:
                     item[field] = copy.deepcopy(state[field])
         else:
-            base_start = float(item.get('macro_start', item.get('start', 0.0)))
-            base_end = float(item.get('macro_end', item.get('end', base_start + 0.01)))
-            if base_end <= base_start:
-                base_start = float(item.get('start', base_start))
-                base_end = float(item.get('end', base_start + 0.01))
+            base_start, base_end = self._get_item_base_boundaries(item)
             item['start'] = base_start
             item['end'] = max(base_end, base_start + 0.01)
             item['raw_start'] = item['start']
@@ -1891,13 +1923,7 @@ class PhoneticsApp:
         item['analysis_mode'] = mode
 
     def _reset_item_mode_boundaries(self, item, mode):
-        base_start = float(item.get('macro_start', item.get('start', 0.0)))
-        base_end = float(item.get('macro_end', item.get('end', base_start + 0.01)))
-        if base_end <= base_start:
-            base_start = float(item.get('start', base_start))
-            base_end = float(item.get('end', base_start + 0.01))
-        if base_end <= base_start:
-            base_end = base_start + 0.01
+        base_start, base_end = self._get_item_base_boundaries(item)
 
         label = item.get('label', '').replace(" (缺失)", "")
         syls = split_into_syllables(label)
@@ -2126,7 +2152,8 @@ class PhoneticsApp:
                 valid_items = []
                 recomputed_pitches = {}
                 for iid, item in items_snapshot:
-                    if item.get('snd'):
+                    macro_bounds = self._get_valid_macro_bounds(item)
+                    if item.get('snd') and macro_bounds:
                         snd = item['snd']
                         snd_id = id(snd)
 
@@ -2145,7 +2172,7 @@ class PhoneticsApp:
                         item['pitch_ceiling'] = params['pitch_ceiling']
                         item['voicing_threshold'] = params['voicing_threshold']
 
-                        mac_s, mac_e = item['macro_start'], item['macro_end']
+                        mac_s, mac_e = macro_bounds
                         valid_ms = max(0, mac_s)
                         valid_me = min(snd.get_total_duration(), mac_e)
 
@@ -2279,10 +2306,12 @@ class PhoneticsApp:
 
                 def get_segmented_f0(snd, params):
                     total_dur = snd.get_total_duration()
-                    if 'macro_start' in item and 'macro_end' in item and total_dur > 15.0:
+                    macro_bounds = self._get_valid_macro_bounds(item)
+                    if macro_bounds and total_dur > 15.0:
+                        macro_start, macro_end = macro_bounds
                         padding = 1.0
-                        seg_start = max(0.0, item['macro_start'] - padding)
-                        seg_end = min(total_dur, item['macro_end'] + padding)
+                        seg_start = max(0.0, macro_start - padding)
+                        seg_end = min(total_dur, macro_end + padding)
                         part_snd = snd.extract_part(from_time=seg_start, to_time=seg_end)
                         part_pitch_data = extract_f0(part_snd, params)
                         part_pitch_data['xs'] = part_pitch_data['xs'] + seg_start
@@ -2293,10 +2322,12 @@ class PhoneticsApp:
                 def get_segmented_formant(snd, params):
                     from modules.audio_core import extract_formants
                     total_dur = snd.get_total_duration()
-                    if 'macro_start' in item and 'macro_end' in item and total_dur > 15.0:
+                    macro_bounds = self._get_valid_macro_bounds(item)
+                    if macro_bounds and total_dur > 15.0:
+                        macro_start, macro_end = macro_bounds
                         padding = 1.0
-                        seg_start = max(0.0, item['macro_start'] - padding)
-                        seg_end = min(total_dur, item['macro_end'] + padding)
+                        seg_start = max(0.0, macro_start - padding)
+                        seg_end = min(total_dur, macro_end + padding)
                         part_snd = snd.extract_part(from_time=seg_start, to_time=seg_end)
                         part_formant_data = extract_formants(part_snd, params)
                         part_formant_data['xs'] = part_formant_data['xs'] + seg_start
@@ -2342,7 +2373,8 @@ class PhoneticsApp:
                     self._stamp_formant_params_on_item(item, worker_params)
 
                 # 单条参数应用可以只刷新声学数据，保留已经识别或手动调整过的边界。
-                if not preserve_bounds and not recompute_formant_only and item.get('snd') and 'macro_start' in item and 'macro_end' in item:
+                macro_bounds = self._get_valid_macro_bounds(item)
+                if not preserve_bounds and not recompute_formant_only and item.get('snd') and macro_bounds:
                     current_pitch = item.get('pitch_data', item.get('pitch'))
                     if only_trim_silence:
                         mic_s, mic_e = recalculate_bounds_fast(
@@ -2357,8 +2389,9 @@ class PhoneticsApp:
                                 item['chars_bounds'] = [[mic_s + (c[0] - old_s) * ratio, mic_s + (c[1] - old_s) * ratio] for c in item['chars_bounds']]
                         item['start'], item['end'] = mic_s, mic_e
                     else:
+                        macro_start, macro_end = macro_bounds
                         mic_s, mic_e, raw_s, raw_e = self._microscopic_vowel_nucleus(
-                            item['snd'], current_pitch, item['macro_start'], item['macro_end']
+                            item['snd'], current_pitch, macro_start, macro_end
                         )
                         item['start'], item['end'] = mic_s, mic_e
                         item['raw_start'], item['raw_end'] = raw_s, raw_e
@@ -2479,12 +2512,14 @@ class PhoneticsApp:
         existing_items = []
         if self.items:
             for iid, item in self.items.items():
-                if item.get('snd') is not None and 'macro_start' in item:
+                macro_bounds = self._get_valid_macro_bounds(item)
+                if item.get('snd') is not None and macro_bounds:
+                    macro_start, macro_end = macro_bounds
                     existing_items.append({
                         'id': iid,
                         'label': item['label'],
-                        'start': item['macro_start'],
-                        'end': item['macro_end'],
+                        'start': macro_start,
+                        'end': macro_end,
                         'inner_splits': item.get('inner_splits', [])
                     })
             existing_items.sort(key=lambda x: x['start'])
@@ -2545,11 +2580,33 @@ class PhoneticsApp:
 
     def _get_all_ordered_iids(self):
         all_iids = []
-        for grp_name in self.tree_panel.project_groups:
-            grp_node = self.tree_panel.group_nodes[grp_name]
-            for child in self.tree_panel.tree.get_children(grp_node):
-                if child in self.items:
-                    all_iids.append(child)
+        seen = set()
+        project_groups = list(getattr(self.tree_panel, 'project_groups', []))
+        tree = getattr(self.tree_panel, 'tree', None)
+        group_nodes = getattr(self.tree_panel, 'group_nodes', {})
+
+        def append_iid(iid):
+            real_iid = str(iid)[8:] if str(iid).startswith('warning_') else iid
+            if real_iid in self.items and real_iid not in seen:
+                all_iids.append(real_iid)
+                seen.add(real_iid)
+
+        for grp_name in project_groups:
+            grp_node = group_nodes.get(grp_name)
+            if tree is not None and grp_node:
+                try:
+                    if tree.exists(grp_node):
+                        for child in tree.get_children(grp_node):
+                            append_iid(child)
+                except tk.TclError:
+                    pass
+
+            for iid, item in self.items.items():
+                if item.get('group', '导入内容') == grp_name:
+                    append_iid(iid)
+
+        for iid in self.items.keys():
+            append_iid(iid)
         return all_iids
 
     def _apply_modified_segment(self, item, seg):
@@ -3173,12 +3230,16 @@ class PhoneticsApp:
 
         def load_txt():
             path = filedialog.askopenfilename(filetypes=[
-                ("Supported Files", "*.txt *.csv *.TextGrid"),
-                ("Text/CSV Files", "*.txt *.csv"),
-                ("TextGrid Files", "*.TextGrid"),
-                ("All Files", "*.*")
+                ("支持的文件", "*.txt *.csv *.ptwl *.TextGrid"),
+                ("文本/CSV 文件", "*.txt *.csv"),
+                ("PhonTracer 高级字表", "*.ptwl"),
+                ("TextGrid 文件", "*.TextGrid"),
+                ("所有文件", "*.*")
             ])
             if not path: return
+            if path.lower().endswith('.ptwl'):
+                load_v2_wordlist(path)
+                return
             active_wordlist_document["doc"] = None
             try:
                 if path.lower().endswith('.textgrid'):
@@ -3195,11 +3256,12 @@ class PhoneticsApp:
             text_box.insert("1.0", text)
             update_stats()
 
-        def load_v2_wordlist():
-            path = filedialog.askopenfilename(filetypes=[
-                ("PhonTracer 高级字表", "*.ptwl"),
-                ("All Files", "*.*")
-            ])
+        def load_v2_wordlist(path=None):
+            if path is None:
+                path = filedialog.askopenfilename(filetypes=[
+                    ("PhonTracer 高级字表", "*.ptwl"),
+                    ("所有文件", "*.*")
+                ])
             if not path:
                 return
             try:
@@ -3517,12 +3579,17 @@ class PhoneticsApp:
                                       hover_color="#7C3AED", command=load_textgrid, font=self.font_main)
         btn_import_tg.pack(side=tk.LEFT)
 
-        btn_import_v2 = ctk.CTkButton(btn_row, text="导入高级字表",
-                                      width=130, height=40, corner_radius=20, fg_color="#10B981", text_color="white",
-                                      hover_color="#059669", command=load_v2_wordlist, font=self.font_main)
-        btn_import_v2.pack(side=tk.LEFT, padx=(10, 0))
-
-        CTkReleaseButton(btn_row, text="开始匹配提取", command=process, corner_radius=20, height=40, font=self.font_main).pack(side=tk.RIGHT)
+        CTkReleaseButton(
+            btn_row,
+            text="开始匹配提取",
+            command=process,
+            corner_radius=20,
+            height=40,
+            font=self.font_main,
+            fg_color="#2563EB",
+            hover_color="#1D4ED8",
+            text_color="white"
+        ).pack(side=tk.RIGHT)
 
         # 初始触发一次统计
         update_stats()
@@ -4105,10 +4172,10 @@ class PhoneticsApp:
 
             def run_current_detection():
                 try:
-                    is_long = ('macro_start' in curr_item and 'macro_end' in curr_item and snd.get_total_duration() > 15.0)
+                    macro_bounds = self._get_valid_macro_bounds(curr_item)
+                    is_long = macro_bounds is not None and snd.get_total_duration() > 15.0
                     if is_long:
-                        m_s = curr_item['macro_start']
-                        m_e = curr_item['macro_end']
+                        m_s, m_e = macro_bounds
                         padding = 0.1
                         from_t = max(0.0, m_s - padding)
                         to_t = min(snd.get_total_duration(), m_e + padding)
@@ -4251,15 +4318,17 @@ class PhoneticsApp:
                         return
 
                     # 提取抽样有声片段的 F0（并发），而非全量提取整段长音频
-                    valid_items = [it for it in items_snapshot if it.get('macro_start') is not None and it.get('macro_end') is not None]
+                    valid_items = [it for it in items_snapshot if self._get_valid_macro_bounds(it) is not None]
                     if not valid_items:
                         self.root.after(0, self.stop_loading)
                         self.root.after(0, lambda: messagebox.showwarning("提示", "未找到有效发音段。"))
                         return
 
                     def process_long_item(item):
-                        m_s = item['macro_start']
-                        m_e = item['macro_end']
+                        macro_bounds = self._get_valid_macro_bounds(item)
+                        if macro_bounds is None:
+                            return []
+                        m_s, m_e = macro_bounds
                         padding = 0.1
                         from_t = max(0.0, m_s - padding)
                         to_t = min(snd.get_total_duration(), m_e + padding)
@@ -4490,9 +4559,12 @@ class PhoneticsApp:
                 snd = parselmouth.Sound(long_audio_path)
             if snd:
                 for item in items_snapshot:
-                    m_s = item.get('macro_start')
-                    m_e = item.get('macro_end')
-                    if m_s is not None and m_e is not None and m_e > m_s + 0.06:
+                    macro_bounds = self._get_valid_macro_bounds(item)
+                    if macro_bounds:
+                        m_s, m_e = macro_bounds
+                    else:
+                        continue
+                    if m_e > m_s + 0.06:
                         try:
                             part = snd.extract_part(from_time=m_s + 0.025, to_time=m_e - 0.025)
                             snippets.append(part)
@@ -4756,11 +4828,11 @@ class PhoneticsApp:
 
             def run_current_detection():
                 try:
-                    is_long = ('macro_start' in curr_item and 'macro_end' in curr_item and snd.get_total_duration() > 15.0)
+                    macro_bounds = self._get_valid_macro_bounds(curr_item)
+                    is_long = macro_bounds is not None and snd.get_total_duration() > 15.0
                     snippets = []
                     if is_long:
-                        m_s = curr_item.get('macro_start', curr_item.get('start', 0.0))
-                        m_e = curr_item.get('macro_end', curr_item.get('end', 0.0))
+                        m_s, m_e = macro_bounds
                         if m_e > m_s:
                             part = snd.extract_part(from_time=m_s, to_time=m_e)
                             snippets.append(part)
@@ -4941,11 +5013,11 @@ class PhoneticsApp:
                         mic_s = item['start']
                         mic_e = item['end']
 
-                        is_long = ('macro_start' in item and 'macro_end' in item and snd.get_total_duration() > 15.0)
+                        macro_bounds = self._get_valid_macro_bounds(item)
+                        is_long = macro_bounds is not None and snd.get_total_duration() > 15.0
 
                         if is_long:
-                            ms = item['macro_start']
-                            me = item['macro_end']
+                            ms, me = macro_bounds
                             valid_ms = max(0, ms)
                             valid_me = min(snd.get_total_duration(), me)
 
