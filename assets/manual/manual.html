@@ -221,32 +221,7 @@
                             <li><a href="#faq" class="flex items-center space-x-2 hover:text-brand-600 transition"><i data-lucide="help-circle" class="w-4 h-4"></i><span>10. 常见排雷指南</span></a></li>
                         </ul>
                     </div>
-                    <!-- Clever Detail: Mini Live T-Value Calculator inside Sidebar -->
-                    <div class="bg-brand-50 border border-brand-100 rounded-xl p-4">
-                        <div class="flex items-center space-x-1.5 text-brand-800 font-semibold text-xs uppercase tracking-wider mb-2">
-                            <i data-lucide="calculator" class="w-4 h-4"></i>
-                            <span>T值实时估算器</span>
-                        </div>
-                        <p class="text-[11px] text-slate-500 mb-3">输入基频数值，自动归一化到 0 - 5 的范围。</p>
-                        <div class="space-y-2 text-xs">
-                            <div class="flex justify-between items-center">
-                                <span class="text-slate-500">当前 F0 (Hz)</span>
-                                <input id="calcHz" type="number" value="220" class="w-16 px-1.5 py-0.5 rounded border border-slate-200 text-right font-mono">
-                            </div>
-                            <div class="flex justify-between items-center">
-                                <span class="text-slate-500">发音人 Min Hz</span>
-                                <input id="calcMin" type="number" value="100" class="w-16 px-1.5 py-0.5 rounded border border-slate-200 text-right font-mono">
-                            </div>
-                            <div class="flex justify-between items-center">
-                                <span class="text-slate-500">发音人 Max Hz</span>
-                                <input id="calcMax" type="number" value="350" class="w-16 px-1.5 py-0.5 rounded border border-slate-200 text-right font-mono">
-                            </div>
-                            <div class="pt-2 border-t border-brand-100/60 flex justify-between items-center font-semibold text-brand-900">
-                                <span>计算结果 T 值</span>
-                                <span id="calcResult" class="font-mono text-brand-600 text-sm">2.87</span>
-                            </div>
-                        </div>
-                    </div>
+
                 </div>
             </aside>
 
@@ -439,13 +414,19 @@
                             </h3>
                             <div class="space-y-4 text-xs text-slate-600 leading-relaxed">
                                 <p>
-                                    如果你下载的是已打包的 <strong>Windows 安装包 (Setup 版本)</strong>，安装包内置 Inno Setup 引导，为系统关联了以下核心功能：
+                                    当前最新的正式体系为 <strong>PhonTracer v1.2.5</strong>。为了让不同设备的用户都能获得极致的性能体验，我们提供了 <strong>Windows x64</strong>（适合绝大多数传统 Intel/AMD 电脑）、<strong>Windows ARM64</strong>（适合最新的高通等 ARM 架构 Windows 本）以及 <strong>macOS</strong> 版本的专属安装包。
+                                </p>
+                                <p>
+                                    如果你下载的是已打包的 <strong>Windows 安装包 (Setup 版本)</strong>，这是最推荐的方式！安装包内置了 Inno Setup 简体中文界面引导，安装后，你的系统会获得以下便利：
                                 </p>
                                 <ul class="list-disc list-inside space-y-1.5 text-slate-500 pl-2">
-                                    <li><strong class="text-slate-700">全家桶快捷方式：</strong> 开始菜单自动注册生成“PhonTracer 声调提取分析器”、“Toolkit 工具箱”和“PhonTracerCLI 命令行界面”三个便捷入口，亦可勾选生成桌面图标。</li>
-                                    <li><strong class="text-slate-700">双击秒开工程：</strong> 关联系统 <code>.teproj</code> 文件，后续直接双击实验工程即可瞬间启动并恢复工作区。</li>
-                                    <li><strong class="text-slate-700">启动冲突解决：</strong> 若系统存在异常退出备份，双击外部工程时，主程序将采用高优先级工程加载逻辑，直接导入目标文件并自动清理旧备份，杜绝数据交叉污染。</li>
+                                    <li><strong class="text-slate-700">全家桶快捷方式：</strong> 开始菜单里会自动生成 <code>PhonTracer 声调提取分析器</code>、<code>Toolkit 工具箱</code> 和 <code>PhonTracerCLI 命令行界面</code> 三个入口，随用随点。在安装过程中，您还可以自行勾选“创建桌面快捷方式”的可选项（默认不勾选），以便从桌面直接双击唤醒。</li>
+                                    <li><strong class="text-slate-700">双击秒开工程与高级字表：</strong> 安装包在系统注册表里注册了对 <code>.teproj</code> 工程文件和 <code>.ptwl</code> 高级字表的文件关联。以后做实验，直接双击你的 <code>.teproj</code> 文件，就能瞬间唤醒软件并恢复工作现场；双击 <code>.ptwl</code> 高级字表则会直接调用 Toolkit 进行实验材料的编辑整理。</li>
+                                    <li><strong class="text-slate-700">启动冲突解决：</strong> 当程序已经安装且存在旧的异常退出自动保存工作区时，若此时您双击打开一个新的 <code>.teproj</code>，PhonTracer 将优先尝试载入当前外部工程。外部工程只有在完整校验并成功替换工作区后才会生效；如果工程损坏或缺少资源，原自动保存工作区仍会保留，避免可恢复状态被提前清除。</li>
                                 </ul>
+                                <p>
+                                    如果你下载的是绿色免安装版 (zip 压缩包)，或者在 macOS 上使用 dmg 挂载，直接双击对应的 <code>.exe</code> 或 <code>.app</code> 程序图标即可。<strong>注意：</strong>绿色压缩包版本可能没有自动文件关联，您可以在主程序或 Toolkit 内通过“打开”按钮来载入工程与字表。
+                                </p>
                                 <div class="bg-brand-50 border border-brand-100 rounded-xl p-4 text-brand-900">
                                     <strong class="font-semibold block mb-1 text-xs">关于窗口“快速穿梭传送门”机制：</strong>
                                     在主程序菜单栏点击“关于”窗口，即可一键直接无缝启动 Toolkit 工具箱或 CLI 命令行。
@@ -520,13 +501,16 @@
                                     <h3 class="font-bold text-slate-900 mb-1">右侧面板：项目树与成果仓库</h3>
                                     <p class="text-sm text-slate-600 mb-3">用于数据树状归档、声学异常警示以及自定义规则导出。</p>
                                     <ul class="space-y-2.5 text-xs text-slate-500 list-disc list-inside">
+                                        <li><strong class="text-slate-700">项目树状态短标签：</strong> 项目树右侧的列表会显示简短的状态标签，例如将冗长的异常警告或忽略原因压缩为更短的文本标签（如 <code>+N</code> 等），避免过长的中文文案挤压您的界面空间，帮您快速扫视状态。</li>
                                         <li><strong class="text-slate-700">智能筛查与“需检查”视图：</strong>
                                             <ul class="list-decimal list-inside pl-4 mt-1 space-y-1 text-slate-500">
-                                                <li><strong>F0 模式下：</strong> 自动收集有声帧比率偏低、异常高低八度跳频的词项。</li>
+                                                <li><strong>F0 模式下：</strong> 自动收集有声帧比率偏低、异常高低八度跳频的词项。在声谱图上，被判定为疑似倍频/半频/噪声的异常频点也会以亮红色高亮警示。</li>
                                                 <li><strong>共振峰模式下：</strong> 收集 F1/F2 错位 (F2 &le; F1) 比例偏高、有效帧数过少的词项。</li>
                                             </ul>
                                         </li>
-                                        <li><strong class="text-slate-700">右键忽略警告：</strong> 在项目树上右键点击警告条目，选择“忽略警告”可绕过该词项的异常视图筛查。适用于发音人清音化或特定方言音系造成的缺失现象。</li>
+                                        <li><strong class="text-slate-700">右键属性窗口（底层核对）：</strong> 怀疑页面显示和真实保存的不一致？您可以右键任何词项或分组选择“属性”。它不仅会显示词项的高级元数据，还会列出该词项实际绑定的独立参数值，明确告诉您它用的是“条目值”还是“发音人默认值”，是排错的最佳帮手。</li>
+                                        <li><strong class="text-slate-700">右键忽略单项警告：</strong> 在项目树上右键点击警告条目，选择“忽略警告”可绕过该词项的异常视图筛查。适用于发音人清音化或特定方言音系造成的缺失现象。</li>
+                                        <li><strong class="text-slate-700">条目级参数隔离机制：</strong> 当你在左侧仅仅调整当前词项的独立参数（比如调某个词的基频上限）时，这套“局部参数”不会污染同一个发音人的其他组或词项。</li>
                                         <li><strong class="text-slate-700">一键导出与 AnomalyWarningDialog 异常拦截：</strong> 导出数据时，若项目中仍存留未处理的异常，系统会弹出滚动拦截弹窗，直观罗列警告详情，双击可快速跳转微调。用户亦可一键“忽略警告并强行导出”。</li>
                                     </ul>
                                 </div>
@@ -547,11 +531,30 @@
                         <div class="space-y-4">
                             <h3 class="text-xl font-bold text-slate-900 flex items-center space-x-2">
                                 <span class="bg-brand-100 text-brand-800 text-xs px-2.5 py-1 rounded">理论保障</span>
-                                <span>字表格式与音节拆分规则</span>
+                                <span>字表格式（普通字表与高级字表）与音节拆分规则</span>
                             </h3>
                             <p class="text-sm text-slate-600 leading-relaxed">
-                                字表支持 TXT 格式，亦可从已有的 TextGrid 转换而来。支持多种形式的语法分词及分组标记。
+                                PhonTracer 支持导入普通文本字表（<code>.txt</code>）、带结构的 CSV，以及其核心的 <strong>高级字表 (<code>.ptwl</code>)</strong> 格式。
                             </p>
+                            
+                            <!-- Ordinary vs Advanced wordlists details -->
+                            <div class="bg-white border border-slate-200/80 rounded-xl p-5 shadow-sm space-y-3 text-xs text-slate-600 leading-relaxed">
+                                <h4 class="font-bold text-slate-900 text-sm flex items-center">
+                                    <i data-lucide="file-text" class="w-4.5 h-4.5 mr-1.5 text-brand-600"></i>
+                                    <span>普通字表与高级字表 (<code>.ptwl</code>) 的区别</span>
+                                </h4>
+                                <ul class="list-disc list-inside space-y-2 text-slate-500 pl-1">
+                                    <li><strong class="text-slate-700">普通字表 (<code>.txt</code>)：</strong> 只有简单的组名与词项。你用方括号包住的词组只能当成视觉上的名字，<strong>不会自动成为数据的科研结构元数据</strong>。它适合于只想快速对齐音频而不打算按词性、调类做复杂组合分析的场景。</li>
+                                    <li><strong class="text-slate-700">高级字表 (<code>.ptwl</code>)：</strong> 这是一种带有强大学术结构化数据的 JSON 载体。它不仅保存了你的字词，还能为每组、每个词附加：<strong>组备注、组标签、词项备注、词项标签、别名、自定义字段（比如“词频等级”、“变调条件”、“结构类型”），以及人工复核状态</strong>。</li>
+                                    <li><strong class="text-slate-700">元数据穿透机制：</strong> 一旦你在主程序导入了 <code>.ptwl</code> 高级字表，这套元数据就会如影随形地“穿透”并永远附加在每个被切分出来的声音条目上！后续不管是你画图、导出 Excel 还是写脚本，你都能随意按这些自定义标签对声音进行分类对比，这也是普通文本字表永远做不到的。</li>
+                                </ul>
+                                <div class="bg-amber-50 border border-amber-100 p-3 rounded-lg text-amber-900 text-[11px] leading-relaxed flex items-start space-x-1.5">
+                                    <i data-lucide="sparkles" class="w-3.5 h-3.5 mt-0.5 shrink-0 text-amber-700"></i>
+                                    <div>
+                                        <strong>导入 .ptwl 时的重点注意：</strong> 虽然导入 <code>.ptwl</code> 时左侧窗口仍然会转换成大家熟悉的带组名文本让您预览，但内部其实绑定着完整的元数据！只要您别用键盘瞎乱删改这个预览文本框里的内容，导入生效后所有高级元数据就会稳稳注入您的音频工程中。
+                                    </div>
+                                </div>
+                            </div>
                             
                             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div class="bg-stone-100/60 rounded-xl p-4">
@@ -902,6 +905,21 @@ sys/tem</pre>
                             修剪和采样完毕后，数据需要无缝对接 R 语言、Python 或 SPSS 等统计工具中，PhonTracer 提供了高实用性的动态导出格式。
                         </p>
 
+                        <!-- Research Method Report Info Box -->
+                        <div class="bg-brand-50 border border-brand-100 rounded-xl p-4 text-xs text-slate-600 leading-relaxed">
+                            <strong class="font-semibold block mb-1 text-brand-900 text-sm flex items-center">
+                                <i data-lucide="file-check" class="w-4.5 h-4.5 mr-1.5 text-brand-600"></i>
+                                <span>研究方法报告智能生成 (Toolkit)</span>
+                            </strong>
+                            当您在 Toolkit 中生成<strong>研究方法报告（Markdown / PDF）</strong>时，系统会自动提取并记录以下关键实验信息，以增强学术可复现性：
+                            <ul class="list-disc list-inside space-y-1.5 mt-2 pl-1 text-[11px] text-slate-500">
+                                <li><strong class="text-slate-700">SHA-256 文件指纹：</strong> 记录 <code>.teproj</code> 工程文件的数字指纹，用于极其严格的论文可复现归档。</li>
+                                <li><strong class="text-slate-700">高级字表元数据：</strong> 项目中所有的标签、别名、自定义科研字段等元数据也会悉数进档。</li>
+                                <li><strong class="text-slate-700">自定义脚本执行记录：</strong> 如果您用了自定义脚本出图并选择写入工程记录，脚本的源码、指纹和运行日志会全数附在报告后供学术审查。</li>
+                                <li><strong class="text-slate-700">参数比对口径：</strong> 局部参数差异比对现在按“发音人多数值”进行计算，让您能一眼看出发音人内部个别被您单独调整过参数的词项。</li>
+                            </ul>
+                        </div>
+
                         <!-- Format Grid -->
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-6 text-slate-600 text-xs">
                             <div class="bg-white border border-slate-100 rounded-xl p-5 shadow-sm">
@@ -1107,29 +1125,39 @@ sys/tem</pre>
                             </div>
                         </div>
 
-                        <!-- Pagination and Scope -->
+                        <!-- Custom Grouping Rules & Pagination -->
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-6 text-xs text-slate-600 leading-relaxed">
                             <div class="bg-stone-50 rounded-xl p-5 border border-slate-200/60">
-                                <strong class="text-slate-900 text-sm block mb-1.5">7.4 智能多组别分页与筛选系统</strong>
+                                <strong class="text-slate-900 text-sm block mb-1.5">7.4 图表分组规则与智能组别筛选</strong>
                                 <p class="text-slate-500 leading-relaxed">
-                                    当实验分组或词项数超过 8 个时，线条重叠会导致视觉混乱。系统提供了先进的组别分页与滚动穿透优化方案：
+                                    传统画图只能按项目树里的“物理组别”画？在全新的工具箱中，如果您导入的是 <code>.ptwl</code> 高级字表或带丰富字段的 CSV，您可以使用强大的<strong>图表分组规则</strong>临时改变图表的“对比口径”：
                                 </p>
-                                <ul class="list-disc list-inside mt-2 space-y-1 text-slate-500 pl-1">
-                                    <li><strong>自适应多页 PDF/图片序列：</strong> 导出 PDF 时自动排版为整齐的多页图册；导出图片时则在路径下自动追加 <code>_第X页</code> 生成分页图像集。</li>
-                                    <li><strong>智能组别筛选器：</strong> 支持输入汉字/拼音实时模糊检索过滤，支持按样本量大小 (Sample Size) 排序或设置样本量下限阈值，自动筛除合格样本数不足的边缘分组。</li>
+                                <ul class="list-disc list-inside mt-2 space-y-1.5 text-slate-500 pl-1">
+                                    <li><strong>自定义图表分组：</strong> 在图表分组规则中，您不仅可以选择“默认组”，还可以选择按 <strong>词项标签</strong>、<strong>组标签</strong>、<strong>复核状态</strong>，或者是你添加的 <strong>自定义字段（如词频等级、目标词/填充词）</strong> 进行临时重组并上色！</li>
+                                    <li><strong>分组预览与避坑：</strong> 应用规则前，右侧会自动显示“分组预览”，帮您核对每个重组后的类别下到底有多少可用样本量。如果预览结果为 0，说明规则没匹配到数据。</li>
+                                    <li><strong>智能组别筛选器：</strong> 支持实时输入拼音/汉字<strong>搜索</strong>过滤分组、<strong>一键全选/反选</strong>；支持按各组有效发音样本量 (Sample Size) 进行升降序重排，以及<strong>自动选择高频组</strong>。</li>
+                                    <li><strong>多组别分页策略：</strong> 当画图的组数过多时，若导出为 <code>.pdf</code>，系统会自动将所有组分页，整合生成为一本<strong>多页 PDF 图册</strong>！若导出 PNG，也会自动渲染成带 <code>_第1页</code> 的<strong>图像序列集</strong>。</li>
                                     <li><strong>滚动穿透冲突优化：</strong> 优化了长筛选器内部的滚动捕获。悬停滚动内部时仅滚动筛选列表，不带动外层长面板晃动，交互感极强。</li>
                                 </ul>
                             </div>
-                            <div class="bg-stone-50 rounded-xl p-5 border border-slate-200/60">
-                                <strong class="text-slate-900 text-sm block mb-1.5">7.5 多发音人范围导出策略</strong>
-                                <p class="text-slate-500 leading-relaxed">
-                                    在导出科学可视化图表时，工具箱支持针对多位受试发音人数据进行多样性排列组合：
-                                </p>
-                                <ul class="list-disc list-inside mt-2 space-y-1 text-slate-500 pl-1">
-                                    <li><strong>active (当前发音人)：</strong> 仅对当前被选择的发音人渲染并出图。</li>
-                                    <li><strong>separate (分别导出)：</strong> 引擎在后台自动依次遍历发音人数据树，生成每位发音人专属的命名科学图表。</li>
-                                    <li><strong>integrated (整合导出)：</strong> 将项目内所有受试者的物理声学数据合并，自动应用<strong>发音人归一化算法 (Speaker Normalization)</strong> 对数运算，抹平高低八度音域差，合并生成代表该实验群体发音特征的均值声学格局图或密度云图。</li>
-                                </ul>
+                            <div class="bg-stone-50 rounded-xl p-5 border border-slate-200/60 flex flex-col justify-between">
+                                <div>
+                                    <strong class="text-slate-900 text-sm block mb-1.5">7.5 多发音人范围导出策略</strong>
+                                    <p class="text-slate-500 leading-relaxed">
+                                        在导出科学可视化图表时，工具箱支持针对多位受试发音人数据进行多样性排列组合：
+                                    </p>
+                                    <ul class="list-disc list-inside mt-2 space-y-1 text-slate-500 pl-1">
+                                        <li><strong>active (当前发音人)：</strong> 仅对当前被选择的发音人渲染并出图。</li>
+                                        <li><strong>separate (分别导出)：</strong> 引擎在后台自动依次遍历发音人数据树，生成每位发音人专属的命名科学图表。</li>
+                                        <li><strong>integrated (整合导出)：</strong> 将项目内所有受试者的物理声学数据合并，自动应用<strong>发音人归一化算法 (Speaker Normalization)</strong> 对数运算，抹平高低八度音域差，合并生成代表该实验群体发音特征 of 均值声学格局图或密度云图。</li>
+                                    </ul>
+                                </div>
+                                <div class="bg-brand-50 border border-brand-100 p-3 rounded-lg text-brand-900 text-[11px] leading-relaxed flex items-start space-x-1.5 mt-2">
+                                    <i data-lucide="sparkles" class="w-3.5 h-3.5 mt-0.5 shrink-0 text-brand-700"></i>
+                                    <div>
+                                        <strong>二字组分析专属小福利：</strong> 当你的数据满足“二字组调类组合”条件（组名形如“前字调类+后字调类”且数据足够）时，声调图表会额外解锁两张高级探索图：<strong>二字组调类效应时间进程图</strong>（估算前后字各自的影响随时间的相对占比），以及<strong>调类组合前后字均值热图</strong>。请注意：这两种图属于探索性可视化，并不能完全替代正式统计学模型！
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -1148,43 +1176,112 @@ sys/tem</pre>
                         </p>
 
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                            <!-- Merge -->
+                            <!-- Card 1: 8.1 合并音频（碎片缝合） -->
                             <div class="bg-white border border-slate-100 rounded-xl p-6 shadow-sm">
                                 <h3 class="font-bold text-slate-900 mb-3 flex items-center text-sm">
                                     <i data-lucide="combine" class="w-4.5 h-4.5 text-brand-600 mr-1.5"></i>
-                                    <span>合并音频与模糊匹配</span>
+                                    <span>8.1 合并音频（碎片缝合）</span>
                                 </h3>
-                                <ol class="space-y-2 text-xs text-slate-500 list-decimal list-inside leading-relaxed mb-4">
-                                    <li>拖入大批次 <code>WAV</code> 或 <code>MP3</code> 小碎片。</li>
-                                    <li>在面板内用键盘 Delete 键移除错误项，拖曳鼠标调整先后播放排列队列。</li>
-                                    <li>设定拼接时的“静音间隔”（默认 0.5s，作为让 VAD 切分的缓冲）。</li>
-                                    <li>一键合并，程序在拼接时会自动重采样到 44100 Hz，生成大整轨。</li>
+                                <p class="text-xs text-slate-600 mb-3 leading-relaxed">
+                                    如果你想用长音频模式的连贯工作流，但手头全是一堆碎音频，用它！
+                                </p>
+                                <ol class="space-y-2 text-[11px] text-slate-500 list-decimal list-inside leading-relaxed mb-3">
+                                    <li>把多个 <code>.wav</code> 或 <code>.mp3</code> 拖进去。</li>
+                                    <li>在面板内用键盘 Delete 键删除错误项，拖动调整队列先后顺序。</li>
+                                    <li>设定拼接时的“静音间隔”（默认 0.5 秒，这能帮助 VAD 算法极好地认出边界）。</li>
+                                    <li>点击合并。软件不仅会把它们无缝拼接，还会自动统一重采样到标准的 44100 Hz，输出一个纯净无暇的长 WAV 文件。</li>
                                 </ol>
-                                <span class="bg-brand-50 border border-brand-100 text-[10px] text-brand-800 p-2.5 rounded block leading-relaxed mb-3">
+                                <div class="bg-brand-50 border border-brand-100 text-[10px] text-brand-800 p-2.5 rounded-lg leading-relaxed">
                                     <strong>文件名排序优化：</strong> “导入字表自动排序”功能，只要录音文件名中包含字表里的词，程序就会将小文件按字表重排，无法对应的音频扔到尾端，极大加速后续处理。
-                                </span>
-                                <div class="bg-stone-50 border border-stone-100 text-[10px] text-slate-500 p-3 rounded-lg leading-relaxed">
-                                    <strong>工程结构预览与 ZIP 另存：</strong>
-                                    在工具箱中载入 <code>.teproj</code>，无需开主程序即可轻量预览工程版本、发音人名册、发音模式与已分析总量。支持将工程无损另存为普通 <code>.zip</code> 格式，以便研究人员解包直接读取底层 <code>project.json</code> 结构与提取无损音频。
                                 </div>
                             </div>
-                            <!-- Split -->
+                            
+                            <!-- Card 2: 8.2 拆分长音频（一键切块） -->
+                            <div class="bg-white border border-slate-100 rounded-xl p-6 shadow-sm">
+                                <h3 class="font-bold text-slate-900 mb-3 flex items-center text-sm">
+                                    <i data-lucide="split" class="w-4.5 h-4.5 text-brand-600 mr-1.5"></i>
+                                    <span>8.2 拆分长音频（一键切块）</span>
+                                </h3>
+                                <p class="text-xs text-slate-600 mb-3 leading-relaxed">
+                                    假设你在做语料库整理，要把一长段录音切成几百个带标号的小文件。
+                                </p>
+                                <ol class="space-y-2 text-[11px] text-slate-500 list-decimal list-inside leading-relaxed mb-3">
+                                    <li>载入长录音文件。</li>
+                                    <li>粘贴或导入字表（一行一个词）。文件解析内置了自动剥离文件开头 UTF-8 BOM 字符的逻辑，防止因可见/不可见 BOM 字符导致首行匹配失效。</li>
+                                    <li>点击“一键匹配”，软件会自动进行宏观的语音活动检测（VAD）。如果发现切得不对，可以进入段落编辑器，利用鼠标滚轮进行波形图横向滚动，或使用 Ctrl + 滚轮对波形进行水平缩放，精细调整边界、点击播放听辨、删除误检段或添加手动段落。</li>
+                                    <li>设定边缘缓冲时间（比如默认留 0.1 秒的白头白尾，听起来更自然）。</li>
+                                    <li>点击拆分，你会瞬间得到一个目录，里面的文件被完美命名为 <code>001_北京.wav</code>、<code>002_上海.wav</code>... 文件名里如果存在系统不允许的非法字符，软件会自动替换为合法下划线，绝不报错卡死。</li>
+                                </ol>
+                            </div>
+                            
+                            <!-- Card 3: 8.3 高级字表 (.ptwl) 可视化编辑器 -->
+                            <div class="bg-white border border-slate-100 rounded-xl p-6 shadow-sm">
+                                <h3 class="font-bold text-slate-900 mb-3 flex items-center text-sm">
+                                    <i data-lucide="file-text" class="w-4.5 h-4.5 text-brand-600 mr-1.5"></i>
+                                    <span>8.3 高级字表 (.ptwl) 可视化编辑器</span>
+                                </h3>
+                                <p class="text-xs text-slate-600 mb-3 leading-relaxed">
+                                    Toolkit 不再只是一个切音频的工具，现在它也是你的<strong>实验材料中央厨房</strong>。在“字表”标签页中，您可以直接构建带丰富科研元数据的 <code>.ptwl</code> 文件。
+                                </p>
+                                <ul class="space-y-2 text-[11px] text-slate-500 list-disc list-inside leading-relaxed">
+                                    <li><strong class="text-slate-700">丰富元数据录入：</strong> 左侧管理组名与组备注/标签，右侧可细致填写每个词的各种标签、别名，以及最关键的<strong>自定义科研字段</strong>。</li>
+                                    <li><strong class="text-slate-700">智能导入导出互转：</strong> 你可以随时将传统的 <code>.txt</code> 文本字表或 <code>.csv</code> 文件导入成高级字表；如果是外部人员填好的带有无数列数据的 Excel（需另存为CSV），工具箱会把未知列自动转换为 <code>item_meta</code>（自定义字段）！反之也可以导出为 CSV。</li>
+                                    <li><strong class="text-slate-700">自动对接：</strong> 编辑完成后保存，或点击“同步到音频拆分”，您可以马上使用这个高级字表去跑切分。</li>
+                                </ul>
+                            </div>
+                            
+                            <!-- Card 4: 8.4 自定义脚本沙箱：探索性科研与受控 AI 协作 -->
+                            <div class="bg-white border border-slate-100 rounded-xl p-6 shadow-sm">
+                                <h3 class="font-bold text-slate-900 mb-3 flex items-center text-sm">
+                                    <i data-lucide="terminal" class="w-4.5 h-4.5 text-brand-600 mr-1.5"></i>
+                                    <span>8.4 自定义脚本沙箱：探索性科研与受控 AI 协作</span>
+                                </h3>
+                                <p class="text-xs text-slate-600 mb-3 leading-relaxed">
+                                    如果你想画的图 PhonTracer 主程序里没有怎么办？在 Toolkit 的“自定义脚本”页，我们为您准备了一个<strong>强大的研究沙箱</strong>！它不是一个允许随意执行任意 Python 代码的危险控制台，而是一个<strong>受控、隔离、可归档的协作分析层</strong>。
+                                </p>
+                                <ol class="space-y-1.5 text-[11px] text-slate-500 list-decimal list-inside leading-relaxed">
+                                    <li>在主程序完成所有的红蓝线纠错工作，并导出 <code>.teproj</code> 完整工程。</li>
+                                    <li>打开 Toolkit，载入这个工程文件，并切到“自定义脚本”页。</li>
+                                    <li>点击底部的<strong>“复制提示词”</strong>。软件会瞬间把您工程的数据格式（有哪些标签、多长、几个发音人）整理成给 AI 的极度清晰的提示词！</li>
+                                    <li>把这串提示词发给您的 AI（比如 ChatGPT、Claude），告诉它你想研究什么。AI 会在安全沙箱的允许范围内（默认开放 numpy、scipy、matplotlib，禁止系统访问和未允许的重型库如 seaborn/pandas/gaussian_kde）为您编写一段 <code>def run(ctx):</code> 函数代码。</li>
+                                    <li>将代码粘贴回脚本编辑器中，点击“运行”。在后台安全跑完后，您能立刻看到生成的图表或 CSV 数据表。</li>
+                                    <li><strong class="text-slate-700">科研归档机制：</strong> 如果运行成功，您可以选择将此次执行记录写入到该 <code>.teproj</code> 内部。之后当您生成报告时，这段脚本的代码指纹、运行时间及结果会一并附在你的论文归档中。</li>
+                                </ol>
+                            </div>
+                            
+                            <!-- Card 5: 8.5 工程包结构预览与报告导出 -->
+                            <div class="bg-white border border-slate-100 rounded-xl p-6 shadow-sm">
+                                <h3 class="font-bold text-slate-900 mb-3 flex items-center text-sm">
+                                    <i data-lucide="archive" class="w-4.5 h-4.5 text-brand-600 mr-1.5"></i>
+                                    <span>8.5 工程包结构预览与报告导出</span>
+                                </h3>
+                                <p class="text-xs text-slate-600 mb-3 leading-relaxed">
+                                    Toolkit 中内置了高效的工程操作模块，专为无需载入主程序的大型工程分析而设计：
+                                </p>
+                                <ul class="space-y-2 text-[11px] text-slate-500 list-disc list-inside leading-relaxed">
+                                    <li><strong class="text-slate-700">结构预览：</strong> 载入 <code>.teproj</code> 工程包后，工具箱会以极轻量级的方式解析其内部结构，快速呈现工程版本、发音人名册、各发音人工作模式、音频数量和已分析项目总量。这为数据交付与多人合作工程审查提供了极大便利。</li>
+                                    <li><strong class="text-slate-700">研究报告智能生成：</strong> 您可以在此直接导出带有 SHA-256 校验和以及高级脚本记录的科研方法报告，现在导出界面还配备了实时的阶段进度提示。</li>
+                                    <li><strong class="text-slate-700">工程包转换另存：</strong> 支持将打包好的 <code>.teproj</code> 另存为标准的 <code>.zip</code> 压缩包，以便于研究人员直接解包并读取底层的 <code>project.json</code> 结构或提取缓存在里面的音频副本及声学缓存。</li>
+                                </ul>
+                            </div>
+                            
+                            <!-- Card 6: 8.6 界面导入与拖拽稳定性说明 -->
                             <div class="bg-white border border-slate-100 rounded-xl p-6 shadow-sm flex flex-col justify-between">
                                 <div>
                                     <h3 class="font-bold text-slate-900 mb-3 flex items-center text-sm">
-                                        <i data-lucide="split" class="w-4.5 h-4.5 text-brand-600 mr-1.5"></i>
-                                        <span>拆分长音频（一键切块）</span>
+                                        <i data-lucide="alert-triangle" class="w-4.5 h-4.5 text-brand-600 mr-1.5"></i>
+                                        <span>8.6 界面导入与拖拽稳定性说明</span>
                                     </h3>
-                                    <ol class="space-y-2 text-xs text-slate-500 list-decimal list-inside leading-relaxed mb-4">
-                                        <li>加载整条长音频，粘贴或读取待对应的逐行字表。文件解析内置<strong>自动剥离 UTF-8 BOM 字符逻辑</strong>，防止因首字符乱码匹配失效。</li>
-                                        <li>系统运用 VAD 判定有声边界，支持在分段编辑器微调：可利用<strong>鼠标滚轮水平滚动波形</strong>，使用 <strong>Ctrl + 滚轮对波形进行水平缩放</strong>，精细锁紧。</li>
-                                        <li>设置切割边界的前后缓冲时间 (默认 0.1s 以保留完整的元音开头)。</li>
-                                        <li>生成完美命名的文件集：<code>001_北京.wav</code>、<code>002_上海.wav</code>。非法物理文件名符号自动替换为下划线。</li>
-                                    </ol>
+                                    <p class="text-xs text-slate-600 mb-3 leading-relaxed">
+                                        在 Windows + Tkinter 的特定多线程运行环境下，直接使用窗口级底层鼠标拖放（如 <code>windnd</code> 库）极易与 Python 的 GIL（全局解释器锁）发生冲突，甚至在导入大规模无序文件时导致程序崩溃。为了保证实验软件的高度稳定性，在新版 Toolkit 中：
+                                    </p>
+                                    <ul class="space-y-2 text-[11px] text-slate-500 list-disc list-inside leading-relaxed">
+                                        <li><strong class="text-slate-700">稳定路径导入：</strong> 关闭了窗口级的外部文件直接拖入入口。推荐用户使用界面中的“添加音频”、“选择长音频”或“选择工程文件”按钮，通过标准文件浏览器对话框进行文件导入。</li>
+                                        <li><strong class="text-slate-700">列表拖动排序：</strong> 导入列表后，其内部的拖拽排序、Delete 键删除选中项等交互机制依然被完美保留且稳定运行。</li>
+                                    </ul>
                                 </div>
-                                <div class="bg-amber-50 border border-amber-100 text-[10px] text-amber-900 p-3 rounded-xl block leading-relaxed mt-2">
-                                    <strong>界面鼠标拖入稳定性保障锁：</strong>
-                                    在 Windows + Tkinter 多线程机制下，系统级鼠标直接拖入（如 <code>windnd</code> 库）极易产生 Python 全局锁 (GIL) 互锁，导致大样本导入时闪退。为绝对保证实验高稳定性，Toolkit 关闭了窗口级外部拖入，<strong>统一建议点击“添加音频”或“选择文件”按钮调用资源管理器对话框安全导入</strong>。
+                                <div class="bg-amber-50 border border-amber-100 text-[10px] text-amber-900 p-2.5 rounded-lg leading-relaxed mt-3">
+                                    <strong>安全锁提示：</strong> 外部直接拖入可能会造成多线程死锁。请统一使用界面的文件对话框安全载入材料。
                                 </div>
                             </div>
                         </div>
@@ -1216,29 +1313,42 @@ sys/tem</pre>
                         <div class="space-y-4">
                             <h3 class="font-bold text-slate-950 text-base flex items-center"><i data-lucide="terminal" class="w-5 h-5 text-brand-600 mr-2"></i> 常用 CLI 指令词典</h3>
                             
-                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-                                <!-- Command Doc -->
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+                                <!-- Column 1: 全局设置与声学配置 -->
                                 <div class="bg-white border border-slate-100 p-4 rounded-xl shadow-sm">
-                                    <span class="font-bold text-brand-700 block mb-2">全局设置与核心配置</span>
+                                    <span class="font-bold text-brand-700 block mb-2">全局设置与声学配置</span>
                                     <ul class="space-y-2 text-slate-500 font-mono">
                                         <li><strong class="text-slate-800">lang zh / lang en :</strong> 设定中英文回显环境。</li>
                                         <li><strong class="text-slate-800">speakers / add_speaker :</strong> 查看或新增发音人隔离工作区。</li>
-                                        <li><strong class="text-slate-800">set_params pts=11 db=60 pitch_floor=75 :</strong> 设定声调提取链参数。</li>
-                                        <li><strong class="text-slate-800">set_params analysis_mode=formant formant_max_hz=5500 :</strong> 设定共振峰模式与追踪限制上限。</li>
-                                        <li><strong class="text-slate-800">autosave on / off / now :</strong> 查看、启闭自动保存或强制后台执行原子写入。</li>
-                                        <li><strong class="text-slate-800">agent_guide :</strong> 返回包含 AI 交互守则指南的结构化 JSON。</li>
+                                        <li><strong class="text-slate-800">set_params pts=11 db=60 pitch_floor=75 :</strong> 设定声调提取参数。</li>
+                                        <li><strong class="text-slate-800">set_params analysis_mode=formant formant_max_hz=5500 :</strong> 设定共振峰模式参数。</li>
+                                        <li><strong class="text-slate-800">autosave on / off / now :</strong> 查看、启闭或强制原子备份写入。</li>
+                                        <li><strong class="text-slate-800">agent_guide :</strong> 返回包含 AI 交互守则指南 of 结构化 JSON。</li>
                                     </ul>
                                 </div>
-                                <!-- Command Doc -->
-                                <div class="bg-white border border-slate-100 p-4 rounded-xl shadow-sm flex flex-col justify-between">
-                                    <span class="font-bold text-brand-700 mb-2 block font-sans">工程载入与转换命令</span>
+                                <!-- Column 2: 数据处理与转换 -->
+                                <div class="bg-white border border-slate-100 p-4 rounded-xl shadow-sm">
+                                    <span class="font-bold text-brand-700 mb-2 block font-sans">数据处理与转换</span>
                                     <ul class="space-y-2 text-slate-500 font-mono">
-                                        <li><strong class="text-slate-800">project_import "我的.teproj" :</strong> 加载打包好的工程文件。</li>
-                                        <li><strong class="text-slate-800">project_export "备份.teproj" :</strong> <strong>核心交付命令！</strong>将音频副本、边界进度及声学矩阵打包归档为工程包。</li>
+                                        <li><strong class="text-slate-800">project_import / project_export :</strong> 导入或导出标准 <code>.teproj</code> 工程包（核心交付命令）。</li>
                                         <li><strong class="text-slate-800">load_long / load_batch :</strong> 导入长录音或小片段集。</li>
-                                        <li><strong class="text-slate-800">apply_wordlist "表.txt" fuzzy / order :</strong> 模糊或顺序对齐字表。</li>
-                                        <li><strong class="text-slate-800">detect_f0 recommended / conservative / fine :</strong> 对录音运行 F0 物理估测并推荐三档上下限范围；<strong>应用时会自动激活局部重算，保护手工边界红蓝线不被重置</strong>。</li>
-                                        <li><strong class="text-slate-800">import_batch_and_export &lt;dir&gt; &lt;out.teproj&gt; :</strong> <strong>数据转换神命令！</strong>批量扫描指定文件夹内 <code>WAV</code> + <code>TextGrid</code> 文件对（按发音人子目录归档），自动以 TextGrid 边界为基准进行声学分析并整合打包为 `.teproj` 工程包，极大方便了历史语料向 PhonTracer 迁移。</li>
+                                        <li><strong class="text-slate-800">apply_wordlist "表.txt" fuzzy/order :</strong> 模糊或顺序对齐字表。</li>
+                                        <li><strong class="text-slate-800">detect_f0 recommended/conservative/fine :</strong> 估测基频，一键应用并采用局部重算保护手工边界。</li>
+                                        <li><strong class="text-slate-800">import_batch_and_export &lt;dir&gt; &lt;out.teproj&gt; :</strong> 批量扫描 <code>WAV</code> + <code>TextGrid</code> 对，自动对齐声学分析并打包。</li>
+                                        <li><strong class="text-slate-800">list_items warnings :</strong> 列出所有有声帧比率偏低或报错的词。</li>
+                                        <li><strong class="text-slate-800">modify_bounds 3 1.250 1.820 :</strong> 强行调整指定词起止时间。</li>
+                                    </ul>
+                                </div>
+                                <!-- Column 3: 脚本管理与受控执行 -->
+                                <div class="bg-white border border-slate-100 p-4 rounded-xl shadow-sm">
+                                    <span class="font-bold text-brand-700 block mb-2">脚本管理与受控执行</span>
+                                    <ul class="space-y-2 text-slate-500 font-mono">
+                                        <li><strong class="text-slate-800">list_scripts :</strong> 列出当前本地保存的所有自定义脚本。</li>
+                                        <li><strong class="text-slate-800">script_info "脚本名" :</strong> 查看指定脚本的源码与使用说明。</li>
+                                        <li><strong class="text-slate-800">script_save / script_delete :</strong> 脚本的本地生命周期管理命令。</li>
+                                        <li><strong class="text-slate-800">script_import / script_export :</strong> 导入与导出脚本文件。</li>
+                                        <li><strong class="text-slate-800">script_prompt / generate_prompt :</strong> 在命令行直接生成 AI 画图提示词。</li>
+                                        <li><strong class="text-slate-800">run_script "脚本ID" timeout=30 :</strong> 在受控沙箱内静默执行目标科研脚本，返回日志并在工程中归档。</li>
                                     </ul>
                                 </div>
                             </div>
@@ -1504,6 +1614,50 @@ exit
                                 <strong>急救：</strong> 为彻底规避 Windows + Tkinter 多进程架构下偶发的 GIL 锁多线程崩溃，主程序关闭了外部文件直接拖拽的 windnd 入口。请统一使用“添加音频”或“选择长音频”按钮，通过系统的文件资源管理器安全导入文件。列表内部的拖放排序仍可完美使用。
                             </div>
                         </div>
+
+                        <!-- Accordion 14 -->
+                        <div class="bg-white border border-slate-100 rounded-xl shadow-sm overflow-hidden transition">
+                            <button class="w-full text-left p-5 flex justify-between items-center font-bold text-slate-900 text-sm hover:bg-slate-50/50" onclick="toggleFaq('faq14')">
+                                <span>Q14：双击 .ptwl 为什么没有反应，或者没有打开 Toolkit？</span>
+                                <i data-lucide="chevron-down" class="w-4 h-4 text-slate-400 transform transition-transform" id="faq14-icon"></i>
+                            </button>
+                            <div class="p-5 pt-0 text-xs text-slate-600 leading-relaxed border-t border-slate-50 hidden" id="faq14">
+                                <strong>急救：</strong> <code>.ptwl</code> 的双击文件关联是由 Windows Setup 完整安装包注册的。如果你使用的是免安装的绿色 zip 压缩包版本，你的系统是不知道用什么程序打开它的。你需要先手动打开 Toolkit，然后再在里面选择载入您的 <code>.ptwl</code> 文件。
+                            </div>
+                        </div>
+
+                        <!-- Accordion 15 -->
+                        <div class="bg-white border border-slate-100 rounded-xl shadow-sm overflow-hidden transition">
+                            <button class="w-full text-left p-5 flex justify-between items-center font-bold text-slate-900 text-sm hover:bg-slate-50/50" onclick="toggleFaq('faq15')">
+                                <span>Q15：为什么我的二字组调类效应图或均值热图怎么弄都不显示？</span>
+                                <i data-lucide="chevron-down" class="w-4 h-4 text-slate-400 transform transition-transform" id="faq15-icon"></i>
+                            </button>
+                            <div class="p-5 pt-0 text-xs text-slate-600 leading-relaxed border-t border-slate-50 hidden" id="faq15">
+                                <strong>急救：</strong> 这些图需要极其特定的数据格式才能自动画出：组名必须能够直接解析成“前字调类+后字调类”（比如 <code>阴平+去声</code> 或者 <code>T1+T4</code>）。同时，你至少需要有 2 个前字调类、2 个后字调类和至少 4 种两两组合，并且必须有音节级别的 F0 采样！数据太少或者名字不对，系统都会自动隐藏该图以防产生误导结果。
+                            </div>
+                        </div>
+
+                        <!-- Accordion 16 -->
+                        <div class="bg-white border border-slate-100 rounded-xl shadow-sm overflow-hidden transition">
+                            <button class="w-full text-left p-5 flex justify-between items-center font-bold text-slate-900 text-sm hover:bg-slate-50/50" onclick="toggleFaq('faq16')">
+                                <span>Q16：自定义图表脚本可以读我本地文件或者用 Pandas 画图吗？</span>
+                                <i data-lucide="chevron-down" class="w-4 h-4 text-slate-400 transform transition-transform" id="faq16-icon"></i>
+                            </button>
+                            <div class="p-5 pt-0 text-xs text-slate-600 leading-relaxed border-t border-slate-50 hidden" id="faq16">
+                                <strong>急救：</strong> 不可以。自定义脚本并非万能的“系统操作台”，而是一个专为了解决重绘与排版需求的受控沙盒。禁止使用 <code>open</code>，禁止使用 <code>pandas</code>, <code>seaborn</code> 和 <code>gaussian_kde</code>（防卡死），它只能读取 <code>ctx</code> 对象中的底层科研数据并使用原生的 <code>matplotlib</code> 和限定库进行作图。
+                            </div>
+                        </div>
+
+                        <!-- Accordion 17 -->
+                        <div class="bg-white border border-slate-100 rounded-xl shadow-sm overflow-hidden transition">
+                            <button class="w-full text-left p-5 flex justify-between items-center font-bold text-slate-900 text-sm hover:bg-slate-50/50" onclick="toggleFaq('faq17')">
+                                <span>Q17：我在脚本里点击了停止，为什么脚本还在跑？</span>
+                                <i data-lucide="chevron-down" class="w-4 h-4 text-slate-400 transform transition-transform" id="faq17-icon"></i>
+                            </button>
+                            <div class="p-5 pt-0 text-xs text-slate-600 leading-relaxed border-t border-slate-50 hidden" id="faq17">
+                                <strong>急救：</strong> 因为这是一个“协作式”停止，并不是直接暴力杀掉 Python 进程。你的脚本需要在大型循环中通过 <code>ctx.is_cancelled()</code> 自行检测停止信号。如果您交给 AI 写代码，AI 生成的代码中通常会包含这些安全退出机制。
+                            </div>
+                        </div>
                     </div>
                 </section>
 
@@ -1523,6 +1677,14 @@ exit
                                 </tr>
                             </thead>
                             <tbody class="divide-y divide-slate-100 font-mono">
+                                <tr>
+                                    <td class="p-4 font-semibold text-slate-900">modules/version.py</td>
+                                    <td class="p-4">全局的真理级软件版本源，绝大部分展示及归档版本号均从此处获取。</td>
+                                </tr>
+                                <tr>
+                                    <td class="p-4 font-semibold text-slate-900">phontracer.wordlist.v2</td>
+                                    <td class="p-4">新版高级字表的 Schema 命名规范定义。</td>
+                                </tr>
                                 <tr>
                                     <td class="p-4 font-semibold text-slate-900">main.py & cli.py</td>
                                     <td class="p-4">应用的主入口。分别对图形程序(GUI)和交互式终端控制台(CLI)进行指令流映射分配，支持单次单命令调用并回显。</td>
@@ -1591,30 +1753,7 @@ exit
             document.getElementById('scrollProgress').style.width = progress + '%';
         });
 
-        // Clever Detail: Realtime T-Value calculation
-        const calcHzInput = document.getElementById('calcHz');
-        const calcMinInput = document.getElementById('calcMin');
-        const calcMaxInput = document.getElementById('calcMax');
-        const calcResult = document.getElementById('calcResult');
 
-        function updateTValue() {
-            const hz = parseFloat(calcHzInput.value);
-            const min = parseFloat(calcMinInput.value);
-            const max = parseFloat(calcMaxInput.value);
-
-            if (isNaN(hz) || isNaN(min) || isNaN(max) || min >= max || hz < min) {
-                calcResult.innerText = "输入异常";
-                return;
-            }
-
-            // Formula: T = 5 * (ln(Hz) - ln(minHz)) / (ln(maxHz) - ln(minHz))
-            const t = 5 * (Math.log(hz) - Math.log(min)) / (Math.log(max) - Math.log(min));
-            calcResult.innerText = t.toFixed(2);
-        }
-
-        calcHzInput.addEventListener('input', updateTValue);
-        calcMinInput.addEventListener('input', updateTValue);
-        calcMaxInput.addEventListener('input', updateTValue);
 
         // Toggle Accordion function for FAQ
         function toggleFaq(id) {
