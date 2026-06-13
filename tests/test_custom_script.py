@@ -411,6 +411,62 @@ def run(ctx):
         self.assertIn("group_tags / item_tags", normal_prompt)
         self.assertIn("item_meta", normal_prompt)
 
+    def test_generate_ai_prompt_agent_detailed_project_summary(self):
+        item_ma = {
+            "label": "马",
+            "group": "需要检查",
+            "analysis_mode": "f0",
+            "wordlist_version": "v2",
+            "wordlist_title": "声调综合测试高级字表",
+            "group_note": "三声相关条目，优先观察变调和复核状态。",
+            "group_tags": ["主测试"],
+            "item_note": "三声目标词",
+            "item_tags": ["目标词", "单字"],
+            "item_aliases": ["ma3"],
+            "item_meta": {"结构": "单字", "词频等级": "高"},
+            "metadata_source": "AI推断，需人工复核",
+        }
+        item_li = {
+            "label": "梨",
+            "group": "需要检查",
+            "analysis_mode": "f0",
+            "wordlist_version": "v2",
+            "wordlist_title": "声调综合测试高级字表",
+            "group_tags": ["主测试"],
+            "item_tags": ["目标词", "单字"],
+            "item_meta": {"结构": "单字", "词频等级": "中"},
+            "metadata_source": "已人工复核",
+        }
+        project_data = {
+            "speakers": {
+                "spk_1": {"name": "张三", "items": {"item_1": dict(item_ma), "item_2": dict(item_li)}},
+                "spk_2": {"name": "李四", "items": {"item_1": dict(item_ma)}},
+            }
+        }
+        prompt = generate_ai_prompt(project_data, {
+            "prompt_mode": "Agent协作",
+            "agent_detail_level": "精简",
+            "agent_chart_count": "3",
+            "agent_project_summary_mode": "包含详细工程摘要",
+        })
+
+        self.assertIn("当前附带详细工程摘要", prompt)
+        self.assertIn("不要要求用户重复粘贴字表", prompt)
+        self.assertIn("详细字表信息", prompt)
+        self.assertIn("声调综合测试高级字表 / 需要检查: 去重词项 2，工程条目 3", prompt)
+        self.assertIn("组备注: 三声相关条目，优先观察变调和复核状态。", prompt)
+        self.assertIn("词项标签汇总: 单字 (2条), 目标词 (2条)", prompt)
+        self.assertIn("结构=单字 (2条)", prompt)
+        self.assertIn("词频等级=高 (1条)", prompt)
+        self.assertIn("马[标签:目标词, 单字", prompt)
+        self.assertIn("状态:AI推断，需人工复核", prompt)
+
+        toolkit_path = os.path.join(os.path.dirname(__file__), "..", "toolkit.py")
+        with open(toolkit_path, "r", encoding="utf-8") as f:
+            toolkit_source = f.read()
+        self.assertIn("包含详细工程摘要", toolkit_source)
+        self.assertIn("agent_project_summary_mode", toolkit_source)
+
     def test_project_manager_load_with_and_without_script_runs(self):
         # 1. Create a project without custom_script_runs
         old_project_data = {

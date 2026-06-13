@@ -2023,8 +2023,8 @@ class ToolkitApp(ctk.CTk):
             colors=self.colors,
             font_family=self.font_family,
             bottom_actions=[
-                ("复制 Agent 提示词", self.copy_wordlist_agent_prompt, "warning"),
-                ("同步到拆分", self.sync_wordlist_from_editor, "purple"),
+                ("复制 Agent 生成字表提示词", self.copy_wordlist_agent_prompt, "warning"),
+                ("同步到音频拆分", self.sync_wordlist_from_editor, "purple"),
             ],
         )
         self.wordlist_editor.grid(row=0, column=0, sticky="nsew", padx=14, pady=14)
@@ -4254,7 +4254,7 @@ class AIPromptDialog(ctk.CTkToplevel):
         col_summary.grid(row=0, column=0, sticky="nsew")
         ctk.CTkLabel(col_summary, text="3. 工程摘要", font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), text_color="#374151").pack(anchor="w", pady=(0, 2))
         self.var_agent_summary = ctk.StringVar(value="包含精简工程摘要")
-        self._make_option_menu(col_summary, ["包含精简工程摘要", "不附带工程摘要"], self.var_agent_summary)
+        self._make_option_menu(col_summary, ["包含精简工程摘要", "包含详细工程摘要", "不附带工程摘要"], self.var_agent_summary)
 
         self._section_label(agent_tab, "4. 给 Agent 的额外提示")
         self.placeholder_agent_extra = "可选。例如：优先考虑论文图；先帮我判断哪些图适合当前工程；不要推荐结构类图表，除非数据里真的有结构字段。"
@@ -4297,7 +4297,9 @@ class AIPromptDialog(ctk.CTkToplevel):
                 "custom_desc": extra,
                 "agent_detail_level": self.var_agent_detail.get(),
                 "agent_chart_count": self.var_agent_chart_count.get(),
-                "agent_include_project_summary": self.var_agent_summary.get() == "包含精简工程摘要",
+                "agent_project_summary_mode": self.var_agent_summary.get(),
+                "agent_include_project_summary": self.var_agent_summary.get() != "不附带工程摘要",
+                "agent_detailed_project_summary": self.var_agent_summary.get() == "包含详细工程摘要",
             }
 
         if active_tab == "目标导向":

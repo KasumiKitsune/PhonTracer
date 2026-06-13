@@ -140,7 +140,7 @@ def test_main_import_routes_to_legacy_dialog():
 def test_toolkit_owns_wordlist_agent_prompt():
     source = Path("toolkit.py").read_text(encoding="utf-8")
     prompt_source = Path("modules/wordlist_v2.py").read_text(encoding="utf-8")
-    assert "复制 Agent 提示词" in source
+    assert "复制 Agent 生成字表提示词" in source
     assert "def copy_wordlist_agent_prompt" in source
     assert "ADVANCED_WORDLIST_AGENT_PROMPT" in source
     assert "组名,组备注,组标签,词项,词项备注,标签,别名,复核状态" in prompt_source
@@ -168,7 +168,7 @@ def test_wordlist_editor_moves_frequent_actions_to_footer():
     assert "footer_actions = [" in source
     assert "(\"打开 .ptwl\", self.load_ptwl_dialog" in source
     assert "(\"保存\", self.save_ptwl_dialog" in source
-    assert "(\"检查\", self.check_document" in source
+    assert "(\"检查字表\", self.check_document" in source
     assert "bottom_actions=[" in Path("toolkit.py").read_text(encoding="utf-8")
 
 

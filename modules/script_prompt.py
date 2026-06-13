@@ -27,6 +27,177 @@ def _format_sequence(values, empty="无", limit=None):
     return ", ".join(values)
 
 
+def _truncate_text(value, limit=80):
+    text = str(value or "").replace("\n", " ").replace("\r", " ").strip()
+    if limit is not None and len(text) > limit:
+        return text[: max(0, limit - 1)] + "…"
+    return text
+
+
+def _as_text_list(value, limit_each=32):
+    if not value:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        raw_values = value
+    else:
+        raw_values = str(value).replace("，", ",").split(",")
+    result = []
+    for item in raw_values:
+        text = _truncate_text(item, limit_each)
+        if text:
+            result.append(text)
+    return result
+
+
+def _format_value_list(values, empty="无", limit=8):
+    clean_values = []
+    seen = set()
+    for value in values or []:
+        text = _truncate_text(value, 32)
+        if text and text not in seen:
+            clean_values.append(text)
+            seen.add(text)
+    return _format_sequence(clean_values, empty=empty, limit=limit)
+
+
+def _format_meta_pairs(meta, limit=8):
+    if not isinstance(meta, dict) or not meta:
+        return "无"
+    pairs = []
+    for key in sorted(meta.keys(), key=str):
+        key_text = _truncate_text(key, 24)
+        value_text = _truncate_text(meta.get(key), 40)
+        if key_text and value_text:
+            pairs.append(f"{key_text}={value_text}")
+    return _format_sequence(pairs, limit=limit)
+
+
+def _wordlist_row_key(item):
+    meta = item.get("item_meta") or {}
+    if not isinstance(meta, dict):
+        meta = {}
+    return (
+        _truncate_text(item.get("label") or item.get("text") or item.get("name") or "未命名词项", 48),
+        tuple(_as_text_list(item.get("item_tags"))),
+        tuple(_as_text_list(item.get("item_aliases"))),
+        tuple((str(k), str(v)) for k, v in sorted(meta.items(), key=lambda pair: str(pair[0]))),
+        _truncate_text(item.get("item_note"), 80),
+        _truncate_text(item.get("metadata_source"), 48),
+    )
+
+
+def _build_detailed_wordlist_summary(items, max_groups=36, max_items_per_group=48):
+    buckets = {}
+    v2_item_count = 0
+
+    for item in items:
+        if not _looks_like_v2_wordlist_item(item):
+            continue
+        v2_item_count += 1
+        title = _truncate_text(item.get("wordlist_title") or "未命名高级字表", 48)
+        group_name = _truncate_text(item.get("group") or "未分组", 48)
+        key = (title, group_name)
+        if key not in buckets:
+            buckets[key] = {
+                "rows": {},
+                "occurrences": 0,
+                "group_notes": Counter(),
+                "group_tags": Counter(),
+            }
+        bucket = buckets[key]
+        bucket["occurrences"] += 1
+        group_note = _truncate_text(item.get("group_note"), 80)
+        if group_note:
+            bucket["group_notes"][group_note] += 1
+        for tag in _as_text_list(item.get("group_tags")):
+            bucket["group_tags"][tag] += 1
+
+        row_key = _wordlist_row_key(item)
+        if row_key not in bucket["rows"]:
+            bucket["rows"][row_key] = {"item": item, "count": 0}
+        bucket["rows"][row_key]["count"] += 1
+
+    if not v2_item_count:
+        return "- 详细字表信息: 当前工程没有可展开的 v2 高级字表词项。"
+
+    lines = [
+        "- 详细字表信息: 以下按“字表 / 组”压缩展示；相同词项在多位发音人中重复出现时只列一次。"
+    ]
+    sorted_keys = sorted(buckets.keys(), key=lambda pair: (pair[0], pair[1]))
+    for title, group_name in sorted_keys[:max_groups]:
+        bucket = buckets[(title, group_name)]
+        rows = list(bucket["rows"].values())
+        item_tags = Counter()
+        meta_values = Counter()
+        statuses = Counter()
+
+        for row in rows:
+            item = row["item"]
+            for tag in _as_text_list(item.get("item_tags")):
+                item_tags[tag] += 1
+            meta = item.get("item_meta") or {}
+            if isinstance(meta, dict):
+                for meta_key, meta_value in meta.items():
+                    key_text = _truncate_text(meta_key, 24)
+                    value_text = _truncate_text(meta_value, 32)
+                    if key_text and value_text:
+                        meta_values[f"{key_text}={value_text}"] += 1
+            status = _truncate_text(item.get("metadata_source"), 48)
+            if status:
+                statuses[status] += 1
+
+        lines.append(
+            f"  - {title} / {group_name}: 去重词项 {len(rows)}，工程条目 {bucket['occurrences']}"
+        )
+        if bucket["group_notes"]:
+            lines.append(f"    组备注: {_format_counter(bucket['group_notes'], limit=2)}")
+        if bucket["group_tags"]:
+            lines.append(f"    组标签: {_format_counter(bucket['group_tags'], limit=8)}")
+        if item_tags:
+            lines.append(f"    词项标签汇总: {_format_counter(item_tags, limit=12)}")
+        if meta_values:
+            lines.append(f"    自定义字段值汇总: {_format_counter(meta_values, limit=14)}")
+        if statuses:
+            lines.append(f"    复核状态汇总: {_format_counter(statuses, limit=8)}")
+
+        entries = []
+        for row in rows[:max_items_per_group]:
+            item = row["item"]
+            label = _truncate_text(item.get("label") or item.get("text") or item.get("name") or "未命名词项", 24)
+            details = []
+            tags = _as_text_list(item.get("item_tags"))
+            aliases = _as_text_list(item.get("item_aliases"))
+            meta = item.get("item_meta") or {}
+            note = _truncate_text(item.get("item_note"), 60)
+            status = _truncate_text(item.get("metadata_source"), 32)
+            if tags:
+                details.append(f"标签:{_format_value_list(tags, limit=5)}")
+            if aliases:
+                details.append(f"别名:{_format_value_list(aliases, limit=4)}")
+            if isinstance(meta, dict) and meta:
+                details.append(f"字段:{_format_meta_pairs(meta, limit=5)}")
+            if note:
+                details.append(f"备注:{note}")
+            if status and status != "人工填写":
+                details.append(f"状态:{status}")
+            if details:
+                entries.append(f"{label}[{'; '.join(details)}]")
+            else:
+                entries.append(label)
+
+        omitted_items = len(rows) - min(len(rows), max_items_per_group)
+        item_line = _format_sequence(entries, empty="无")
+        if omitted_items > 0:
+            item_line += f"，其余 {omitted_items} 个去重词项已省略"
+        lines.append(f"    词项: {item_line}")
+
+    omitted_groups = len(sorted_keys) - min(len(sorted_keys), max_groups)
+    if omitted_groups > 0:
+        lines.append(f"  - 其余 {omitted_groups} 个字表组已省略；如需完整逐词清单，请让用户在 Toolkit 中导出 CSV。")
+
+    return "\n".join(lines)
+
+
 def _iter_project_items(project_data):
     if not project_data or not isinstance(project_data, dict):
         return
@@ -126,6 +297,7 @@ def _build_project_summary(
     max_speakers=12,
     max_groups=None,
     max_speaker_groups=None,
+    wordlist_detail="compact",
 ):
     spk_count = 0
     item_count = 0
@@ -192,13 +364,17 @@ def _build_project_summary(
     if len(speaker_lines) > speaker_limit:
         speaker_detail += f"\n  - 其余 {len(speaker_lines) - speaker_limit} 位发音人已省略"
 
+    wordlist_summary = _build_wordlist_metadata_summary(all_items)
+    if wordlist_detail == "detailed":
+        wordlist_summary = f"{wordlist_summary}\n{_build_detailed_wordlist_summary(all_items)}"
+
     return (
         f"- 发音人数: {spk_count} (列表: {_format_sequence(speaker_names, limit=max_speaker_names)})\n"
         f"- 条目总数: {item_count}；纳入分析: {included_count}；已排除: {excluded_count}\n"
         f"- 分组及条目数: {_format_counter(groups, limit=max_groups)}\n"
         f"- 分析模式分布: {_format_counter(modes)}\n"
         f"- 已缓存基频条目估计: {pitch_cache_count}；已缓存共振峰条目估计: {formant_cache_count}\n"
-        f"{_build_wordlist_metadata_summary(all_items)}\n"
+        f"{wordlist_summary}\n"
         f"- 发音人明细:\n{speaker_detail}"
     )
 
@@ -382,7 +558,14 @@ def run(ctx):
 def _build_agent_prompt(project_data, selections):
     detail_level = selections.get("agent_detail_level", "精简")
     chart_count = selections.get("agent_chart_count", "5")
-    include_project_summary = selections.get("agent_include_project_summary", True)
+    summary_mode = selections.get("agent_project_summary_mode")
+    if summary_mode not in ("包含精简工程摘要", "包含详细工程摘要", "不附带工程摘要"):
+        if selections.get("agent_detailed_project_summary", False):
+            summary_mode = "包含详细工程摘要"
+        elif selections.get("agent_include_project_summary", True):
+            summary_mode = "包含精简工程摘要"
+        else:
+            summary_mode = "不附带工程摘要"
     custom_desc = selections.get("custom_desc", "").strip()
 
     try:
@@ -391,13 +574,14 @@ def _build_agent_prompt(project_data, selections):
         chart_count_int = 5
     chart_count_int = max(3, min(6, chart_count_int))
 
-    if include_project_summary:
+    if summary_mode != "不附带工程摘要":
         project_summary = _build_project_summary(
             project_data,
             max_speaker_names=12,
             max_speakers=8,
             max_groups=20,
             max_speaker_groups=8,
+            wordlist_detail="detailed" if summary_mode == "包含详细工程摘要" else "compact",
         )
     else:
         project_summary = "- 用户选择不附带当前工程摘要。请在首轮询问用户希望分析的数据范围。"
@@ -409,6 +593,8 @@ def _build_agent_prompt(project_data, selections):
         if is_detailed
         else "使用精简说明：推荐图表时给出字段、统计口径、风险和适用场景，但仍避免逐条复述工程数据。"
     )
+    if summary_mode == "包含详细工程摘要":
+        detail_instruction += " 当前附带详细工程摘要，优先利用其中的字表标签、备注和自定义字段，不要要求用户重复粘贴字表。"
     detail_appendix = f"\n\n{_build_agent_detail_appendix()}" if is_detailed else ""
 
     return f"""你现在是 PhonTracer / Tone Extractor Toolkit 的自定义图表脚本 Agent。

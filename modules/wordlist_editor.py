@@ -147,6 +147,30 @@ class RoundedGroupList(ctk.CTkScrollableFrame):
         return () if self._selected_index is None else (self._selected_index,)
 
 
+def _apply_custom_arrow(dropdown):
+    try:
+        orig_draw_arrow = dropdown._draw_engine.draw_dropdown_arrow
+
+        def custom_draw_arrow(*args, **kwargs):
+            old_method = dropdown._draw_engine.preferred_drawing_method
+            try:
+                dropdown._draw_engine.preferred_drawing_method = "polygon_shapes"
+                res = orig_draw_arrow(*args, **kwargs)
+                try:
+                    dropdown._canvas.itemconfigure("dropdown_arrow", width=2)
+                except Exception:
+                    pass
+                return res
+            finally:
+                dropdown._draw_engine.preferred_drawing_method = old_method
+
+        dropdown._draw_engine.draw_dropdown_arrow = custom_draw_arrow
+        dropdown._canvas.delete("dropdown_arrow")
+        dropdown._draw(no_color_updates=False)
+    except Exception:
+        pass
+
+
 class VisualWordlistEditor(ctk.CTkFrame):
     """高级字表的可视化编辑组件。"""
 
@@ -306,7 +330,7 @@ class VisualWordlistEditor(ctk.CTkFrame):
     def show_more_actions(self):
         popup = ctk.CTkToplevel(self.winfo_toplevel())
         popup.title("字表操作")
-        popup.geometry("420x350")
+        popup.geometry("420x390")
         popup.resizable(False, False)
         popup.configure(fg_color=self.colors.get("surface", "#FFFFFF"))
         popup.transient(self.winfo_toplevel())
@@ -326,6 +350,7 @@ class VisualWordlistEditor(ctk.CTkFrame):
         actions = [
             ("新建字表", lambda: self.set_document({}), "secondary"),
             ("另存为", lambda: self.save_ptwl_dialog(save_as=True), "success"),
+            ("检查字表", self.check_document, "warning"),
             ("导入 v1 文本", self.import_v1_dialog, "secondary"),
             ("导入 CSV", self.import_csv_dialog, "secondary"),
             ("导出 v1 文本", self.export_v1_dialog, "secondary"),
@@ -436,10 +461,16 @@ class VisualWordlistEditor(ctk.CTkFrame):
             values=[DEFAULT_REVIEW_STATUS, AI_REVIEW_STATUS, REVIEWED_STATUS],
             variable=self.item_source_var,
             command=lambda _v: self._sync_from_fields(),
-            height=30,
-            corner_radius=8,
+            fg_color=("#F3F4F6", "#374151"),
+            text_color=("#1F2937", "#E5E7EB"),
+            button_color=("#F3F4F6", "#374151"),
+            button_hover_color=("#E5E7EB", "#4B5563"),
+            height=32,
+            corner_radius=16,
+            font=self.font_main,
         )
         self.source_menu.pack(fill=tk.X, padx=12, pady=(4, 8))
+        _apply_custom_arrow(self.source_menu)
         self._bind_child_to_scroll_frame(self.source_menu, right)
 
         ctk.CTkLabel(right, text="自定义字段", font=self.font_small, text_color=self.colors["muted"]).pack(anchor="w", padx=12)
@@ -465,10 +496,9 @@ class VisualWordlistEditor(ctk.CTkFrame):
         footer_actions = [
             ("打开 .ptwl", self.load_ptwl_dialog, "primary", 96),
             ("保存", self.save_ptwl_dialog, "success", 76),
-            ("检查", self.check_document, "warning", 70),
-            ("标记已复核", self.mark_ai_reviewed, "secondary", 100),
+            ("全部标记为已复核", self.mark_ai_reviewed, "secondary", 135),
         ]
-        footer_actions.extend([(text, command, tone, 130 if "提示词" in text else 104) for text, command, tone in self.bottom_actions])
+        footer_actions.extend([(text, command, tone, 196 if "提示词" in text else (135 if "同步" in text else 104)) for text, command, tone in self.bottom_actions])
         for idx, (text, command, tone, width) in enumerate(footer_actions):
             self._button(footer, text, command, tone, width=width).grid(row=0, column=idx, padx=(10 if idx == 0 else 0, 8), pady=10, sticky="w")
         self._button(footer, "更多", self.show_more_actions, "secondary", width=72).grid(row=0, column=7, padx=(0, 10), pady=10, sticky="e")
