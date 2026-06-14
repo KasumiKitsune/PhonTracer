@@ -1723,7 +1723,7 @@ class ToolkitApp(ctk.CTk):
         self.tree_textgrid_tiers.column("count", width=90, anchor="center")
         self.tree_textgrid_tiers.column("samples", width=420, anchor="w")
         self.tree_textgrid_tiers.configure(style="Converter.Treeview", takefocus=False)
-        self.textgrid_tier_scroll = ctk.CTkScrollbar(tier_container, orientation="vertical", command=self.tree_textgrid_tiers.yview, width=12)
+        self.textgrid_tier_scroll = ctk.CTkScrollbar(tier_container, orientation="vertical", command=self.tree_textgrid_tiers.yview, width=12, height=10)
         self.tree_textgrid_tiers.configure(yscrollcommand=self.textgrid_tier_scroll.set)
         self.tree_textgrid_tiers.grid(row=0, column=0, sticky="nsew", padx=(1, 0), pady=1)
         self.textgrid_tier_scroll.grid(row=0, column=1, sticky="ns", padx=(0, 1), pady=1)
