@@ -1240,7 +1240,7 @@ class ToolkitApp(ctk.CTk):
             kwargs["height"] = height
         return ctk.CTkFrame(parent, **kwargs)
 
-    def _section_header(self, parent, title, subtitle=None, icon_text=None):
+    def _section_header(self, parent, title, subtitle=None, icon_text=None, show_toggle=False, toggle_cmd=None):
         frame = ctk.CTkFrame(parent, fg_color="transparent")
         frame.pack(fill=tk.X, padx=20, pady=(18, 12))
 
@@ -1254,6 +1254,18 @@ class ToolkitApp(ctk.CTk):
                 text_color=self.colors["primary"],
             ).pack(side=tk.LEFT, padx=(0, 8))
         ctk.CTkLabel(title_row, text=title, font=self.font_title, text_color=self.colors["text"]).pack(side=tk.LEFT)
+
+        if show_toggle and toggle_cmd:
+            toggle_btn = self._make_button(
+                title_row,
+                "折叠",
+                toggle_cmd,
+                tone="ghost",
+                height=26,
+                width=50,
+            )
+            toggle_btn.pack(side=tk.RIGHT)
+            frame.toggle_btn = toggle_btn
 
         if subtitle:
             ctk.CTkLabel(
@@ -1648,7 +1660,7 @@ class ToolkitApp(ctk.CTk):
         source_card.grid_rowconfigure(2, weight=1)
 
         source_header = ctk.CTkFrame(source_card, fg_color="transparent")
-        source_header.grid(row=0, column=0, sticky="ew", padx=20, pady=(16, 8))
+        source_header.grid(row=0, column=0, sticky="ew", padx=20, pady=(12, 6))
         source_header.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(source_header, text="源文件与层摘要", font=self.font_title, text_color=self.colors["text"]).grid(row=0, column=0, sticky="w")
         self._make_button(
@@ -1662,19 +1674,19 @@ class ToolkitApp(ctk.CTk):
         ).grid(row=0, column=1, sticky="e")
 
         path_pill = ctk.CTkFrame(source_card, fg_color=self.colors["surface"], corner_radius=999, border_width=1, border_color=self.colors["border"])
-        path_pill.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 10))
+        path_pill.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 6))
         self.lbl_textgrid_source = ctk.CTkLabel(path_pill, text="未选择 TextGrid 文件", text_color=self.colors["muted"], font=self.font_small, anchor="w")
         self.lbl_textgrid_source.pack(fill=tk.X, padx=14, pady=8)
 
         tier_container = ctk.CTkFrame(source_card, fg_color=self.colors["surface"], corner_radius=14, border_width=1, border_color=self.colors["border"])
-        tier_container.grid(row=2, column=0, sticky="nsew", padx=20, pady=(0, 16))
+        tier_container.grid(row=2, column=0, sticky="nsew", padx=20, pady=(0, 12))
         tier_container.grid_columnconfigure(0, weight=1)
         tier_container.grid_rowconfigure(0, weight=1)
         self.tree_textgrid_tiers = ttk.Treeview(
             tier_container,
             columns=("name", "type", "count", "samples"),
             show="headings",
-            height=3,
+            height=2,
             selectmode="browse",
         )
         self.tree_textgrid_tiers.heading("name", text="层名")
@@ -1754,9 +1766,29 @@ class ToolkitApp(ctk.CTk):
 
         mapping_card = self._make_card(right_panel, fg_color=self.colors["surface_soft"], width=340)
         mapping_card.pack(fill=tk.X, side=tk.TOP, pady=(0, 16))
-        self._section_header(mapping_card, "层映射", "条目层给词项标签，核心层给实际分析边界。", icon_text="03")
 
         mapping_body = ctk.CTkFrame(mapping_card, fg_color="transparent")
+
+        self.mapping_is_collapsed = False
+        def toggle_mapping():
+            if self.mapping_is_collapsed:
+                mapping_body.pack(fill=tk.X, padx=20, pady=(0, 10))
+                header_frame.toggle_btn.configure(text="折叠")
+                self.mapping_is_collapsed = False
+            else:
+                mapping_body.pack_forget()
+                header_frame.toggle_btn.configure(text="展开")
+                self.mapping_is_collapsed = True
+
+        header_frame = self._section_header(
+            mapping_card,
+            "层映射",
+            "条目层给词项标签，核心层给实际分析边界。",
+            icon_text="03",
+            show_toggle=True,
+            toggle_cmd=toggle_mapping,
+        )
+
         mapping_body.pack(fill=tk.X, padx=20, pady=(0, 10))
 
         # 采用 Grid 布局横向排列下拉菜单，合并组层和条目层在同一行
