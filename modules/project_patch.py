@@ -17,6 +17,7 @@ import zipfile
 import numpy as np
 
 from .project_manager import (
+    ProjectManager,
     read_project_metadata_from_archive,
     to_json_serializable,
     validate_project_archive_members,
@@ -61,6 +62,14 @@ ANALYSIS_CACHE_FIELDS = {
 
 class ProjectPatchError(ValueError):
     """工程补丁操作无法安全应用时抛出的错误。"""
+
+
+def _same_file_path(left, right):
+    if not left or not right:
+        return False
+    left_path = os.path.normcase(os.path.abspath(left))
+    right_path = os.path.normcase(os.path.abspath(right))
+    return left_path == right_path
 
 
 def _safe_token(value, fallback="item"):
@@ -142,6 +151,26 @@ def _extract_project(teproj_path, workspace_dir):
                 shutil.copyfileobj(source, dest)
 
 
+def _project_manager_for_validation():
+    return ProjectManager(app=None)
+
+
+def _validate_project_workspace_for_import(workspace_dir):
+    state = _load_project_state(workspace_dir)
+    _project_manager_for_validation()._validate_project_resources(state, workspace_dir)
+    return state
+
+
+def _validate_project_archive_for_import(teproj_path):
+    read_project_metadata_from_archive(teproj_path)
+    temp_dir = tempfile.mkdtemp(prefix="phontracer_validate_")
+    try:
+        _extract_project(teproj_path, temp_dir)
+        _validate_project_workspace_for_import(temp_dir)
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 def _write_project_archive(workspace_dir, output_path):
     project_json = os.path.join(workspace_dir, "project.json")
     if not os.path.isfile(project_json):
@@ -159,7 +188,7 @@ def _write_project_archive(workspace_dir, output_path):
                     file_path = os.path.join(root, filename)
                     rel_path = os.path.relpath(file_path, workspace_dir).replace(os.sep, "/")
                     zf.write(file_path, rel_path)
-        read_project_metadata_from_archive(temp_zip)
+        _validate_project_archive_for_import(temp_zip)
         os.replace(temp_zip, abs_output)
     finally:
         if os.path.exists(temp_zip):
@@ -184,6 +213,49 @@ def _save_project_state(workspace_dir, state):
     with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(to_json_serializable(state), f, ensure_ascii=False, indent=2)
     os.replace(tmp_path, project_json)
+
+
+def _iter_state_resource_paths(state):
+    for spk in state.get("speakers", {}).values():
+        if not isinstance(spk, dict):
+            continue
+        for path in (spk.get("long_audio_path"),):
+            if path:
+                yield _normalize_rel_path(path)
+        for path in spk.get("pending_batch_paths", []) or []:
+            if path:
+                yield _normalize_rel_path(path)
+        for item in (spk.get("items", {}) or {}).values():
+            if not isinstance(item, dict):
+                continue
+            for key in ("path", "pitch_data_file", "formant_data_file"):
+                path = item.get(key)
+                if path:
+                    yield _normalize_rel_path(path)
+
+
+def _prune_workspace_resources_for_state(workspace_dir, state):
+    keep_paths = set(_iter_state_resource_paths(state))
+    for root_name in ("audio", "data"):
+        root_dir = os.path.join(workspace_dir, root_name)
+        if not os.path.isdir(root_dir):
+            continue
+        for root, _dirs, files in os.walk(root_dir):
+            for filename in files:
+                file_path = os.path.join(root, filename)
+                rel_path = os.path.relpath(file_path, workspace_dir).replace(os.sep, "/")
+                if rel_path not in keep_paths:
+                    try:
+                        os.remove(file_path)
+                    except OSError:
+                        pass
+        for root, dirs, _files in os.walk(root_dir, topdown=False):
+            for dirname in dirs:
+                dir_path = os.path.join(root, dirname)
+                try:
+                    os.rmdir(dir_path)
+                except OSError:
+                    pass
 
 
 def _find_item(state, target):
@@ -357,7 +429,13 @@ def _apply_trim_item_audio(state, workspace_dir, op, records):
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     part.save(out_path, "WAV")
 
+    old_item_path = item.get("path")
     item["path"] = rel_name
+    if isinstance(spk.get("pending_batch_paths"), list):
+        spk["pending_batch_paths"] = [
+            rel_name if path == old_item_path else path
+            for path in spk.get("pending_batch_paths", [])
+        ]
     item["start"] = 0.0
     item["end"] = float(part.get_total_duration())
     item["macro_start"] = 0.0
@@ -389,6 +467,21 @@ def _apply_split_project(state, _workspace_dir, op, records):
         else:
             new_spk["items"] = copy.deepcopy(old_items)
         if new_spk["items"] or (speaker_ids and spk_id in speaker_ids):
+            item_audio_paths = {
+                _normalize_rel_path(item.get("path"))
+                for item in new_spk["items"].values()
+                if item.get("path")
+            }
+            new_spk["pending_batch_paths"] = [
+                path
+                for path in (new_spk.get("pending_batch_paths", []) or [])
+                if path and _normalize_rel_path(path) in item_audio_paths
+            ]
+            uses_long_audio = any(not item.get("path") for item in new_spk["items"].values())
+            if not uses_long_audio:
+                new_spk["long_audio_path"] = None
+                new_spk["current_macro_segments"] = []
+                new_spk["manual_segments"] = []
             kept_items += len(new_spk["items"])
             new_speakers[spk_id] = new_spk
 
@@ -471,6 +564,8 @@ def apply_project_patch_to_teproj(teproj_path, patch_result, output_path, run_re
         raise ProjectPatchError("找不到输入 .teproj 工程文件。")
     if not output_path:
         raise ProjectPatchError("必须提供输出 .teproj 路径。")
+    if _same_file_path(teproj_path, output_path):
+        raise ProjectPatchError("输出工程不能覆盖原 .teproj，请另存为新文件。")
 
     patch = _coerce_patch_result(patch_result)
     summary = summarize_project_patch(patch_result)
@@ -489,7 +584,7 @@ def apply_project_patch_to_teproj(teproj_path, patch_result, output_path, run_re
     temp_dir = tempfile.mkdtemp(prefix="phontracer_patch_")
     records = []
     try:
-        read_project_metadata_from_archive(teproj_path)
+        _validate_project_archive_for_import(teproj_path)
         _extract_project(teproj_path, temp_dir)
         base_state = _load_project_state(temp_dir)
 
@@ -508,8 +603,8 @@ def apply_project_patch_to_teproj(teproj_path, patch_result, output_path, run_re
             if run_record:
                 state["custom_script_runs"].append(copy.deepcopy(run_record))
             _save_project_state(temp_dir, state)
+            _validate_project_workspace_for_import(temp_dir)
             _write_project_archive(temp_dir, output_path)
-            read_project_metadata_from_archive(output_path)
             return {
                 **summary,
                 "output_path": output_path,
@@ -525,8 +620,9 @@ def apply_project_patch_to_teproj(teproj_path, patch_result, output_path, run_re
             if run_record:
                 state["custom_script_runs"].append(copy.deepcopy(run_record))
             _save_project_state(temp_dir, state)
+            _prune_workspace_resources_for_state(temp_dir, state)
+            _validate_project_workspace_for_import(temp_dir)
             _write_project_archive(temp_dir, output_path)
-            read_project_metadata_from_archive(output_path)
             return {
                 **summary,
                 "output_path": output_path,
@@ -538,33 +634,45 @@ def apply_project_patch_to_teproj(teproj_path, patch_result, output_path, run_re
             base_dir = os.path.dirname(output_path)
             base_filename = os.path.basename(output_path)
             name_part, ext_part = os.path.splitext(base_filename)
-            
+
             output_paths = []
+            used_output_paths = set()
+            _save_project_state(temp_dir, base_state)
             for op in split_ops:
+                split_dir = tempfile.mkdtemp(prefix="phontracer_split_")
                 state_copy = copy.deepcopy(base_state)
-                # 应用拆分
-                _apply_split_project(state_copy, temp_dir, op, records)
-                
-                # 构造独立文件名，例如: input_前字阴平子工程.teproj
-                safe_suffix = _safe_token(op.get("name") or "split")
-                sub_filename = f"{name_part}_{safe_suffix}{ext_part}"
-                sub_output_path = os.path.join(base_dir, sub_filename)
-                
-                # 写入运行记录
-                state_copy.setdefault("custom_script_runs", [])
-                if run_record:
-                    # 复制运行记录，修改输出路径
-                    sub_record = copy.deepcopy(run_record)
-                    if sub_record.get("outputs"):
-                        sub_record["outputs"][0]["saved_path"] = sub_output_path
-                        sub_record["outputs"][0]["filename"] = sub_filename
-                    state_copy["custom_script_runs"].append(sub_record)
-                
-                _save_project_state(temp_dir, state_copy)
-                _write_project_archive(temp_dir, sub_output_path)
-                read_project_metadata_from_archive(sub_output_path)
-                output_paths.append(sub_output_path)
-                
+                try:
+                    shutil.copytree(temp_dir, split_dir, dirs_exist_ok=True)
+                    _apply_split_project(state_copy, split_dir, op, records)
+
+                    safe_suffix = _safe_token(op.get("name") or "split")
+                    sub_filename = f"{name_part}_{safe_suffix}{ext_part}"
+                    sub_output_path = os.path.join(base_dir, sub_filename)
+                    counter = 2
+                    while os.path.normcase(os.path.abspath(sub_output_path)) in used_output_paths:
+                        sub_filename = f"{name_part}_{safe_suffix}_{counter}{ext_part}"
+                        sub_output_path = os.path.join(base_dir, sub_filename)
+                        counter += 1
+                    if _same_file_path(teproj_path, sub_output_path):
+                        raise ProjectPatchError("拆分工程的输出路径不能覆盖原 .teproj。")
+                    used_output_paths.add(os.path.normcase(os.path.abspath(sub_output_path)))
+
+                    state_copy.setdefault("custom_script_runs", [])
+                    if run_record:
+                        sub_record = copy.deepcopy(run_record)
+                        if sub_record.get("outputs"):
+                            sub_record["outputs"][0]["saved_path"] = sub_output_path
+                            sub_record["outputs"][0]["filename"] = sub_filename
+                        state_copy["custom_script_runs"].append(sub_record)
+
+                    _save_project_state(split_dir, state_copy)
+                    _prune_workspace_resources_for_state(split_dir, state_copy)
+                    _validate_project_workspace_for_import(split_dir)
+                    _write_project_archive(split_dir, sub_output_path)
+                    output_paths.append(sub_output_path)
+                finally:
+                    shutil.rmtree(split_dir, ignore_errors=True)
+
             return {
                 **summary,
                 "output_path": output_paths[0],

@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from modules.project_manager import read_project_metadata_from_archive
-from modules.project_patch import apply_project_patch_to_teproj, summarize_project_patch
+from modules.project_patch import ProjectPatchError, apply_project_patch_to_teproj, summarize_project_patch
 from modules.script_api import ProjectPatchResult
 from modules.script_prompt import generate_ai_prompt
 from modules.script_runner import run_custom_script
@@ -45,6 +45,17 @@ def _minimal_project():
             }
         },
     }
+
+
+def _write_test_wav(path, duration=0.08, frequency=220.0):
+    parselmouth = pytest.importorskip("parselmouth")
+    sample_rate = 8000
+    sample_count = max(1, int(sample_rate * duration))
+    xs = np.arange(sample_count, dtype=np.float64) / sample_rate
+    samples = np.sin(2 * math.pi * frequency * xs)
+    snd = parselmouth.Sound(np.array([samples]), sampling_frequency=sample_rate)
+    snd.save(str(path), "WAV")
+    return path.read_bytes()
 
 
 def test_project_patch_result_helpers_and_runner():
@@ -115,6 +126,40 @@ def test_apply_set_item_fields_to_teproj(tmp_path):
     assert state["custom_script_runs"][0]["script_type"] == "data_process"
 
 
+def test_apply_project_patch_rejects_overwriting_source(tmp_path):
+    src = tmp_path / "input.teproj"
+    _write_project(src, _minimal_project())
+    patch = ProjectPatchResult([
+        {
+            "op": "set_item_fields",
+            "target": {"speaker_id": "spk1", "item_id": "item1"},
+            "fields": {"group": "新组"},
+        }
+    ])
+
+    with pytest.raises(ProjectPatchError, match="不能覆盖原"):
+        apply_project_patch_to_teproj(str(src), patch, str(src))
+
+
+def test_apply_project_patch_validates_missing_resources(tmp_path):
+    src = tmp_path / "bad_input.teproj"
+    dst = tmp_path / "bad_output.teproj"
+    project = _minimal_project()
+    project["speakers"]["spk1"]["items"]["item1"]["path"] = "audio/missing.wav"
+    _write_project(src, project)
+    patch = ProjectPatchResult([
+        {
+            "op": "set_item_fields",
+            "target": {"speaker_id": "spk1", "item_id": "item1"},
+            "fields": {"group": "新组"},
+        }
+    ])
+
+    with pytest.raises(FileNotFoundError, match="missing.wav"):
+        apply_project_patch_to_teproj(str(src), patch, str(dst))
+    assert not dst.exists()
+
+
 def test_project_patch_summary_and_empty_result():
     patch = ProjectPatchResult([], title="空处理")
     summary = summarize_project_patch(patch)
@@ -145,20 +190,15 @@ def test_data_process_prompt_uses_project_patch_documentation():
 
 
 def test_trim_item_audio_creates_new_managed_audio(tmp_path):
-    parselmouth = pytest.importorskip("parselmouth")
-
     src = tmp_path / "audio_input.teproj"
     dst = tmp_path / "audio_output.teproj"
-    samples = np.sin(np.linspace(0, math.pi * 8, 800, dtype=np.float64))
-    snd = parselmouth.Sound(np.array([samples]), sampling_frequency=8000)
     wav_path = tmp_path / "item.wav"
-    snd.save(str(wav_path), "WAV")
 
     project = _minimal_project()
     item = project["speakers"]["spk1"]["items"]["item1"]
     item["path"] = "audio/item.wav"
     item["end"] = 0.1
-    _write_project(src, project, {"audio/item.wav": wav_path.read_bytes()})
+    _write_project(src, project, {"audio/item.wav": _write_test_wav(wav_path, duration=0.1)})
 
     patch = ProjectPatchResult([
         {
@@ -180,3 +220,48 @@ def test_trim_item_audio_creates_new_managed_audio(tmp_path):
     assert new_item["path"] in names
     assert new_item["start"] == 0.0
     assert 0.0 < new_item["end"] < 0.1
+
+
+def test_split_project_prunes_unreferenced_audio_resources(tmp_path):
+    src = tmp_path / "split_input.teproj"
+    dst = tmp_path / "split_output.teproj"
+    wav_a = tmp_path / "a.wav"
+    wav_b = tmp_path / "b.wav"
+    project = _minimal_project()
+    spk = project["speakers"]["spk1"]
+    spk["pending_batch_paths"] = ["audio/a.wav", "audio/b.wav"]
+    spk["items"]["item1"]["path"] = "audio/a.wav"
+    spk["items"]["item1"]["end"] = 0.08
+    spk["items"]["item2"] = {
+        "label": "ma2",
+        "group": "旧组",
+        "path": "audio/b.wav",
+        "start": 0.0,
+        "end": 0.08,
+        "is_excluded": False,
+    }
+    _write_project(
+        src,
+        project,
+        {
+            "audio/a.wav": _write_test_wav(wav_a, duration=0.08, frequency=220.0),
+            "audio/b.wav": _write_test_wav(wav_b, duration=0.08, frequency=330.0),
+        },
+    )
+
+    patch = ProjectPatchResult([
+        {
+            "op": "split_project",
+            "item_ids": ["item1"],
+            "name": "只保留第一项",
+        }
+    ])
+
+    apply_project_patch_to_teproj(str(src), patch, str(dst))
+    state, names = read_project_metadata_from_archive(dst)
+    spk_out = state["speakers"]["spk1"]
+
+    assert set(spk_out["items"]) == {"item1"}
+    assert spk_out["pending_batch_paths"] == ["audio/a.wav"]
+    assert "audio/a.wav" in names
+    assert "audio/b.wav" not in names

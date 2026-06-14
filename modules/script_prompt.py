@@ -859,10 +859,6 @@ def generate_ai_prompt(project_data, selections):
     :param selections: 包含用户选择偏好的字典
     :return: 格式化后的完整提示词字符串
     """
-    # 1. 提取工程摘要信息
-    project_summary = _build_project_summary(project_data)
-
-    # 2. 整合用户偏好
     script_type = selections.get("script_type", "chart")
     prompt_mode = selections.get("prompt_mode", "参数选项")
     if script_type == "data_process":
@@ -870,6 +866,10 @@ def generate_ai_prompt(project_data, selections):
     if str(prompt_mode).replace(" ", "") in ("Agent协作", "Agent模式", "代理协作"):
         return _build_agent_prompt(project_data, selections)
 
+    # 1. 提取工程摘要信息
+    project_summary = _build_project_summary(project_data)
+
+    # 2. 整合用户偏好
     user_goal = selections.get("goal", "自定义图表")
     data_range = selections.get("data_range", "只使用纳入分析的条目")
     group_by = selections.get("group_by", "按声调/分组")

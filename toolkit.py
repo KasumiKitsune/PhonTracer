@@ -2406,8 +2406,8 @@ class ToolkitApp(ctk.CTk):
 
         # 新增：用于显示生成文件列表的滚动区域（默认隐藏）
         self.script_file_list_frame = ctk.CTkScrollableFrame(
-            preview_box, 
-            fg_color="transparent", 
+            preview_box,
+            fg_color="transparent",
             label_text="已生成的文件列表 (点击打开文件夹)",
             label_font=ctk.CTkFont(family=self.font_family, size=11, weight="bold"),
             label_text_color=self.colors["muted"]
@@ -2888,7 +2888,18 @@ class ToolkitApp(ctk.CTk):
         from modules.script_api import FigureResult, TableResult, ProjectPatchResult, configure_matplotlib_chinese_font
         from modules.project_patch import apply_project_patch_to_teproj
 
-        if isinstance(res, ProjectPatchResult):
+        results = res if isinstance(res, list) else [res]
+        project_patch_results = [r for r in results if isinstance(r, ProjectPatchResult)]
+        if project_patch_results:
+            if len(project_patch_results) != 1 or len(results) != 1:
+                self.append_script_log("数据处理脚本只能返回一个 ctx.project_patch(...)，不能同时返回图表、表格或多个工程补丁。\n")
+                self._update_chart_preview("数据处理脚本返回值不合法。", None)
+                if hasattr(self, "script_preview_nav"):
+                    self.script_preview_nav.grid_remove()
+                messagebox.showerror("错误", "数据处理脚本只能返回一个工程修改结果。")
+                return
+
+            res = project_patch_results[0]
             if not hasattr(self, 'loaded_teproj_path') or not self.loaded_teproj_path:
                 self.append_script_log("未加载任何工程，无法应用数据处理结果。\n")
                 self._update_chart_preview("未加载工程，操作未应用。", None)
@@ -2896,7 +2907,7 @@ class ToolkitApp(ctk.CTk):
                     self.script_preview_nav.grid_remove()
                 messagebox.showwarning("警告", "当前未加载工程，无法应用数据处理操作。")
                 return
-            
+
             if not res.operations:
                 self.append_script_log("脚本没有返回任何工程修改操作。\n")
                 self._update_chart_preview("脚本没有返回任何工程修改操作。", None)
@@ -2921,6 +2932,13 @@ class ToolkitApp(ctk.CTk):
                 self._update_chart_preview("用户取消了保存，操作未应用。", None)
                 if hasattr(self, "script_preview_nav"):
                     self.script_preview_nav.grid_remove()
+                return
+            if os.path.normcase(os.path.abspath(output_path)) == os.path.normcase(os.path.abspath(self.loaded_teproj_path)):
+                self.append_script_log("输出路径与原工程相同，操作未应用。请另存为新的 .teproj 文件。\n")
+                self._update_chart_preview("不能覆盖原工程，请另存为新 .teproj。", None)
+                if hasattr(self, "script_preview_nav"):
+                    self.script_preview_nav.grid_remove()
+                messagebox.showwarning("警告", "数据处理脚本不会覆盖原工程，请另存为新的 .teproj 文件。")
                 return
 
             # 构造运行记录 (run_record)
@@ -2958,25 +2976,25 @@ class ToolkitApp(ctk.CTk):
 
             try:
                 summary = apply_project_patch_to_teproj(
-                    self.loaded_teproj_path, 
-                    res, 
-                    output_path, 
+                    self.loaded_teproj_path,
+                    res,
+                    output_path,
                     run_record=run_record
                 )
-                
+
                 # 打印执行摘要到日志
                 self.append_script_log(f"\n=== 数据处理应用结果 ===\n")
                 self.append_script_log(f"操作名称: {summary.get('title') or '未命名'}\n")
                 if summary.get('description'):
                     self.append_script_log(f"操作说明: {summary.get('description')}\n")
-                
+
                 self.append_script_log(f"包含操作总数: {summary.get('operation_count', 0)}\n")
-                
+
                 applied_ops = summary.get("applied_operations", [])
                 self.append_script_log(f"实际执行细节 (共 {len(applied_ops)} 项):\n")
                 for r in applied_ops:
                     self.append_script_log(f"  - {r.get('message') or r.get('op')}\n")
-                
+
                 # 输出路径
                 output_paths = summary.get("output_paths", [])
                 if output_paths:
@@ -3009,15 +3027,15 @@ class ToolkitApp(ctk.CTk):
                         self.script_file_list_frame.grid()
                         for widget in self.script_file_list_frame.winfo_children():
                             widget.destroy()
-                        
+
                         for path in output_paths:
                             file_name = os.path.basename(path)
                             row_frame = ctk.CTkFrame(self.script_file_list_frame, fg_color="transparent")
                             row_frame.pack(fill=tk.X, padx=5, pady=2)
-                            
+
                             btn = ctk.CTkButton(
                                 row_frame,
-                                text=f"📄 {file_name}",
+                                text=f"工程文件：{file_name}",
                                 anchor="w",
                                 fg_color="transparent",
                                 text_color=self.colors["primary"],
@@ -3037,10 +3055,9 @@ class ToolkitApp(ctk.CTk):
                 if hasattr(self, "script_preview_nav"):
                     self.script_preview_nav.grid_remove()
                 messagebox.showerror("错误", f"应用数据处理操作失败：{e}")
-            
+
             return
 
-        results = res if isinstance(res, list) else [res]
         figure_results = [r for r in results if isinstance(r, FigureResult)]
         table_results = [r for r in results if isinstance(r, TableResult)]
 
