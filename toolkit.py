@@ -11,6 +11,7 @@ import customtkinter as ctk
 import encodings.cp437
 import gc
 import queue
+from modules.audio_core import trim_bounds_by_amplitude
 
 SCRIPT_EDITOR_DEFAULT_NAME = "新建自定义脚本"
 SCRIPT_EDITOR_DEFAULT_DESC = "自定义分析说明"
@@ -1793,7 +1794,8 @@ class ToolkitApp(ctk.CTk):
 
                 self.after(0, lambda: messagebox.showinfo("匹配结果", msg))
             except Exception as e:
-                self.after(0, lambda: messagebox.showerror("错误", f"匹配失败: {e}"))
+                error_message = f"匹配失败: {e}"
+                self.after(0, lambda msg=error_message: messagebox.showerror("错误", msg))
             finally:
                 self.after(0, lambda: self.set_loading(False))
 
@@ -1872,7 +1874,8 @@ class ToolkitApp(ctk.CTk):
                     vad_segs = macroscopic_vad(snd, expected_count=len(self.wordlist) or None)
                     self.after(0, lambda: VisualSplitter(self, snd, {}, self.on_visual_split_confirm, vad_segments=vad_segs, wordlist=self.wordlist))
             except Exception as e:
-                self.after(0, lambda: messagebox.showerror("错误", f"加载失败: {e}"))
+                error_message = f"加载失败: {e}"
+                self.after(0, lambda msg=error_message: messagebox.showerror("错误", msg))
             finally:
                 self.after(0, lambda: self.set_loading(False))
 
@@ -1924,7 +1927,8 @@ class ToolkitApp(ctk.CTk):
 
                 self.after(0, lambda: messagebox.showinfo("成功", f"合并完成！\n保存在: {out_path}"))
             except Exception as e:
-                self.after(0, lambda: messagebox.showerror("错误", f"合并失败:\n{str(e)}"))
+                error_message = f"合并失败:\n{e}"
+                self.after(0, lambda msg=error_message: messagebox.showerror("错误", msg))
             finally:
                 self.after(0, lambda: self.set_loading(False))
 
@@ -1978,11 +1982,7 @@ class ToolkitApp(ctk.CTk):
                         part = snd.extract_part(from_time=s, to_time=e)
                         vals = part.values[0]
                         xs = part.xs()
-                        threshold = 10 ** (-50 / 20)
-                        valid_idx = np.where(np.abs(vals) > threshold)[0]
-                        if len(valid_idx) > 0:
-                            s = s + xs[valid_idx[0]]
-                            e = s + xs[valid_idx[-1]]
+                        s, e = trim_bounds_by_amplitude(s, e, xs, vals)
 
                     s = max(0, s - buffer_sec)
                     e = min(snd.get_total_duration(), e + buffer_sec)
@@ -2002,7 +2002,8 @@ class ToolkitApp(ctk.CTk):
                     self.after(0, lambda: messagebox.showinfo("成功", f"成功拆分 {total} 段音频并保存到:\n{out_dir}"))
 
             except Exception as e:
-                self.after(0, lambda: messagebox.showerror("错误", f"拆分失败:\n{str(e)}"))
+                error_message = f"拆分失败:\n{e}"
+                self.after(0, lambda msg=error_message: messagebox.showerror("错误", msg))
             finally:
                 self.after(0, lambda: self.set_loading(False))
 

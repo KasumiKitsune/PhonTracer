@@ -27,6 +27,9 @@
 !tests/**
 !.github/**
 !工作流/Toolkit脚本/**
+!PhonAcq V4.9/Canary.py
+!PhonAcq V4.9/requirements.txt
+!PhonAcq V4.9/phonacq_lite/**
 
 # 5. [已移除 example/ 白名单]
 

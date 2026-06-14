@@ -38,7 +38,7 @@ json.dumps = dumps_utf8
 # Modify sys.path if necessary
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from modules.audio_core import macroscopic_vad, core_microscopic_vowel_nucleus, auto_split_inner_word, auto_split_to_chars_bounds, batch_process_worker, recalculate_bounds_fast, extract_f0
+from modules.audio_core import macroscopic_vad, core_microscopic_vowel_nucleus, auto_split_inner_word, auto_split_to_chars_bounds, batch_process_worker, recalculate_bounds_fast, extract_f0, trim_bounds_by_amplitude
 from modules.speaker_manager import SpeakerManager
 from modules.data_utils import parse_wordlist, fuzzy_match_word_to_path, get_export_text_for_item, build_five_point_chart, split_into_syllables, make_textgrid_export_stem
 from modules.project_manager import ProjectManager
@@ -2260,11 +2260,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                     part = snd.extract_part(from_time=s, to_time=e)
                     vals = part.values[0]
                     xs = part.xs()
-                    threshold = 10 ** (-50 / 20)
-                    valid_idx = np.where(np.abs(vals) > threshold)[0]
-                    if len(valid_idx) > 0:
-                        s = s + xs[valid_idx[0]]
-                        e = s + xs[valid_idx[-1]]
+                    s, e = trim_bounds_by_amplitude(s, e, xs, vals)
 
                 s = max(0, s - buffer_sec)
                 e = min(snd.get_total_duration(), e + buffer_sec)
@@ -3556,12 +3552,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                     part = snd.extract_part(from_time=start, to_time=end)
                     vals = part.values[0]
                     xs = part.xs()
-                    threshold = 10 ** (-50 / 20)
-                    valid_idx = np.where(np.abs(vals) > threshold)[0]
-                    if len(valid_idx) > 0:
-                        old_start = start
-                        start = old_start + xs[valid_idx[0]]
-                        end = old_start + xs[valid_idx[-1]]
+                    start, end = trim_bounds_by_amplitude(start, end, xs, vals)
 
                 start = max(0, start - buffer_sec)
                 end = min(snd.get_total_duration(), end + buffer_sec)

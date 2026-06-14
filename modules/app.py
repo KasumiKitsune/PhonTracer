@@ -626,8 +626,9 @@ class PhoneticsApp:
                                 self._process_unified_wordlist('long')
                     self.root.after(0, update_ui)
                 except Exception as e:
+                    error_message = f"读取音频失败: {e}"
                     self.root.after(0, self.stop_loading)
-                    self.root.after(0, lambda: messagebox.showerror("错误", f"读取音频失败: {e}"))
+                    self.root.after(0, lambda msg=error_message: messagebox.showerror("错误", msg))
             threading.Thread(target=check_audio, daemon=True).start()
         else:
             self.tabview.set("多条独立音频")
@@ -1192,7 +1193,8 @@ class PhoneticsApp:
 
                 self.root.after(0, done)
             except Exception as e:
-                self.root.after(0, lambda: self.set_status(f"加载失败: {str(e)}", "#EF4444", "status_error"))
+                error_message = f"加载失败: {e}"
+                self.root.after(0, lambda msg=error_message: self.set_status(msg, "#EF4444", "status_error"))
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -1336,7 +1338,8 @@ class PhoneticsApp:
                     self.stop_loading("识别完成，可点击 F0/共振峰检测获取建议参数")
                 self.root.after(0, update_ui)
             except Exception as e:
-                self.root.after(0, lambda: self.set_status(f"识别失败: {str(e)}", "#EF4444", "status_error"))
+                error_message = f"识别失败: {e}"
+                self.root.after(0, lambda msg=error_message: self.set_status(msg, "#EF4444", "status_error"))
                 self.root.after(0, self.stop_loading)
         threading.Thread(target=run, daemon=True).start()
 
@@ -2460,7 +2463,8 @@ class PhoneticsApp:
 
                 self.root.after(0, finalize)
             except Exception as e:
-                self.root.after(0, lambda: self.set_status(f"更新失败: {str(e)}", "#EF4444", "status_error"))
+                error_message = f"更新失败: {e}"
+                self.root.after(0, lambda msg=error_message: self.set_status(msg, "#EF4444", "status_error"))
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -2498,7 +2502,8 @@ class PhoneticsApp:
                         self._process_unified_wordlist('long')
                 self.root.after(0, done)
             except Exception as e:
-                self.root.after(0, lambda: self.stop_loading(f"加载失败: {e}"))
+                error_message = f"加载失败: {e}"
+                self.root.after(0, lambda msg=error_message: self.stop_loading(msg))
         threading.Thread(target=run, daemon=True).start()
 
     def open_visual_splitter(self):
@@ -2560,7 +2565,8 @@ class PhoneticsApp:
                                       callback, vad_segments=vad_segs)
                     self.root.after(0, open_splitter)
                 except Exception as e:
-                    self.root.after(0, lambda: self.stop_loading(f"检测失败: {e}"))
+                    error_message = f"检测失败: {e}"
+                    self.root.after(0, lambda msg=error_message: self.stop_loading(msg))
             threading.Thread(target=run_vad, daemon=True).start()
 
 
@@ -4260,8 +4266,9 @@ class PhoneticsApp:
 
                     self.root.after(0, show_result_dialog)
                 except Exception as e:
+                    error_message = f"检测过程中发生错误: {e}"
                     self.root.after(0, self.stop_loading)
-                    self.root.after(0, lambda: messagebox.showerror("错误", f"检测过程中发生错误: {e}"))
+                    self.root.after(0, lambda msg=error_message: messagebox.showerror("错误", msg))
 
             import threading
             threading.Thread(target=run_current_detection, daemon=True).start()
@@ -4454,8 +4461,9 @@ class PhoneticsApp:
                 self.root.after(0, show_result_dialog)
 
             except Exception as e:
+                error_message = f"检测过程中发生错误: {e}"
                 self.root.after(0, self.stop_loading)
-                self.root.after(0, lambda: messagebox.showerror("错误", f"检测过程中发生错误: {e}"))
+                self.root.after(0, lambda msg=error_message: messagebox.showerror("错误", msg))
 
         import threading
         threading.Thread(target=run_detection, daemon=True).start()
@@ -4795,8 +4803,9 @@ class PhoneticsApp:
             self.root.after(0, show_result_dialog)
 
         except Exception as e:
+            error_message = f"检测过程中发生错误: {e}"
             self.root.after(0, self.stop_loading)
-            self.root.after(0, lambda: messagebox.showerror("错误", f"检测过程中发生错误: {e}"))
+            self.root.after(0, lambda msg=error_message: messagebox.showerror("错误", msg))
 
     def on_detect_formant_clicked(self):
         if not self.items:
@@ -4884,8 +4893,9 @@ class PhoneticsApp:
 
                     self.root.after(0, show_result_dialog)
                 except Exception as e:
+                    error_message = f"检测过程中发生错误: {e}"
                     self.root.after(0, self.stop_loading)
-                    self.root.after(0, lambda: messagebox.showerror("错误", f"检测过程中发生错误: {e}"))
+                    self.root.after(0, lambda msg=error_message: messagebox.showerror("错误", msg))
 
             import threading
             threading.Thread(target=run_current_detection, daemon=True).start()

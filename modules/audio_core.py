@@ -12,6 +12,27 @@ VAD_TIME_STEP = 0.01
 VAD_MIN_DURATION = 0.1
 VAD_CLEAR_GAP_THRESHOLD = 0.12
 
+def trim_bounds_by_amplitude(start: float, end: float, xs, values, threshold: float = SILENCE_AMPLITUDE_THRESHOLD) -> Tuple[float, float]:
+    """
+    根据片段内相对时间轴和振幅，返回剔除首尾静音后的绝对时间边界。
+    """
+    try:
+        xs_arr = np.asarray(xs, dtype=float)
+        vals_arr = np.asarray(values, dtype=float)
+        if xs_arr.ndim != 1 or vals_arr.ndim != 1 or len(xs_arr) == 0 or len(xs_arr) != len(vals_arr):
+            return start, end
+        valid_idx = np.where(np.abs(vals_arr) > threshold)[0]
+        if len(valid_idx) == 0:
+            return start, end
+        base_start = float(start)
+        trimmed_start = base_start + float(xs_arr[valid_idx[0]])
+        trimmed_end = base_start + float(xs_arr[valid_idx[-1]])
+        if trimmed_end <= trimmed_start:
+            return start, end
+        return trimmed_start, trimmed_end
+    except Exception:
+        return start, end
+
 def detect_vowel_onset(snd: parselmouth.Sound, rough_start: float, rough_end: float) -> float:
     """
     智能元音起始点 (VOP) 检测：
@@ -219,10 +240,7 @@ def core_microscopic_vowel_nucleus(snd: parselmouth.Sound, global_pitch_or_array
             trim_part = snd.extract_part(from_time=temp_s, to_time=temp_e)
             vals = trim_part.values[0]
             trim_xs = trim_part.xs()
-            valid_idx = np.where(np.abs(vals) > SILENCE_AMPLITUDE_THRESHOLD)[0]
-            if len(valid_idx) > 0:
-                final_s = temp_s + trim_xs[valid_idx[0]]
-                final_e = temp_s + trim_xs[valid_idx[-1]]
+            final_s, final_e = trim_bounds_by_amplitude(temp_s, temp_e, trim_xs, vals)
 
         # --- 算法优化：严格收缩到有效基频区间，消除头尾 0 值 ---
         valid_pitch_xs = [x for x, f in zip(xs, freqs) if f > 0 and final_s <= x <= final_e]
@@ -253,10 +271,7 @@ def recalculate_bounds_fast(snd: parselmouth.Sound, global_pitch_or_arrays: Unio
             trim_part = snd.extract_part(from_time=temp_s, to_time=temp_e) if temp_s != 0 or temp_e != snd.get_total_duration() else snd
             vals = trim_part.values[0]
             trim_xs = trim_part.xs()
-            valid_idx = np.where(np.abs(vals) > SILENCE_AMPLITUDE_THRESHOLD)[0]
-            if len(valid_idx) > 0:
-                final_s = temp_s + trim_xs[valid_idx[0]]
-                final_e = temp_s + trim_xs[valid_idx[-1]]
+            final_s, final_e = trim_bounds_by_amplitude(temp_s, temp_e, trim_xs, vals)
 
         valid_pitch_xs = [x for x, f in zip(xs, freqs) if f > 0 and final_s <= x <= final_e]
         if len(valid_pitch_xs) >= 2:
