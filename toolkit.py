@@ -2408,12 +2408,19 @@ class ToolkitApp(ctk.CTk):
         self.script_file_list_frame = ctk.CTkScrollableFrame(
             preview_box, 
             fg_color="transparent", 
-            label_text="已生成的文件列表 (点击打开)",
+            label_text="已生成的文件列表 (点击打开文件夹)",
             label_font=ctk.CTkFont(family=self.font_family, size=11, weight="bold"),
             label_text_color=self.colors["muted"]
         )
         self.script_file_list_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
         self.script_file_list_frame.grid_remove()
+
+        if hasattr(self.script_file_list_frame, "_label") and self.script_file_list_frame._label:
+            self.script_file_list_frame._label.configure(cursor="hand2")
+            self.script_file_list_frame._label.bind("<Button-1>", lambda e: self.open_script_output_dir())
+            if hasattr(self.script_file_list_frame._label, "_label") and self.script_file_list_frame._label._label:
+                self.script_file_list_frame._label._label.configure(cursor="hand2")
+                self.script_file_list_frame._label._label.bind("<Button-1>", lambda e: self.open_script_output_dir())
 
 
         # 右侧日志输出
