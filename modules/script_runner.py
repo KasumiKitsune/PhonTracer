@@ -16,6 +16,7 @@ ALLOWED_IMPORT_ROOTS = {
     "math",
     "matplotlib",
     "numpy",
+    "parselmouth",
     "re",
     "scipy",
     "statistics",
@@ -107,6 +108,23 @@ def check_script_safety(code):
             "请改用散点图、分箱均值曲线、hexbin/hist2d，或先将每组数据降采样到很小规模。"
         ),
     }
+    forbidden_output_calls = {
+        "dump",
+        "imsave",
+        "save",
+        "savefig",
+        "savetxt",
+        "savez",
+        "savez_compressed",
+        "to_csv",
+        "to_excel",
+        "to_file",
+        "write",
+        "write_bytes",
+        "write_text",
+        "writelines",
+        "writestr",
+    }
 
     def call_name(node):
         if isinstance(node, ast.Name):
@@ -127,22 +145,27 @@ def check_script_safety(code):
                 name = node.module.split('.')[0]
                 if name not in ALLOWED_IMPORT_ROOTS:
                     raise ValueError(f"安全检查拦截：禁止在第一版脚本中导入库 '{node.module}'")
+                if node.module.startswith("parselmouth.praat"):
+                    raise ValueError("安全检查拦截：第一版脚本不允许导入 parselmouth.praat；请使用 ctx.load_item_sound 和 Sound.to_spectrogram 等受控接口。")
         elif isinstance(node, ast.Call):
             name = call_name(node.func)
             short_name = name.split(".")[-1] if name else ""
             if short_name in forbidden_funcs:
                 raise ValueError(f"安全检查拦截：禁止在第一版脚本中调用系统函数 '{short_name}'")
+            if short_name in forbidden_output_calls:
+                raise ValueError(f"安全检查拦截：禁止在脚本中直接调用输出/写入函数 '{short_name}'；请通过 ctx.figure(...) 或 ctx.table(...) 返回结果。")
             if short_name in forbidden_expensive_calls:
                 raise ValueError(f"安全检查拦截：{forbidden_expensive_calls[short_name]}")
 
 
-def run_custom_script(code, dataset_items, timeout=30, cancel_event=None):
+def run_custom_script(code, dataset_items, timeout=30, cancel_event=None, teproj_path=None):
     """
     运行自定义 Python 脚本。
     :param code: 脚本源码
     :param dataset_items: 只读数据集条目列表
     :param timeout: 超时时间（秒）
     :param cancel_event: 线程取消事件对象（可选）
+    :param teproj_path: 当前工程文件路径（可选，仅供 ctx 受控读取工程内音频）
     :return: (result, logs, error_message)
     """
     logs = []
@@ -155,7 +178,7 @@ def run_custom_script(code, dataset_items, timeout=30, cancel_event=None):
 
     # 2. 构造只读上下文
     from .script_api import ScriptContext
-    ctx = ScriptContext(dataset_items, cancel_event=cancel_event)
+    ctx = ScriptContext(dataset_items, cancel_event=cancel_event, teproj_path=teproj_path)
 
     # 3. 构造重定向的 print 函数以捕获 stdout
     def custom_print(*args, sep=' ', end='\n'):

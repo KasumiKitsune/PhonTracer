@@ -3750,17 +3750,21 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                     from modules.script_api import build_dataset_snapshot
                     dataset_items = build_dataset_snapshot(temp_path)
                 else:
+                    if temp_path and os.path.exists(temp_path):
+                        try:
+                            os.remove(temp_path)
+                        except Exception:
+                            pass
                     self._emit(False, error="Failed to export project state to temporary file for snapshotting.")
                     return
         except Exception as e:
-            self._emit(False, error=f"Failed to prepare project snapshot: {e}")
-            return
-        finally:
             if temp_path and os.path.exists(temp_path):
                 try:
                     os.remove(temp_path)
                 except Exception:
                     pass
+            self._emit(False, error=f"Failed to prepare project snapshot: {e}")
+            return
                     
         # Run custom script
         try:
@@ -3768,7 +3772,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
             import matplotlib.pyplot as plt
             plt.close('all')
             
-            res, logs, err = run_custom_script(code, dataset_items, timeout=timeout)
+            res, logs, err = run_custom_script(code, dataset_items, timeout=timeout, teproj_path=temp_path)
             
             if err:
                 self._emit(False, error=err, logs=logs)
@@ -3893,6 +3897,12 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
             import traceback
             tb = traceback.format_exc()
             self._emit(False, error=f"执行发生意外错误: {e}", traceback=tb)
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except Exception:
+                    pass
 
     def do_batch_textgrid_import(self, arg):
         """

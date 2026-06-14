@@ -382,8 +382,17 @@ def _build_project_summary(
 REFERENCE_CHART_RULE = (
     "如果用户上传、粘贴或提到参考图表，理解为用户想使用当前 PhonTracer 工程数据，"
     "复刻参考图的图表类型、变量关系、统计口径、布局和视觉表达方式；"
+    "如果参考图是语谱图，可复刻灰度语谱图、多宫格、标签和箭头标注风格；"
     "严禁照抄参考图里的数值、样本标签、数据点或结论，除非用户明确说明这些内容就是待分析数据。"
 )
+
+
+SPECTROGRAM_SCRIPT_GUIDE = """语谱图与 Parselmouth：
+- 可用 `ctx.parselmouth`，也可 `import parselmouth`。
+- 脚本不能自行读取本地音频路径；如需真实音频，必须调用 `ctx.load_item_sound(item, padding=0.0)` 读取当前 `.teproj` 内受控音频。
+- 可用 `ctx.spectrogram_data(sound, max_frequency=5000.0, window_length=0.005, dynamic_range_db=50.0)` 取得 dB 语谱图矩阵。
+- 可用 `ctx.plot_spectrogram_grid(items, columns=4, max_items=8, show_formant_arrows=True, label_field="auto", max_frequency=4000.0)` 生成参考图式多宫格灰度语谱图；标签优先使用 `item_meta["IPA"]` / `item_aliases` / `label`。
+- 如果复刻参考语谱图，只复刻布局、灰度底图、标签和箭头标注风格；不要复制参考图中的具体数据或结论。"""
 
 
 def _build_agent_detail_appendix():
@@ -402,18 +411,19 @@ def _build_agent_detail_appendix():
 - `ctx.np` 是 numpy 库。
 - `ctx.plt` 是 matplotlib.pyplot。
 - `ctx.scipy` 是 scipy 库。
-- 可导入并使用 numpy、matplotlib、scipy。
+- `ctx.parselmouth` 是 praat-parselmouth 库。
+- 可导入并使用 numpy、matplotlib、scipy、parselmouth。
 - 可导入并使用标准库 math、statistics、collections、itertools、re、time、warnings。
 
 三、禁止使用
 - 禁止 pandas、seaborn、plotly、requests、os、sys、subprocess。
 - 禁止 open、eval、exec、input、globals、locals、vars、__import__ 等系统能力。
-- 禁止任何本机绝对路径、网络请求、外部进程和额外文件读写。
+- 禁止自行使用任何本机绝对路径、网络请求、外部进程和额外文件读写；如需音频，必须使用 ctx 的受控音频 API。
 - 禁止 scipy.stats.gaussian_kde；它在点数较多时容易长时间占用后台线程，运行器也会拦截。
 - 如果需要密度感，优先使用 ax.hexbin、ax.hist2d、低分辨率分箱均值、抽样散点或均值/置信区间曲线。
 
 四、项目数据说明与数据来源
-数据来自只读快照列表 `ctx.dataset.items`。脚本无法访问工程文件路径，也不应该读取任何本地文件；所有可用数据都已经被 PhonTracer 整理成 item 字典。
+数据来自只读快照列表 `ctx.dataset.items`。脚本不能自行访问工程文件路径或读取本地文件；如需当前工程内音频，必须通过 `ctx.load_item_sound(...)` 受控读取。
 
 每个条目（item）代表一个被切分/分析的字词条目，包含以下字段：
 - speaker_id: 发音人 ID (str)
@@ -472,10 +482,14 @@ def _build_agent_detail_appendix():
 4. 多发音人比较：
    - 如果跨男女声比较原始 Hz，必须谨慎；更推荐 T 值或分发音人子图
    - 如果使用 Hz，请至少按 speaker_name 分面或在图例中区分发音人
-5. 结构类图表：
+5. 参考图式语谱图：
+   - 如果用户要复刻类似论文中的多宫格语谱图，优先使用 `ctx.plot_spectrogram_grid(...)`
+   - 如果需要更细控制，使用 `ctx.load_item_sound(item)` 加 `ctx.spectrogram_data(sound, ...)`，再用 `ax.pcolormesh(..., cmap="Greys")` 绘制
+   - 箭头可标注当前条目缓存中的 F1/F2/F3 位置；不要手动写入或读取任何音频文件
+6. 结构类图表：
    - 优先检查 item["item_meta"] 是否存在“结构”“实验条件”“词频等级”“语义类”等字段
    - 如果工程快照没有相应字段，必须请用户提供分类映射，不要在脚本里硬编码 Demo 词表
-6. 高级字表标签图表：
+7. 高级字表标签图表：
    - 如果用户想只分析目标词，可过滤 `"目标词" in item.get("item_tags", [])`
    - 如果用户想比较实验组/对照组，可优先看 group_tags 或 item_tags
    - 如果用户想按自定义字段分组，可用 `(item.get("item_meta") or {}).get("字段名")`
@@ -488,6 +502,10 @@ def _build_agent_detail_appendix():
 - ctx.dataset.included_items(): 仅获取未排除的分析条目
 - ctx.dataset.pitch_points(item): 获取指定条目的基频点数据
 - ctx.dataset.formant_points(item): 获取指定条目的共振峰点数据
+- ctx.parselmouth: praat-parselmouth 库
+- ctx.load_item_sound(item, padding=0.0): 从当前工程内受控读取条目音频，返回 parselmouth.Sound
+- ctx.spectrogram_data(sound, max_frequency=5000.0, window_length=0.005, dynamic_range_db=50.0): 返回语谱图绘图矩阵
+- ctx.plot_spectrogram_grid(items, columns=4, max_items=8, show_formant_arrows=True, label_field="auto", max_frequency=4000.0): 返回多宫格语谱图 Figure
 - ctx.log("日志内容"): 记录一条日志，方便在结果界面中查看
 - ctx.is_cancelled(): 长循环中可定期检查，返回 True 时请尽快结束脚本
 - ctx.figure(fig, filename="xxx.png", title="图表标题"): 包装并返回 Matplotlib figure 对象
@@ -635,12 +653,14 @@ Toolkit 自定义脚本硬性接口：
 - 长循环中要定期检查 `ctx.is_cancelled()`。
 
 可用库与禁止项：
-- 可用：`ctx.np`、`ctx.plt`、`ctx.scipy`，也可导入 numpy、matplotlib、scipy。
+- 可用：`ctx.np`、`ctx.plt`、`ctx.scipy`、`ctx.parselmouth`，也可导入 numpy、matplotlib、scipy、parselmouth。
 - 可用标准库：math、statistics、collections、itertools、re、time、warnings。
 - 禁止：pandas、seaborn、plotly、requests、os、sys、subprocess。
 - 禁止：open/eval/exec/input/globals/locals/vars/__import__ 等系统能力。
-- 禁止：任何本机绝对路径、网络请求、额外文件读写。
+- 禁止：自行使用任何本机绝对路径、网络请求、额外文件读写；如需音频，必须使用 ctx 的受控音频 API。
 - 禁止：scipy.stats.gaussian_kde。需要密度感时使用 hexbin、hist2d、低分辨率分箱或抽样散点。
+
+{SPECTROGRAM_SCRIPT_GUIDE}
 
 可用数据字段：
 - `speaker_id`、`speaker_name`：发音人信息。
@@ -664,6 +684,7 @@ Toolkit 自定义脚本硬性接口：
 - 比较发音人差异：推荐分面图或按发音人分组，跨男女声优先使用 T 值。
 - 元音空间：推荐 F2-F1 散点或均值中心图，过滤非有限值、F1<=0、F2<=0、F2<=F1，并反转传统元音空间坐标轴。
 - 共振峰轨迹：优先用 `syl_formants`，标注音节位置或时间点。
+- 语谱图/声学截图复刻：优先推荐 `ctx.plot_spectrogram_grid(...)`；如需逐格定制，使用 `ctx.load_item_sound(...)` 和 `ctx.spectrogram_data(...)`。
 - 质量检查：推荐缺失率、异常值、时长/F0 范围、排除条目分布等诊断图。
 - 结构类图表：优先检查 `item_meta` 是否真的存在结构字段；否则必须先请用户提供结构分类映射，不要在代码里硬编码 Demo 词表。
 - 高级字表分析：如果工程摘要显示有词项标签、组标签或自定义字段，要主动推荐“按标签筛选”“按自定义字段分组”“未复核字段质量检查”等候选。
@@ -933,7 +954,8 @@ def run(ctx):
 - ctx.np 是 numpy 库
 - ctx.plt 是 matplotlib.pyplot
 - ctx.scipy 是 scipy 库
-- 可导入并使用 numpy、matplotlib、scipy
+- ctx.parselmouth 是 praat-parselmouth 库
+- 可导入并使用 numpy、matplotlib、scipy、parselmouth
 - 可导入并使用标准库 math、statistics、collections、itertools、re、time
 
 禁止使用：
@@ -945,11 +967,13 @@ def run(ctx):
 - sys
 - subprocess
 - scipy.stats.gaussian_kde（第一版运行器会拦截；它在点数较多时容易长时间占用后台线程）
-- 任何本机绝对路径
-- 任何文件读写操作，除非通过 ctx.figure 或 ctx.table 返回结果
+- 自行使用任何本机绝对路径
+- 自行进行任何文件读写操作，除非通过 ctx.figure 或 ctx.table 返回结果；如需音频，必须使用 ctx 的受控音频 API
 
 项目数据说明与数据来源：
-数据来自只读快照列表 ctx.dataset.items。脚本无法访问工程文件路径，也不应该读取任何本地文件；所有可用数据都已经被 PhonTracer 整理成 item 字典。
+数据来自只读快照列表 ctx.dataset.items。脚本不能自行访问工程文件路径或读取本地文件；如需当前工程内音频，必须通过 ctx.load_item_sound(...) 受控读取。
+
+{SPECTROGRAM_SCRIPT_GUIDE}
 
 每个条目（item）代表一个被切分/分析的字词条目，包含以下字段：
 - speaker_id: 发音人 ID (str)
@@ -1023,12 +1047,16 @@ def run(ctx):
 4. 多发音人比较：
    - 如果跨男女声比较原始 Hz，必须谨慎；更推荐 T 值或分发音人子图
    - 如果使用 Hz，请至少按 speaker_name 分面或在图例中区分发音人
-5. 高级字表字段分析：
+5. 参考图式语谱图：
+   - 如果用户要复刻类似论文中的多宫格语谱图，优先使用 `ctx.plot_spectrogram_grid(...)`
+   - 如果需要更细控制，使用 `ctx.load_item_sound(item)` 加 `ctx.spectrogram_data(sound, ...)`，再用 `ax.pcolormesh(..., cmap="Greys")` 绘制
+   - 箭头可标注当前条目缓存中的 F1/F2/F3 位置；不要手动写入或读取任何音频文件
+6. 高级字表字段分析：
    - 只分析目标词：过滤 `"目标词" in item.get("item_tags", [])`
    - 比较实验组/对照组：优先看 `group_tags` 或 `item_tags`
    - 按结构、实验条件、词频等级、语义类分组：使用 `(item.get("item_meta") or {{}}).get("字段名")`
    - 质量检查：统计 `metadata_source`，单独列出“AI推断，需人工复核”的条目比例
-6. 输出格式：
+7. 输出格式：
    - 结构化选项里的文件名和格式优先级高于补充需求。
    - 如果输出文件名是 png 且用户只要求“一张清晰图表”，只返回一个 ctx.figure(...png)。
    - 只有当用户非常明确要求“同时导出 PNG 和 SVG”时，才返回同一 figure 的两个结果，并使用同一个基础文件名的 .png / .svg。
@@ -1041,6 +1069,10 @@ ctx 提供的辅助方法：
 - ctx.dataset.included_items(): 仅获取未排除的分析条目
 - ctx.dataset.pitch_points(item): 获取指定条目的基频点数据
 - ctx.dataset.formant_points(item): 获取指定条目的共振峰点数据
+- ctx.parselmouth: praat-parselmouth 库
+- ctx.load_item_sound(item, padding=0.0): 从当前工程内受控读取条目音频，返回 parselmouth.Sound
+- ctx.spectrogram_data(sound, max_frequency=5000.0, window_length=0.005, dynamic_range_db=50.0): 返回语谱图绘图矩阵
+- ctx.plot_spectrogram_grid(items, columns=4, max_items=8, show_formant_arrows=True, label_field="auto", max_frequency=4000.0): 返回多宫格语谱图 Figure
 - ctx.log("日志内容"): 记录一条日志，方便在结果界面中查看
 - ctx.is_cancelled(): 长循环中可定期检查，返回 True 时请尽快结束脚本
 - ctx.figure(fig, filename="xxx.png", title="图表标题"): 包装并返回 Matplotlib figure 对象

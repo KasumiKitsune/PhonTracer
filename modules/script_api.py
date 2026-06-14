@@ -7,6 +7,7 @@ import os
 import zipfile
 import json
 import math
+import tempfile
 import numpy as np
 
 
@@ -160,20 +161,87 @@ class DatasetSnapshot:
         """获取指定条目的共振峰点数据"""
         return item.get("formant", {"xs": [], "f1": [], "f2": []})
 
+
+def _build_zip_member_lookup(zf):
+    lookup = {}
+    for name in zf.namelist():
+        try:
+            decoded = name.encode('cp437').decode('gbk')
+        except Exception:
+            try:
+                decoded = name.encode('cp437').decode('utf-8')
+            except Exception:
+                decoded = name
+        lookup[decoded.replace("\\", "/")] = name
+        lookup[name.replace("\\", "/")] = name
+    return lookup
+
+
+def _normalize_audio_resource_path(path):
+    if not path:
+        return None
+    norm = str(path).replace("\\", "/")
+    parts = norm.split("/")
+    if len(parts) < 2 or parts[0] != "audio":
+        raise ValueError(f"工程音频资源路径不受支持：{path}")
+    if any(part in ("", ".", "..") for part in parts):
+        raise ValueError(f"工程音频资源路径非法：{path}")
+    return norm
+
+
+def _coerce_time(value, default=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _item_display_label(item, label_field="auto"):
+    if not isinstance(item, dict):
+        return ""
+    meta = item.get("item_meta") or {}
+    if not isinstance(meta, dict):
+        meta = {}
+
+    if label_field and label_field != "auto":
+        if label_field.startswith("item_meta."):
+            value = meta.get(label_field.split(".", 1)[1])
+        else:
+            value = item.get(label_field)
+        if value:
+            return str(value)
+
+    for key in ("IPA", "ipa", "音标", "国际音标"):
+        value = meta.get(key)
+        if value:
+            return str(value)
+
+    aliases = item.get("item_aliases") or []
+    if isinstance(aliases, (list, tuple)) and aliases:
+        return str(aliases[0])
+    if isinstance(aliases, str) and aliases.strip():
+        return aliases.strip()
+
+    return str(item.get("label") or item.get("item_id") or "")
+
+
 class ScriptContext:
     """
     传递给脚本 run(ctx) 函数的上下文对象。
     """
-    def __init__(self, dataset_items, cancel_event=None):
+    def __init__(self, dataset_items, cancel_event=None, teproj_path=None):
         import numpy as np
         import matplotlib.pyplot as plt
         import scipy
+        import parselmouth
 
         configure_matplotlib_chinese_font()
         self.dataset = DatasetSnapshot(dataset_items)
         self.np = np
         self.plt = plt
         self.scipy = scipy
+        self.parselmouth = parselmouth
+        self._teproj_path = teproj_path
         self._cancel_event = cancel_event
         self._logs = []
 
@@ -188,6 +256,231 @@ class ScriptContext:
     def table(self, rows, columns, title="自定义表格"):
         """返回表格结果对象"""
         return TableResult(rows, columns, title)
+
+    def _read_audio_resource(self, rel_path):
+        if not self._teproj_path or not os.path.exists(self._teproj_path):
+            raise ValueError("当前脚本上下文没有可用工程文件，无法读取受控音频资源。")
+
+        norm_path = _normalize_audio_resource_path(rel_path)
+        with zipfile.ZipFile(self._teproj_path, "r") as zf:
+            member_lookup = _build_zip_member_lookup(zf)
+            member = member_lookup.get(norm_path)
+            if not member:
+                raise FileNotFoundError(f"工程中找不到音频资源：{norm_path}")
+            return zf.read(member)
+
+    def _load_sound_from_resource(self, rel_path):
+        audio_bytes = self._read_audio_resource(rel_path)
+        suffix = os.path.splitext(str(rel_path))[1] or ".wav"
+        fd, tmp_path = tempfile.mkstemp(prefix="phontracer_script_audio_", suffix=suffix)
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(audio_bytes)
+            return self.parselmouth.Sound(tmp_path)
+        finally:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+
+    def _project_item_for_snapshot(self, item):
+        if not isinstance(item, dict):
+            raise ValueError("load_item_sound 需要传入 ctx.dataset.items 中的条目字典。")
+        if not self._teproj_path or not os.path.exists(self._teproj_path):
+            raise ValueError("当前脚本上下文没有可用工程文件，无法读取受控音频资源。")
+
+        speaker_id = item.get("speaker_id")
+        item_id = item.get("item_id")
+        with zipfile.ZipFile(self._teproj_path, "r") as zf:
+            try:
+                raw = zf.read("project.json")
+            except KeyError as exc:
+                raise ValueError("工程文件缺少 project.json，无法读取音频。") from exc
+        project_data = json.loads(raw.decode("utf-8"))
+        speakers = project_data.get("speakers", {})
+
+        if speaker_id in speakers:
+            spk = speakers[speaker_id]
+            items = spk.get("items", {}) or {}
+            if item_id in items:
+                return spk, items[item_id]
+
+        for spk in speakers.values():
+            if not isinstance(spk, dict):
+                continue
+            items = spk.get("items", {}) or {}
+            if item_id in items:
+                return spk, items[item_id]
+
+        label = item.get("label", "")
+        raise ValueError(f"工程中找不到目标条目：speaker_id={speaker_id}, item_id={item_id}, label={label}")
+
+    def load_item_sound(self, item, padding=0.0):
+        """
+        从当前 .teproj 中受控读取条目音频，返回 parselmouth.Sound。
+        独立音频优先读取条目 path；长音频条目会按 start/end 提取当前片段。
+        """
+        spk, project_item = self._project_item_for_snapshot(item)
+        item_path = project_item.get("path")
+        padding = max(0.0, _coerce_time(padding, 0.0))
+
+        if item_path:
+            snd = self._load_sound_from_resource(item_path)
+            total = float(snd.get_total_duration())
+            start = _coerce_time(project_item.get("start"), 0.0)
+            end = _coerce_time(project_item.get("end"), total)
+            if end > start and (start > 0.0 or end < total):
+                from_time = max(0.0, start - padding)
+                to_time = min(total, end + padding)
+                if to_time > from_time:
+                    return snd.extract_part(from_time=from_time, to_time=to_time)
+            return snd
+
+        long_audio_path = spk.get("long_audio_path")
+        if not long_audio_path:
+            raise ValueError(f"条目 {project_item.get('label', '')} 缺少可用音频资源。")
+
+        snd = self._load_sound_from_resource(long_audio_path)
+        total = float(snd.get_total_duration())
+        start = _coerce_time(project_item.get("start"), 0.0)
+        end = _coerce_time(project_item.get("end"), total)
+        from_time = max(0.0, start - padding)
+        to_time = min(total, end + padding)
+        if to_time <= from_time:
+            raise ValueError(f"条目 {project_item.get('label', '')} 的音频时间范围无效。")
+        return snd.extract_part(from_time=from_time, to_time=to_time)
+
+    def spectrogram_data(self, sound, max_frequency=5000.0, window_length=0.005, dynamic_range_db=50.0):
+        """
+        使用 Parselmouth 生成 dB 语谱图矩阵，返回 x/y/db/vmin/vmax 等绘图数据。
+        """
+        if sound is None:
+            raise ValueError("spectrogram_data 需要传入 parselmouth.Sound。")
+        max_frequency = _coerce_time(max_frequency, 5000.0)
+        window_length = _coerce_time(window_length, 0.005)
+        dynamic_range_db = max(1.0, _coerce_time(dynamic_range_db, 50.0))
+        try:
+            nyquist = float(sound.sampling_frequency) / 2.0
+            if nyquist > 0:
+                max_frequency = min(max_frequency, nyquist)
+        except Exception:
+            pass
+        if max_frequency <= 0:
+            max_frequency = 5000.0
+        if window_length <= 0:
+            window_length = 0.005
+
+        spectrogram = sound.to_spectrogram(window_length=window_length, maximum_frequency=max_frequency)
+        x_grid = spectrogram.x_grid()
+        y_grid = spectrogram.y_grid()
+        values = np.where(spectrogram.values > 0, spectrogram.values, 1e-10)
+        db_values = 10 * np.log10(values)
+        finite = db_values[np.isfinite(db_values)]
+        vmax = float(np.max(finite)) if finite.size else 0.0
+        return {
+            "x": x_grid,
+            "y": y_grid,
+            "db": db_values,
+            "vmin": vmax - dynamic_range_db,
+            "vmax": vmax,
+            "max_frequency": float(max_frequency),
+            "window_length": float(window_length),
+            "dynamic_range_db": float(dynamic_range_db),
+        }
+
+    def plot_spectrogram_grid(
+        self,
+        items,
+        columns=4,
+        max_items=8,
+        show_formant_arrows=True,
+        label_field="auto",
+        max_frequency=4000.0,
+    ):
+        """
+        生成参考图式多宫格灰度语谱图，返回 Matplotlib Figure。
+        """
+        items = list(items or [])[: max(1, int(max_items or 8))]
+        columns = max(1, int(columns or 4))
+        rows = max(1, int(math.ceil(len(items) / columns))) if items else 1
+        fig, axes = self.plt.subplots(
+            rows,
+            columns,
+            figsize=(max(3.0, columns * 2.2), max(2.2, rows * 1.8)),
+            squeeze=False,
+        )
+        axes_flat = [ax for row in axes for ax in row]
+
+        if not items:
+            ax = axes_flat[0]
+            ax.text(0.5, 0.5, "没有可用音频条目", ha="center", va="center")
+            ax.axis("off")
+            for extra_ax in axes_flat[1:]:
+                extra_ax.axis("off")
+            fig.tight_layout()
+            return fig
+
+        for ax, item in zip(axes_flat, items):
+            if self.is_cancelled():
+                ax.axis("off")
+                continue
+            try:
+                sound = self.load_item_sound(item)
+                spec = self.spectrogram_data(sound, max_frequency=max_frequency)
+                ax.pcolormesh(
+                    spec["x"],
+                    spec["y"],
+                    spec["db"],
+                    vmin=spec["vmin"],
+                    vmax=spec["vmax"],
+                    cmap="Greys",
+                    shading="auto",
+                )
+                duration = float(sound.get_total_duration())
+                ax.set_xlim(0.0, duration)
+                ax.set_ylim(0.0, spec["max_frequency"])
+                ax.set_xticks([0.0, duration])
+                ax.tick_params(labelsize=7, length=2)
+                if show_formant_arrows:
+                    self._draw_formant_arrows(ax, item, duration, spec["max_frequency"])
+            except Exception as exc:
+                ax.text(0.5, 0.5, f"无法绘制\n{exc}", ha="center", va="center", fontsize=8)
+                ax.set_xticks([])
+                ax.set_yticks([])
+
+            label = _item_display_label(item, label_field=label_field)
+            ax.set_xlabel(f"[ {label} ]" if label else "", fontsize=10)
+            ax.grid(True, color="#D1D5DB", linewidth=0.45, alpha=0.65)
+
+        for ax in axes_flat[len(items):]:
+            ax.axis("off")
+
+        for row_idx in range(rows):
+            axes[row_idx][0].set_ylabel("Hz", fontsize=8)
+
+        fig.tight_layout()
+        return fig
+
+    def _draw_formant_arrows(self, ax, item, duration, max_frequency):
+        formant = item.get("formant") or {}
+        values = []
+        for key in ("f1", "f2", "f3"):
+            arr = np.asarray(formant.get(key, []), dtype=float)
+            arr = arr[np.isfinite(arr) & (arr > 0) & (arr <= max_frequency)]
+            if arr.size:
+                values.append(float(np.nanmedian(arr)))
+        if not values:
+            return
+        x0 = max(0.0, duration * 0.02)
+        x1 = max(duration * 0.16, x0 + 0.001)
+        for freq in values[:3]:
+            ax.annotate(
+                "",
+                xy=(x1, freq),
+                xytext=(x0, freq),
+                arrowprops={"arrowstyle": "-|>", "color": "black", "lw": 1.0},
+                zorder=8,
+            )
 
     def _item_target(self, item):
         if not isinstance(item, dict):

@@ -7,7 +7,7 @@ import pytest
 
 from modules.project_manager import read_project_metadata_from_archive
 from modules.project_patch import ProjectPatchError, apply_project_patch_to_teproj, summarize_project_patch
-from modules.script_api import ProjectPatchResult
+from modules.script_api import FigureResult, ProjectPatchResult, TableResult, build_dataset_snapshot
 from modules.script_prompt import generate_ai_prompt
 from modules.script_runner import run_custom_script
 
@@ -96,6 +96,129 @@ def run(ctx):
     assert err is not None
     assert "open" in err
     assert logs and "安全检查失败" in logs[0]
+
+
+def test_script_runner_allows_parselmouth_but_blocks_system_imports():
+    code = """
+import parselmouth
+
+def run(ctx):
+    return ctx.table([[ctx.parselmouth is parselmouth]], ["可用"], title="Parselmouth 导入")
+"""
+
+    result, logs, err = run_custom_script(code, [], timeout=5)
+
+    assert err is None
+    assert logs == []
+    assert isinstance(result, TableResult)
+    assert result.rows == [[True]]
+
+    bad_code = """
+import os
+
+def run(ctx):
+    return ctx.table([], [], title="不应运行")
+"""
+    result, logs, err = run_custom_script(bad_code, [], timeout=5)
+    assert result is None
+    assert err is not None
+    assert "os" in err
+    assert logs and "安全检查失败" in logs[0]
+
+    bad_code = """
+import subprocess
+
+def run(ctx):
+    return ctx.table([], [], title="不应运行")
+"""
+    result, logs, err = run_custom_script(bad_code, [], timeout=5)
+    assert result is None
+    assert err is not None
+    assert "subprocess" in err
+    assert logs and "安全检查失败" in logs[0]
+
+
+def test_custom_script_can_draw_spectrogram_from_teproj_item_audio(tmp_path):
+    src = tmp_path / "spectrogram_input.teproj"
+    wav_path = tmp_path / "item.wav"
+    project = _minimal_project()
+    item = project["speakers"]["spk1"]["items"]["item1"]
+    item["path"] = "audio/item.wav"
+    item["end"] = 0.08
+    _write_project(src, project, {"audio/item.wav": _write_test_wav(wav_path, duration=0.08)})
+    items = build_dataset_snapshot(str(src))
+
+    code = """
+def run(ctx):
+    item = ctx.dataset.items[0]
+    snd = ctx.load_item_sound(item)
+    spec = ctx.spectrogram_data(snd, max_frequency=3000.0)
+    fig, ax = ctx.plt.subplots(figsize=(4, 3))
+    ax.pcolormesh(spec["x"], spec["y"], spec["db"], vmin=spec["vmin"], vmax=spec["vmax"], cmap="Greys", shading="auto")
+    ax.set_title("受控语谱图")
+    return ctx.figure(fig, filename="spectrogram.png", title="受控语谱图")
+"""
+
+    result, logs, err = run_custom_script(code, items, timeout=5, teproj_path=str(src))
+
+    assert err is None
+    assert logs == []
+    assert isinstance(result, FigureResult)
+    assert result.title == "受控语谱图"
+
+
+def test_custom_script_can_use_spectrogram_grid_helper(tmp_path):
+    src = tmp_path / "spectrogram_grid_input.teproj"
+    wav_path = tmp_path / "item.wav"
+    project = _minimal_project()
+    item = project["speakers"]["spk1"]["items"]["item1"]
+    item["path"] = "audio/item.wav"
+    item["end"] = 0.08
+    item["item_meta"] = {"IPA": "i"}
+    _write_project(src, project, {"audio/item.wav": _write_test_wav(wav_path, duration=0.08)})
+    items = build_dataset_snapshot(str(src))
+
+    code = """
+def run(ctx):
+    fig = ctx.plot_spectrogram_grid(ctx.dataset.items, columns=1, max_items=1, max_frequency=3000.0)
+    return ctx.figure(fig, filename="spectrogram_grid.png", title="多宫格语谱图")
+"""
+
+    result, logs, err = run_custom_script(code, items, timeout=5, teproj_path=str(src))
+
+    assert err is None
+    assert logs == []
+    assert isinstance(result, FigureResult)
+    assert result.title == "多宫格语谱图"
+
+
+def test_custom_script_loads_long_audio_item_segment(tmp_path):
+    src = tmp_path / "long_audio_input.teproj"
+    wav_path = tmp_path / "long.wav"
+    project = _minimal_project()
+    spk = project["speakers"]["spk1"]
+    spk["tab_mode"] = "长音频切分"
+    spk["long_audio_path"] = "audio/long.wav"
+    item = spk["items"]["item1"]
+    item.pop("path", None)
+    item["start"] = 0.02
+    item["end"] = 0.07
+    _write_project(src, project, {"audio/long.wav": _write_test_wav(wav_path, duration=0.12)})
+    items = build_dataset_snapshot(str(src))
+
+    code = """
+def run(ctx):
+    item = ctx.dataset.items[0]
+    snd = ctx.load_item_sound(item)
+    return ctx.table([[round(snd.get_total_duration(), 3)]], ["时长"], title="长音频切片")
+"""
+
+    result, logs, err = run_custom_script(code, items, timeout=5, teproj_path=str(src))
+
+    assert err is None
+    assert logs == []
+    assert isinstance(result, TableResult)
+    assert 0.045 <= result.rows[0][0] <= 0.055
 
 
 def test_apply_set_item_fields_to_teproj(tmp_path):
@@ -187,6 +310,36 @@ def test_data_process_prompt_uses_project_patch_documentation():
     assert "横轴" not in prompt
     assert "纵轴" not in prompt
     assert "推荐图表数量" not in prompt
+
+
+def test_chart_prompts_document_parselmouth_spectrogram_api():
+    project = _minimal_project()
+    agent_prompt = generate_ai_prompt(
+        project,
+        {
+            "script_type": "chart",
+            "prompt_mode": "Agent协作",
+            "agent_detail_level": "精简",
+            "agent_project_summary_mode": "包含精简工程摘要",
+            "custom_desc": "参考图是多宫格语谱图",
+        },
+    )
+    option_prompt = generate_ai_prompt(
+        project,
+        {
+            "script_type": "chart",
+            "prompt_mode": "参数选项",
+            "goal": "画多宫格语谱图",
+            "chart_style": "语谱图",
+        },
+    )
+
+    for prompt in (agent_prompt, option_prompt):
+        assert "parselmouth" in prompt
+        assert "ctx.load_item_sound" in prompt
+        assert "ctx.plot_spectrogram_grid" in prompt
+        assert "脚本无法访问工程文件路径" not in prompt
+        assert "不应该读取任何本地文件" not in prompt
 
 
 def test_trim_item_audio_creates_new_managed_audio(tmp_path):

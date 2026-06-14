@@ -97,11 +97,22 @@ import datetime
 import uuid
 import zipfile
 import json
-from modules.data_utils import fuzzy_match_word_to_path
+from modules.data_utils import fuzzy_match_word_to_path, parse_wordlist as parse_grouped_wordlist
 from modules.project_manager import read_project_metadata_from_archive
 from modules.report_generator import get_pitch_floor, get_pitch_ceiling
+from modules.textgrid_converter import (
+    DEFAULT_GROUP_NAME,
+    NONE_TIER_LABEL,
+    PAIR_MODE_ADJACENT,
+    PAIR_MODE_NONE,
+    TextGridMapping,
+    convert_textgrid,
+    inspect_textgrid,
+    preview_textgrid_conversion,
+    recommend_tier_names,
+)
 from modules.wordlist_editor import VisualWordlistEditor
-from modules.wordlist_v2 import ADVANCED_WORDLIST_AGENT_PROMPT, document_to_v1_text, flatten_wordlist_document, load_wordlist_document
+from modules.wordlist_v2 import ADVANCED_WORDLIST_AGENT_PROMPT, build_document_from_csv_text, document_to_v1_text, flatten_wordlist_document, load_wordlist_document
 
 try:
     import sounddevice as sd
@@ -1002,8 +1013,8 @@ class ToolkitApp(ctk.CTk):
             pass
 
         self.title("PhonTracer Toolkit")
-        self.geometry("1100x760")
-        self.minsize(1000, 700)
+        self.geometry("1180x780")
+        self.minsize(1080, 720)
 
         self.colors = {
             "bg": "#EEF2F6",
@@ -1044,6 +1055,12 @@ class ToolkitApp(ctk.CTk):
         self.split_source = None
         self.wordlist = []
         self.custom_segments = None  # 存储用户微调后的分段数据
+        self.textgrid_source_path = None
+        self.textgrid_summary = None
+        self.textgrid_group_overrides = {}
+        self.textgrid_preview_items = []
+        self.textgrid_wordlist_records = []
+        self.textgrid_wordlist_path = None
 
         self.setup_icons()
         self.setup_ui()
@@ -1366,6 +1383,7 @@ class ToolkitApp(ctk.CTk):
 
         self.tab_merge_name = "音频合并（独立音频→长音频）"
         self.tab_split_name = "音频拆分（长音频→独立音频）"
+        self.tab_textgrid_name = "TextGrid 转换器"
         self.tab_wordlist_name = "字表编辑器"
         self.tab_project_name = "工程预览"
         self.tab_script_name = "自定义脚本"
@@ -1388,17 +1406,18 @@ class ToolkitApp(ctk.CTk):
 
         self.tab_merge = self.tabview.add(self.tab_merge_name)
         self.tab_split = self.tabview.add(self.tab_split_name)
+        self.tab_textgrid = self.tabview.add(self.tab_textgrid_name)
         self.tab_wordlist = self.tabview.add(self.tab_wordlist_name)
         self.tab_project = self.tabview.add(self.tab_project_name)
         self.tab_script = self.tabview.add(self.tab_script_name)
 
-        for tab in (self.tab_merge, self.tab_split, self.tab_wordlist, self.tab_project, self.tab_script):
+        for tab in (self.tab_merge, self.tab_split, self.tab_textgrid, self.tab_wordlist, self.tab_project, self.tab_script):
             tab.configure(fg_color=self.colors["surface"])
 
         # Patch segmented button: left-align, pill-shaped, wider, fix text colors
         sb = self.tabview._segmented_button
         # Configure overall size, pill shape (corner_radius), and doubled inner border (border_width=6)
-        sb.configure(width=820, height=40, corner_radius=20, border_width=6)
+        sb.configure(width=980, height=40, corner_radius=20, border_width=6)
         # Cleanly left-align the segmented button in the grid without stretching
         sb.grid_configure(sticky="w", padx=20, pady=(12, 6))
 
@@ -1414,6 +1433,7 @@ class ToolkitApp(ctk.CTk):
 
         self.build_merge_tab()
         self.build_split_tab()
+        self.build_textgrid_tab()
         self.build_wordlist_tab()
         self.build_project_tab()
         self.build_script_tab()
@@ -1585,6 +1605,668 @@ class ToolkitApp(ctk.CTk):
         self._make_button(actions, "匹配字表", self.match_segments_to_wordlist, tone="warning", image=self.icons.get("check")).pack(fill=tk.X, pady=(0, 10))
         self._make_button(actions, "保存到目录", lambda: self.process_split(send_to_main=False), tone="success", image=self.icons.get("save")).pack(fill=tk.X)
 
+    def _make_converter_option(self, parent, values, command=None, width=190):
+        combo = ctk.CTkOptionMenu(
+            parent,
+            values=values or [NONE_TIER_LABEL],
+            command=command,
+            width=width,
+            height=36,
+            corner_radius=18,
+            fg_color=self.colors["surface"],
+            text_color=self.colors["text"],
+            button_color=self.colors["surface"],
+            button_hover_color="#E5E7EB",
+            dropdown_fg_color=self.colors["surface"],
+            dropdown_hover_color="#EFF6FF",
+            dropdown_text_color=self.colors["text"],
+            font=self.font_main,
+            dropdown_font=self.font_main,
+        )
+        _apply_custom_arrow(combo)
+        return combo
+
+    def build_textgrid_tab(self):
+        self.var_textgrid_group_tier = ctk.StringVar(value=NONE_TIER_LABEL)
+        self.var_textgrid_item_tier = ctk.StringVar(value=NONE_TIER_LABEL)
+        self.var_textgrid_core_tier = ctk.StringVar(value=NONE_TIER_LABEL)
+        self.var_textgrid_pair_mode = ctk.BooleanVar(value=False)
+
+        content = ctk.CTkFrame(self.tab_textgrid, fg_color="transparent")
+        content.pack(fill=tk.BOTH, expand=True, padx=20, pady=18)
+        content.grid_columnconfigure(0, weight=1)
+        content.grid_columnconfigure(1, weight=0)
+        content.grid_rowconfigure(0, weight=1)
+
+        # 左栏：源文件摘要 + 转换预览
+        left_panel = ctk.CTkFrame(content, fg_color="transparent")
+        left_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 16))
+
+        source_card = self._make_card(left_panel, fg_color=self.colors["surface_soft"])
+        source_card.pack(fill=tk.X, side=tk.TOP, pady=(0, 16))
+        source_card.grid_columnconfigure(0, weight=1)
+        source_card.grid_rowconfigure(2, weight=1)
+
+        source_header = ctk.CTkFrame(source_card, fg_color="transparent")
+        source_header.grid(row=0, column=0, sticky="ew", padx=20, pady=(16, 8))
+        source_header.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(source_header, text="源文件与层摘要", font=self.font_title, text_color=self.colors["text"]).grid(row=0, column=0, sticky="w")
+        self._make_button(
+            source_header,
+            "选择 TextGrid",
+            self.select_textgrid_source,
+            tone="primary",
+            image=self.icons.get("import_white"),
+            width=148,
+            height=36,
+        ).grid(row=0, column=1, sticky="e")
+
+        path_pill = ctk.CTkFrame(source_card, fg_color=self.colors["surface"], corner_radius=999, border_width=1, border_color=self.colors["border"])
+        path_pill.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 10))
+        self.lbl_textgrid_source = ctk.CTkLabel(path_pill, text="未选择 TextGrid 文件", text_color=self.colors["muted"], font=self.font_small, anchor="w")
+        self.lbl_textgrid_source.pack(fill=tk.X, padx=14, pady=8)
+
+        tier_container = ctk.CTkFrame(source_card, fg_color=self.colors["surface"], corner_radius=14, border_width=1, border_color=self.colors["border"])
+        tier_container.grid(row=2, column=0, sticky="nsew", padx=20, pady=(0, 16))
+        tier_container.grid_columnconfigure(0, weight=1)
+        tier_container.grid_rowconfigure(0, weight=1)
+        self.tree_textgrid_tiers = ttk.Treeview(
+            tier_container,
+            columns=("name", "type", "count", "samples"),
+            show="headings",
+            height=3,
+            selectmode="browse",
+        )
+        self.tree_textgrid_tiers.heading("name", text="层名")
+        self.tree_textgrid_tiers.heading("type", text="类型")
+        self.tree_textgrid_tiers.heading("count", text="非空/总数")
+        self.tree_textgrid_tiers.heading("samples", text="示例标签")
+        self.tree_textgrid_tiers.column("name", width=130, anchor="w")
+        self.tree_textgrid_tiers.column("type", width=110, anchor="center")
+        self.tree_textgrid_tiers.column("count", width=90, anchor="center")
+        self.tree_textgrid_tiers.column("samples", width=420, anchor="w")
+        self.tree_textgrid_tiers.configure(style="Treeview", takefocus=False)
+        self.textgrid_tier_scroll = ctk.CTkScrollbar(tier_container, orientation="vertical", command=self.tree_textgrid_tiers.yview, width=12)
+        self.tree_textgrid_tiers.configure(yscrollcommand=self.textgrid_tier_scroll.set)
+        self.tree_textgrid_tiers.grid(row=0, column=0, sticky="nsew", padx=(1, 0), pady=1)
+        self.textgrid_tier_scroll.grid(row=0, column=1, sticky="ns", padx=(0, 1), pady=1)
+        self.textgrid_tier_empty_state = ctk.CTkFrame(tier_container, fg_color="transparent")
+        ctk.CTkLabel(self.textgrid_tier_empty_state, text="选择文件后显示 IntervalTier 摘要", font=self.font_main, text_color=self.colors["muted"]).pack()
+        self.textgrid_tier_empty_state.place(relx=0.5, rely=0.5, anchor="center")
+
+        preview_card = self._make_card(left_panel)
+        preview_card.pack(fill=tk.BOTH, expand=True, side=tk.TOP)
+        preview_card.grid_columnconfigure(0, weight=1)
+        preview_card.grid_rowconfigure(1, weight=1)
+
+        preview_header = ctk.CTkFrame(preview_card, fg_color="transparent")
+        preview_header.grid(row=0, column=0, sticky="ew", padx=20, pady=(18, 12))
+        preview_header.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(preview_header, text="转换预览", font=self.font_title, text_color=self.colors["text"]).grid(row=0, column=0, sticky="w")
+        self.lbl_textgrid_preview_count = ctk.CTkLabel(preview_header, text="0 个条目", font=self.font_small, text_color=self.colors["muted"])
+        self.lbl_textgrid_preview_count.grid(row=0, column=1, sticky="e")
+        ctk.CTkLabel(
+            preview_header,
+            text="可多选条目并移动到右侧输入的临时组；导出时写入 groups / words / chars 三层。",
+            font=self.font_small,
+            text_color=self.colors["muted"],
+        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 0))
+
+        preview_container = ctk.CTkFrame(preview_card, fg_color=self.colors["surface"], corner_radius=14, border_width=1, border_color=self.colors["border"])
+        preview_container.grid(row=1, column=0, sticky="nsew", padx=20, pady=(0, 12))
+        preview_container.grid_columnconfigure(0, weight=1)
+        preview_container.grid_rowconfigure(0, weight=1)
+        self.tree_textgrid_preview = ttk.Treeview(
+            preview_container,
+            columns=("label", "group", "core", "chars", "status"),
+            show="headings",
+            height=12,
+            selectmode="extended",
+        )
+        self.tree_textgrid_preview.heading("label", text="条目")
+        self.tree_textgrid_preview.heading("group", text="组名")
+        self.tree_textgrid_preview.heading("core", text="核心边界")
+        self.tree_textgrid_preview.heading("chars", text="字区间")
+        self.tree_textgrid_preview.heading("status", text="状态")
+        self.tree_textgrid_preview.column("label", width=120, anchor="w")
+        self.tree_textgrid_preview.column("group", width=150, anchor="w")
+        self.tree_textgrid_preview.column("core", width=130, anchor="center")
+        self.tree_textgrid_preview.column("chars", width=70, anchor="center")
+        self.tree_textgrid_preview.column("status", width=330, anchor="w")
+        self.tree_textgrid_preview.configure(style="Treeview", takefocus=False)
+        self.tree_textgrid_preview.tag_configure("warning", background="#FEF3C7")
+        self.textgrid_preview_scroll = ctk.CTkScrollbar(preview_container, orientation="vertical", command=self.tree_textgrid_preview.yview, width=12)
+        self.tree_textgrid_preview.configure(yscrollcommand=self.textgrid_preview_scroll.set)
+        self.tree_textgrid_preview.grid(row=0, column=0, sticky="nsew", padx=(1, 0), pady=1)
+        self.textgrid_preview_scroll.grid(row=0, column=1, sticky="ns", padx=(0, 1), pady=1)
+        self.textgrid_preview_empty_state = ctk.CTkFrame(preview_container, fg_color="transparent")
+        ctk.CTkLabel(self.textgrid_preview_empty_state, text="选择 TextGrid 并确认层映射后显示预览", font=self.font_main, text_color=self.colors["muted"]).pack()
+        self.textgrid_preview_empty_state.place(relx=0.5, rely=0.5, anchor="center")
+
+        self.lbl_textgrid_status = ctk.CTkLabel(preview_card, text="等待选择源文件。", font=self.font_small, text_color=self.colors["muted"], anchor="w")
+        self.lbl_textgrid_status.grid(row=2, column=0, sticky="ew", padx=22, pady=(0, 16))
+
+        # 右栏：层映射 + 导出设置
+        right_panel = ctk.CTkFrame(content, fg_color="transparent", width=340)
+        right_panel.grid(row=0, column=1, sticky="nsew")
+        right_panel.grid_propagate(False)
+        right_panel.pack_propagate(False)
+
+        mapping_card = self._make_card(right_panel, fg_color=self.colors["surface_soft"], width=340)
+        mapping_card.pack(fill=tk.X, side=tk.TOP, pady=(0, 16))
+        self._section_header(mapping_card, "层映射", "条目层给词项标签，核心层给实际分析边界。", icon_text="03")
+
+        mapping_body = ctk.CTkFrame(mapping_card, fg_color="transparent")
+        mapping_body.pack(fill=tk.X, padx=20, pady=(0, 10))
+
+        # 采用 Grid 布局横向排列下拉菜单，合并组层和条目层在同一行
+        dropdowns_frame = ctk.CTkFrame(mapping_body, fg_color="transparent")
+        dropdowns_frame.pack(fill=tk.X, pady=(0, 8))
+        dropdowns_frame.grid_columnconfigure(0, weight=0)
+        dropdowns_frame.grid_columnconfigure(1, weight=1)
+        dropdowns_frame.grid_columnconfigure(2, weight=0)
+        dropdowns_frame.grid_columnconfigure(3, weight=1)
+
+        # 组层
+        lbl_group = ctk.CTkLabel(dropdowns_frame, text="组层", font=self.font_small, text_color=self.colors["text_soft"], anchor="w")
+        lbl_group.grid(row=0, column=0, sticky="w", padx=(0, 6), pady=4)
+        self.combo_textgrid_group = self._make_converter_option(
+            dropdowns_frame,
+            [NONE_TIER_LABEL],
+            command=lambda _value: self.refresh_textgrid_preview(),
+            width=90,
+        )
+        self.combo_textgrid_group.configure(variable=self.var_textgrid_group_tier)
+        self.combo_textgrid_group.grid(row=0, column=1, sticky="ew", padx=(0, 12), pady=4)
+
+        # 条目层
+        lbl_item = ctk.CTkLabel(dropdowns_frame, text="条目层", font=self.font_small, text_color=self.colors["text_soft"], anchor="w")
+        lbl_item.grid(row=0, column=2, sticky="w", padx=(0, 6), pady=4)
+        self.combo_textgrid_item = self._make_converter_option(
+            dropdowns_frame,
+            [NONE_TIER_LABEL],
+            command=lambda _value: self.refresh_textgrid_preview(),
+            width=90,
+        )
+        self.combo_textgrid_item.configure(variable=self.var_textgrid_item_tier)
+        self.combo_textgrid_item.grid(row=0, column=3, sticky="ew", pady=4)
+
+        # 核心层
+        lbl_core = ctk.CTkLabel(dropdowns_frame, text="核心层", font=self.font_small, text_color=self.colors["text_soft"], anchor="w")
+        lbl_core.grid(row=1, column=0, sticky="w", padx=(0, 6), pady=4)
+        self.combo_textgrid_core = self._make_converter_option(
+            dropdowns_frame,
+            [NONE_TIER_LABEL],
+            command=lambda _value: self.refresh_textgrid_preview(),
+            width=190,
+        )
+        self.combo_textgrid_core.configure(variable=self.var_textgrid_core_tier)
+        self.combo_textgrid_core.grid(row=1, column=1, columnspan=3, sticky="ew", pady=4)
+
+        # 辅助字表栏：按钮并排，布局更紧凑
+        wordlist_box = ctk.CTkFrame(mapping_body, fg_color=self.colors["surface"], corner_radius=12, border_width=1, border_color=self.colors["border"])
+        wordlist_box.pack(fill=tk.X, pady=(0, 8))
+        
+        wl_header = ctk.CTkFrame(wordlist_box, fg_color="transparent")
+        wl_header.pack(fill=tk.X, padx=12, pady=(8, 4))
+        
+        ctk.CTkLabel(
+            wl_header,
+            text="辅助字表",
+            font=ctk.CTkFont(family=self.font_family, size=13, weight="bold"),
+            text_color=self.colors["text"],
+        ).pack(side=tk.LEFT)
+        
+        self.btn_wordlist_clear = self._make_button(
+            wl_header,
+            "清除",
+            self.clear_textgrid_aux_wordlist,
+            tone="ghost",
+            height=26,
+            width=50,
+        )
+        self.btn_wordlist_clear.pack(side=tk.RIGHT, padx=(4, 0))
+        
+        self.btn_wordlist_import = self._make_button(
+            wl_header,
+            "导入",
+            self.import_textgrid_aux_wordlist,
+            tone="secondary",
+            height=26,
+            width=50,
+        )
+        self.btn_wordlist_import.pack(side=tk.RIGHT)
+        
+        self.lbl_textgrid_wordlist = ctk.CTkLabel(
+            wordlist_box,
+            text="未导入；二字组将按时间顺序判断。",
+            font=self.font_caption,
+            text_color=self.colors["muted"],
+            wraplength=260,
+            justify="left",
+            anchor="w",
+        )
+        self.lbl_textgrid_wordlist.pack(fill=tk.X, padx=12, pady=(0, 8))
+
+        # 智能合并开关：缩短说明文本，取消不必要的高度占用
+        switch_box = ctk.CTkFrame(mapping_body, fg_color=self.colors["surface"], corner_radius=12, border_width=1, border_color=self.colors["border"])
+        switch_box.pack(fill=tk.X, pady=(2, 0))
+        
+        self.switch_textgrid_pair = ctk.CTkSwitch(
+            switch_box,
+            text="启用二字组智能合并",
+            variable=self.var_textgrid_pair_mode,
+            command=self.refresh_textgrid_preview,
+            font=self.font_main,
+            progress_color=self.colors["purple"],
+            button_color="#475569",
+            button_hover_color="#334155",
+        )
+        self.switch_textgrid_pair.pack(anchor="w", padx=12, pady=(8, 4))
+        
+        ctk.CTkLabel(
+            switch_box,
+            text="根据字表或时间顺序合并二字组",
+            font=self.font_caption,
+            text_color=self.colors["muted"],
+            anchor="w",
+        ).pack(fill=tk.X, padx=12, pady=(0, 8))
+
+        export_card = self._make_card(right_panel, fg_color=self.colors["surface_soft"], width=340)
+        export_card.pack(fill=tk.BOTH, expand=True, side=tk.TOP)
+        export_card.grid_propagate(False)
+        self._section_header(export_card, "临时分组与导出", "无组层时可在这里把条目分入临时组。", icon_text="04")
+
+        group_body = ctk.CTkFrame(export_card, fg_color="transparent")
+        group_body.pack(fill=tk.X, padx=20, pady=(0, 12))
+        ctk.CTkLabel(group_body, text="目标组名", font=self.font_small, text_color=self.colors["text_soft"]).pack(anchor="w")
+        self.entry_textgrid_group = ctk.CTkEntry(
+            group_body,
+            placeholder_text=DEFAULT_GROUP_NAME,
+            height=38,
+            corner_radius=19,
+            border_color=self.colors["border_strong"],
+            fg_color=self.colors["surface"],
+            text_color=self.colors["text"],
+            font=self.font_main,
+        )
+        self.entry_textgrid_group.pack(fill=tk.X, pady=(6, 10))
+
+        assign_row = ctk.CTkFrame(group_body, fg_color="transparent")
+        assign_row.pack(fill=tk.X, pady=(0, 10))
+        self._make_button(assign_row, "应用到选中", self.add_textgrid_group, tone="purple", height=34).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 8))
+        self._make_button(assign_row, "清除选中", self.clear_textgrid_group_override, tone="secondary", height=34).pack(side=tk.LEFT, expand=True, fill=tk.X)
+
+        diagnosis_box = ctk.CTkFrame(export_card, fg_color=self.colors["surface"], corner_radius=14, border_width=1, border_color=self.colors["border"])
+        diagnosis_box.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 12))
+        ctk.CTkLabel(
+            diagnosis_box,
+            text="二字组体检",
+            font=ctk.CTkFont(family=self.font_family, size=13, weight="bold"),
+            text_color=self.colors["text"],
+        ).pack(anchor="w", padx=14, pady=(12, 4))
+        self.lbl_textgrid_diagnosis = ctk.CTkLabel(
+            diagnosis_box,
+            text="尚无可诊断内容。",
+            font=self.font_small,
+            text_color=self.colors["muted"],
+            wraplength=278,
+            justify="left",
+            anchor="w",
+        )
+        self.lbl_textgrid_diagnosis.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 12), anchor="nw")
+
+        actions = ctk.CTkFrame(export_card, fg_color="transparent")
+        actions.pack(side=tk.BOTTOM, fill=tk.X, padx=20, pady=20)
+        self._make_button(actions, "刷新预览", self.refresh_textgrid_preview, tone="secondary", height=36).pack(fill=tk.X, pady=(0, 10))
+        self._make_button(actions, "导出标准 TextGrid", self.export_converted_textgrid, tone="success", image=self.icons.get("save"), height=40).pack(fill=tk.X)
+
+    def select_textgrid_source(self):
+        path = filedialog.askopenfilename(
+            filetypes=[
+                ("Praat TextGrid", "*.TextGrid *.textgrid"),
+                ("All Files", "*.*"),
+            ]
+        )
+        if path:
+            self.load_textgrid_source(path)
+
+    def load_textgrid_source(self, path):
+        if not path:
+            return
+        try:
+            summary = inspect_textgrid(path)
+        except Exception as e:
+            messagebox.showerror("读取失败", f"无法读取 TextGrid：\n{e}")
+            return
+
+        self.textgrid_source_path = path
+        self.textgrid_summary = summary
+        self.textgrid_group_overrides = {}
+        self.textgrid_preview_items = []
+        if hasattr(self, "lbl_textgrid_source"):
+            self.lbl_textgrid_source.configure(text=self._short_path(path, max_parts=4), text_color=self.colors["text_soft"])
+        self._fill_textgrid_tiers_tree(summary.get("tiers", []))
+        self.refresh_textgrid_tier_options()
+        self.tabview.set(self.tab_textgrid_name)
+        self._textgrid_status("已读取 TextGrid，请确认层映射。", "muted")
+
+    def import_textgrid_aux_wordlist(self):
+        path = filedialog.askopenfilename(
+            filetypes=[
+                ("支持的字表", "*.txt *.csv *.ptwl"),
+                ("普通字表", "*.txt *.csv"),
+                ("PhonTracer 高级字表", "*.ptwl"),
+                ("All Files", "*.*"),
+            ]
+        )
+        if not path:
+            return
+        try:
+            records, groups_count = self._load_textgrid_aux_wordlist_records(path)
+        except Exception as e:
+            messagebox.showerror("读取失败", f"无法读取辅助字表：\n{e}")
+            return
+        if not records:
+            messagebox.showwarning("提示", "辅助字表中没有可用词项。")
+            return
+
+        self.textgrid_wordlist_records = records
+        self.textgrid_wordlist_path = path
+        if hasattr(self, "lbl_textgrid_wordlist"):
+            self.lbl_textgrid_wordlist.configure(
+                text=f"已导入 {self._short_path(path, max_parts=2)}；{groups_count} 组，{len(records)} 项。",
+                text_color=self.colors["success"],
+            )
+        self.refresh_textgrid_preview()
+
+    def clear_textgrid_aux_wordlist(self):
+        self.textgrid_wordlist_records = []
+        self.textgrid_wordlist_path = None
+        if hasattr(self, "lbl_textgrid_wordlist"):
+            self.lbl_textgrid_wordlist.configure(
+                text="未导入；二字组将按时间顺序判断。",
+                text_color=self.colors["muted"],
+            )
+        self.refresh_textgrid_preview()
+
+    def _load_textgrid_aux_wordlist_records(self, path):
+        lower = path.lower()
+        if lower.endswith(".ptwl"):
+            doc = load_wordlist_document(path)
+            groups, _flat_words, records = flatten_wordlist_document(doc)
+            return records, len(groups)
+
+        text = self._read_text_file_with_fallback(path)
+        if lower.endswith(".csv"):
+            try:
+                doc = build_document_from_csv_text(text, title=os.path.splitext(os.path.basename(path))[0])
+                groups, _flat_words, records = flatten_wordlist_document(doc)
+                if records:
+                    return records, len(groups)
+            except Exception:
+                pass
+
+        groups, _flat_words = parse_grouped_wordlist(text)
+        records = []
+        for group in groups:
+            group_name = str(group.get("group") or DEFAULT_GROUP_NAME).strip() or DEFAULT_GROUP_NAME
+            for word in group.get("items", []):
+                label = str(word or "").strip()
+                if label:
+                    records.append({"label": label, "word": label, "group": group_name})
+        return records, len(groups)
+
+    def _read_text_file_with_fallback(self, path):
+        last_error = None
+        for encoding in ("utf-8-sig", "utf-8", "gbk"):
+            try:
+                with open(path, "r", encoding=encoding) as f:
+                    return f.read()
+            except UnicodeDecodeError as e:
+                last_error = e
+        if last_error:
+            raise last_error
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            return f.read()
+
+    def refresh_textgrid_tier_options(self):
+        summary = self.textgrid_summary or {}
+        tiers = [tier for tier in summary.get("tiers", []) if tier.get("supported")]
+        names = [str(tier.get("name", "")).strip() for tier in tiers if str(tier.get("name", "")).strip()]
+        if not names:
+            names = [NONE_TIER_LABEL]
+
+        group_values = [NONE_TIER_LABEL] + [name for name in names if name != NONE_TIER_LABEL]
+        recommendations = recommend_tier_names(summary) if summary else {}
+        defaults = {
+            "group": recommendations.get("group_tier") or NONE_TIER_LABEL,
+            "item": recommendations.get("item_tier") or names[0],
+            "core": recommendations.get("core_tier") or (names[1] if len(names) > 1 else names[0]),
+        }
+
+        for combo, values in (
+            (getattr(self, "combo_textgrid_group", None), group_values),
+            (getattr(self, "combo_textgrid_item", None), names),
+            (getattr(self, "combo_textgrid_core", None), names),
+        ):
+            if combo is not None:
+                combo.configure(values=values)
+
+        self.var_textgrid_group_tier.set(defaults["group"] if defaults["group"] in group_values else NONE_TIER_LABEL)
+        self.var_textgrid_item_tier.set(defaults["item"] if defaults["item"] in names else names[0])
+        self.var_textgrid_core_tier.set(defaults["core"] if defaults["core"] in names else names[0])
+        self.refresh_textgrid_preview()
+
+    def _selected_textgrid_mapping(self):
+        item_tier = (self.var_textgrid_item_tier.get() or "").strip()
+        core_tier = (self.var_textgrid_core_tier.get() or "").strip()
+        group_tier = (self.var_textgrid_group_tier.get() or "").strip()
+        if item_tier in ("", NONE_TIER_LABEL) or core_tier in ("", NONE_TIER_LABEL):
+            raise ValueError("请选择条目层和核心层。")
+        if group_tier in ("", NONE_TIER_LABEL):
+            group_tier = None
+        return TextGridMapping(
+            item_tier=item_tier,
+            core_tier=core_tier,
+            group_tier=group_tier,
+            pair_mode=PAIR_MODE_ADJACENT if self.var_textgrid_pair_mode.get() else PAIR_MODE_NONE,
+        )
+
+    def refresh_textgrid_preview(self, *_args):
+        if not getattr(self, "textgrid_source_path", None):
+            self._fill_textgrid_preview_tree([])
+            self._textgrid_status("等待选择源文件。", "muted")
+            return
+        try:
+            mapping = self._selected_textgrid_mapping()
+            preview = preview_textgrid_conversion(
+                self.textgrid_source_path,
+                mapping,
+                group_overrides=self.textgrid_group_overrides,
+                wordlist_records=self.textgrid_wordlist_records,
+            )
+        except ValueError as e:
+            self.textgrid_preview_items = []
+            self._fill_textgrid_preview_tree([])
+            self.lbl_textgrid_diagnosis.configure(text="尚无可诊断内容。")
+            self._textgrid_status(str(e), "warning")
+            return
+        except Exception as e:
+            self.textgrid_preview_items = []
+            self._fill_textgrid_preview_tree([])
+            self.lbl_textgrid_diagnosis.configure(text=f"预览失败：{e}")
+            self._textgrid_status(f"预览失败：{e}", "danger")
+            return
+
+        self.textgrid_preview_items = preview.items
+        self._fill_textgrid_preview_tree(preview.items)
+        self.lbl_textgrid_diagnosis.configure(text=self._format_textgrid_diagnosis(preview))
+        warn_count = sum(len(item.warnings) for item in preview.items)
+        if warn_count:
+            self._textgrid_status(f"预览完成，发现 {warn_count} 条需要确认的提示。", "warning")
+        else:
+            self._textgrid_status("预览完成，可以导出。", "success")
+
+    def _fill_textgrid_tiers_tree(self, tiers):
+        if not hasattr(self, "tree_textgrid_tiers"):
+            return
+        self.tree_textgrid_tiers.delete(*self.tree_textgrid_tiers.get_children())
+        for idx, tier in enumerate(tiers or []):
+            samples = "，".join(tier.get("sample_labels", [])[:6]) or "空"
+            count_text = f"{tier.get('non_empty_count', 0)}/{tier.get('count', 0)}"
+            self.tree_textgrid_tiers.insert(
+                "",
+                tk.END,
+                iid=f"tier_{idx}",
+                values=(tier.get("name", ""), tier.get("type", ""), count_text, samples),
+            )
+        if tiers:
+            self.textgrid_tier_empty_state.place_forget()
+        else:
+            self.textgrid_tier_empty_state.place(relx=0.5, rely=0.5, anchor="center")
+
+    def _fill_textgrid_preview_tree(self, items):
+        if not hasattr(self, "tree_textgrid_preview"):
+            return
+        previous_selection = set(self.tree_textgrid_preview.selection())
+        self.tree_textgrid_preview.delete(*self.tree_textgrid_preview.get_children())
+        for item in items or []:
+            core_text = f"{item.core_start:.3f} - {item.core_end:.3f}"
+            char_text = str(len(item.char_bounds))
+            notes = []
+            if item.match_note:
+                notes.append(item.match_note)
+            notes.extend(item.warnings[:2])
+            status = "；".join(notes) if notes else "正常"
+            tags = ("warning",) if item.warnings else ()
+            self.tree_textgrid_preview.insert(
+                "",
+                tk.END,
+                iid=item.id,
+                values=(item.label, item.group, core_text, char_text, status),
+                tags=tags,
+            )
+        if hasattr(self, "lbl_textgrid_preview_count"):
+            self.lbl_textgrid_preview_count.configure(text=f"{len(items or [])} 个条目")
+        if items:
+            self.textgrid_preview_empty_state.place_forget()
+        else:
+            self.textgrid_preview_empty_state.place(relx=0.5, rely=0.5, anchor="center")
+        for item_id in previous_selection:
+            if self.tree_textgrid_preview.exists(item_id):
+                self.tree_textgrid_preview.selection_add(item_id)
+
+    def _textgrid_selected_item_ids(self):
+        if not hasattr(self, "tree_textgrid_preview"):
+            return []
+        return list(self.tree_textgrid_preview.selection())
+
+    def add_textgrid_group(self):
+        self.assign_textgrid_group()
+
+    def assign_textgrid_group(self):
+        selected_ids = self._textgrid_selected_item_ids()
+        if not selected_ids:
+            messagebox.showwarning("提示", "请先在转换预览中选择一个或多个条目。")
+            return
+        group_name = self.entry_textgrid_group.get().strip() or DEFAULT_GROUP_NAME
+        item_map = {item.id: item for item in self.textgrid_preview_items}
+        for item_id in selected_ids:
+            self.textgrid_group_overrides[item_id] = group_name
+            item = item_map.get(item_id)
+            if item:
+                for source_id in item.source_ids:
+                    self.textgrid_group_overrides[source_id] = group_name
+        self.refresh_textgrid_preview()
+
+    def clear_textgrid_group_override(self):
+        selected_ids = self._textgrid_selected_item_ids()
+        if not selected_ids:
+            messagebox.showwarning("提示", "请先在转换预览中选择一个或多个条目。")
+            return
+        item_map = {item.id: item for item in self.textgrid_preview_items}
+        for item_id in selected_ids:
+            self.textgrid_group_overrides.pop(item_id, None)
+            item = item_map.get(item_id)
+            if item:
+                for source_id in item.source_ids:
+                    self.textgrid_group_overrides.pop(source_id, None)
+        self.refresh_textgrid_preview()
+
+    def export_converted_textgrid(self):
+        if not getattr(self, "textgrid_source_path", None):
+            messagebox.showwarning("提示", "请先选择一个 TextGrid 文件。")
+            return
+        try:
+            mapping = self._selected_textgrid_mapping()
+        except ValueError as e:
+            messagebox.showwarning("提示", str(e))
+            return
+
+        source_dir = os.path.dirname(self.textgrid_source_path)
+        source_name = os.path.splitext(os.path.basename(self.textgrid_source_path))[0]
+        out_path = filedialog.asksaveasfilename(
+            defaultextension=".TextGrid",
+            initialdir=source_dir,
+            initialfile=f"{source_name}_converted.TextGrid",
+            filetypes=[
+                ("Praat TextGrid", "*.TextGrid"),
+                ("All Files", "*.*"),
+            ],
+        )
+        if not out_path:
+            return
+        try:
+            preview = convert_textgrid(
+                self.textgrid_source_path,
+                out_path,
+                mapping,
+                group_overrides=self.textgrid_group_overrides,
+                wordlist_records=self.textgrid_wordlist_records,
+            )
+            self.textgrid_preview_items = preview.items
+            self._fill_textgrid_preview_tree(preview.items)
+            self.lbl_textgrid_diagnosis.configure(text=self._format_textgrid_diagnosis(preview))
+            self._textgrid_status(f"已导出：{self._short_path(out_path, max_parts=3)}", "success")
+            messagebox.showinfo("导出完成", f"已导出标准 TextGrid：\n{out_path}")
+        except Exception as e:
+            self._textgrid_status(f"导出失败：{e}", "danger")
+            messagebox.showerror("导出失败", f"无法导出 TextGrid：\n{e}")
+
+    def _format_textgrid_diagnosis(self, preview):
+        report = preview.tone_pair_report or {}
+        lines = [f"转换预览：{len(preview.items)} 个条目。"]
+        wordlist_matched = sum(1 for item in preview.items if getattr(item, "match_note", ""))
+        if self.textgrid_wordlist_records:
+            lines.append(f"辅助字表：{len(self.textgrid_wordlist_records)} 项；当前命中 {wordlist_matched} 个条目/二字组。")
+        lines.append(
+            f"二字组：可识别 {report.get('eligible_count', 0)} 个；"
+            f"前调类 {report.get('front_count', 0)} 个，后调类 {report.get('back_count', 0)} 个，组合 {report.get('combo_count', 0)} 个。"
+        )
+        for message in report.get("messages", [])[:3]:
+            lines.append(message)
+        unique_warnings = []
+        for warning in preview.warnings:
+            if warning not in unique_warnings:
+                unique_warnings.append(warning)
+            if len(unique_warnings) >= 3:
+                break
+        if unique_warnings:
+            lines.append("转换提示：" + "；".join(unique_warnings))
+        return "\n".join(lines)
+
+    def _textgrid_status(self, text, tone="muted"):
+        if not hasattr(self, "lbl_textgrid_status"):
+            return
+        colors = {
+            "muted": self.colors["muted"],
+            "success": self.colors["success"],
+            "warning": self.colors["warning_hover"],
+            "danger": self.colors["danger"],
+        }
+        self.lbl_textgrid_status.configure(text=text, text_color=colors.get(tone, self.colors["muted"]))
+
     # ==========================
     # 交互回调与工具函数
     # ==========================
@@ -1595,6 +2277,12 @@ class ToolkitApp(ctk.CTk):
 
     def _handle_dropped_files(self, paths):
         if not paths:
+            return
+
+        textgrid_files = [p for p in paths if p.lower().endswith(".textgrid")]
+        if textgrid_files:
+            self.tabview.set(self.tab_textgrid_name)
+            self.load_textgrid_source(textgrid_files[0])
             return
 
         # Check if there is any .teproj file dropped
@@ -2117,7 +2805,7 @@ class ToolkitApp(ctk.CTk):
         left_panel = self._make_card(content, fg_color=self.colors["surface_soft"], width=310)
         left_panel.grid(row=0, column=0, sticky="ns", padx=(0, 16))
         left_panel.grid_propagate(False)
-        self._section_header(left_panel, "工程操作", "打开 .teproj 后可预览结构，也可另存为 zip。", icon_text="03")
+        self._section_header(left_panel, "工程操作", "打开 .teproj 后可预览结构，也可另存为 zip。", icon_text="04")
 
         actions = ctk.CTkFrame(left_panel, fg_color="transparent")
         actions.pack(fill=tk.X, padx=20, pady=(4, 18))
@@ -2236,7 +2924,7 @@ class ToolkitApp(ctk.CTk):
         left_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 16))
         left_panel.pack_propagate(False)
 
-        self._section_header(left_panel, "脚本库", subtitle=None, icon_text="04")
+        self._section_header(left_panel, "脚本库", subtitle=None, icon_text="05")
 
         # 搜索框
         search_frame = ctk.CTkFrame(left_panel, fg_color="transparent")
@@ -2675,7 +3363,13 @@ class ToolkitApp(ctk.CTk):
                 import matplotlib.pyplot as plt
                 plt.close('all') # 运行前清理图表
 
-                res, logs, err = run_custom_script(code, dataset_items, timeout=30, cancel_event=self.run_cancel_event)
+                res, logs, err = run_custom_script(
+                    code,
+                    dataset_items,
+                    timeout=30,
+                    cancel_event=self.run_cancel_event,
+                    teproj_path=getattr(self, "loaded_teproj_path", None),
+                )
                 self.after(0, lambda: self.on_script_finished(res, logs, err))
             except Exception as e:
                 import traceback
