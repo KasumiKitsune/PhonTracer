@@ -867,8 +867,8 @@ class ProjectTreePanel:
         tree_container.grid_rowconfigure(0, weight=1)
 
         self.tree = ttk.Treeview(tree_container, show='tree', selectmode='extended', columns=("info",))
-        self.tree.column("#0", anchor="w", width=80, minwidth=60, stretch=True)
-        self.tree.column("info", anchor="w", width=130, minwidth=80, stretch=False)
+        self.tree.column("#0", anchor="w", width=150, minwidth=80, stretch=True)
+        self.tree.column("info", anchor="w", width=100, minwidth=60, stretch=False)
         scroll_tree = AutoScrollbar(tree_container, command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll_tree.set)
 
@@ -2454,7 +2454,7 @@ class ProjectTreePanel:
             total_count = len(items_in_grp)
             excluded_count = sum(1 for iid, item in items_in_grp if item.get('is_excluded', False))
             if excluded_count > 0:
-                g_text = f"{grp} ({total_count - excluded_count}/{total_count}, 已忽略 {excluded_count} 项)"
+                g_text = f"{grp} ({total_count - excluded_count}/{total_count}, 忽略 {excluded_count})"
             else:
                 g_text = f"{grp} ({total_count})"
             is_open = grp in expanded_groups or not expanded_groups
