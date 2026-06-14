@@ -1388,6 +1388,31 @@ class ToolkitApp(ctk.CTk):
             foreground=[("selected", "#FFFFFF")],
         )
 
+        style.configure(
+            "Converter.Treeview",
+            font=(self.font_family, 10),
+            rowheight=24,
+            background=self.colors["surface"],
+            fieldbackground=self.colors["surface"],
+            foreground=self.colors["text"],
+            borderwidth=0,
+            relief="flat",
+        )
+        style.configure(
+            "Converter.Treeview.Heading",
+            font=(self.font_family, 10, "bold"),
+            background=self.colors["surface_soft"],
+            foreground=self.colors["text_soft"],
+            padding=(8, 4),
+            borderwidth=0,
+            relief="flat",
+        )
+        style.map(
+            "Converter.Treeview",
+            background=[("selected", self.colors["primary"])],
+            foreground=[("selected", "#FFFFFF")],
+        )
+
         self.main_shell = ctk.CTkFrame(self, fg_color="transparent")
         self.main_shell.grid(row=0, column=0, sticky="nsew", padx=24, pady=20)
         self.main_shell.grid_columnconfigure(0, weight=1)
@@ -1655,12 +1680,12 @@ class ToolkitApp(ctk.CTk):
         left_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 16))
 
         source_card = self._make_card(left_panel, fg_color=self.colors["surface_soft"])
-        source_card.pack(fill=tk.X, side=tk.TOP, pady=(0, 16))
+        source_card.pack(fill=tk.X, side=tk.TOP, pady=(0, 12))
         source_card.grid_columnconfigure(0, weight=1)
         source_card.grid_rowconfigure(2, weight=1)
 
         source_header = ctk.CTkFrame(source_card, fg_color="transparent")
-        source_header.grid(row=0, column=0, sticky="ew", padx=20, pady=(12, 6))
+        source_header.grid(row=0, column=0, sticky="ew", padx=20, pady=(8, 4))
         source_header.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(source_header, text="源文件与层摘要", font=self.font_title, text_color=self.colors["text"]).grid(row=0, column=0, sticky="w")
         self._make_button(
@@ -1674,12 +1699,12 @@ class ToolkitApp(ctk.CTk):
         ).grid(row=0, column=1, sticky="e")
 
         path_pill = ctk.CTkFrame(source_card, fg_color=self.colors["surface"], corner_radius=999, border_width=1, border_color=self.colors["border"])
-        path_pill.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 6))
+        path_pill.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 4))
         self.lbl_textgrid_source = ctk.CTkLabel(path_pill, text="未选择 TextGrid 文件", text_color=self.colors["muted"], font=self.font_small, anchor="w")
-        self.lbl_textgrid_source.pack(fill=tk.X, padx=14, pady=8)
+        self.lbl_textgrid_source.pack(fill=tk.X, padx=14, pady=5)
 
         tier_container = ctk.CTkFrame(source_card, fg_color=self.colors["surface"], corner_radius=14, border_width=1, border_color=self.colors["border"])
-        tier_container.grid(row=2, column=0, sticky="nsew", padx=20, pady=(0, 12))
+        tier_container.grid(row=2, column=0, sticky="nsew", padx=20, pady=(0, 8))
         tier_container.grid_columnconfigure(0, weight=1)
         tier_container.grid_rowconfigure(0, weight=1)
         self.tree_textgrid_tiers = ttk.Treeview(
@@ -1697,7 +1722,7 @@ class ToolkitApp(ctk.CTk):
         self.tree_textgrid_tiers.column("type", width=110, anchor="center")
         self.tree_textgrid_tiers.column("count", width=90, anchor="center")
         self.tree_textgrid_tiers.column("samples", width=420, anchor="w")
-        self.tree_textgrid_tiers.configure(style="Treeview", takefocus=False)
+        self.tree_textgrid_tiers.configure(style="Converter.Treeview", takefocus=False)
         self.textgrid_tier_scroll = ctk.CTkScrollbar(tier_container, orientation="vertical", command=self.tree_textgrid_tiers.yview, width=12)
         self.tree_textgrid_tiers.configure(yscrollcommand=self.textgrid_tier_scroll.set)
         self.tree_textgrid_tiers.grid(row=0, column=0, sticky="nsew", padx=(1, 0), pady=1)
@@ -1745,7 +1770,7 @@ class ToolkitApp(ctk.CTk):
         self.tree_textgrid_preview.column("core", width=130, anchor="center")
         self.tree_textgrid_preview.column("chars", width=70, anchor="center")
         self.tree_textgrid_preview.column("status", width=330, anchor="w")
-        self.tree_textgrid_preview.configure(style="Treeview", takefocus=False)
+        self.tree_textgrid_preview.configure(style="Converter.Treeview", takefocus=False)
         self.tree_textgrid_preview.tag_configure("warning", background="#FEF3C7")
         self.textgrid_preview_scroll = ctk.CTkScrollbar(preview_container, orientation="vertical", command=self.tree_textgrid_preview.yview, width=12)
         self.tree_textgrid_preview.configure(yscrollcommand=self.textgrid_preview_scroll.set)
@@ -1755,8 +1780,21 @@ class ToolkitApp(ctk.CTk):
         ctk.CTkLabel(self.textgrid_preview_empty_state, text="选择 TextGrid 并确认层映射后显示预览", font=self.font_main, text_color=self.colors["muted"]).pack()
         self.textgrid_preview_empty_state.place(relx=0.5, rely=0.5, anchor="center")
 
-        self.lbl_textgrid_status = ctk.CTkLabel(preview_card, text="等待选择源文件。", font=self.font_small, text_color=self.colors["muted"], anchor="w")
-        self.lbl_textgrid_status.grid(row=2, column=0, sticky="ew", padx=22, pady=(0, 16))
+        preview_footer = ctk.CTkFrame(preview_card, fg_color="transparent")
+        preview_footer.grid(row=2, column=0, sticky="ew", padx=20, pady=(0, 16))
+
+        self.lbl_textgrid_status = ctk.CTkLabel(preview_footer, text="等待选择源文件。", font=self.font_small, text_color=self.colors["muted"], anchor="w")
+        self.lbl_textgrid_status.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+
+        self.btn_export_textgrid = self._make_button(
+            preview_footer,
+            "导出标准 TextGrid",
+            self.export_converted_textgrid,
+            tone="success",
+            image=self.icons.get("save"),
+            height=36,
+        )
+        self.btn_export_textgrid.pack(side=tk.RIGHT)
 
         # 右栏：层映射 + 导出设置
         right_panel = ctk.CTkFrame(content, fg_color="transparent", width=340)
@@ -1768,19 +1806,45 @@ class ToolkitApp(ctk.CTk):
         mapping_card.pack(fill=tk.X, side=tk.TOP, pady=(0, 16))
 
         mapping_body = ctk.CTkFrame(mapping_card, fg_color="transparent")
+        self.mapping_body = mapping_body
 
         self.mapping_is_collapsed = False
+        self.export_is_collapsed = True
+
         def toggle_mapping():
             if self.mapping_is_collapsed:
-                mapping_body.pack(fill=tk.X, padx=20, pady=(0, 10))
-                header_frame.toggle_btn.configure(text="折叠")
+                self.mapping_body.pack(fill=tk.X, padx=20, pady=(0, 10))
+                self.header_mapping.toggle_btn.configure(text="折叠")
                 self.mapping_is_collapsed = False
+                
+                if not self.export_is_collapsed:
+                    self.export_body.pack_forget()
+                    self.export_card.pack(fill=tk.X, side=tk.TOP, pady=(0, 16))
+                    self.header_export.toggle_btn.configure(text="展开")
+                    self.export_is_collapsed = True
             else:
-                mapping_body.pack_forget()
-                header_frame.toggle_btn.configure(text="展开")
+                self.mapping_body.pack_forget()
+                self.header_mapping.toggle_btn.configure(text="展开")
                 self.mapping_is_collapsed = True
 
-        header_frame = self._section_header(
+        def toggle_export():
+            if self.export_is_collapsed:
+                self.export_card.pack(fill=tk.BOTH, expand=True, side=tk.TOP)
+                self.export_body.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 12))
+                self.header_export.toggle_btn.configure(text="折叠")
+                self.export_is_collapsed = False
+                
+                if not self.mapping_is_collapsed:
+                    self.mapping_body.pack_forget()
+                    self.header_mapping.toggle_btn.configure(text="展开")
+                    self.mapping_is_collapsed = True
+            else:
+                self.export_body.pack_forget()
+                self.export_card.pack(fill=tk.X, side=tk.TOP, pady=(0, 16))
+                self.header_export.toggle_btn.configure(text="展开")
+                self.export_is_collapsed = True
+
+        self.header_mapping = self._section_header(
             mapping_card,
             "层映射",
             "条目层给词项标签，核心层给实际分析边界。",
@@ -1789,7 +1853,7 @@ class ToolkitApp(ctk.CTk):
             toggle_cmd=toggle_mapping,
         )
 
-        mapping_body.pack(fill=tk.X, padx=20, pady=(0, 10))
+        self.mapping_body.pack(fill=tk.X, padx=20, pady=(0, 10))
 
         # 采用 Grid 布局横向排列下拉菜单，合并组层和条目层在同一行
         dropdowns_frame = ctk.CTkFrame(mapping_body, fg_color="transparent")
@@ -1904,12 +1968,23 @@ class ToolkitApp(ctk.CTk):
             anchor="w",
         ).pack(fill=tk.X, padx=12, pady=(0, 8))
 
-        export_card = self._make_card(right_panel, fg_color=self.colors["surface_soft"], width=340)
-        export_card.pack(fill=tk.BOTH, expand=True, side=tk.TOP)
-        export_card.grid_propagate(False)
-        self._section_header(export_card, "临时分组与导出", "无组层时可在这里把条目分入临时组。", icon_text="04")
+        self.export_card = self._make_card(right_panel, fg_color=self.colors["surface_soft"], width=340)
+        self.export_card.pack(fill=tk.X, side=tk.TOP, pady=(0, 16))
+        self.export_card.grid_propagate(False)
 
-        group_body = ctk.CTkFrame(export_card, fg_color="transparent")
+        self.header_export = self._section_header(
+            self.export_card,
+            "临时分组与导出",
+            "无组层时可在这里把条目分入临时组。",
+            icon_text="04",
+            show_toggle=True,
+            toggle_cmd=toggle_export,
+        )
+        self.header_export.toggle_btn.configure(text="展开")
+
+        self.export_body = ctk.CTkFrame(self.export_card, fg_color="transparent")
+
+        group_body = ctk.CTkFrame(self.export_body, fg_color="transparent")
         group_body.pack(fill=tk.X, padx=20, pady=(0, 12))
         ctk.CTkLabel(group_body, text="目标组名", font=self.font_small, text_color=self.colors["text_soft"]).pack(anchor="w")
         self.entry_textgrid_group = ctk.CTkEntry(
@@ -1929,7 +2004,7 @@ class ToolkitApp(ctk.CTk):
         self._make_button(assign_row, "应用到选中", self.add_textgrid_group, tone="purple", height=34).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 8))
         self._make_button(assign_row, "清除选中", self.clear_textgrid_group_override, tone="secondary", height=34).pack(side=tk.LEFT, expand=True, fill=tk.X)
 
-        diagnosis_box = ctk.CTkFrame(export_card, fg_color=self.colors["surface"], corner_radius=14, border_width=1, border_color=self.colors["border"])
+        diagnosis_box = ctk.CTkFrame(self.export_body, fg_color=self.colors["surface"], corner_radius=14, border_width=1, border_color=self.colors["border"])
         diagnosis_box.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 12))
         ctk.CTkLabel(
             diagnosis_box,
@@ -1948,10 +2023,9 @@ class ToolkitApp(ctk.CTk):
         )
         self.lbl_textgrid_diagnosis.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 12), anchor="nw")
 
-        actions = ctk.CTkFrame(export_card, fg_color="transparent")
+        actions = ctk.CTkFrame(self.export_body, fg_color="transparent")
         actions.pack(side=tk.BOTTOM, fill=tk.X, padx=20, pady=20)
-        self._make_button(actions, "刷新预览", self.refresh_textgrid_preview, tone="secondary", height=36).pack(fill=tk.X, pady=(0, 10))
-        self._make_button(actions, "导出标准 TextGrid", self.export_converted_textgrid, tone="success", image=self.icons.get("save"), height=40).pack(fill=tk.X)
+        self._make_button(actions, "刷新预览", self.refresh_textgrid_preview, tone="secondary", height=36).pack(fill=tk.X)
 
     def select_textgrid_source(self):
         path = filedialog.askopenfilename(
