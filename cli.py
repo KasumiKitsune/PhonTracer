@@ -4331,6 +4331,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
         """
         args = shlex.split(arg)
         selections = {
+            "script_type": "chart",
             "prompt_mode": "参数选项",
             "goal": "绘制 F0 曲线图",
             "data_range": "只使用纳入分析的条目",
@@ -4374,7 +4375,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                     selections['stats'] = [s.strip() for s in v.split(',') if s.strip()]
                 elif k in ('output_table', 'show_legend', 'use_chinese'):
                     selections[k] = v.lower() in ('true', '1', 'yes')
-                elif k in ('data_range', 'group_by', 'chart_style', 'x_axis', 'y_axis', 'title', 'filename', 'custom_desc'):
+                elif k in ('script_type', 'prompt_mode', 'data_range', 'group_by', 'chart_style', 'x_axis', 'y_axis', 'title', 'filename', 'custom_desc', 'agent_detail_level', 'agent_plan_count', 'agent_project_summary_mode'):
                     selections[k] = v
                 else:
                     self._emit(False, error=f"Unknown key: {k}")

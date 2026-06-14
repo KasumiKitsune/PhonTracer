@@ -183,6 +183,20 @@ class CTkScriptList(ctk.CTkScrollableFrame):
         if self._selected_id == iid:
             self._selected_id = None
 
+    def exists(self, iid):
+        return iid in self.buttons
+
+    def selection_clear(self):
+        if self._selected_id in self.buttons:
+            old_btn = self.buttons[self._selected_id]
+            old_btn.configure(
+                fg_color="transparent",
+                text_color=self.colors.get("text", "#17202A"),
+                hover_color=("#F3F4F6", "#262930"),
+                font=ctk.CTkFont(family=self.font_family, size=13, weight="normal")
+            )
+        self._selected_id = None
+
     def insert(self, parent, index, iid, text):
         btn = ctk.CTkButton(
             self,
@@ -2243,7 +2257,7 @@ class ToolkitApp(ctk.CTk):
         # 类型过滤
         self.combo_script_type = ctk.CTkOptionMenu(
             left_panel,
-            values=["全部类型", "图表脚本", "数据处理脚本（暂未开放）"],
+            values=["全部类型", "图表脚本", "数据处理脚本"],
             command=self.on_script_filter_changed,
             fg_color=("#F3F4F6", "#374151"),
             text_color=("#1F2937", "#E5E7EB"),
@@ -2486,14 +2500,27 @@ class ToolkitApp(ctk.CTk):
             # 过滤类型
             if filter_type == "图表脚本" and type_str != "chart":
                 continue
-            elif filter_type == "数据处理脚本（暂未开放）" and type_str != "data_process":
+            elif filter_type == "数据处理脚本" and type_str != "data_process":
                 continue
 
             self.script_tree.insert("", tk.END, iid=s["id"], text=name)
 
-    def on_script_selected(self, event):
+        # 恢复或清除选择状态
+        if self.selected_script_id and self.script_tree.exists(self.selected_script_id):
+            self.script_tree.selection_set(self.selected_script_id)
+        else:
+            self.script_tree.selection_clear()
+            self.on_script_selected()
+
+    def on_script_selected(self, event=None):
         selected = self.script_tree.selection()
         if not selected:
+            self.selected_script_id = None
+            self.lbl_selected_script_name.configure(text="当前脚本：未选择")
+            self.lbl_selected_script_desc.configure(text="描述：请从左侧列表中选择一个脚本，或者点击“新建”创建新脚本。")
+            self.txt_script_code_preview.configure(state="normal")
+            self.txt_script_code_preview.delete("1.0", tk.END)
+            self.txt_script_code_preview.configure(state="disabled")
             return
         s_id = selected[0]
         self.selected_script_id = s_id
@@ -2512,12 +2539,14 @@ class ToolkitApp(ctk.CTk):
         self.load_scripts_to_tree()
 
     def on_new_script(self):
+        default_type = "data_process" if self.combo_script_type.get() == "数据处理脚本" else "chart"
         ScriptEditorDialog(
             self,
             script_id=None,
             script_name=SCRIPT_EDITOR_DEFAULT_NAME,
             script_desc=SCRIPT_EDITOR_DEFAULT_DESC,
-            script_code=""
+            script_code="",
+            script_type=default_type,
         )
 
     def on_edit_script(self):
@@ -2817,7 +2846,127 @@ class ToolkitApp(ctk.CTk):
             self.script_preview_nav.grid_remove()
 
     def display_script_result(self, res):
-        from modules.script_api import FigureResult, TableResult, configure_matplotlib_chinese_font
+        from modules.script_api import FigureResult, TableResult, ProjectPatchResult, configure_matplotlib_chinese_font
+        from modules.project_patch import apply_project_patch_to_teproj
+
+        if isinstance(res, ProjectPatchResult):
+            if not hasattr(self, 'loaded_teproj_path') or not self.loaded_teproj_path:
+                self.append_script_log("未加载任何工程，无法应用数据处理结果。\n")
+                self._update_chart_preview("未加载工程，操作未应用。", None)
+                if hasattr(self, "script_preview_nav"):
+                    self.script_preview_nav.grid_remove()
+                messagebox.showwarning("警告", "当前未加载工程，无法应用数据处理操作。")
+                return
+            
+            if not res.operations:
+                self.append_script_log("脚本没有返回任何工程修改操作。\n")
+                self._update_chart_preview("脚本没有返回任何工程修改操作。", None)
+                if hasattr(self, "script_preview_nav"):
+                    self.script_preview_nav.grid_remove()
+                return
+
+            # 提示用户保存输出工程
+            orig_dir, orig_name = os.path.split(self.loaded_teproj_path)
+            name_part, ext_part = os.path.splitext(orig_name)
+            default_output_name = f"patched_{name_part}{ext_part}"
+
+            output_path = filedialog.asksaveasfilename(
+                title="保存修改后的工程",
+                initialdir=orig_dir,
+                initialfile=default_output_name,
+                defaultextension=".teproj",
+                filetypes=[("ToneExtractor Project", "*.teproj")]
+            )
+            if not output_path:
+                self.append_script_log("用户取消了保存，操作未应用。\n")
+                self._update_chart_preview("用户取消了保存，操作未应用。", None)
+                if hasattr(self, "script_preview_nav"):
+                    self.script_preview_nav.grid_remove()
+                return
+
+            # 构造运行记录 (run_record)
+            import hashlib
+            import uuid
+            import datetime
+            from modules.version import __version__
+
+            script_meta = next((s for s in self.local_scripts if s.get("id") == self.selected_script_id), {}) or {}
+            script_name = script_meta.get("name") or "未命名脚本"
+            script_desc = script_meta.get("description") or "数据处理"
+            script_type = script_meta.get("type") or "data_process"
+
+            code = self.txt_script_code_preview.get("1.0", tk.END).strip()
+            code_sha256 = hashlib.sha256(code.encode('utf-8')).hexdigest()
+
+            run_record = {
+                "script_id": self.selected_script_id or str(uuid.uuid4()),
+                "script_name": script_name,
+                "script_type": script_type,
+                "api_version": "1",
+                "software_version": __version__,
+                "code_sha256": code_sha256,
+                "code": code,
+                "used_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "user_goal": script_desc,
+                "status": "成功",
+                "outputs": [{
+                    "type": "project",
+                    "title": res.title or "数据处理后的工程",
+                    "filename": os.path.basename(output_path),
+                    "saved_path": output_path
+                }]
+            }
+
+            try:
+                summary = apply_project_patch_to_teproj(
+                    self.loaded_teproj_path, 
+                    res, 
+                    output_path, 
+                    run_record=run_record
+                )
+                
+                # 打印执行摘要到日志
+                self.append_script_log(f"\n=== 数据处理应用结果 ===\n")
+                self.append_script_log(f"操作名称: {summary.get('title') or '未命名'}\n")
+                if summary.get('description'):
+                    self.append_script_log(f"操作说明: {summary.get('description')}\n")
+                
+                self.append_script_log(f"包含操作总数: {summary.get('operation_count', 0)}\n")
+                
+                applied_ops = summary.get("applied_operations", [])
+                self.append_script_log(f"实际执行细节 (共 {len(applied_ops)} 项):\n")
+                for r in applied_ops:
+                    self.append_script_log(f"  - {r.get('message') or r.get('op')}\n")
+                
+                # 输出路径
+                output_paths = summary.get("output_paths", [])
+                if output_paths:
+                    self.append_script_log("\n已成功拆分为以下子工程文件：\n")
+                    for path in output_paths:
+                        self.append_script_log(f"  - {path}\n")
+                else:
+                    self.append_script_log(f"\n已生成工程文件: {summary.get('output_path')}\n")
+
+                # 设置输出目录为保存位置，并启用“打开目录”按钮
+                self.script_output_dir = os.path.dirname(output_path)
+                if hasattr(self, "btn_open_script_output"):
+                    self.btn_open_script_output.configure(state="normal")
+
+                self._update_chart_preview("数据处理脚本运行成功，无图表输出。", None)
+                if hasattr(self, "script_preview_nav"):
+                    self.script_preview_nav.grid_remove()
+
+                messagebox.showinfo("成功", summary.get("message") or "操作成功应用！")
+
+            except Exception as e:
+                import traceback
+                self.append_script_log(f"应用数据处理操作失败：\n{e}\n\n{traceback.format_exc()}\n")
+                self._update_chart_preview("数据处理应用失败。", None)
+                if hasattr(self, "script_preview_nav"):
+                    self.script_preview_nav.grid_remove()
+                messagebox.showerror("错误", f"应用数据处理操作失败：{e}")
+            
+            return
 
         results = res if isinstance(res, list) else [res]
         figure_results = [r for r in results if isinstance(r, FigureResult)]
@@ -3035,7 +3184,13 @@ class ToolkitApp(ctk.CTk):
         self.txt_script_log.configure(state="disabled")
 
     def show_prompt_dialog(self):
-        AIPromptDialog(self, self.project_data if hasattr(self, 'project_data') else None)
+        script_type = "chart"
+        script = next((s for s in self.local_scripts if s.get("id") == self.selected_script_id), None)
+        if script:
+            script_type = script.get("type", "chart")
+        elif hasattr(self, "combo_script_type") and self.combo_script_type.get() == "数据处理脚本":
+            script_type = "data_process"
+        AIPromptDialog(self, self.project_data if hasattr(self, 'project_data') else None, script_type=script_type)
 
     def select_project_file(self):
         path = filedialog.askopenfilename(filetypes=[("PhonTracer Project", "*.teproj")])
@@ -3611,6 +3766,25 @@ class ScriptEditorDialog(ctk.CTkToplevel):
         self.entry_desc.insert(0, script_desc)
         self.entry_desc.pack(side="left", fill="x", expand=True, padx=(5, 0))
 
+        # 脚本类型
+        row_type = ctk.CTkFrame(content, fg_color="transparent")
+        row_type.pack(fill="x", pady=6)
+        ctk.CTkLabel(row_type, text="脚本类型:", font=parent.font_main, text_color=parent.colors["text"], width=70, anchor="w").pack(side="left")
+        self.var_script_type = ctk.StringVar(value="数据处理脚本" if script_type == "data_process" else "图表脚本")
+        self.combo_script_type = ctk.CTkOptionMenu(
+            row_type,
+            values=["图表脚本", "数据处理脚本"],
+            variable=self.var_script_type,
+            fg_color=("#F3F4F6", "#374151"),
+            text_color=("#1F2937", "#E5E7EB"),
+            button_color=("#F3F4F6", "#374151"),
+            button_hover_color=("#E5E7EB", "#4B5563"),
+            height=32,
+            corner_radius=16,
+        )
+        self.combo_script_type.pack(side="left", fill="x", expand=True, padx=(5, 0))
+        _apply_custom_arrow(self.combo_script_type)
+
         # 代码编辑区
         ctk.CTkLabel(content, text="代码编辑区 (Python 3):", font=parent.font_main, text_color=parent.colors["text"]).pack(anchor="w", pady=(10, 4))
         self.txt_code = ctk.CTkTextbox(
@@ -3701,6 +3875,7 @@ class ScriptEditorDialog(ctk.CTkToplevel):
             return messagebox.showwarning("提示", "请输入脚本名称")
 
         from modules.script_manager import save_script, load_all_scripts
+        self.script_type = "data_process" if self.var_script_type.get() == "数据处理脚本" else "chart"
         new_id = save_script(self.script_id, name, desc, self.script_type, code)
 
         self.parent.local_scripts = load_all_scripts()
@@ -3715,14 +3890,15 @@ class AIPromptDialog(ctk.CTkToplevel):
     """
     生成 AI 提示词的引导式对话框。
     """
-    def __init__(self, parent, project_data):
+    def __init__(self, parent, project_data, script_type="chart"):
         super().__init__(parent)
         self.parent = parent
         self.project_data = project_data
+        self.script_type = script_type or "chart"
         self.colors = parent.colors
         self.font_family = getattr(parent, "font_family", "Microsoft YaHei")
 
-        self.title("生成 AI 脚本提示词")
+        self.title("生成 AI 数据处理脚本提示词" if self.script_type == "data_process" else "生成 AI 脚本提示词")
         self.geometry("620x620")
         self.resizable(True, True)
 
@@ -3805,7 +3981,129 @@ class AIPromptDialog(ctk.CTkToplevel):
             except Exception:
                 pass
 
+    def _speed_up_scroll_recursive(self, scroll):
+        def _wheel_steps(delta, multiplier):
+            if delta == 0:
+                return 0
+            if abs(delta) >= 120:
+                return -int(delta / 120) * multiplier
+            return -1 * multiplier if delta > 0 else multiplier
+
+        def speed_up_main_scroll(event):
+            canvas = getattr(scroll, "_parent_canvas", None)
+            if canvas is not None:
+                delta = getattr(event, "delta", 0)
+                if delta != 0:
+                    try:
+                        canvas.configure(yscrollincrement=8)
+                    except Exception:
+                        pass
+                    steps = _wheel_steps(delta, 12)
+                    canvas.yview_scroll(steps, "units")
+                return "break"
+
+        def safe_mousewheel_bind(widget, handler):
+            try:
+                widget.bind("<MouseWheel>", handler, add="+")
+            except (NotImplementedError, tk.TclError, AttributeError):
+                for attr in ("_canvas", "_text_label", "_image_label"):
+                    child = getattr(widget, attr, None)
+                    if child is not None:
+                        try:
+                            child.bind("<MouseWheel>", handler, add="+")
+                        except (NotImplementedError, tk.TclError, AttributeError):
+                            pass
+
+        def bind_scroll_recursive(w):
+            if isinstance(w, ctk.CTkTextbox):
+                def speed_up_tb_scroll(event):
+                    delta = getattr(event, "delta", 0)
+                    if delta != 0:
+                        steps = _wheel_steps(delta, 8)
+                        w.yview_scroll(steps, "units")
+                    return "break"
+                safe_mousewheel_bind(w, speed_up_tb_scroll)
+                if hasattr(w, "_textbox"):
+                    safe_mousewheel_bind(w._textbox, speed_up_tb_scroll)
+                return
+
+            safe_mousewheel_bind(w, speed_up_main_scroll)
+            for child in w.winfo_children():
+                bind_scroll_recursive(child)
+
+        bind_scroll_recursive(scroll)
+
+    def _setup_data_process_ui(self):
+        bottom_frame = ctk.CTkFrame(self, height=56, fg_color=("#F9FAFB", "#1A1D24"), corner_radius=0)
+        bottom_frame.pack(side="bottom", fill="x", pady=0)
+
+        scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        scroll.pack(fill="both", expand=True, padx=20, pady=(15, 6))
+
+        self.prompt_tabview = ctk.CTkTabview(
+            scroll,
+            fg_color=("#FFFFFF", "#1F232B"),
+            segmented_button_fg_color=("#E5E7EB", "#2F3541"),
+            segmented_button_selected_color=("#6366F1", "#6366F1"),
+            segmented_button_selected_hover_color=("#4F46E5", "#4F46E5"),
+            segmented_button_unselected_color=("#E5E7EB", "#2F3541"),
+            segmented_button_unselected_hover_color=("#D1D5DB", "#374151"),
+            text_color=("#111827", "#F9FAFB"),
+            corner_radius=14,
+            command=self._on_prompt_tab_changed,
+        )
+        self.prompt_tabview.pack(fill="x", padx=0, pady=(0, 10))
+        agent_tab = self.prompt_tabview.add("Agent协作")
+        agent_tab.configure(fg_color="transparent")
+        self._build_agent_tab(agent_tab)
+        self._update_prompt_tab_text_colors()
+
+        preview_header = ctk.CTkFrame(scroll, fg_color="transparent")
+        preview_header.pack(fill="x", padx=10, pady=(15, 2))
+        ctk.CTkLabel(preview_header, text="提示词生成预览", font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), text_color="#374151").pack(side="left", anchor="w")
+        self.btn_copy_prompt_preview = ctk.CTkButton(
+            preview_header,
+            text="复制",
+            width=40,
+            height=20,
+            font=ctk.CTkFont(family=self.font_family, size=10),
+            corner_radius=4,
+            fg_color=self.colors["primary_soft"],
+            text_color=self.colors["primary"],
+            hover_color=self.colors["border_strong"],
+            command=self.copy_prompt_preview
+        )
+        self.btn_copy_prompt_preview.pack(side="right", padx=(5, 0))
+
+        self.txt_preview = ctk.CTkTextbox(
+            scroll, height=190, font=ctk.CTkFont(family="Consolas", size=11),
+            border_width=1,
+            border_color=("#D1D5DB", "#374151"),
+            fg_color=("#FFFFFF", "#262930"),
+            text_color=("#111827", "#F9FAFB")
+        )
+        self.txt_preview.pack(fill="x", padx=10, pady=5)
+
+        btn_cancel = ctk.CTkButton(
+            bottom_frame, text="取消", fg_color="#F3F4F6", text_color="#1F2937", hover_color="#E5E7EB",
+            font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), height=36, corner_radius=18,
+            command=self.destroy
+        )
+        btn_cancel.pack(side="left", padx=20, pady=10)
+
+        self.btn_copy = ctk.CTkButton(
+            bottom_frame, text="生成提示词", fg_color="#6366F1", text_color="white", hover_color="#4F46E5",
+            font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), height=36, corner_radius=18,
+            command=self.generate_and_copy
+        )
+        self.btn_copy.pack(side="right", padx=20, pady=10)
+
+        self._speed_up_scroll_recursive(scroll)
+
     def setup_ui(self):
+        if self.script_type == "data_process":
+            self._setup_data_process_ui()
+            return
         # 底部固定按钮区（设为透明以融合背景，去掉白色块）
         bottom_frame = ctk.CTkFrame(self, height=56, fg_color=("#F9FAFB", "#1A1D24"), corner_radius=0)
         bottom_frame.pack(side="bottom", fill="x", pady=0)
@@ -4059,57 +4357,7 @@ class AIPromptDialog(ctk.CTkToplevel):
         )
         self.txt_preview.pack(fill="x", padx=10, pady=5)
 
-        # 加速 main dialog 滚动与内部文本框滚动
-        def _wheel_steps(delta, multiplier):
-            if delta == 0:
-                return 0
-            if abs(delta) >= 120:
-                return -int(delta / 120) * multiplier
-            return -1 * multiplier if delta > 0 else multiplier
-
-        def speed_up_main_scroll(event):
-            canvas = getattr(scroll, "_parent_canvas", None)
-            if canvas is not None:
-                delta = getattr(event, "delta", 0)
-                if delta != 0:
-                    try:
-                        canvas.configure(yscrollincrement=8)
-                    except Exception:
-                        pass
-                    steps = _wheel_steps(delta, 12)
-                    canvas.yview_scroll(steps, "units")
-                return "break"
-
-        def safe_mousewheel_bind(widget, handler):
-            try:
-                widget.bind("<MouseWheel>", handler, add="+")
-            except (NotImplementedError, tk.TclError, AttributeError):
-                for attr in ("_canvas", "_text_label", "_image_label"):
-                    child = getattr(widget, attr, None)
-                    if child is not None:
-                        try:
-                            child.bind("<MouseWheel>", handler, add="+")
-                        except (NotImplementedError, tk.TclError, AttributeError):
-                            pass
-
-        def bind_scroll_recursive(w):
-            if isinstance(w, ctk.CTkTextbox):
-                def speed_up_tb_scroll(event):
-                    delta = getattr(event, "delta", 0)
-                    if delta != 0:
-                        steps = _wheel_steps(delta, 8)
-                        w.yview_scroll(steps, "units")
-                    return "break"
-                safe_mousewheel_bind(w, speed_up_tb_scroll)
-                if hasattr(w, "_textbox"):
-                    safe_mousewheel_bind(w._textbox, speed_up_tb_scroll)
-                return
-
-            safe_mousewheel_bind(w, speed_up_main_scroll)
-            for child in w.winfo_children():
-                bind_scroll_recursive(child)
-
-        bind_scroll_recursive(scroll)
+        self._speed_up_scroll_recursive(scroll)
 
         # 底部按钮 (padding 调小为 10，贴合底部并美化布局)
         btn_cancel = ctk.CTkButton(
@@ -4220,9 +4468,14 @@ class AIPromptDialog(ctk.CTkToplevel):
         )
 
     def _build_agent_tab(self, agent_tab):
+        is_data_process = self.script_type == "data_process"
         intro = ctk.CTkLabel(
             agent_tab,
-            text="这个页面会把 AI 设定成协作 Agent：先询问研究目的并推荐图表，等你确认后再输出 Toolkit 可运行代码。",
+            text=(
+                "这个页面会把 AI 设定成数据处理 Agent：先询问工程再加工目的，推荐重分析、重组、音频处理或元数据合并方案，等你确认后再输出 Toolkit 可运行代码。"
+                if is_data_process else
+                "这个页面会把 AI 设定成协作 Agent：先询问研究目的并推荐图表，等你确认后再输出 Toolkit 可运行代码。"
+            ),
             font=ctk.CTkFont(family="Microsoft YaHei", size=12),
             text_color="#64748B",
             wraplength=520,
@@ -4238,14 +4491,19 @@ class AIPromptDialog(ctk.CTkToplevel):
         col_detail = ctk.CTkFrame(row1, fg_color="transparent")
         col_detail.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
         ctk.CTkLabel(col_detail, text="1. 提示词详略", font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), text_color="#374151").pack(anchor="w", pady=(0, 2))
-        self.var_agent_detail = ctk.StringVar(value="精简")
+        self.var_agent_detail = ctk.StringVar(value="详细" if is_data_process else "精简")
         self._make_option_menu(col_detail, ["精简", "详细"], self.var_agent_detail)
 
         col_count = ctk.CTkFrame(row1, fg_color="transparent")
         col_count.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
-        ctk.CTkLabel(col_count, text="2. 推荐图表数量", font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), text_color="#374151").pack(anchor="w", pady=(0, 2))
         self.var_agent_chart_count = ctk.StringVar(value="5")
-        self._make_option_menu(col_count, ["3", "5", "6"], self.var_agent_chart_count)
+        if is_data_process:
+            ctk.CTkLabel(col_count, text="2. 方案数量", font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), text_color="#374151").pack(anchor="w", pady=(0, 2))
+            self.var_agent_plan_count = ctk.StringVar(value="4")
+            self._make_option_menu(col_count, ["3", "4", "5"], self.var_agent_plan_count)
+        else:
+            ctk.CTkLabel(col_count, text="2. 推荐图表数量", font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), text_color="#374151").pack(anchor="w", pady=(0, 2))
+            self._make_option_menu(col_count, ["3", "5", "6"], self.var_agent_chart_count)
 
         row2 = ctk.CTkFrame(agent_tab, fg_color="transparent")
         row2.pack(fill="x", pady=6)
@@ -4258,7 +4516,11 @@ class AIPromptDialog(ctk.CTkToplevel):
         self._make_option_menu(col_summary, ["包含精简工程摘要", "包含详细工程摘要", "不附带工程摘要"], self.var_agent_summary)
 
         self._section_label(agent_tab, "4. 给 Agent 的额外提示")
-        self.placeholder_agent_extra = "可选。例如：优先考虑论文图；先帮我判断哪些图适合当前工程；不要推荐结构类图表，除非数据里真的有结构字段。"
+        self.placeholder_agent_extra = (
+            "可选。例如：优先帮我重算失败条目；按词项标签拆成干净工程；裁剪每个条目音频；把 CSV 里的实验条件合并进 item_meta。"
+            if is_data_process else
+            "可选。例如：优先考虑论文图；先帮我判断哪些图适合当前工程；不要推荐结构类图表，除非数据里真的有结构字段。"
+        )
         self.txt_agent_extra = self._make_textbox(
             agent_tab,
             height=110,
@@ -4281,7 +4543,20 @@ class AIPromptDialog(ctk.CTkToplevel):
         active_tab = self.prompt_tabview.get() if hasattr(self, "prompt_tabview") else "参数选项"
         if active_tab == "Agent协作":
             extra = self._textbox_value_without_placeholder(self.txt_agent_extra, self.placeholder_agent_extra)
+            if self.script_type == "data_process":
+                return {
+                    "script_type": "data_process",
+                    "prompt_mode": "Agent协作",
+                    "goal": "让 AI 先询问工程再加工目的、推荐数据处理方案、再写 Toolkit 数据处理脚本",
+                    "custom_desc": extra,
+                    "agent_detail_level": self.var_agent_detail.get(),
+                    "agent_plan_count": self.var_agent_plan_count.get() if hasattr(self, "var_agent_plan_count") else "4",
+                    "agent_project_summary_mode": self.var_agent_summary.get(),
+                    "agent_include_project_summary": self.var_agent_summary.get() != "不附带工程摘要",
+                    "agent_detailed_project_summary": self.var_agent_summary.get() == "包含详细工程摘要",
+                }
             return {
+                "script_type": "chart",
                 "prompt_mode": "Agent协作",
                 "goal": "让 AI 先询问目的、推荐图表、再写 Toolkit 脚本",
                 "data_range": "由用户与 Agent 对话确认",
@@ -4323,6 +4598,7 @@ class AIPromptDialog(ctk.CTkToplevel):
             if constraints:
                 custom_lines.append(f"输出偏好：{constraints}")
             return {
+                "script_type": "chart",
                 "prompt_mode": "目标导向",
                 "goal": target_goal,
                 "data_range": self.var_target_data.get(),
@@ -4355,6 +4631,7 @@ class AIPromptDialog(ctk.CTkToplevel):
             grouping = f"自定义分组字段 ({custom_key or '未指定'})"
 
         selections = {
+            "script_type": "chart",
             "prompt_mode": "参数选项",
             "goal": self.var_purpose.get(),
             "data_range": scope,

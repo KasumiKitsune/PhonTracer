@@ -84,6 +84,45 @@ class TableResult:
         self.columns = columns
         self.title = title
 
+
+class ProjectPatchResult:
+    """
+    表示脚本生成的工程数据处理操作清单。
+    脚本不直接修改 .teproj，只返回受控操作，由 Toolkit 统一校验和写回。
+    """
+    ALLOWED_OPS = {
+        "set_item_fields",
+        "recompute_pitch",
+        "recompute_formant",
+        "trim_item_audio",
+        "split_project",
+        "import_csv_metadata",
+    }
+
+    def __init__(self, operations, title="数据处理脚本结果", description=""):
+        if operations is None:
+            operations = []
+        if not isinstance(operations, list):
+            raise ValueError("project_patch 的 operations 必须是列表。")
+
+        clean_ops = []
+        for idx, op in enumerate(operations, start=1):
+            if not isinstance(op, dict):
+                raise ValueError(f"第 {idx} 个数据处理操作不是字典。")
+            op_type = op.get("op")
+            if op_type not in self.ALLOWED_OPS:
+                raise ValueError(f"第 {idx} 个数据处理操作类型不受支持：{op_type}")
+            clean_ops.append(dict(op))
+
+        self.operations = clean_ops
+        self.title = title
+        self.description = description
+
+    @property
+    def operation_count(self):
+        return len(self.operations)
+
+
 class DatasetSnapshot:
     """
     只读数据快照包装器。
@@ -149,6 +188,93 @@ class ScriptContext:
     def table(self, rows, columns, title="自定义表格"):
         """返回表格结果对象"""
         return TableResult(rows, columns, title)
+
+    def _item_target(self, item):
+        if not isinstance(item, dict):
+            raise ValueError("数据处理操作需要传入工程条目 item 字典。")
+        target = {
+            "speaker_id": item.get("speaker_id"),
+            "speaker_name": item.get("speaker_name"),
+            "item_id": item.get("item_id"),
+            "label": item.get("label", ""),
+        }
+        if not target["speaker_id"] or not target["item_id"]:
+            raise ValueError("条目缺少 speaker_id 或 item_id，无法生成可写回操作。")
+        return target
+
+    def set_item_fields(self, item, fields, reason=""):
+        """生成条目字段修改操作。"""
+        if not isinstance(fields, dict):
+            raise ValueError("set_item_fields 的 fields 必须是字典。")
+        return {
+            "op": "set_item_fields",
+            "target": self._item_target(item),
+            "fields": dict(fields),
+            "reason": str(reason or ""),
+        }
+
+    def recompute_pitch(self, item, params=None, reason=""):
+        """生成重算条目 F0 缓存的操作。"""
+        return {
+            "op": "recompute_pitch",
+            "target": self._item_target(item),
+            "params": dict(params or {}),
+            "reason": str(reason or ""),
+        }
+
+    def recompute_formant(self, item, params=None, reason=""):
+        """生成重算条目共振峰缓存的操作。"""
+        return {
+            "op": "recompute_formant",
+            "target": self._item_target(item),
+            "params": dict(params or {}),
+            "reason": str(reason or ""),
+        }
+
+    def trim_item_audio(self, item, start=None, end=None, padding=0.0, reason=""):
+        """生成裁剪条目音频并替换引用的操作。"""
+        return {
+            "op": "trim_item_audio",
+            "target": self._item_target(item),
+            "start": start,
+            "end": end,
+            "padding": float(padding or 0.0),
+            "reason": str(reason or ""),
+        }
+
+    def split_project(self, name, item_ids=None, speaker_ids=None, reason=""):
+        """生成按发音人或条目拆出新工程的操作。"""
+        return {
+            "op": "split_project",
+            "name": str(name or "拆分工程"),
+            "item_ids": list(item_ids or []),
+            "speaker_ids": list(speaker_ids or []),
+            "reason": str(reason or ""),
+        }
+
+    def import_csv_metadata(self, rows, match_on="label", field_map=None, reason=""):
+        """
+        生成外部表格元数据合并操作。
+        第一版不允许脚本读取文件；rows 必须是已经结构化的字典列表。
+        """
+        if not isinstance(rows, list):
+            raise ValueError("import_csv_metadata 的 rows 必须是字典列表。")
+        clean_rows = []
+        for row in rows:
+            if not isinstance(row, dict):
+                raise ValueError("import_csv_metadata 的每一行必须是字典。")
+            clean_rows.append(dict(row))
+        return {
+            "op": "import_csv_metadata",
+            "rows": clean_rows,
+            "match_on": str(match_on or "label"),
+            "field_map": dict(field_map or {}),
+            "reason": str(reason or ""),
+        }
+
+    def project_patch(self, operations, title="数据处理脚本结果", description=""):
+        """返回工程数据处理结果对象。"""
+        return ProjectPatchResult(operations, title=title, description=description)
 
     def is_cancelled(self):
         """脚本长循环中可调用，用于协作式响应用户取消。"""
