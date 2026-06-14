@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import os
 import re
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 import textgrid
 
-from .data_utils import has_cjk, split_into_syllables
+from .data_utils import has_cjk, parse_wordlist, split_into_syllables
+from .wordlist_v2 import build_document_from_csv_text, flatten_wordlist_document, load_wordlist_document
 
 
 DEFAULT_GROUP_NAME = "导入内容"
@@ -238,13 +240,17 @@ def recommend_tier_names(summary: Dict[str, Any]) -> Dict[str, Optional[str]]:
     tiers = [tier for tier in summary.get("tiers", []) if tier.get("supported")]
     by_lower = {str(tier.get("name", "")).strip().lower(): tier.get("name") for tier in tiers}
 
-    def pick(candidates: Iterable[str], fallback_index: int = 0):
+    def pick(candidates: Iterable[str], fallback_index: int = 0, excluded: Optional[Iterable[str]] = None):
+        excluded_names = {str(name or "") for name in (excluded or []) if str(name or "")}
         for candidate in candidates:
             name = by_lower.get(candidate.lower())
-            if name:
+            if name and name not in excluded_names:
                 return name
-        if len(tiers) > fallback_index:
-            return tiers[fallback_index].get("name")
+        available = [tier for tier in tiers if tier.get("name") not in excluded_names]
+        if len(available) > fallback_index:
+            return available[fallback_index].get("name")
+        if available:
+            return available[0].get("name")
         return None
 
     group_tier = None
@@ -252,12 +258,56 @@ def recommend_tier_names(summary: Dict[str, Any]) -> Dict[str, Optional[str]]:
         group_tier = by_lower.get(candidate.lower())
         if group_tier:
             break
+    item_tier = pick(("words", "word", "items", "item", "字", "词", "词项", "条目", "句", "标签"), fallback_index=0, excluded={group_tier})
 
     return {
         "group_tier": group_tier,
-        "item_tier": pick(("words", "word", "items", "item", "字", "词", "句"), fallback_index=0),
-        "core_tier": pick(("core", "cores", "核心", "vowel", "vowels", "nucleus", "韵母"), fallback_index=1 if len(tiers) > 1 else 0),
+        "item_tier": item_tier,
+        "core_tier": pick(("core", "cores", "核心", "vowel", "vowels", "nucleus", "韵母"), fallback_index=0, excluded={group_tier, item_tier}),
     }
+
+
+def load_auxiliary_wordlist_records(path: str) -> Tuple[List[Dict[str, Any]], int]:
+    """读取普通字表、CSV 或 .ptwl，返回 TextGrid 转换器可用的辅助词项记录。"""
+    lower = str(path or "").lower()
+    if lower.endswith(".ptwl"):
+        doc = load_wordlist_document(path)
+        groups, _flat_words, records = flatten_wordlist_document(doc)
+        return records, len(groups)
+
+    text = _read_text_file_with_fallback(path)
+    if lower.endswith(".csv"):
+        try:
+            doc = build_document_from_csv_text(text, title=os.path.splitext(os.path.basename(path))[0])
+            groups, _flat_words, records = flatten_wordlist_document(doc)
+            if records:
+                return records, len(groups)
+        except Exception:
+            pass
+
+    groups, _flat_words = parse_wordlist(text)
+    records = []
+    for group in groups:
+        group_name = str(group.get("group") or DEFAULT_GROUP_NAME).strip() or DEFAULT_GROUP_NAME
+        for word in group.get("items", []):
+            label = str(word or "").strip()
+            if label:
+                records.append({"label": label, "word": label, "group": group_name})
+    return records, len(groups)
+
+
+def _read_text_file_with_fallback(path: str) -> str:
+    last_error = None
+    for encoding in ("utf-8-sig", "utf-8", "gbk"):
+        try:
+            with open(path, "r", encoding=encoding) as f:
+                return f.read()
+        except UnicodeDecodeError as e:
+            last_error = e
+    if last_error:
+        raise last_error
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        return f.read()
 
 
 def _normalize_mapping(mapping: TextGridMapping | Dict[str, Any]) -> TextGridMapping:

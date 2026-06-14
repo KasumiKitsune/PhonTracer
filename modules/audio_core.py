@@ -720,16 +720,38 @@ def find_minimum_intensity_valley(snd: parselmouth.Sound, t_ref: float, search_w
     return t_ref
 
 
-def long_process_worker(snd_values: np.ndarray, snd_sf: float, pitch_xs: np.ndarray, pitch_freqs: np.ndarray, ms: float, me: float, params: Dict[str, float], trim_silence: bool, word_label: str = "", ref_splits: List[float] = None) -> Dict[str, Any]:
+def _normalize_locked_chars_bounds(ref_chars_bounds: List[List[float]], ms: float, duration: float) -> List[List[float]]:
+    locked_bounds = []
+    for bound in ref_chars_bounds or []:
+        if not bound or len(bound) < 2:
+            continue
+        try:
+            start = max(0.0, min(duration, float(bound[0]) - ms))
+            end = max(0.0, min(duration, float(bound[1]) - ms))
+        except (TypeError, ValueError):
+            continue
+        if end > start:
+            locked_bounds.append([start, end])
+    locked_bounds.sort(key=lambda value: (value[0], value[1]))
+    return locked_bounds
+
+
+def long_process_worker(snd_values: np.ndarray, snd_sf: float, pitch_xs: np.ndarray, pitch_freqs: np.ndarray, ms: float, me: float, params: Dict[str, float], trim_silence: bool, word_label: str = "", ref_splits: List[float] = None, ref_chars_bounds: List[List[float]] = None) -> Dict[str, Any]:
     try:
         snd_part = parselmouth.Sound(snd_values, sampling_frequency=snd_sf)
         shifted_xs = pitch_xs - ms
+        locked_chars_bounds = _normalize_locked_chars_bounds(ref_chars_bounds or [], ms, snd_part.get_total_duration())
 
-        # 提取微观红线边界
-        mic_s, mic_e, raw_s, raw_e = core_microscopic_vowel_nucleus(
-            snd_part, (shifted_xs, pitch_freqs), 0.0, snd_part.get_total_duration(),
-            params['db'], params['skip_front'], trim_silence
-        )
+        if locked_chars_bounds:
+            mic_s = locked_chars_bounds[0][0]
+            mic_e = locked_chars_bounds[-1][1]
+            raw_s, raw_e = mic_s, mic_e
+        else:
+            # 提取微观红线边界
+            mic_s, mic_e, raw_s, raw_e = core_microscopic_vowel_nucleus(
+                snd_part, (shifted_xs, pitch_freqs), 0.0, snd_part.get_total_duration(),
+                params['db'], params['skip_front'], trim_silence
+            )
 
         # 提取内部蓝线边界
         inner_splits = []
@@ -738,7 +760,13 @@ def long_process_worker(snd_values: np.ndarray, snd_sf: float, pitch_xs: np.ndar
         split_confidence = 1.0
         from .data_utils import split_into_syllables
         syls = split_into_syllables(word_label) if word_label else []
-        if syls and len(syls) > 1:
+        if locked_chars_bounds:
+            chars_bounds = [[s + ms, e + ms] for s, e in locked_chars_bounds]
+            inner_splits = [end for _start, end in chars_bounds[:-1]]
+            if syls and len(syls) != len(chars_bounds):
+                split_warnings.append("TextGrid chars 层数量与标签音节数不一致，已按 TextGrid 原边界保留。")
+                split_confidence = 0.0
+        elif syls and len(syls) > 1:
             if ref_splits:
                 # 寻找在空白处（TextGrid分割线附近）的音量最低值点
                 local_ref_splits = [t - ms for t in ref_splits]
@@ -801,12 +829,12 @@ def long_process_worker(snd_values: np.ndarray, snd_sf: float, pitch_xs: np.ndar
         return {'success': False, 'error': str(e), 'ms': ms, 'me': me}
 
 
-def process_single_long_word(snd_values: np.ndarray, snd_sf: float, word: str, ms: float, me: float, params: Dict[str, float], trim: bool, pitch_xs: np.ndarray, pitch_freqs: np.ndarray, ref_splits: List[float] = None) -> Dict[str, Any]:
+def process_single_long_word(snd_values: np.ndarray, snd_sf: float, word: str, ms: float, me: float, params: Dict[str, float], trim: bool, pitch_xs: np.ndarray, pitch_freqs: np.ndarray, ref_splits: List[float] = None, ref_chars_bounds: List[List[float]] = None) -> Dict[str, Any]:
     """
     Import helper that processes a single word slice from a long audio,
     running long_process_worker and translating keys back to target format.
     """
-    res = long_process_worker(snd_values, snd_sf, pitch_xs, pitch_freqs, ms, me, params, trim, word_label=word, ref_splits=ref_splits)
+    res = long_process_worker(snd_values, snd_sf, pitch_xs, pitch_freqs, ms, me, params, trim, word_label=word, ref_splits=ref_splits, ref_chars_bounds=ref_chars_bounds)
     if res.get('success'):
         return {
             'label': word,
@@ -872,6 +900,7 @@ def batch_process_worker_with_textgrid(path: str, tg_path: str, params: Dict[str
             grp_name = "导入内容"
             inner_splits = []
             chars_bounds = [[0.0, total_dur]]
+            has_locked_chars_bounds = False
         else:
             lbl = interval.mark.strip()
             t_s = max(0.0, interval.minTime)
@@ -889,6 +918,7 @@ def batch_process_worker_with_textgrid(path: str, tg_path: str, params: Dict[str
 
             chars_bounds = []
             inner_splits = []
+            has_locked_chars_bounds = False
             if chars_tier:
                 overlapping_chars = []
                 for c_interval in chars_tier:
@@ -903,6 +933,7 @@ def batch_process_worker_with_textgrid(path: str, tg_path: str, params: Dict[str
                         chars_bounds.append([c.minTime, c.maxTime])
                     for j in range(len(overlapping_chars) - 1):
                         inner_splits.append(overlapping_chars[j].maxTime)
+                    has_locked_chars_bounds = True
 
             if not chars_bounds:
                 from .data_utils import split_into_syllables
@@ -917,10 +948,18 @@ def batch_process_worker_with_textgrid(path: str, tg_path: str, params: Dict[str
                     inner_splits = []
 
         pitch_data = extract_f0(snd, params)
-        mic_s, mic_e, raw_s, raw_e = core_microscopic_vowel_nucleus(
-            snd, pitch_data, t_s, t_e,
-            params['db'], params['skip_front'], trim_silence
-        )
+        locked_chars_bounds = _normalize_locked_chars_bounds(chars_bounds, 0.0, total_dur) if has_locked_chars_bounds else []
+        if locked_chars_bounds:
+            chars_bounds = locked_chars_bounds
+            mic_s = chars_bounds[0][0]
+            mic_e = chars_bounds[-1][1]
+            raw_s, raw_e = mic_s, mic_e
+            inner_splits = [end for _start, end in chars_bounds[:-1]]
+        else:
+            mic_s, mic_e, raw_s, raw_e = core_microscopic_vowel_nucleus(
+                snd, pitch_data, t_s, t_e,
+                params['db'], params['skip_front'], trim_silence
+            )
 
         preview_times = np.linspace(mic_s, mic_e, 11)
         p_xs = pitch_data['xs']

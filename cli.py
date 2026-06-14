@@ -44,6 +44,18 @@ from modules.data_utils import parse_wordlist, fuzzy_match_word_to_path, get_exp
 from modules.project_manager import ProjectManager
 from modules.version import APP_NAME, __version__
 from modules.acoustic_exporter import AcousticChartExporter
+from modules.textgrid_converter import (
+    DEFAULT_GROUP_NAME,
+    NONE_TIER_LABEL,
+    PAIR_MODE_ADJACENT,
+    PAIR_MODE_NONE,
+    TextGridMapping,
+    convert_textgrid,
+    inspect_textgrid,
+    load_auxiliary_wordlist_records,
+    preview_textgrid_conversion,
+    recommend_tier_names,
+)
 
 class LoggerOut:
     def __init__(self, original_stdout, log_file):
@@ -457,6 +469,9 @@ PhonTracer 是一款高精度的声学声调/共振峰格局分析工具。
      * 匹配模式：'fuzzy'（模糊文件名匹配，默认）或 'order'（按物理顺序匹配）。
    - `apply_textgrid <TextGrid路径>` (仅长音频模式下使用，导入 TextGrid 音段并对齐)
    - `batch_textgrid_import <TextGrid文件或目录...>` (导入多个 TextGrid 并与已有独立音频做文件名自动匹配)
+   - `textgrid_inspect <TextGrid路径>` (查看任意 TextGrid 的层摘要和推荐层映射)
+   - `textgrid_preview <TextGrid路径> item=<条目层> core=<核心层> [group=<组层|无>] [pair=adjacent] [wordlist=<字表>]`
+   - `textgrid_convert <TextGrid文件或目录...> out=<输出文件或目录> item=<条目层> core=<核心层> [group=<组层|无>] [pair=adjacent] [wordlist=<字表>]`
 3. 微调边界或声学提取参数：
    - 精细修正某个音节的自动 VAD 时间边界：
      `modify_bounds <音节ID> <开始时间> <结束时间>`
@@ -499,6 +514,9 @@ PhonTracer 是一款高精度的声学声调/共振峰格局分析工具。
 - `autosave on|off|now`: 开启、关闭或立即执行工程自动保存。
 - `project_preview <路径.teproj>`: 预览并展示 teproj 工程内部数据明细与发音人摘要。
 - `project_convert_zip <路径.teproj> <目标.zip>`: 将工程包另存为普通 ZIP 压缩包。
+- `textgrid_inspect <TextGrid路径>`: 查看 TextGrid 层摘要，并返回 CLI/Toolkit 转换器推荐的组层、条目层、核心层。
+- `textgrid_preview <TextGrid路径> item=<条目层> core=<核心层> [group=<组层|无>] [pair=none|adjacent] [wordlist=<字表>] [override=条目ID或标签:组名]`: 预览标准 TextGrid 转换结果和二字组体检。
+- `textgrid_convert <TextGrid文件或目录...> out=<输出文件或目录> [item=<条目层>] [core=<核心层>] [group=<组层|无>] [pair=none|adjacent] [wordlist=<字表>] [override=条目ID或标签:组名] [recursive=true]`: 转换为 PhonTracer 标准 `groups / words / chars` TextGrid，支持批量和辅助字表。
 - `batch_textgrid_import <TextGrid文件或目录...>`: 批量导入 TextGrid 并与已有独立音频做文件名自动匹配。
 - `import_batch_and_export <音频与TextGrid目录> <输出.teproj>`: 一键批量导入并导出为 teproj 工程。
 - `report_export <路径.teproj> <输出目录> [md|excel|both] [include_cache=true|false]`: 导出项目研究方法报告与数据档案。
@@ -539,6 +557,9 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
      * match_mode: 'fuzzy' (fuzzy filename matching) or 'order' (strict order matching).
    - `apply_textgrid <textgrid_filepath>` (long audio mode: segment and align by TextGrid)
    - `batch_textgrid_import <tg_file_or_dir...>` (batch audio mode: import and match TextGrids to audios)
+   - `textgrid_inspect <textgrid_filepath>` (inspect tiers and recommended converter mapping)
+   - `textgrid_preview <textgrid_filepath> item=<item_tier> core=<core_tier> [group=<group_tier|none>] [pair=adjacent] [wordlist=<path>]`
+   - `textgrid_convert <tg_file_or_dir...> out=<output_file_or_dir> item=<item_tier> core=<core_tier> [group=<group_tier|none>] [pair=adjacent] [wordlist=<path>]`
 3. Fine-Tune boundaries or acoustic parameters:
    - To fine-tune VAD time boundaries of a specific syllable:
      `modify_bounds <item_id> <start> <end>`
@@ -582,6 +603,9 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
 - `autosave on|off|now`: Enable, disable, or immediately run project autosave.
 - `project_preview <path.teproj>`: Preview metadata and speaker details of a teproj project file.
 - `project_convert_zip <path.teproj> <dest.zip>`: Save teproj archive as a standard ZIP file.
+- `textgrid_inspect <textgrid_filepath>`: Inspect TextGrid tiers and recommended converter mapping.
+- `textgrid_preview <textgrid_filepath> item=<item_tier> core=<core_tier> [group=<group_tier|none>] [pair=none|adjacent] [wordlist=<path>] [override=item_id_or_label:group]`: Preview standard TextGrid conversion and tone-pair diagnostics.
+- `textgrid_convert <tg_file_or_dir...> out=<output_file_or_dir> [item=<item_tier>] [core=<core_tier>] [group=<group_tier|none>] [pair=none|adjacent] [wordlist=<path>] [override=item_id_or_label:group] [recursive=true]`: Convert to PhonTracer standard `groups / words / chars` TextGrid, with batch and auxiliary wordlist support.
 - `batch_textgrid_import <tg_file_or_dir...>`: Import multiple TextGrids and match them to batch audios.
 - `import_batch_and_export <folder_path> <output.teproj>`: One-step import folder and export to teproj.
 - `report_export <path.teproj> <out_dir> [md|excel|both] [include_cache]`: Export research methods report and data archives.
@@ -649,6 +673,15 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                         "2. batch_textgrid_import <textgrid_paths...> (导入所有对应的 TextGrid 并与音频做文件名对齐)",
                         "3. status / list_items (检查匹配和基频提取警告)",
                         "4. project_export <filepath.teproj> (保存为 .teproj 工程)"
+                    ]
+                },
+                "textgrid_converter_workflow": {
+                    "description": "把任意层结构的 TextGrid 转为 PhonTracer 标准 groups / words / chars TextGrid",
+                    "steps": [
+                        "1. textgrid_inspect <textgrid_path> (查看层摘要和推荐映射)",
+                        "2. textgrid_preview <textgrid_path> item=<条目层> core=<核心层> group=<组层|无> pair=<none|adjacent> wordlist=<可选字表> (确认转换和二字组体检)",
+                        "3. textgrid_convert <textgrid_path_or_dir...> out=<输出文件或目录> item=<条目层> core=<核心层> group=<组层|无> pair=<none|adjacent> wordlist=<可选字表> (导出标准 TextGrid)",
+                        "4. 如需临时分组，追加 override=条目ID或标签:组名；批量目录可追加 recursive=true"
                     ]
                 },
                 "run_custom_scripts": {
@@ -953,6 +986,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                 word = item['label']
                 grp_name = item.get('group', '导入内容')
                 ref_splits = item.get('inner_splits', [])
+                ref_chars_bounds = item.get('chars_bounds', [])
 
                 valid_ms = max(0, ms)
                 valid_me = min(snd.get_total_duration(), me)
@@ -972,6 +1006,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                         'snd_values': snd_values, 'snd_sf': snd_sf,
                         'sliced_xs': sliced_xs, 'sliced_freqs': sliced_freqs,
                         'ref_splits': ref_splits,
+                        'ref_chars_bounds': ref_chars_bounds,
                         'missing': False
                     })
                 else:
@@ -988,7 +1023,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                     future = executor.submit(
                         process_single_long_word,
                         t['snd_values'], t['snd_sf'], t['word'], t['ms'], t['me'],
-                        self.params, self.params['trim_silence'], t['sliced_xs'], t['sliced_freqs'], t['ref_splits']
+                        self.params, self.params['trim_silence'], t['sliced_xs'], t['sliced_freqs'], t['ref_splits'], t['ref_chars_bounds']
                     )
                     futures[future] = i
 
@@ -1044,6 +1079,403 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
             self._emit(True, f"TextGrid 已应用：完成 {matched_count}/{len(results)} 项。", processed=matched_count, total=len(results))
         except Exception as e:
             print(json.dumps({"success": False, "error": str(e)}))
+
+    def do_textgrid_inspect(self, arg):
+        """
+        查看 TextGrid 层摘要并给出转换器推荐层。
+        用法：textgrid_inspect <TextGrid路径>
+        """
+        try:
+            args = shlex.split(arg)
+        except ValueError as e:
+            self._emit(False, error=f"参数解析失败：{e}")
+            return
+        if len(args) != 1:
+            self._emit(False, error="用法：textgrid_inspect <TextGrid路径>")
+            return
+        path = args[0]
+        if not os.path.isfile(path) or not path.lower().endswith(".textgrid"):
+            self._emit(False, error=f"不是有效的 TextGrid 文件：{path}")
+            return
+        try:
+            summary = inspect_textgrid(path)
+            self._emit(
+                True,
+                "TextGrid 层摘要读取完成。",
+                path=os.path.abspath(path),
+                summary=summary,
+                recommendations=recommend_tier_names(summary),
+            )
+        except Exception as e:
+            self._emit(False, error=f"读取 TextGrid 失败：{e}")
+
+    def do_textgrid_preview(self, arg):
+        """
+        预览任意 TextGrid 转换为标准 groups / words / chars 的结果。
+        用法：textgrid_preview <TextGrid路径> [item=<条目层>] [core=<核心层>] [group=<组层|无>] [pair=none|adjacent] [wordlist=<字表路径>] [override=条目ID或标签:组名] [limit=50|all]
+        """
+        try:
+            options = self._parse_textgrid_converter_args(arg)
+            if len(options["sources"]) != 1:
+                self._emit(False, error="用法：textgrid_preview <TextGrid路径> [item=<条目层>] [core=<核心层>] ...")
+                return
+            sources = self._collect_textgrid_sources(options["sources"], recursive=False, allow_directories=False)
+            source = sources[0]
+            records, wordlist_groups = self._load_textgrid_converter_wordlist(options)
+            summary, mapping, recommendations = self._build_textgrid_converter_mapping(source, options)
+            preview = preview_textgrid_conversion(
+                source,
+                mapping,
+                group_overrides=options["group_overrides"],
+                wordlist_records=records,
+            )
+            rows, truncated = self._limited_textgrid_preview_rows(preview, options["limit"])
+            self._emit(
+                True,
+                "TextGrid 转换预览完成。",
+                source=os.path.abspath(source),
+                mapping=self._textgrid_mapping_payload(mapping),
+                recommendations=recommendations,
+                total_items=len(preview.items),
+                shown_items=len(rows),
+                truncated=truncated,
+                items=rows,
+                warnings=preview.warnings,
+                tone_pair_report=preview.tone_pair_report,
+                wordlist={"path": options["wordlist"], "groups": wordlist_groups, "records": len(records)} if options["wordlist"] else None,
+            )
+        except Exception as e:
+            self._emit(False, error=str(e))
+
+    def do_textgrid_convert(self, arg):
+        """
+        将一个或多个任意 TextGrid 转换为 PhonTracer 标准 groups / words / chars TextGrid。
+        用法：textgrid_convert <TextGrid文件或目录...> out=<输出文件或目录> [item=<条目层>] [core=<核心层>] [group=<组层|无>] [pair=none|adjacent] [wordlist=<字表路径>] [override=条目ID或标签:组名] [suffix=_converted] [overwrite=true] [recursive=true]
+        """
+        try:
+            options = self._parse_textgrid_converter_args(arg, require_output=True)
+            sources = self._collect_textgrid_sources(options["sources"], recursive=options["recursive"], allow_directories=True)
+            records, wordlist_groups = self._load_textgrid_converter_wordlist(options)
+            outputs = []
+            failures = []
+            for source in sources:
+                try:
+                    summary, mapping, recommendations = self._build_textgrid_converter_mapping(source, options)
+                    out_path = self._resolve_textgrid_converter_output(
+                        source=source,
+                        output=options["output"],
+                        source_count=len(sources),
+                        suffix=options["suffix"],
+                        overwrite=options["overwrite"],
+                    )
+                    preview = convert_textgrid(
+                        source,
+                        out_path,
+                        mapping,
+                        group_overrides=options["group_overrides"],
+                        wordlist_records=records,
+                    )
+                    outputs.append({
+                        "source": os.path.abspath(source),
+                        "output": os.path.abspath(out_path),
+                        "mapping": self._textgrid_mapping_payload(mapping),
+                        "recommendations": recommendations,
+                        "items": len(preview.items),
+                        "warnings": preview.warnings,
+                        "tone_pair_report": preview.tone_pair_report,
+                    })
+                except Exception as e:
+                    failures.append({"source": os.path.abspath(source), "error": str(e)})
+
+            success = len(failures) == 0
+            self._emit(
+                success,
+                "TextGrid 批量转换完成。" if len(sources) > 1 else ("TextGrid 转换完成。" if success else "TextGrid 转换失败。"),
+                converted_count=len(outputs),
+                failed_count=len(failures),
+                total=len(sources),
+                outputs=outputs,
+                failures=failures,
+                wordlist={"path": options["wordlist"], "groups": wordlist_groups, "records": len(records)} if options["wordlist"] else None,
+            )
+        except Exception as e:
+            self._emit(False, error=str(e))
+
+    def do_textgrid_converter(self, arg):
+        """
+        textgrid_convert 的别名。
+        """
+        self.do_textgrid_convert(arg)
+
+    def _parse_textgrid_converter_args(self, arg, require_output=False):
+        try:
+            tokens = shlex.split(arg)
+        except ValueError as e:
+            raise ValueError(f"参数解析失败：{e}") from e
+
+        aliases = {
+            "out": "output",
+            "output": "output",
+            "输出": "output",
+            "item": "item_tier",
+            "item_tier": "item_tier",
+            "item-tier": "item_tier",
+            "word": "item_tier",
+            "words": "item_tier",
+            "条目": "item_tier",
+            "条目层": "item_tier",
+            "core": "core_tier",
+            "core_tier": "core_tier",
+            "core-tier": "core_tier",
+            "核心": "core_tier",
+            "核心层": "core_tier",
+            "group": "group_tier",
+            "group_tier": "group_tier",
+            "group-tier": "group_tier",
+            "组": "group_tier",
+            "组层": "group_tier",
+            "pair": "pair_mode",
+            "pair_mode": "pair_mode",
+            "pair-mode": "pair_mode",
+            "二字组": "pair_mode",
+            "wordlist": "wordlist",
+            "字表": "wordlist",
+            "aux": "wordlist",
+            "override": "override",
+            "group_override": "override",
+            "group-override": "override",
+            "临时分组": "override",
+            "suffix": "suffix",
+            "后缀": "suffix",
+            "overwrite": "overwrite",
+            "覆盖": "overwrite",
+            "recursive": "recursive",
+            "递归": "recursive",
+            "limit": "limit",
+            "数量": "limit",
+        }
+        bool_keys = {"overwrite", "recursive"}
+        options = {
+            "sources": [],
+            "output": None,
+            "item_tier": None,
+            "core_tier": None,
+            "group_tier": None,
+            "group_tier_provided": False,
+            "pair_mode": PAIR_MODE_NONE,
+            "wordlist": None,
+            "group_overrides": {},
+            "suffix": "_converted",
+            "overwrite": False,
+            "recursive": False,
+            "limit": 50,
+        }
+
+        index = 0
+        while index < len(tokens):
+            token = tokens[index]
+            if token in ("--pair-adjacent", "--adjacent-pair", "--二字组合并"):
+                options["pair_mode"] = PAIR_MODE_ADJACENT
+                index += 1
+                continue
+            if token.startswith("--"):
+                raw = token[2:]
+                if "=" in raw:
+                    key, value = raw.split("=", 1)
+                else:
+                    key = raw
+                    normalized = aliases.get(key.strip().lower())
+                    if not normalized:
+                        raise ValueError(f"未知参数：--{key}")
+                    if normalized in bool_keys:
+                        value = "true"
+                    else:
+                        if index + 1 >= len(tokens):
+                            raise ValueError(f"参数 --{key} 缺少取值。")
+                        index += 1
+                        value = tokens[index]
+                self._set_textgrid_converter_option(options, aliases, key, value)
+            elif "=" in token:
+                key, value = token.split("=", 1)
+                if aliases.get(key.strip().lower()):
+                    self._set_textgrid_converter_option(options, aliases, key, value)
+                else:
+                    options["sources"].append(token)
+            else:
+                options["sources"].append(token)
+            index += 1
+
+        if require_output and not options["output"]:
+            raise ValueError("缺少输出路径，请使用 out=<输出文件或目录>。")
+        if not options["sources"]:
+            raise ValueError("缺少 TextGrid 输入路径。")
+        return options
+
+    def _set_textgrid_converter_option(self, options, aliases, key, value):
+        normalized = aliases.get(str(key).strip().lower())
+        if not normalized:
+            raise ValueError(f"未知参数：{key}")
+        text = str(value or "").strip()
+        if normalized == "output":
+            options["output"] = text
+        elif normalized == "item_tier":
+            options["item_tier"] = text
+        elif normalized == "core_tier":
+            options["core_tier"] = text
+        elif normalized == "group_tier":
+            options["group_tier_provided"] = True
+            options["group_tier"] = None if self._is_none_tier_value(text) else text
+        elif normalized == "pair_mode":
+            lowered = text.lower()
+            if lowered in ("adjacent", "pair", "paired", "true", "1", "yes", "on", "二字", "二字组", "相邻", "两两合并"):
+                options["pair_mode"] = PAIR_MODE_ADJACENT
+            elif lowered in ("none", "false", "0", "no", "off", "无", "关闭"):
+                options["pair_mode"] = PAIR_MODE_NONE
+            else:
+                raise ValueError("pair 只能是 none 或 adjacent。")
+        elif normalized == "wordlist":
+            options["wordlist"] = text
+        elif normalized == "override":
+            item_key, group_name = self._split_textgrid_group_override(text)
+            options["group_overrides"][item_key] = group_name
+        elif normalized == "suffix":
+            options["suffix"] = text or "_converted"
+        elif normalized == "overwrite":
+            options["overwrite"] = self._parse_textgrid_bool(text)
+        elif normalized == "recursive":
+            options["recursive"] = self._parse_textgrid_bool(text)
+        elif normalized == "limit":
+            lowered = text.lower()
+            if lowered in ("all", "全部", "none", "无"):
+                options["limit"] = None
+            else:
+                options["limit"] = max(0, int(text))
+
+    def _is_none_tier_value(self, value):
+        return str(value or "").strip().lower() in ("", "none", "null", "no", "false", "0", NONE_TIER_LABEL.lower(), "无", "不使用", "跳过")
+
+    def _parse_textgrid_bool(self, value):
+        return str(value or "").strip().lower() in ("1", "true", "yes", "y", "on", "是", "真", "开启", "覆盖", "递归")
+
+    def _split_textgrid_group_override(self, value):
+        text = str(value or "").strip()
+        for sep in ("=>", "->", "=", ":", "："):
+            if sep in text:
+                key, group = text.split(sep, 1)
+                key = key.strip()
+                group = group.strip()
+                if key and group:
+                    return key, group
+        raise ValueError("临时分组格式应为 override=条目ID或标签:组名，例如 override=0:实验组。")
+
+    def _collect_textgrid_sources(self, source_args, recursive=False, allow_directories=True):
+        paths = []
+        seen = set()
+        for source in source_args:
+            path = os.path.normpath(source)
+            if os.path.isdir(path):
+                if not allow_directories:
+                    raise ValueError(f"此命令只接受单个 TextGrid 文件：{source}")
+                iterator = os.walk(path) if recursive else [(path, [], os.listdir(path))]
+                for root, _dirs, files in iterator:
+                    for filename in files:
+                        if filename.lower().endswith(".textgrid"):
+                            full_path = os.path.join(root, filename)
+                            key = os.path.normcase(os.path.abspath(full_path))
+                            if key not in seen:
+                                paths.append(full_path)
+                                seen.add(key)
+            elif os.path.isfile(path) and path.lower().endswith(".textgrid"):
+                key = os.path.normcase(os.path.abspath(path))
+                if key not in seen:
+                    paths.append(path)
+                    seen.add(key)
+            else:
+                raise ValueError(f"不是有效的 TextGrid 文件或目录：{source}")
+
+        paths.sort(key=self._natural_textgrid_path_key)
+        if not paths:
+            raise ValueError("没有找到可转换的 TextGrid 文件。")
+        return paths
+
+    def _natural_textgrid_path_key(self, path):
+        import re
+        text = os.path.basename(str(path))
+        return [int(part) if part.isdigit() else part.lower() for part in re.split(r"([0-9]+)", text)]
+
+    def _load_textgrid_converter_wordlist(self, options):
+        path = options.get("wordlist")
+        if not path:
+            return [], 0
+        if not os.path.isfile(path):
+            raise ValueError(f"辅助字表不存在：{path}")
+        records, groups_count = load_auxiliary_wordlist_records(path)
+        if not records:
+            raise ValueError("辅助字表中没有可用词项。")
+        return records, groups_count
+
+    def _build_textgrid_converter_mapping(self, source, options):
+        summary = inspect_textgrid(source)
+        recommendations = recommend_tier_names(summary)
+        item_tier = options.get("item_tier") or recommendations.get("item_tier")
+        core_tier = options.get("core_tier") or recommendations.get("core_tier")
+        if options.get("group_tier_provided"):
+            group_tier = options.get("group_tier")
+        else:
+            group_tier = recommendations.get("group_tier")
+        if self._is_none_tier_value(item_tier):
+            raise ValueError("无法确定条目层，请使用 item=<层名> 指定。")
+        if self._is_none_tier_value(core_tier):
+            raise ValueError("无法确定核心层，请使用 core=<层名> 指定。")
+        mapping = TextGridMapping(
+            item_tier=item_tier,
+            core_tier=core_tier,
+            group_tier=None if self._is_none_tier_value(group_tier) else group_tier,
+            pair_mode=options.get("pair_mode") or PAIR_MODE_NONE,
+        )
+        return summary, mapping, recommendations
+
+    def _resolve_textgrid_converter_output(self, source, output, source_count, suffix, overwrite=False):
+        output = os.path.normpath(output)
+        explicit_file = source_count == 1 and output.lower().endswith(".textgrid")
+        if explicit_file:
+            out_path = output
+            parent = os.path.dirname(os.path.abspath(out_path))
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            if os.path.exists(out_path) and not overwrite:
+                raise ValueError(f"输出文件已存在，若要覆盖请加 overwrite=true：{out_path}")
+            return out_path
+
+        if os.path.exists(output) and not os.path.isdir(output):
+            raise ValueError(f"批量输出路径必须是目录：{output}")
+        os.makedirs(output, exist_ok=True)
+        stem = os.path.splitext(os.path.basename(source))[0]
+        suffix = suffix or "_converted"
+        filename = f"{stem}{suffix}.TextGrid"
+        candidate = os.path.join(output, filename)
+        if overwrite:
+            return candidate
+        base, ext = os.path.splitext(filename)
+        counter = 2
+        while os.path.exists(candidate):
+            candidate = os.path.join(output, f"{base}_{counter}{ext or '.TextGrid'}")
+            counter += 1
+        return candidate
+
+    def _textgrid_mapping_payload(self, mapping):
+        return {
+            "item_tier": mapping.item_tier,
+            "core_tier": mapping.core_tier,
+            "group_tier": mapping.group_tier,
+            "pair_mode": mapping.pair_mode,
+        }
+
+    def _limited_textgrid_preview_rows(self, preview, limit):
+        rows = preview.rows()
+        if limit is None:
+            return rows, False
+        return rows[:limit], len(rows) > limit
 
     def _process_long_wordlist(self, groups, flat_words):
         try:
@@ -4793,7 +5225,6 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
         last_word_end = 0.0
         last_char_end = 0.0
         last_group_end = 0.0
-        has_chars = False
 
         for item in items:
             t_s, t_e = item['start'], item['end']
@@ -4813,7 +5244,6 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
 
             syls = split_into_syllables(label)
             if len(syls) > 1:
-                has_chars = True
                 if t_s > last_char_end:
                     char_tier.add(last_char_end, t_s, "")
 
@@ -4850,8 +5280,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
 
         tg.append(group_tier)
         tg.append(word_tier)
-        if has_chars:
-            tg.append(char_tier)
+        tg.append(char_tier)
 
         tg.write(tg_path)
 

@@ -3778,6 +3778,7 @@ class PhoneticsApp:
                 word = item['label']
                 grp_name = item.get('group', '导入内容')
                 ref_splits = item.get('inner_splits', [])
+                ref_chars_bounds = item.get('chars_bounds', [])
 
                 valid_ms = max(0, ms)
                 valid_me = min(snd.get_total_duration(), me)
@@ -3798,6 +3799,7 @@ class PhoneticsApp:
                         'snd_values': snd_values, 'snd_sf': snd_sf,
                         'sliced_xs': sliced_xs, 'sliced_freqs': sliced_freqs,
                         'ref_splits': ref_splits,
+                        'ref_chars_bounds': ref_chars_bounds,
                         'missing': False
                     })
                 else:
@@ -3816,7 +3818,7 @@ class PhoneticsApp:
                     future = executor.submit(
                         process_single_long_word,
                         t['snd_values'], t['snd_sf'], t['word'], t['ms'], t['me'],
-                        params, trim, t['sliced_xs'], t['sliced_freqs'], t['ref_splits']
+                        params, trim, t['sliced_xs'], t['sliced_freqs'], t['ref_splits'], t['ref_chars_bounds']
                     )
                     futures[future] = (i, t['group'], t['word'])
 

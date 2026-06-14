@@ -982,11 +982,11 @@ def get_export_textgrid_for_item(item, max_time=None):
             word_tier.add(t_e, end_time, "")
     tg.append(word_tier)
  
+    char_tier = textgrid.IntervalTier(name="chars", minTime=0.0, maxTime=max_time if max_time else t_e)
+    if t_s > 0:
+        char_tier.add(0.0, t_s, "")
+
     if is_word_mode:
-        char_tier = textgrid.IntervalTier(name="chars", minTime=0.0, maxTime=max_time if max_time else t_e)
-        if t_s > 0:
-            char_tier.add(0.0, t_s, "")
- 
         chars_bounds = item.get('chars_bounds', [])
         if not chars_bounds:
             import numpy as np
@@ -1011,7 +1011,13 @@ def get_export_textgrid_for_item(item, max_time=None):
         end_time = max_time if max_time else t_e
         if end_time > t_e:
             char_tier.add(t_e, end_time, "")
-        tg.append(char_tier)
+    else:
+        char_tier.add(t_s, t_e, label)
+        end_time = max_time if max_time else t_e
+        if end_time > t_e:
+            char_tier.add(t_e, end_time, "")
+
+    tg.append(char_tier)
 
     return tg
 

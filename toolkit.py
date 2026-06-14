@@ -108,10 +108,11 @@ from modules.textgrid_converter import (
     TextGridMapping,
     convert_textgrid,
     inspect_textgrid,
+    load_auxiliary_wordlist_records,
     preview_textgrid_conversion,
     recommend_tier_names,
 )
-from modules.wordlist_editor import VisualWordlistEditor
+from modules.wordlist_editor import RoundedGroupList, VisualWordlistEditor
 from modules.wordlist_v2 import ADVANCED_WORDLIST_AGENT_PROMPT, build_document_from_csv_text, document_to_v1_text, flatten_wordlist_document, load_wordlist_document
 
 try:
@@ -1056,6 +1057,8 @@ class ToolkitApp(ctk.CTk):
         self.wordlist = []
         self.custom_segments = None  # 存储用户微调后的分段数据
         self.textgrid_source_path = None
+        self.textgrid_source_paths = []
+        self.textgrid_file_list_paths = []
         self.textgrid_summary = None
         self.textgrid_group_overrides = {}
         self.textgrid_preview_items = []
@@ -1682,7 +1685,6 @@ class ToolkitApp(ctk.CTk):
         source_card = self._make_card(left_panel, fg_color=self.colors["surface_soft"])
         source_card.pack(fill=tk.X, side=tk.TOP, pady=(0, 12))
         source_card.grid_columnconfigure(0, weight=1)
-        source_card.grid_rowconfigure(2, weight=1)
 
         source_header = ctk.CTkFrame(source_card, fg_color="transparent")
         source_header.grid(row=0, column=0, sticky="ew", padx=20, pady=(8, 4))
@@ -1690,7 +1692,7 @@ class ToolkitApp(ctk.CTk):
         ctk.CTkLabel(source_header, text="源文件与层摘要", font=self.font_title, text_color=self.colors["text"]).grid(row=0, column=0, sticky="w")
         self._make_button(
             source_header,
-            "选择 TextGrid",
+            "导入 TextGrid",
             self.select_textgrid_source,
             tone="primary",
             image=self.icons.get("import_white"),
@@ -1703,15 +1705,35 @@ class ToolkitApp(ctk.CTk):
         self.lbl_textgrid_source = ctk.CTkLabel(path_pill, text="未选择 TextGrid 文件", text_color=self.colors["muted"], font=self.font_small, anchor="w")
         self.lbl_textgrid_source.pack(fill=tk.X, padx=14, pady=5)
 
-        tier_container = ctk.CTkFrame(source_card, fg_color=self.colors["surface"], corner_radius=14, border_width=1, border_color=self.colors["border"])
-        tier_container.grid(row=2, column=0, sticky="nsew", padx=20, pady=(0, 8))
+        source_body = ctk.CTkFrame(source_card, fg_color="transparent")
+        source_body.grid(row=2, column=0, sticky="ew", padx=20, pady=(0, 10))
+        source_body.grid_columnconfigure(0, weight=0, minsize=245)
+        source_body.grid_columnconfigure(1, weight=1)
+        source_body.grid_rowconfigure(0, weight=1)
+
+        file_container = ctk.CTkFrame(source_body, fg_color=self.colors["surface"], corner_radius=8, border_width=1, border_color=self.colors["border"], width=245, height=150)
+        file_container.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        file_container.grid_propagate(False)
+        file_container.grid_columnconfigure(0, weight=1)
+        file_container.grid_rowconfigure(1, weight=1)
+        ctk.CTkLabel(file_container, text="待转换文件", font=self.font_title, text_color=self.colors["text"]).grid(row=0, column=0, sticky="w", padx=12, pady=(10, 4))
+        self.textgrid_file_list = RoundedGroupList(file_container, colors=self.colors, font_family=self.font_family)
+        self.textgrid_file_list.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        self.textgrid_file_list.bind("<<ListboxSelect>>", self.on_textgrid_file_selected)
+        self.textgrid_files_empty_state = ctk.CTkFrame(file_container, fg_color="transparent")
+        ctk.CTkLabel(self.textgrid_files_empty_state, text="可一次选择多个 TextGrid", font=self.font_caption, text_color=self.colors["muted"]).pack()
+        self.textgrid_files_empty_state.place(relx=0.5, rely=0.5, anchor="center")
+
+        tier_container = ctk.CTkFrame(source_body, fg_color=self.colors["surface"], corner_radius=14, border_width=1, border_color=self.colors["border"], height=150)
+        tier_container.grid(row=0, column=1, sticky="nsew")
+        tier_container.grid_propagate(False)
         tier_container.grid_columnconfigure(0, weight=1)
         tier_container.grid_rowconfigure(0, weight=1)
         self.tree_textgrid_tiers = ttk.Treeview(
             tier_container,
             columns=("name", "type", "count", "samples"),
             show="headings",
-            height=2,
+            height=3,
             selectmode="browse",
         )
         self.tree_textgrid_tiers.heading("name", text="层名")
@@ -1723,7 +1745,7 @@ class ToolkitApp(ctk.CTk):
         self.tree_textgrid_tiers.column("count", width=90, anchor="center")
         self.tree_textgrid_tiers.column("samples", width=420, anchor="w")
         self.tree_textgrid_tiers.configure(style="Converter.Treeview", takefocus=False)
-        self.textgrid_tier_scroll = ctk.CTkScrollbar(tier_container, orientation="vertical", command=self.tree_textgrid_tiers.yview, width=12, height=10)
+        self.textgrid_tier_scroll = ctk.CTkScrollbar(tier_container, orientation="vertical", command=self.tree_textgrid_tiers.yview, width=12, height=120)
         self.tree_textgrid_tiers.configure(yscrollcommand=self.textgrid_tier_scroll.set)
         self.tree_textgrid_tiers.grid(row=0, column=0, sticky="nsew", padx=(1, 0), pady=1)
         self.textgrid_tier_scroll.grid(row=0, column=1, sticky="ns", padx=(0, 1), pady=1)
@@ -1795,6 +1817,15 @@ class ToolkitApp(ctk.CTk):
             height=36,
         )
         self.btn_export_textgrid.pack(side=tk.RIGHT)
+        self.btn_batch_export_textgrid = self._make_button(
+            preview_footer,
+            "批量导出",
+            self.export_converted_textgrids_batch,
+            tone="purple",
+            height=36,
+            width=96,
+        )
+        self.btn_batch_export_textgrid.pack(side=tk.RIGHT, padx=(0, 8))
 
         # 右栏：层映射 + 导出设置
         right_panel = ctk.CTkFrame(content, fg_color="transparent", width=340)
@@ -2028,16 +2059,31 @@ class ToolkitApp(ctk.CTk):
         self._make_button(actions, "刷新预览", self.refresh_textgrid_preview, tone="secondary", height=36).pack(fill=tk.X)
 
     def select_textgrid_source(self):
-        path = filedialog.askopenfilename(
+        paths = filedialog.askopenfilenames(
             filetypes=[
                 ("Praat TextGrid", "*.TextGrid *.textgrid"),
                 ("All Files", "*.*"),
             ]
         )
-        if path:
-            self.load_textgrid_source(path)
+        if paths:
+            self.load_textgrid_sources(list(paths))
 
-    def load_textgrid_source(self, path):
+    def load_textgrid_sources(self, paths):
+        cleaned = []
+        seen = set()
+        for path in paths or []:
+            normalized = os.path.normpath(str(path))
+            seen_key = os.path.normcase(os.path.abspath(normalized)) if normalized else ""
+            if normalized and normalized.lower().endswith(".textgrid") and seen_key not in seen:
+                cleaned.append(normalized)
+                seen.add(seen_key)
+        if not cleaned:
+            return
+        self.textgrid_source_paths = cleaned
+        self._fill_textgrid_files_tree(cleaned)
+        self.load_textgrid_source(cleaned[0], update_sources=False)
+
+    def load_textgrid_source(self, path, update_sources=True):
         if not path:
             return
         try:
@@ -2046,16 +2092,70 @@ class ToolkitApp(ctk.CTk):
             messagebox.showerror("读取失败", f"无法读取 TextGrid：\n{e}")
             return
 
+        if update_sources:
+            normalized = os.path.normpath(str(path))
+            self.textgrid_source_paths = [normalized]
+            self._fill_textgrid_files_tree(self.textgrid_source_paths)
+            path = normalized
         self.textgrid_source_path = path
         self.textgrid_summary = summary
         self.textgrid_group_overrides = {}
         self.textgrid_preview_items = []
         if hasattr(self, "lbl_textgrid_source"):
-            self.lbl_textgrid_source.configure(text=self._short_path(path, max_parts=4), text_color=self.colors["text_soft"])
+            total = len(getattr(self, "textgrid_source_paths", []) or [])
+            if total > 1:
+                current = (self.textgrid_source_paths.index(path) + 1) if path in self.textgrid_source_paths else 1
+                text = f"当前 {current}/{total}：{self._short_path(path, max_parts=3)}"
+            else:
+                text = self._short_path(path, max_parts=4)
+            self.lbl_textgrid_source.configure(text=text, text_color=self.colors["text_soft"])
+        self._select_textgrid_file_in_tree(path)
         self._fill_textgrid_tiers_tree(summary.get("tiers", []))
         self.refresh_textgrid_tier_options()
         self.tabview.set(self.tab_textgrid_name)
-        self._textgrid_status("已读取 TextGrid，请确认层映射。", "muted")
+        self._textgrid_status(f"已读取 {len(getattr(self, 'textgrid_source_paths', []) or [path])} 个 TextGrid，请确认层映射。", "muted")
+
+    def _fill_textgrid_files_tree(self, paths):
+        if not hasattr(self, "textgrid_file_list"):
+            return
+        self.textgrid_file_list_paths = list(paths or [])
+        self.textgrid_file_list.delete(0, tk.END)
+        basename_counts = {}
+        for path in self.textgrid_file_list_paths:
+            name = os.path.basename(path)
+            basename_counts[name] = basename_counts.get(name, 0) + 1
+        for idx, path in enumerate(paths or []):
+            basename = os.path.basename(path)
+            label = self._short_path(path, max_parts=2) if basename_counts.get(basename, 0) > 1 else basename
+            self.textgrid_file_list.insert(tk.END, f"{idx + 1:02d}  {label}")
+        if paths:
+            self.textgrid_files_empty_state.place_forget()
+        else:
+            self.textgrid_files_empty_state.place(relx=0.5, rely=0.5, anchor="center")
+
+    def _select_textgrid_file_in_tree(self, path):
+        if not hasattr(self, "textgrid_file_list"):
+            return
+        target = os.path.normcase(os.path.abspath(path))
+        for index, item_path in enumerate(getattr(self, "textgrid_file_list_paths", []) or []):
+            if os.path.normcase(os.path.abspath(item_path)) == target:
+                self.textgrid_file_list.selection_set(index, notify=False)
+                self.textgrid_file_list.activate(index)
+                break
+
+    def on_textgrid_file_selected(self, _event=None):
+        if not hasattr(self, "textgrid_file_list"):
+            return
+        selected = self.textgrid_file_list.curselection()
+        if not selected:
+            return
+        index = selected[0]
+        paths = getattr(self, "textgrid_file_list_paths", []) or []
+        if index < 0 or index >= len(paths):
+            return
+        path = paths[index]
+        if path and os.path.normpath(path) != os.path.normpath(getattr(self, "textgrid_source_path", "") or ""):
+            self.load_textgrid_source(path, update_sources=False)
 
     def import_textgrid_aux_wordlist(self):
         path = filedialog.askopenfilename(
@@ -2097,44 +2197,7 @@ class ToolkitApp(ctk.CTk):
         self.refresh_textgrid_preview()
 
     def _load_textgrid_aux_wordlist_records(self, path):
-        lower = path.lower()
-        if lower.endswith(".ptwl"):
-            doc = load_wordlist_document(path)
-            groups, _flat_words, records = flatten_wordlist_document(doc)
-            return records, len(groups)
-
-        text = self._read_text_file_with_fallback(path)
-        if lower.endswith(".csv"):
-            try:
-                doc = build_document_from_csv_text(text, title=os.path.splitext(os.path.basename(path))[0])
-                groups, _flat_words, records = flatten_wordlist_document(doc)
-                if records:
-                    return records, len(groups)
-            except Exception:
-                pass
-
-        groups, _flat_words = parse_grouped_wordlist(text)
-        records = []
-        for group in groups:
-            group_name = str(group.get("group") or DEFAULT_GROUP_NAME).strip() or DEFAULT_GROUP_NAME
-            for word in group.get("items", []):
-                label = str(word or "").strip()
-                if label:
-                    records.append({"label": label, "word": label, "group": group_name})
-        return records, len(groups)
-
-    def _read_text_file_with_fallback(self, path):
-        last_error = None
-        for encoding in ("utf-8-sig", "utf-8", "gbk"):
-            try:
-                with open(path, "r", encoding=encoding) as f:
-                    return f.read()
-            except UnicodeDecodeError as e:
-                last_error = e
-        if last_error:
-            raise last_error
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
-            return f.read()
+        return load_auxiliary_wordlist_records(path)
 
     def refresh_textgrid_tier_options(self):
         summary = self.textgrid_summary or {}
@@ -2340,6 +2403,99 @@ class ToolkitApp(ctk.CTk):
             self._textgrid_status(f"导出失败：{e}", "danger")
             messagebox.showerror("导出失败", f"无法导出 TextGrid：\n{e}")
 
+    def export_converted_textgrids_batch(self):
+        paths = list(getattr(self, "textgrid_source_paths", []) or [])
+        if not paths and getattr(self, "textgrid_source_path", None):
+            paths = [self.textgrid_source_path]
+        if not paths:
+            messagebox.showwarning("提示", "请先导入一个或多个 TextGrid 文件。")
+            return
+        try:
+            mapping = self._selected_textgrid_mapping()
+        except ValueError as e:
+            messagebox.showwarning("提示", str(e))
+            return
+
+        initialdir = os.path.dirname(paths[0]) if paths else os.getcwd()
+        out_dir = filedialog.askdirectory(title="选择批量导出目录", initialdir=initialdir)
+        if not out_dir:
+            return
+
+        batch_overrides = self._textgrid_group_overrides_for_batch(len(paths))
+        exported = []
+        failed = []
+        current_preview = None
+        current_source = os.path.normcase(os.path.abspath(getattr(self, "textgrid_source_path", "") or ""))
+        for path in paths:
+            try:
+                source_name = os.path.splitext(os.path.basename(path))[0]
+                out_path = self._unique_textgrid_output_path(out_dir, f"{source_name}_converted.TextGrid")
+                preview = convert_textgrid(
+                    path,
+                    out_path,
+                    mapping,
+                    group_overrides=batch_overrides,
+                    wordlist_records=self.textgrid_wordlist_records,
+                )
+                exported.append((out_path, preview))
+                if os.path.normcase(os.path.abspath(path)) == current_source:
+                    current_preview = preview
+            except Exception as e:
+                failed.append((path, str(e)))
+
+        if exported:
+            shown_preview = current_preview or exported[-1][1]
+            self.textgrid_preview_items = shown_preview.items
+            self._fill_textgrid_preview_tree(shown_preview.items)
+            self.lbl_textgrid_diagnosis.configure(text=self._format_textgrid_diagnosis(shown_preview))
+            self._textgrid_status(
+                f"批量导出完成：成功 {len(exported)} 个，失败 {len(failed)} 个。",
+                "warning" if failed else "success",
+            )
+        else:
+            self._textgrid_status(f"批量导出失败：{len(failed)} 个文件未能转换。", "danger")
+
+        lines = [f"成功：{len(exported)} 个", f"失败：{len(failed)} 个"]
+        if len(paths) > 1 and self.textgrid_group_overrides and not batch_overrides:
+            lines.append("提示：当前预览中的临时分组只适用于单文件导出，批量导出已按层映射和辅助字表处理。")
+        if exported:
+            lines.append(f"输出目录：{out_dir}")
+        if failed:
+            lines.append("")
+            lines.append("失败文件：")
+            for path, error in failed[:5]:
+                lines.append(f"- {os.path.basename(path)}：{error}")
+            if len(failed) > 5:
+                lines.append(f"- 还有 {len(failed) - 5} 个失败文件未列出")
+
+        if exported:
+            messagebox.showinfo("批量导出完成", "\n".join(lines))
+        else:
+            messagebox.showerror("批量导出失败", "\n".join(lines))
+
+    def _textgrid_group_overrides_for_batch(self, source_count):
+        if source_count <= 1:
+            return dict(self.textgrid_group_overrides)
+        current_item_keys = set()
+        for item in self.textgrid_preview_items:
+            current_item_keys.add(item.id)
+            current_item_keys.update(item.source_ids)
+        return {
+            key: value
+            for key, value in self.textgrid_group_overrides.items()
+            if key not in current_item_keys
+        }
+
+    def _unique_textgrid_output_path(self, out_dir, filename):
+        base, ext = os.path.splitext(filename)
+        ext = ext or ".TextGrid"
+        candidate = os.path.join(out_dir, f"{base}{ext}")
+        counter = 2
+        while os.path.exists(candidate):
+            candidate = os.path.join(out_dir, f"{base}_{counter}{ext}")
+            counter += 1
+        return candidate
+
     def _format_textgrid_diagnosis(self, preview):
         report = preview.tone_pair_report or {}
         lines = [f"转换预览：{len(preview.items)} 个条目。"]
@@ -2388,7 +2544,7 @@ class ToolkitApp(ctk.CTk):
         textgrid_files = [p for p in paths if p.lower().endswith(".textgrid")]
         if textgrid_files:
             self.tabview.set(self.tab_textgrid_name)
-            self.load_textgrid_source(textgrid_files[0])
+            self.load_textgrid_sources(textgrid_files)
             return
 
         # Check if there is any .teproj file dropped
