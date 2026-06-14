@@ -2404,6 +2404,17 @@ class ToolkitApp(ctk.CTk):
         if hasattr(self.lbl_chart_preview, "_label"):
             self.lbl_chart_preview._label.bind("<Button-1>", self.on_chart_preview_clicked)
 
+        # 新增：用于显示生成文件列表的滚动区域（默认隐藏）
+        self.script_file_list_frame = ctk.CTkScrollableFrame(
+            preview_box, 
+            fg_color="transparent", 
+            label_text="已生成的文件列表 (点击打开)",
+            label_font=ctk.CTkFont(family=self.font_family, size=11, weight="bold"),
+            label_text_color=self.colors["muted"]
+        )
+        self.script_file_list_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
+        self.script_file_list_frame.grid_remove()
+
 
         # 右侧日志输出
         log_box = ctk.CTkFrame(output_frame, fg_color=self.colors["surface_soft"], corner_radius=10, border_width=1, border_color=self.colors["border"])
@@ -2761,8 +2772,29 @@ class ToolkitApp(ctk.CTk):
         except Exception as e:
             messagebox.showerror("打开失败", f"无法打开结果目录：\n{e}")
 
+    def _open_file_safely(self, path):
+        if not path or not os.path.exists(path):
+            messagebox.showerror("错误", f"找不到文件：\n{path}")
+            return
+        import subprocess
+        import sys
+        try:
+            if sys.platform == "win32":
+                os.startfile(path)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", path])
+            else:
+                subprocess.Popen(["xdg-open", path])
+        except Exception as e:
+            messagebox.showerror("打开失败", f"无法打开文件：\n{e}")
+
     def _update_chart_preview(self, text, image=None):
         try:
+            if hasattr(self, "lbl_chart_preview") and self.lbl_chart_preview:
+                self.lbl_chart_preview.grid()
+            if hasattr(self, "script_file_list_frame") and self.script_file_list_frame:
+                self.script_file_list_frame.grid_remove()
+
             if hasattr(self, "lbl_chart_preview") and self.lbl_chart_preview:
                 try:
                     self.lbl_chart_preview._label.configure(image="")
@@ -2955,6 +2987,39 @@ class ToolkitApp(ctk.CTk):
                 self._update_chart_preview("数据处理脚本运行成功，无图表输出。", None)
                 if hasattr(self, "script_preview_nav"):
                     self.script_preview_nav.grid_remove()
+
+                # 将生成的文件展示在文件列表中，替代图片预览
+                output_paths = summary.get("output_paths", [])
+                if not output_paths:
+                    single_path = summary.get("output_path")
+                    if single_path:
+                        output_paths = [single_path]
+
+                if output_paths:
+                    if hasattr(self, "lbl_chart_preview") and self.lbl_chart_preview:
+                        self.lbl_chart_preview.grid_remove()
+                    if hasattr(self, "script_file_list_frame") and self.script_file_list_frame:
+                        self.script_file_list_frame.grid()
+                        for widget in self.script_file_list_frame.winfo_children():
+                            widget.destroy()
+                        
+                        for path in output_paths:
+                            file_name = os.path.basename(path)
+                            row_frame = ctk.CTkFrame(self.script_file_list_frame, fg_color="transparent")
+                            row_frame.pack(fill=tk.X, padx=5, pady=2)
+                            
+                            btn = ctk.CTkButton(
+                                row_frame,
+                                text=f"📄 {file_name}",
+                                anchor="w",
+                                fg_color="transparent",
+                                text_color=self.colors["primary"],
+                                hover_color=self.colors["surface_soft"],
+                                font=ctk.CTkFont(family=self.font_family, size=11),
+                                height=28,
+                                command=lambda p=path: self._open_file_safely(p)
+                            )
+                            btn.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
                 messagebox.showinfo("成功", summary.get("message") or "操作成功应用！")
 
