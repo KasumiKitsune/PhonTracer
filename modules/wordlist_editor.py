@@ -308,24 +308,12 @@ class VisualWordlistEditor(ctk.CTkFrame):
             self._bind_scroll_descendants(child, frame)
 
     def _make_context_menu(self, parent):
-        return tk.Menu(
-            parent,
-            tearoff=0,
-            font=("Microsoft YaHei", 10),
-            bg="#FFFFFF",
-            fg="#2C3E50",
-            activebackground="#3B82F6",
-            activeforeground="#FFFFFF",
-            activeborderwidth=0,
-            bd=1,
-            relief="solid",
-        )
+        from .ui_widgets import make_context_menu
+        return make_context_menu(parent, font_size=10)
 
     def _post_menu(self, menu, event):
-        try:
-            menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            menu.grab_release()
+        from .ui_widgets import post_context_menu
+        post_context_menu(menu, event)
 
     def show_more_actions(self):
         popup = ctk.CTkToplevel(self.winfo_toplevel())

@@ -150,6 +150,8 @@ class SpectrogramPanel:
         self.ax2 = self.ax.twinx()
         self.canvas = FigureCanvasTkAgg(self.fig, master=center_frame)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        self.canvas.get_tk_widget().bind("<Button-2>", self._show_context_menu, add="+")
+        self.canvas.get_tk_widget().bind("<Button-3>", self._show_context_menu, add="+")
         self.canvas.mpl_connect('button_press_event', self.on_press)
         self.canvas.mpl_connect('motion_notify_event', self.on_motion)
         self.canvas.mpl_connect('button_release_event', self.on_release)
@@ -1569,3 +1571,39 @@ class SpectrogramPanel:
             self.btn_eraser.configure(text=" 剔除点")
         else:
             self.btn_eraser.configure(text=" 橡皮擦")
+
+    def _show_context_menu(self, event):
+        if self.dragging is not None or getattr(self, 'erasing', False):
+            return
+
+        from .ui_widgets import make_context_menu, post_context_menu
+
+        # 这里的 event 是 tkinter Event 实例，可以使用 event.x_root, event.y_root
+        menu = make_context_menu(self.canvas.get_tk_widget(), font_size=15)
+
+        if not self.current_item:
+            menu.add_command(label="暂无可操作条目", state="disabled")
+        else:
+            play_label = "停止播放" if self.is_playing else "播放 / 停止播放"
+            menu.add_command(label=play_label, command=self.play_selected)
+            menu.add_command(label="播放当前字", command=self.play_current_char)
+            menu.add_command(label="播放整段", command=self.play_current_item)
+
+            clear_state = "normal" if self.playback_selection is not None else "disabled"
+            menu.add_command(label="清除播放选区", command=self._clear_playback_selection, state=clear_state)
+
+            menu.add_separator()
+
+            eraser_label = "退出橡皮擦并应用" if self.eraser_mode else "开启橡皮擦"
+            menu.add_command(label=eraser_label, command=self.toggle_eraser_mode)
+            menu.add_command(label="应用当前时间", command=self.apply_manual_time)
+            menu.add_command(label="自动识别", command=self.apply_auto_detect)
+
+            menu.add_separator()
+
+            # 导出当前数据
+            menu.add_command(label="导出当前数据...", command=self.on_export_callback)
+            menu.add_command(label="导入工程...", command=self.on_import_project_clicked)
+            menu.add_command(label="导出工程...", command=self.on_export_project_clicked)
+
+        post_context_menu(menu, event)

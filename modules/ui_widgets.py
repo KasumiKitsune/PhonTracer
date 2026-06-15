@@ -22,28 +22,28 @@ class CTkReleaseButton(ctk.CTkButton):
             for w in widgets:
                 w.bind("<ButtonPress-1>", self._on_press, add="+")
                 w.bind("<ButtonRelease-1>", self._on_release, add="+")
-            
+
     def _on_press(self, event):
         if self.cget("state") == "disabled":
             return
         self._is_pressed = True
-        
+
     def _on_release(self, event):
         if not getattr(self, "_is_pressed", False):
             return
         self._is_pressed = False
-        
+
         # 如果按钮被禁用，则不响应
         if self.cget("state") == "disabled":
             return
-            
+
         # 4. 核心：判断松开时，鼠标是否还在按钮的区域内
         x, y = self.winfo_pointerxy()
         btn_x = self.winfo_rootx()
         btn_y = self.winfo_rooty()
         btn_w = self.winfo_width()
         btn_h = self.winfo_height()
-        
+
         if btn_x <= x <= btn_x + btn_w and btn_y <= y <= btn_y + btn_h:
             if self._release_command:
                 self._release_command()
@@ -57,10 +57,10 @@ class ToolTip:
         self.text = text
         self.tipwindow = None
         self.id = None
-        
+
         # 递归绑定事件到所有内部子控件上，确保 100% 灵敏触发
         self._bind_widget(self.widget)
-        
+
         # 仅全局绑定一次，当发生任何鼠标滚动或点击时，立即消失当前 ToolTip
         if not ToolTip._global_bound:
             try:
@@ -86,7 +86,7 @@ class ToolTip:
             w.bind("<Leave>", self.leave, add="+")
         except Exception:
             pass
-        
+
         # CustomTkinter 控件可能包含的内部原生子控件
         for attr in ("_canvas", "_text_label", "_image_label", "_entry", "_check_box"):
             if hasattr(w, attr):
@@ -97,7 +97,7 @@ class ToolTip:
                         sub.bind("<Leave>", self.leave, add="+")
                     except Exception:
                         pass
-                        
+
         # 递归遍历子控件并绑定，使得容器类控件（如 CTkFrame）子项也能触发 Tooltip
         try:
             for child in w.winfo_children():
@@ -141,7 +141,7 @@ class ToolTip:
         # 双重保险：显示前确认没有其他 ToolTip
         if ToolTip.active_tip and ToolTip.active_tip != self:
             ToolTip.active_tip.hidetip()
-            
+
         ToolTip.active_tip = self
         x, y, cx, cy = self.widget.bbox("insert") or (0,0,0,0)
         x += self.widget.winfo_rootx() + 25
@@ -174,3 +174,29 @@ class AutoScrollbar(ctk.CTkScrollbar):
             if not self.winfo_ismapped():
                 self.grid()
         super().set(low, high)
+
+def make_context_menu(parent, font_size=10):
+    """
+    统一创建右键菜单，带有系统统一的样式。
+    """
+    return tk.Menu(
+        parent,
+        tearoff=0,
+        font=("Microsoft YaHei", font_size),
+        bg="#FFFFFF",
+        fg="#2C3E50",
+        activebackground="#3B82F6",
+        activeforeground="#FFFFFF",
+        activeborderwidth=0,
+        bd=1,
+        relief="solid",
+    )
+
+def post_context_menu(menu, event):
+    """
+    统一弹出右键菜单，并在之后正确释放鼠标抓取。
+    """
+    try:
+        menu.tk_popup(event.x_root, event.y_root)
+    finally:
+        menu.grab_release()

@@ -1816,6 +1816,7 @@ class ProjectTreePanel:
         }
 
     def on_right_click(self, event):
+        from .ui_widgets import make_context_menu, post_context_menu
         iid = self.tree.identify_row(event.y)
 
         if iid:
@@ -1823,18 +1824,7 @@ class ProjectTreePanel:
             if iid not in sel:
                 self.tree.selection_set(iid)
 
-        menu = tk.Menu(
-            self.tree,
-            tearoff=0,
-            font=("Microsoft YaHei", 12),
-            bg="#FFFFFF",
-            fg="#2C3E50",
-            activebackground="#3B82F6",
-            activeforeground="#FFFFFF",
-            activeborderwidth=0,
-            bd=1,
-            relief="solid"
-        )
+        menu = make_context_menu(self.tree, font_size=15)
 
         if iid and self.tree.exists(iid):
             tags = self.tree.item(iid, 'tags')
@@ -1857,18 +1847,7 @@ class ProjectTreePanel:
                     menu.add_command(label="属性", command=lambda: self.show_item_properties(real_iid))
 
                     menu.add_separator()
-                    adv_menu = tk.Menu(
-                        menu,
-                        tearoff=0,
-                        font=("Microsoft YaHei", 12),
-                        bg="#FFFFFF",
-                        fg="#2C3E50",
-                        activebackground="#3B82F6",
-                        activeforeground="#FFFFFF",
-                        activeborderwidth=0,
-                        bd=1,
-                        relief="solid"
-                    )
+                    adv_menu = make_context_menu(menu, font_size=15)
                     adv_menu.add_command(label="彻底删除此项...", command=lambda: self.permanently_delete_selected_items())
                     menu.add_cascade(label="高级操作", menu=adv_menu)
             elif 'group' in tags and iid != self.warning_group_id:
@@ -1883,7 +1862,7 @@ class ProjectTreePanel:
         else:
             menu.add_command(label="新建组别", command=self.add_new_group)
 
-        menu.post(event.x_root, event.y_root)
+        post_context_menu(menu, event)
 
     def toggle_ignore_warnings(self, real_iid):
         if real_iid not in self.items: return

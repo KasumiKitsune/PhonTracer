@@ -261,7 +261,7 @@ class AcousticChartExporter:
     def _get_legend_kwargs(self):
         loc_val = self.get_param('legend_loc', '右上')
         outside_val = self.get_param('legend_outside', False)
-        
+
         loc_map = {
             "右上": "upper right",
             "右下": "lower right",
@@ -269,12 +269,12 @@ class AcousticChartExporter:
             "左下": "lower left",
         }
         loc_str = loc_map.get(loc_val, "upper right")
-        
+
         kwargs = {
             "markerscale": 0.55,
             "labelspacing": 0.65
         }
-        
+
         if outside_val:
             if loc_val == "右上":
                 kwargs.update({"loc": "upper left", "bbox_to_anchor": (1.02, 1)})
@@ -286,7 +286,7 @@ class AcousticChartExporter:
                 kwargs.update({"loc": "lower right", "bbox_to_anchor": (-0.02, 0)})
         else:
             kwargs["loc"] = loc_str
-            
+
         return kwargs
 
     # --- CORE DATA EXTRACTION ENGINE ---
@@ -1007,7 +1007,7 @@ class AcousticChartExporter:
                         text.set_size(max(7.0, float(curr_size) * 0.72))
                     except ValueError:
                         pass
-            
+
             # Ensure proper margins and tight layout for small floating window
             try:
                 fig.tight_layout(pad=1.2)
@@ -1109,11 +1109,11 @@ class AcousticChartExporter:
                         syl_list = entry['normalized_syl_data'] if "T 值" in scale else entry['syl_data']
                         if s_idx >= len(syl_list):
                             continue
-                        
+
                         acc_dur = 0.0
                         for prev_idx in range(s_idx):
                             acc_dur += syl_list[prev_idx][0]
-                            
+
                         s_dur, pts = syl_list[s_idx]
 
                         if x_axis == "归一化采样点":
@@ -1153,7 +1153,7 @@ class AcousticChartExporter:
                     short_g_name = g_name
                     if len(g_name) > 12:
                         short_g_name = g_name[:10] + ".."
-                    
+
                     lbl = short_g_name if not label_added else None
                     ax.plot(grid_x, mean_y, '-o', color=color, linewidth=2.5, markersize=5, label=lbl)
                     label_added = True
@@ -1283,7 +1283,7 @@ class AcousticChartExporter:
         matrix = []
         y_ticks = []
         y_labels = []
-        
+
         last_tg = None
         current_row_idx = 0
 
@@ -1309,7 +1309,7 @@ class AcousticChartExporter:
                     y_flat.extend([np.nan] * (total_points - len(y_flat)))
                 elif len(y_flat) > total_points:
                     y_flat = y_flat[:total_points]
-                
+
                 y_flat = np.array(y_flat, dtype=float)
                 if show_deviation:
                     entry_tg = entry['group']
@@ -2712,14 +2712,14 @@ class AcousticChartExporter:
             cov = np.cov(x, y)
             if np.any(np.isnan(cov)) or np.any(np.isinf(cov)):
                 return None
-            
+
             vals, vecs = np.linalg.eigh(cov)
             order = vals.argsort()[::-1]
             vals, vecs = vals[order], vecs[:, order]
-            
+
             theta = np.degrees(np.arctan2(*vecs[:, 0][::-1]))
             width, height = 2 * n_std * np.sqrt(np.maximum(vals, 0))
-            
+
             ellipse = Ellipse(xy=(np.mean(x), np.mean(y)), width=width, height=height,
                               angle=theta, facecolor=facecolor, **kwargs)
             return ax.add_patch(ellipse)
@@ -2785,13 +2785,13 @@ class AcousticChartExporter:
 
         f1_p1, f1_p99 = np.percentile(all_f1, 1.0), np.percentile(all_f1, 99.0)
         f2_p1, f2_p99 = np.percentile(all_f2, 1.0), np.percentile(all_f2, 99.0)
-        
+
         norm_mode = self.get_param('formant_normalization', '原始频率 (Hz)')
         is_hz = "Hz" in norm_mode
-        
+
         f1_pad = (f1_p99 - f1_p1) * 0.16 if f1_p99 > f1_p1 else (100.0 if is_hz else 0.5)
         f2_pad = (f2_p99 - f2_p1) * 0.16 if f2_p99 > f2_p1 else (150.0 if is_hz else 0.8)
-        
+
         f1_grid_min, f1_grid_max = (max(50.0, f1_p1 - f1_pad) if is_hz else (f1_p1 - f1_pad)), f1_p99 + f1_pad
         f2_grid_min, f2_grid_max = (max(500.0, f2_p1 - f2_pad) if is_hz else (f2_p1 - f2_pad)), f2_p99 + f2_pad
 
@@ -2904,39 +2904,39 @@ class AcousticChartExporter:
             density_f1, density_f2 = [], []
 
         category_data = {}
-        
+
         for entry in data_entries:
             for syl in entry.get('syl_formants', []):
                 c_s, c_e = syl['bounds']
                 xs = np.asarray(entry.get('raw_xs', []), dtype=float)
                 f1_arr = np.asarray(entry.get('raw_f1', []), dtype=float)
                 f2_arr = np.asarray(entry.get('raw_f2', []), dtype=float)
-                
+
                 if len(xs) == 0 or len(f1_arr) == 0 or len(f2_arr) == 0:
                     continue
-                    
+
                 mask = (xs >= c_s) & (xs <= c_e) & np.isfinite(f1_arr) & np.isfinite(f2_arr) & (f2_arr > f1_arr)
                 s_f1 = f1_arr[mask]
                 s_f2 = f2_arr[mask]
-                
+
                 if len(s_f1) == 0:
                     continue
-                
+
                 if transform_fn is not None:
                     s_f1, s_f2 = transform_fn(s_f1, s_f2)
-                
+
                 cat = self._get_syl_category(entry, syl, groupby_val)
                 if cat not in category_data:
                     category_data[cat] = {
                         'f1': [], 'f2': [], 'entries_labels': [], 'syl_chars': [],
                         'trajs_f1': [], 'trajs_f2': []
                     }
-                
+
                 category_data[cat]['f1'].append(s_f1)
                 category_data[cat]['f2'].append(s_f2)
                 category_data[cat]['entries_labels'].append(entry['label'])
                 category_data[cat]['syl_chars'].append(syl['char'])
-                
+
                 # Collect normalized trajectory data (typically 11 points)
                 traj_f1 = np.asarray(syl.get('f1', []), dtype=float)
                 traj_f2 = np.asarray(syl.get('f2', []), dtype=float)
@@ -2966,13 +2966,13 @@ class AcousticChartExporter:
             f2_list = np.concatenate(category_data[cat]['f2'])
             category_data[cat]['f1_concat'] = f1_list
             category_data[cat]['f2_concat'] = f2_list
-            
+
             if len(f1_list) == 0:
                 continue
-                
+
             all_f1_plotted_list.append(f1_list)
             all_f2_plotted_list.append(f2_list)
-            
+
             if show_raw:
                 ax.scatter(f2_list, f1_list, color=color, s=14, alpha=0.20 if density_overlay else 0.12, edgecolors='none', zorder=3)
 
@@ -2982,45 +2982,45 @@ class AcousticChartExporter:
                 continue
             f1_list = category_data[cat]['f1_concat']
             f2_list = category_data[cat]['f2_concat']
-                
+
             trajs_f1 = np.array(category_data[cat]['trajs_f1'])
             trajs_f2 = np.array(category_data[cat]['trajs_f2'])
-            
+
             lbl_x = np.nan
             lbl_y = np.nan
-            
+
             if time_gradient and len(trajs_f1) > 0 and len(trajs_f2) > 0:
                 with np.errstate(all='ignore'):
                     mean_traj_f1 = np.nanmean(trajs_f1, axis=0)
                     mean_traj_f2 = np.nanmean(trajs_f2, axis=0)
-                
+
                 valid_mask = np.isfinite(mean_traj_f1) & np.isfinite(mean_traj_f2)
                 if np.any(valid_mask):
                     v_f1 = mean_traj_f1[valid_mask]
                     v_f2 = mean_traj_f2[valid_mask]
                     n_pts = len(v_f1)
-                    
+
                     # Plot the trajectory line using the category color
                     ax.plot(v_f2, v_f1, color=color, linewidth=1.2, alpha=0.55, label=str(cat), zorder=5)
-                    
+
                     cmap = self._get_formant_time_cmap()
                     marker_colors = cmap(np.linspace(0, 1, n_pts))
                     for i in range(n_pts):
-                        ax.scatter(v_f2[i], v_f1[i], color=marker_colors[i], s=80, 
+                        ax.scatter(v_f2[i], v_f1[i], color=marker_colors[i], s=80,
                                    edgecolors='black', linewidth=0.8, zorder=6)
-                    
+
                     # Store midpoint for label placement
                     mid_idx = n_pts // 2
                     lbl_x = v_f2[mid_idx]
                     lbl_y = v_f1[mid_idx]
-            
+
             if np.isnan(lbl_x) or np.isnan(lbl_y):
                 mean_f1 = np.mean(f1_list)
                 mean_f2 = np.mean(f2_list)
                 ax.scatter(mean_f2, mean_f1, color=color, s=150, marker='o', edgecolors='black', linewidth=1.2, zorder=6, label=str(cat))
                 lbl_x = mean_f2
                 lbl_y = mean_f1
-            
+
             if not np.isnan(lbl_x) and not np.isnan(lbl_y):
                 if label_mode == "显示分组标签":
                     lbl_text = str(cat)
@@ -3064,13 +3064,13 @@ class AcousticChartExporter:
             limit_f2 = np.concatenate(all_f2_plotted_list)
             f1_p1, f1_p99 = np.percentile(limit_f1, 1.0), np.percentile(limit_f1, 99.0)
             f2_p1, f2_p99 = np.percentile(limit_f2, 1.0), np.percentile(limit_f2, 99.0)
-            
+
             norm_mode = self.get_param('formant_normalization', '原始频率 (Hz)')
             is_hz = "Hz" in norm_mode
-            
+
             f1_pad = (f1_p99 - f1_p1) * 0.15 if f1_p99 > f1_p1 else (100.0 if is_hz else 0.5)
             f2_pad = (f2_p99 - f2_p1) * 0.15 if f2_p99 > f2_p1 else (150.0 if is_hz else 0.8)
-            
+
             ax.set_ylim(f1_p99 + f1_pad, max(50.0, f1_p1 - f1_pad) if is_hz else (f1_p1 - f1_pad))
             ax.set_xlim(f2_p99 + f2_pad, max(500.0, f2_p1 - f2_pad) if is_hz else (f2_p1 - f2_pad))
 
@@ -3087,7 +3087,7 @@ class AcousticChartExporter:
         else:
             ax.set_xlabel("F2 (Hz)", fontsize=12, fontweight='bold', labelpad=10)
             ax.set_ylabel("F1 (Hz)", fontsize=12, fontweight='bold', labelpad=10)
-            
+
         all_f1_res = np.concatenate(all_f1_plotted_list) if all_f1_plotted_list else np.array([])
         all_f2_res = np.concatenate(all_f2_plotted_list) if all_f2_plotted_list else np.array([])
         return all_f1_res, all_f2_res
@@ -3120,7 +3120,7 @@ class AcousticChartExporter:
     def _build_formant_normalizer(self, ref_entries, mode):
         if not ref_entries:
             return lambda f1, f2: (f1, f2)
-        
+
         if "Bark" in mode or "巴克" in mode:
             def to_bark(f1, f2):
                 f1 = np.asarray(f1, dtype=float)
@@ -3129,7 +3129,7 @@ class AcousticChartExporter:
                 b2 = 26.81 * f2 / (1960.0 + f2) - 0.53
                 return b1, b2
             return to_bark
-            
+
         elif "Mel" in mode or "美尔" in mode:
             def to_mel(f1, f2):
                 f1 = np.asarray(f1, dtype=float)
@@ -3138,7 +3138,7 @@ class AcousticChartExporter:
                 m2 = 2595.0 * np.log10(1.0 + f2 / 700.0)
                 return m1, m2
             return to_mel
-            
+
         elif "Lobanov" in mode or "归一化" in mode or "L-归一化" in mode:
             all_f1, all_f2 = [], []
             for entry in ref_entries:
@@ -3153,22 +3153,22 @@ class AcousticChartExporter:
                     valid_syl = np.isfinite(f1_pts) & np.isfinite(f2_pts)
                     all_f1.extend(f1_pts[valid_syl].tolist())
                     all_f2.extend(f2_pts[valid_syl].tolist())
-                        
+
             mean_f1 = np.mean(all_f1) if all_f1 else 500.0
             std_f1 = np.std(all_f1) if all_f1 else 100.0
             if std_f1 < 1e-3: std_f1 = 1.0
-            
+
             mean_f2 = np.mean(all_f2) if all_f2 else 1500.0
             std_f2 = np.std(all_f2) if all_f2 else 250.0
             if std_f2 < 1e-3: std_f2 = 1.0
-            
+
             def to_lobanov(f1, f2):
                 f1 = np.asarray(f1, dtype=float)
                 f2 = np.asarray(f2, dtype=float)
                 return (f1 - mean_f1) / std_f1, (f2 - mean_f2) / std_f2
-                
+
             return to_lobanov
-            
+
         else:
             return lambda f1, f2: (f1, f2)
 
@@ -3184,9 +3184,9 @@ class AcousticChartExporter:
         normalization_mode = self.get_param('formant_normalization', '原始频率 (Hz)')
         lock_axes = bool(self.get_param('formant_axis_lock', False))
         axis_ref_entries = self.get_param('formant_axis_ref_entries', data_entries)
-        
+
         transform_fn = self._build_formant_normalizer(axis_ref_entries, normalization_mode)
-        
+
         fixed_limits = None
         if lock_axes:
             ref_f1, ref_f2 = [], []
@@ -3204,23 +3204,23 @@ class AcousticChartExporter:
                     valid_syl = np.isfinite(f1_pts) & np.isfinite(f2_pts)
                     ref_f1.extend(f1_pts[valid_syl].tolist())
                     ref_f2.extend(f2_pts[valid_syl].tolist())
-            
+
             if ref_f1 and ref_f2:
                 ref_f1, ref_f2 = transform_fn(np.array(ref_f1), np.array(ref_f2))
                 f1_p1, f1_p99 = np.percentile(ref_f1, 1.0), np.percentile(ref_f1, 99.0)
                 f2_p1, f2_p99 = np.percentile(ref_f2, 1.0), np.percentile(ref_f2, 99.0)
-                
+
                 is_hz = "Hz" in normalization_mode
                 f1_pad = (f1_p99 - f1_p1) * 0.15 if f1_p99 > f1_p1 else (100.0 if is_hz else 0.5)
                 f2_pad = (f2_p99 - f2_p1) * 0.15 if f2_p99 > f2_p1 else (150.0 if is_hz else 0.8)
-                
+
                 if is_hz:
                     ymin, ymax = f1_p99 + f1_pad, max(50.0, f1_p1 - f1_pad)
                     xmin, xmax = f2_p99 + f2_pad, max(500.0, f2_p1 - f2_pad)
                 else:
                     ymin, ymax = f1_p99 + f1_pad, f1_p1 - f1_pad
                     xmin, xmax = f2_p99 + f2_pad, f2_p1 - f2_pad
-                
+
                 fixed_limits = (ymin, ymax, xmin, xmax)
 
         facet_specs = [("Default", data_entries)]
@@ -3266,7 +3266,7 @@ class AcousticChartExporter:
 
         if density_overlay and density_sm_holder.get('sm') is not None:
             self._add_formant_density_colorbar(fig, axes_flat[:n_facets], density_sm_holder['sm'])
-        
+
         legend_kwargs = self._get_legend_kwargs()
         legend_kwargs["fontsize"] = 9
         if density_overlay and self.get_param('legend_outside', False):
@@ -3281,7 +3281,7 @@ class AcousticChartExporter:
             handles, labels = ax.get_legend_handles_labels()
             if handles:
                 ax.legend(**legend_kwargs)
-        
+
         if not density_overlay:
             fig.tight_layout()
         return fig
@@ -3293,10 +3293,10 @@ class AcousticChartExporter:
 
         show_raw = self.get_param('formant_density_show_raw', False)
         show_contours = self.get_param('formant_density_show_contours', True)
-        
+
         normalization_mode = self.get_param('formant_normalization', '原始频率 (Hz)')
         transform_fn = self._build_formant_normalizer(data_entries, normalization_mode)
-        
+
         sm, all_f1, all_f2 = self._draw_formant_density_layer(
             ax,
             data_entries,
@@ -3318,11 +3318,11 @@ class AcousticChartExporter:
         if all_f1 is not None and all_f2 is not None and len(all_f1) > 0 and len(all_f2) > 0:
             f1_p1, f1_p99 = np.percentile(all_f1, 1.0), np.percentile(all_f1, 99.0)
             f2_p1, f2_p99 = np.percentile(all_f2, 1.0), np.percentile(all_f2, 99.0)
-            
+
             is_hz = "Hz" in normalization_mode
             f1_pad = (f1_p99 - f1_p1) * 0.16 if f1_p99 > f1_p1 else (100.0 if is_hz else 0.5)
             f2_pad = (f2_p99 - f2_p1) * 0.16 if f2_p99 > f2_p1 else (150.0 if is_hz else 0.8)
-            
+
             ax.set_ylim(f1_p99 + f1_pad, max(50.0, f1_p1 - f1_pad) if is_hz else (f1_p1 - f1_pad))
             ax.set_xlim(f2_p99 + f2_pad, max(500.0, f2_p1 - f2_pad) if is_hz else (f2_p1 - f2_pad))
 
@@ -3368,10 +3368,10 @@ class AcousticChartExporter:
                 cat = self._get_syl_category(entry, syl, groupby_val)
                 if cat not in category_trajs:
                     category_trajs[cat] = {'f1': [], 'f2': []}
-                
+
                 f1_pts = np.array(syl['f1'], dtype=float)
                 f2_pts = np.array(syl['f2'], dtype=float)
-                
+
                 if len(f1_pts) == num_points and len(f2_pts) == num_points:
                     if transform_fn is not None:
                         f1_pts, f2_pts = transform_fn(f1_pts, f2_pts)
@@ -3392,7 +3392,7 @@ class AcousticChartExporter:
             color = cat_colors[cat]
             f1_arr = np.array(category_trajs[cat]['f1'])
             f2_arr = np.array(category_trajs[cat]['f2'])
-            
+
             if len(f1_arr) == 0 or len(f2_arr) == 0:
                 continue
 
@@ -3418,7 +3418,7 @@ class AcousticChartExporter:
             ax.plot(x_pts, mean_f2, linestyle='-', marker='o', markersize=4.5, color=color, linewidth=2.3, label=f"{cat} F2")
 
         ax.set_xlabel("音节物理时长百分比 (%)", fontsize=12, fontweight='bold', labelpad=10)
-        
+
         if "Bark" in normalization_mode or "巴克" in normalization_mode:
             ax.set_ylabel("频率 (Bark)", fontsize=12, fontweight='bold', labelpad=10)
         elif "Mel" in normalization_mode or "美尔" in normalization_mode:
@@ -3428,16 +3428,16 @@ class AcousticChartExporter:
         else:
             ax.set_ylabel("频率 (Hz)", fontsize=12, fontweight='bold', labelpad=10)
         ax.margins(x=0.02)
-        
+
         legend_kwargs = self._get_legend_kwargs()
         legend_kwargs["fontsize"] = 9
         ax.legend(**legend_kwargs)
-        
+
         title_text = "共振峰 F1-F2 时序轨迹平均曲线图"
         if len(set(e['speaker_name'] for e in data_entries)) == 1:
             title_text = f"{data_entries[0]['speaker_name']} - {title_text}"
         ax.set_title(title_text, fontsize=13, fontweight='bold', pad=15)
-        
+
         fig.tight_layout()
         return fig
 
@@ -3445,9 +3445,9 @@ class AcousticChartExporter:
         # Confidence Ellipse
         ctk.CTkLabel(self.dynamic_content_frame, text="置信椭圆 (Confidence Ellipse):", font=self.font_small).pack(anchor="w", pady=(5, 2))
         self.combo_formant_ellipse = ctk.CTkOptionMenu(
-            self.dynamic_content_frame, 
-            values=["1-sigma 置信椭圆", "2-sigma 置信椭圆", "无置信椭圆"], 
-            command=lambda _: self.trigger_preview_update(), 
+            self.dynamic_content_frame,
+            values=["1-sigma 置信椭圆", "2-sigma 置信椭圆", "无置信椭圆"],
+            command=lambda _: self.trigger_preview_update(),
             **self.dropdown_kwargs
         )
         self.combo_formant_ellipse.set("1-sigma 置信椭圆")
@@ -3457,9 +3457,9 @@ class AcousticChartExporter:
         # Label Mode
         ctk.CTkLabel(self.dynamic_content_frame, text="标签显示模式:", font=self.font_small).pack(anchor="w", pady=(5, 2))
         self.combo_formant_label_mode = ctk.CTkOptionMenu(
-            self.dynamic_content_frame, 
-            values=["显示分组标签", "显示单字标签", "显示词语标签", "不显示标签"], 
-            command=lambda _: self.trigger_preview_update(), 
+            self.dynamic_content_frame,
+            values=["显示分组标签", "显示单字标签", "显示词语标签", "不显示标签"],
+            command=lambda _: self.trigger_preview_update(),
             **self.dropdown_kwargs
         )
         self.combo_formant_label_mode.set("显示分组标签")
@@ -3494,15 +3494,15 @@ class AcousticChartExporter:
 
         # Show raw scatter points
         self.cb_formant_show_raw = ctk.CTkCheckBox(
-            self.dynamic_content_frame, 
-            text="显示个体测量帧 (散点背景)", 
+            self.dynamic_content_frame,
+            text="显示个体测量帧 (散点背景)",
             variable=self.var_formant_show_raw,
-            font=self.font_small, 
-            checkbox_width=18, 
+            font=self.font_small,
+            checkbox_width=18,
             checkbox_height=18,
             corner_radius=1000,
             fg_color=(self.ui_primary, self.ui_primary_hover),
-            hover_color=("#9CA3AF", "#4B5563"), 
+            hover_color=("#9CA3AF", "#4B5563"),
             border_color=("#4B5563", "#9CA3AF"),
             command=self.update_preview
         )
@@ -3510,15 +3510,15 @@ class AcousticChartExporter:
 
         # Show time gradient (red to blue)
         self.cb_formant_time_gradient = ctk.CTkCheckBox(
-            self.dynamic_content_frame, 
-            text="显示时序渐变轨迹线 (红→蓝)", 
+            self.dynamic_content_frame,
+            text="显示时序渐变轨迹线 (红→蓝)",
             variable=self.var_formant_time_gradient,
-            font=self.font_small, 
-            checkbox_width=18, 
+            font=self.font_small,
+            checkbox_width=18,
             checkbox_height=18,
             corner_radius=1000,
             fg_color=(self.ui_primary, self.ui_primary_hover),
-            hover_color=("#9CA3AF", "#4B5563"), 
+            hover_color=("#9CA3AF", "#4B5563"),
             border_color=("#4B5563", "#9CA3AF"),
             command=self.update_preview
         )
@@ -3590,15 +3590,15 @@ class AcousticChartExporter:
     def _build_formant_density_settings(self):
         # Checkbox for show raw points
         self.cb_formant_density_show_raw = ctk.CTkCheckBox(
-            self.dynamic_content_frame, 
-            text="显示个体测量帧 (极淡散点)", 
+            self.dynamic_content_frame,
+            text="显示个体测量帧 (极淡散点)",
             variable=self.var_formant_density_show_raw,
-            font=self.font_small, 
-            checkbox_width=18, 
+            font=self.font_small,
+            checkbox_width=18,
             checkbox_height=18,
             corner_radius=1000,
             fg_color=(self.ui_primary, self.ui_primary_hover),
-            hover_color=("#9CA3AF", "#4B5563"), 
+            hover_color=("#9CA3AF", "#4B5563"),
             border_color=("#4B5563", "#9CA3AF"),
             command=self.update_preview
         )
@@ -3606,15 +3606,15 @@ class AcousticChartExporter:
 
         # Checkbox for show contour lines
         self.cb_formant_density_show_contours = ctk.CTkCheckBox(
-            self.dynamic_content_frame, 
-            text="叠加等密度轮廓线", 
+            self.dynamic_content_frame,
+            text="叠加等密度轮廓线",
             variable=self.var_formant_density_show_contours,
-            font=self.font_small, 
-            checkbox_width=18, 
+            font=self.font_small,
+            checkbox_width=18,
             checkbox_height=18,
             corner_radius=1000,
             fg_color=(self.ui_primary, self.ui_primary_hover),
-            hover_color=("#9CA3AF", "#4B5563"), 
+            hover_color=("#9CA3AF", "#4B5563"),
             border_color=("#4B5563", "#9CA3AF"),
             command=self.update_preview
         )
@@ -3624,9 +3624,9 @@ class AcousticChartExporter:
         # Trajectory style
         ctk.CTkLabel(self.dynamic_content_frame, text="曲线展现形式:", font=self.font_small).pack(anchor="w", pady=(5, 2))
         self.combo_formant_traj_style = ctk.CTkOptionMenu(
-            self.dynamic_content_frame, 
-            values=["仅平均曲线", "平均曲线 + 个体浅色细线", "平均曲线 + 置信区间阴影"], 
-            command=lambda _: self.trigger_preview_update(), 
+            self.dynamic_content_frame,
+            values=["仅平均曲线", "平均曲线 + 个体浅色细线", "平均曲线 + 置信区间阴影"],
+            command=lambda _: self.trigger_preview_update(),
             **self.dropdown_kwargs
         )
         self.combo_formant_traj_style.set("平均曲线 + 置信区间阴影")
@@ -3918,6 +3918,9 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         self.preview_container.grid_rowconfigure(0, weight=1)
         self.preview_container.grid_columnconfigure(0, weight=1)
 
+        self.preview_wrapper.bind("<Button-2>", self._show_context_menu, add="+")
+        self.preview_wrapper.bind("<Button-3>", self._show_context_menu, add="+")
+
         self.preview_lbl = ctk.CTkLabel(self.preview_container, text="正在加载图表预览...", font=self.font_title, text_color="#6B7280")
         self.preview_lbl.grid(row=0, column=0)
 
@@ -3928,6 +3931,8 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             hover_color=("#D1D5DB", "#4B5563"), bg_color="transparent", command=self.toggle_minimize
         )
         self.btn_toggle_minimize.place(x=10, y=10)
+
+        self._bind_chart_context_menu(self.preview_container)
 
         self.preview_wrapper.bind("<Configure>", lambda e: self.on_preview_wrapper_configure())
 
@@ -4334,7 +4339,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
                     method()
                 except Exception:
                     pass
-        
+
         def on_leave_filter_scroll(e):
             x = self.filter_scroll.winfo_pointerx() - self.filter_scroll.winfo_rootx()
             y = self.filter_scroll.winfo_pointery() - self.filter_scroll.winfo_rooty()
@@ -4347,7 +4352,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
                         method()
                     except Exception:
                         pass
-            
+
         self.filter_scroll.bind("<Enter>", on_enter_filter_scroll, add="+")
         self.filter_scroll.bind("<Leave>", on_leave_filter_scroll, add="+")
 
@@ -4816,7 +4821,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
                 self.combo_scale.configure(state="disabled")
             else:
                 self.combo_scale.configure(state="normal")
-        
+
         # Dynamically adjust overview heatmap options if currently showing it
         if hasattr(self, 'combo_overview_metric') and self.combo_overview_metric.winfo_exists():
             is_integrated = ("整合" in val)
@@ -5074,9 +5079,9 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         is_integrated = (self.var_export_scope.get() == "integrated")
         metric_values = self._get_tone_overview_metric_values(is_integrated=is_integrated)
         self.combo_overview_metric = ctk.CTkOptionMenu(
-            self.dynamic_content_frame, 
-            values=metric_values, 
-            command=self._on_overview_metric_changed, 
+            self.dynamic_content_frame,
+            values=metric_values,
+            command=self._on_overview_metric_changed,
             **self.dropdown_kwargs
         )
         self.combo_overview_metric.set("均值热图 (Mean Map)")
@@ -5372,6 +5377,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             canvas = FigureCanvasTkAgg(fig, master=self.preview_container)
             canvas.draw()
             canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+            self._bind_chart_context_menu(canvas.get_tk_widget())
             if getattr(self, 'btn_toggle_minimize', None):
                 self.btn_toggle_minimize.lift()
             if getattr(self, "active_figure", None) is not None and self.active_figure is not fig:
@@ -5415,7 +5421,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         for widget in self.preview_container.winfo_children():
             if widget != getattr(self, 'btn_toggle_minimize', None):
                 widget.destroy()
-        
+
         if getattr(self, 'btn_toggle_minimize', None):
             self.btn_toggle_minimize.lift()
 
@@ -5427,6 +5433,8 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         self.preview_progress.set(0.05)
         self.preview_progress.pack(pady=(0, 10))
         ctk.CTkButton(preview_status, text="取消预览", width=90, height=30, command=self._cancel_preview_render).pack()
+
+        self._bind_chart_context_menu(preview_status)
 
         scope = self.var_export_scope.get()
         if scope == "separate" and len(self.all_speakers) > 1:
@@ -5907,7 +5915,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
     def toggle_minimize(self):
         if not hasattr(self, 'is_minimized'):
             self.is_minimized = False
-            
+
         if not self.is_minimized:
             # Minimize (Floating Mode):
             # 1. Save current geometry
@@ -5915,7 +5923,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             # 2. Hide left sidebar
             self.left_scroll.grid_remove()
             self.grid_columnconfigure(0, minsize=0)
-            
+
             # 3. Reconfigure bottom frame elements to be smaller with less padding
             if hasattr(self, 'btn_manual_refresh'):
                 self.btn_manual_refresh.configure(
@@ -5926,48 +5934,48 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
                 )
                 self.btn_manual_refresh.pack_forget()
                 self.btn_manual_refresh.pack(side=tk.LEFT, padx=3)
-                
+
             if hasattr(self, 'switch_live_refresh'):
                 self.switch_live_refresh.configure(font=self.font_small)
                 self.switch_live_refresh.pack_forget()
                 self.switch_live_refresh.pack(side=tk.LEFT, padx=6)
-                
+
             if hasattr(self, 'switch_high_precision'):
                 self.switch_high_precision.pack_forget()
             if hasattr(self, 'btn_export'):
                 self.btn_export.pack_forget()
-            
+
             # 4. Hide the canvas toggle button completely so it doesn't block the chart
             self.btn_toggle_minimize.place_forget()
-            
+
             # 5. Pack the restore button at the bottom
             if hasattr(self, 'btn_restore'):
                 self.btn_restore.pack(side=tk.LEFT, padx=3)
-            
+
             # 6. Set always-on-top
             self.attributes("-topmost", True)
-            
+
             # 7. Allow window to scale down to a very small size
             self.minsize(300, 200)
-            
+
             # 8. Change geometry to smaller default size
             self.geometry("450x380")
             self.is_minimized = True
-            
+
             # 9. Update preview to refresh layout instantly
             self.update_preview()
         else:
             # Restore:
             # 1. Disable always-on-top
             self.attributes("-topmost", False)
-            
+
             # 2. Set minsize back to default
             self.minsize(800, 500)
-            
+
             # 3. Show left sidebar
             self.left_scroll.grid(row=0, column=0, sticky="nsew", padx=(15, 10), pady=15)
             self.grid_columnconfigure(0, weight=0, minsize=420)
-            
+
             # 4. Restore bottom frame elements to normal sizes and order
             if hasattr(self, 'btn_manual_refresh'):
                 self.btn_manual_refresh.configure(
@@ -5978,32 +5986,32 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
                 )
                 self.btn_manual_refresh.pack_forget()
                 self.btn_manual_refresh.pack(side=tk.LEFT, padx=5)
-                
+
             if hasattr(self, 'switch_live_refresh'):
                 self.switch_live_refresh.configure(font=self.font_main)
                 self.switch_live_refresh.pack_forget()
                 self.switch_live_refresh.pack(side=tk.LEFT, padx=10)
-                
+
             if hasattr(self, 'switch_high_precision'):
                 self.switch_high_precision.pack(side=tk.LEFT, padx=10)
             if hasattr(self, 'btn_export'):
                 self.btn_export.pack(side=tk.RIGHT, padx=5)
-                
+
             # 5. Hide restore button and place toggle button back on canvas
             if hasattr(self, 'btn_restore'):
                 self.btn_restore.pack_forget()
-                
+
             self.btn_toggle_minimize.place(x=10, y=10)
             self.btn_toggle_minimize.lift()
-                
+
             # 6. Restore geometry
             if hasattr(self, 'saved_geometry') and self.saved_geometry:
                 self.geometry(self.saved_geometry)
             else:
                 self.geometry("980x640")
-                
+
             self.is_minimized = False
-            
+
             # 7. Update preview
             self.update_preview()
 
@@ -6032,5 +6040,65 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             self._speaker_data_cache.clear()
         try:
             self._update_group_filters()
+        except Exception:
+            pass
+
+    def _show_context_menu(self, event):
+        from .ui_widgets import make_context_menu, post_context_menu
+        import tkinter as tk
+
+        menu = make_context_menu(self, font_size=15)
+
+        # 1. 刷新预览
+        menu.add_command(label="刷新预览", command=self.manual_refresh_preview)
+
+        # 2. 取消本次预览。没有预览线程时禁用
+        has_preview_thread = (
+            getattr(self, '_preview_worker', None) is not None and
+            self._preview_worker.is_alive()
+        )
+        cancel_state = "normal" if has_preview_thread else "disabled"
+        menu.add_command(label="取消本次预览", command=self._cancel_preview_render, state=cancel_state)
+
+        # 3. 悬浮模式 / 还原预览
+        minimize_label = "还原预览" if getattr(self, 'is_minimized', False) else "悬浮模式"
+        menu.add_command(label=minimize_label, command=self.toggle_minimize)
+
+        # 4. 导出图表...。导出任务运行中时禁用
+        is_exporting = (
+            getattr(self, '_export_worker', None) is not None and
+            self._export_worker.is_alive()
+        )
+        export_state = "disabled" if is_exporting else "normal"
+        menu.add_command(label="导出图表...", command=self.on_confirm, state=export_state)
+
+        menu.add_separator()
+
+        # 5. Checkbutton items
+        menu.add_checkbutton(label="实时刷新", variable=self.var_live_refresh, command=self._on_live_refresh_toggle)
+        menu.add_checkbutton(label="高渲染精细度", variable=self.var_high_precision, command=self.update_preview)
+
+        # 6. Pagination elements
+        show_speaker = hasattr(self, 'pagination_frame') and self.pagination_frame.winfo_ismapped()
+        show_group = hasattr(self, 'group_pagination_frame') and self.group_pagination_frame.winfo_ismapped()
+
+        if show_speaker or show_group:
+            menu.add_separator()
+            if show_speaker:
+                menu.add_command(label="上一个发音人", command=self._prev_page)
+                menu.add_command(label="下一个发音人", command=self._next_page)
+            if show_group:
+                menu.add_command(label="上一组别页", command=self._prev_group_page)
+                menu.add_command(label="下一组别页", command=self._next_group_page)
+
+        post_context_menu(menu, event)
+
+    def _bind_chart_context_menu(self, widget):
+        widget.bind("<Button-2>", self._show_context_menu, add="+")
+        widget.bind("<Button-3>", self._show_context_menu, add="+")
+        try:
+            for child in widget.winfo_children():
+                if child != getattr(self, 'btn_toggle_minimize', None):
+                    self._bind_chart_context_menu(child)
         except Exception:
             pass

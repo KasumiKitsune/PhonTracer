@@ -148,6 +148,18 @@ class CTkScriptList(ctk.CTkScrollableFrame):
         self.buttons = {} # iid -> button
         self._selected_id = None
         self._select_callback = None
+        self._context_callback = None
+
+        # 绑定空白区域右键菜单到 self 和 self._parent_canvas
+        def on_bg_right_click(event):
+            if self._context_callback:
+                self._context_callback(event, None)
+
+        self.bind("<Button-2>", on_bg_right_click, add="+")
+        self.bind("<Button-3>", on_bg_right_click, add="+")
+        if hasattr(self, "_parent_canvas") and self._parent_canvas:
+            self._parent_canvas.bind("<Button-2>", on_bg_right_click, add="+")
+            self._parent_canvas.bind("<Button-3>", on_bg_right_click, add="+")
 
     def get_children(self):
         return list(self.buttons.keys())
@@ -160,7 +172,7 @@ class CTkScriptList(ctk.CTkScrollableFrame):
     def selection_set(self, iid):
         if iid not in self.buttons:
             return
-        
+
         # Deselect old
         if self._selected_id in self.buttons:
             old_btn = self.buttons[self._selected_id]
@@ -170,9 +182,9 @@ class CTkScriptList(ctk.CTkScrollableFrame):
                 hover_color=("#F3F4F6", "#262930"),
                 font=ctk.CTkFont(family=self.font_family, size=13, weight="normal")
             )
-        
+
         self._selected_id = iid
-        
+
         # Select new
         new_btn = self.buttons[iid]
         new_btn.configure(
@@ -181,7 +193,7 @@ class CTkScriptList(ctk.CTkScrollableFrame):
             hover_color=self.colors.get("primary_hover", "#1D4ED8"),
             font=ctk.CTkFont(family=self.font_family, size=13, weight="bold")
         )
-        
+
         if self._select_callback:
             class MockEvent:
                 def __init__(self, widget):
@@ -209,6 +221,9 @@ class CTkScriptList(ctk.CTkScrollableFrame):
             )
         self._selected_id = None
 
+    def set_context_callback(self, callback):
+        self._context_callback = callback
+
     def insert(self, parent, index, iid, text):
         btn = ctk.CTkButton(
             self,
@@ -229,7 +244,7 @@ class CTkScriptList(ctk.CTkScrollableFrame):
         btn.grid_columnconfigure(2, weight=0, minsize=0)
         btn.grid_columnconfigure(3, weight=0)
         btn.grid_columnconfigure(4, weight=1, minsize=12)
-        
+
         # Configure inner label anchor to 'w' so that if the button is narrower than the text,
         # the text is clipped on the right and never on the left.
         if btn._text_label is not None:
@@ -237,6 +252,21 @@ class CTkScriptList(ctk.CTkScrollableFrame):
 
         btn.pack(fill=tk.X, pady=2, padx=2)
         self.buttons[iid] = btn
+
+        def on_btn_right_click(event):
+            self.selection_set(iid)
+            if self._context_callback:
+                self._context_callback(event, iid)
+
+        widgets_to_bind = [btn]
+        for attr in ("_canvas", "_text_label", "_image_label"):
+            if hasattr(btn, attr):
+                w = getattr(btn, attr)
+                if w:
+                    widgets_to_bind.append(w)
+        for w in widgets_to_bind:
+            w.bind("<Button-2>", on_btn_right_click, add="+")
+            w.bind("<Button-3>", on_btn_right_click, add="+")
 
     def bind(self, event_name, callback, add=None):
         if event_name == "<<TreeviewSelect>>":
@@ -1847,7 +1877,7 @@ class ToolkitApp(ctk.CTk):
                 self.mapping_body.pack(fill=tk.X, padx=20, pady=(0, 10))
                 self.header_mapping.toggle_btn.configure(text="折叠")
                 self.mapping_is_collapsed = False
-                
+
                 if not self.export_is_collapsed:
                     self.export_body.pack_forget()
                     self.export_card.pack(fill=tk.X, side=tk.TOP, pady=(0, 16))
@@ -1864,7 +1894,7 @@ class ToolkitApp(ctk.CTk):
                 self.export_body.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 12))
                 self.header_export.toggle_btn.configure(text="折叠")
                 self.export_is_collapsed = False
-                
+
                 if not self.mapping_is_collapsed:
                     self.mapping_body.pack_forget()
                     self.header_mapping.toggle_btn.configure(text="展开")
@@ -1933,17 +1963,17 @@ class ToolkitApp(ctk.CTk):
         # 辅助字表栏：按钮并排，布局更紧凑
         wordlist_box = ctk.CTkFrame(mapping_body, fg_color=self.colors["surface"], corner_radius=12, border_width=1, border_color=self.colors["border"])
         wordlist_box.pack(fill=tk.X, pady=(0, 8))
-        
+
         wl_header = ctk.CTkFrame(wordlist_box, fg_color="transparent")
         wl_header.pack(fill=tk.X, padx=12, pady=(8, 4))
-        
+
         ctk.CTkLabel(
             wl_header,
             text="辅助字表",
             font=ctk.CTkFont(family=self.font_family, size=13, weight="bold"),
             text_color=self.colors["text"],
         ).pack(side=tk.LEFT)
-        
+
         self.btn_wordlist_clear = self._make_button(
             wl_header,
             "清除",
@@ -1953,7 +1983,7 @@ class ToolkitApp(ctk.CTk):
             width=50,
         )
         self.btn_wordlist_clear.pack(side=tk.RIGHT, padx=(4, 0))
-        
+
         self.btn_wordlist_import = self._make_button(
             wl_header,
             "导入",
@@ -1963,7 +1993,7 @@ class ToolkitApp(ctk.CTk):
             width=50,
         )
         self.btn_wordlist_import.pack(side=tk.RIGHT)
-        
+
         self.lbl_textgrid_wordlist = ctk.CTkLabel(
             wordlist_box,
             text="未导入；二字组将按时间顺序判断。",
@@ -1978,7 +2008,7 @@ class ToolkitApp(ctk.CTk):
         # 智能合并开关：缩短说明文本，取消不必要的高度占用
         switch_box = ctk.CTkFrame(mapping_body, fg_color=self.colors["surface"], corner_radius=12, border_width=1, border_color=self.colors["border"])
         switch_box.pack(fill=tk.X, pady=(2, 0))
-        
+
         self.switch_textgrid_pair = ctk.CTkSwitch(
             switch_box,
             text="启用二字组智能合并",
@@ -1990,7 +2020,7 @@ class ToolkitApp(ctk.CTk):
             button_hover_color="#334155",
         )
         self.switch_textgrid_pair.pack(anchor="w", padx=12, pady=(8, 4))
-        
+
         ctk.CTkLabel(
             switch_box,
             text="根据字表或时间顺序合并二字组",
@@ -3226,6 +3256,7 @@ class ToolkitApp(ctk.CTk):
         self.script_tree = CTkScriptList(tree_frame, font_family=self.font_family, colors=self.colors)
         self.script_tree.pack(fill=tk.BOTH, expand=True)
         self.script_tree.bind("<<TreeviewSelect>>", self.on_script_selected)
+        self.script_tree.set_context_callback(self.show_script_context_menu)
 
         # 常用操作按钮
         act_frame1 = ctk.CTkFrame(left_panel, fg_color="transparent")
@@ -3426,7 +3457,7 @@ class ToolkitApp(ctk.CTk):
             self.clipboard_clear()
             self.clipboard_append(log_text)
             self.update()
-            
+
             self.btn_copy_log.configure(
                 text="✔已复制",
                 fg_color=self.colors["success_soft"],
@@ -3479,6 +3510,41 @@ class ToolkitApp(ctk.CTk):
         else:
             self.script_tree.selection_clear()
             self.on_script_selected()
+    def show_script_context_menu(self, event, iid):
+        import os
+        from modules.ui_widgets import make_context_menu, post_context_menu
+
+        menu = make_context_menu(self)
+
+        # 判断是否选中了脚本
+        if iid is not None:
+            # 选中了脚本
+            if getattr(self, "is_script_running", False):
+                menu.add_command(label="停止运行", command=lambda: self.after(10, self.stop_current_script))
+            else:
+                menu.add_command(label="运行脚本", command=lambda: self.after(10, self.run_current_script))
+
+            menu.add_command(label="编辑脚本", command=lambda: self.after(10, self.on_edit_script))
+            menu.add_command(label="导出脚本...", command=lambda: self.after(10, self.on_export_script))
+            menu.add_command(label="复制 AI 提示词...", command=lambda: self.after(10, self.show_prompt_dialog))
+
+            menu.add_separator()
+
+            # 打开结果目录。无输出目录时禁用
+            folder = getattr(self, "script_output_dir", None)
+            has_output = folder and os.path.isdir(folder)
+            state = "normal" if has_output else "disabled"
+            menu.add_command(label="打开结果目录", command=lambda: self.after(10, self.open_script_output_dir), state=state)
+
+            menu.add_separator()
+            menu.add_command(label="删除脚本...", command=lambda: self.after(10, self.on_delete_script))
+        else:
+            # 没有选中脚本（空白处右键）
+            menu.add_command(label="新建脚本", command=lambda: self.after(10, self.on_new_script))
+            menu.add_command(label="导入脚本...", command=lambda: self.after(10, self.on_import_script))
+            menu.add_command(label="复制 AI 提示词...", command=lambda: self.after(10, self.show_prompt_dialog))
+
+        post_context_menu(menu, event)
 
     def on_script_selected(self, event=None):
         selected = self.script_tree.selection()
@@ -4081,7 +4147,7 @@ class ToolkitApp(ctk.CTk):
 
         # 过滤 SVG 同名重复预览：若存在 PNG/JPG 则排除 SVG 预览
         png_basenames = {c["basename"] for c in preview_candidates if c["ext"] in (".png", ".jpg", ".jpeg")}
-        
+
         filtered_results = []
         seen_fig_ids = set()
         for c in preview_candidates:
@@ -5700,7 +5766,7 @@ class AIPromptDialog(ctk.CTkToplevel):
             self.clipboard_clear()
             self.clipboard_append(prompt_text)
             self.update()
-            
+
             if hasattr(self, "btn_copy_prompt_preview"):
                 self.btn_copy_prompt_preview.configure(
                     text="✔已复制",
@@ -5740,7 +5806,7 @@ class AIPromptDialog(ctk.CTkToplevel):
             self.clipboard_clear()
             self.clipboard_append(prompt_text)
             self.update()
-            
+
             if hasattr(self, "btn_copy"):
                 self.btn_copy.configure(
                     text="✔已生成并复制",
