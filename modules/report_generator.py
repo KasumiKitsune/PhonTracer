@@ -1135,9 +1135,18 @@ def write_excel_archive(teproj_path: str, state: Dict[str, Any], output_xlsx_pat
                         for x_val, f_val in zip(pitch_data['xs'], pitch_data['freqs']):
                             f0_cache_rows.append([spk_name, group, item_id, label, x_val, f_val, "是" if item_mode == "f0" else "否"])
                     if formant_data:
-                        for x_val, f1, f2 in zip(formant_data['xs'], formant_data['f1'], formant_data['f2']):
-                            formant_cache_rows.append([spk_name, group, item_id, label, x_val, f1 if not np.isnan(f1) else "",
-                                                       f2 if not np.isnan(f2) else "", "", "是" if item_mode == "formant" else "否"])
+                        f1_arr = formant_data.get('f1', [])
+                        f2_arr = formant_data.get('f2', [])
+                        f3_arr = formant_data.get('f3')
+                        for idx_f, (x_val, f1, f2) in enumerate(zip(formant_data['xs'], f1_arr, f2_arr)):
+                            f3 = f3_arr[idx_f] if f3_arr is not None and idx_f < len(f3_arr) else np.nan
+                            formant_cache_rows.append([
+                                spk_name, group, item_id, label, x_val,
+                                f1 if not np.isnan(f1) else "",
+                                f2 if not np.isnan(f2) else "",
+                                f3 if not np.isnan(f3) else "",
+                                "是" if item_mode == "formant" else "否"
+                            ])
 
         # Resource listing
         for member in z.infolist():
@@ -1482,7 +1491,7 @@ def write_excel_archive(teproj_path: str, state: Dict[str, Any], output_xlsx_pat
         if f0_cache_rows:
             write_sheet("F0缓存明细", ["发音人", "组别", "条目ID", "标签", "时间点(s)", "基频F0(Hz)"], f0_cache_rows)
         if formant_cache_rows:
-            write_sheet("共振峰缓存明细", ["发音人", "组别", "条目ID", "标签", "时间点(s)", "F1共振峰(Hz)", "F2共振峰(Hz)", "F3共振峰(Hz)"], formant_cache_rows)
+            write_sheet("共振峰缓存明细", ["发音人", "组别", "条目ID", "标签", "时间点(s)", "F1共振峰(Hz)", "F2共振峰(Hz)", "F3共振峰(Hz)", "是否当前模式"], formant_cache_rows)
 
     wb.close()
 

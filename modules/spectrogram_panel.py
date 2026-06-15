@@ -64,9 +64,9 @@ class SpectrogramPanel:
         self.eraser_circle = None # Matplotlib patch for displaying the eraser scope
         self.background = None
         self.session_erased_pitch_indices = set()
-        self.session_erased_formant_indices = {"f1": set(), "f2": set()}
+        self.session_erased_formant_indices = {"f1": set(), "f2": set(), "f3": set()}
         self.session_erased_pitch_points = {}
-        self.session_erased_formant_points = {"f1": {}, "f2": {}}
+        self.session_erased_formant_points = {"f1": {}, "f2": {}, "f3": {}}
 
         self.setup_ui()
 
@@ -588,12 +588,22 @@ class SpectrogramPanel:
                 self.ax.scatter(f_xs_filtered, f1_plot, s=18, color='#F97316', alpha=0.9, edgecolors='none', zorder=5, label="F1")
                 self.ax.scatter(f_xs_filtered, f2_plot, s=18, color='#22C55E', alpha=0.9, edgecolors='none', zorder=5, label="F2")
 
+                show_f3 = bool(item.get("show_f3", app_params.get("show_f3", False)))
+                f3_arr = item['formant_data'].get('f3') if show_f3 else None
+
+                if f3_arr is not None:
+                    f3_plot = f3_arr[mask].copy()
+                    self.ax.scatter(f_xs_filtered, f3_plot, s=18, color='#8B5CF6', alpha=0.9, edgecolors='none', zorder=5, label="F3")
+                    self.erased_f3_layer = self.ax.scatter([], [], s=22, color='#DC2626', alpha=0.6, edgecolors='none', zorder=7, label="待剔除F3")
+                else:
+                    self.erased_f3_layer = None
+
                 # 创建共振峰待剔除点图层
                 self.erased_f1_layer = self.ax.scatter([], [], s=22, color='#DC2626', alpha=0.6, edgecolors='none', zorder=7, label="待剔除F1")
                 self.erased_f2_layer = self.ax.scatter([], [], s=22, color='#DC2626', alpha=0.6, edgecolors='none', zorder=7, label="待剔除F2")
 
                 if self.eraser_mode and hasattr(self, 'session_erased_formant_indices'):
-                    self._remember_erased_formant_points(f_xs, f1_arr, f2_arr)
+                    self._remember_erased_formant_points(f_xs, f1_arr, f2_arr, f3_arr)
                     self._update_erased_formant_layers()
         else:
             self.ax2.set_visible(True)
@@ -1208,9 +1218,9 @@ class SpectrogramPanel:
 
     def _reset_eraser_session(self):
         self.session_erased_pitch_indices = set()
-        self.session_erased_formant_indices = {"f1": set(), "f2": set()}
+        self.session_erased_formant_indices = {"f1": set(), "f2": set(), "f3": set()}
         self.session_erased_pitch_points = {}
-        self.session_erased_formant_points = {"f1": {}, "f2": {}}
+        self.session_erased_formant_points = {"f1": {}, "f2": {}, "f3": {}}
 
     def _remember_erased_pitch_points(self, xs, freqs):
         points = getattr(self, 'session_erased_pitch_points', {})
@@ -1219,9 +1229,12 @@ class SpectrogramPanel:
                 points[idx] = (xs[idx], freqs[idx])
         self.session_erased_pitch_points = points
 
-    def _remember_erased_formant_points(self, xs, f1, f2):
-        points = getattr(self, 'session_erased_formant_points', {"f1": {}, "f2": {}})
-        for curve, values in (("f1", f1), ("f2", f2)):
+    def _remember_erased_formant_points(self, xs, f1, f2, f3=None):
+        points = getattr(self, 'session_erased_formant_points', {"f1": {}, "f2": {}, "f3": {}})
+        curves = [("f1", f1), ("f2", f2)]
+        if f3 is not None:
+            curves.append(("f3", f3))
+        for curve, values in curves:
             curve_points = points.setdefault(curve, {})
             for idx in self.session_erased_formant_indices.get(curve, set()):
                 if idx not in curve_points and 0 <= idx < len(xs) and 0 <= idx < len(values):
@@ -1239,8 +1252,8 @@ class SpectrogramPanel:
         )
 
     def _update_erased_formant_layers(self):
-        points = getattr(self, 'session_erased_formant_points', {"f1": {}, "f2": {}})
-        for curve, layer_name in (("f1", "erased_f1_layer"), ("f2", "erased_f2_layer")):
+        points = getattr(self, 'session_erased_formant_points', {"f1": {}, "f2": {}, "f3": {}})
+        for curve, layer_name in (("f1", "erased_f1_layer"), ("f2", "erased_f2_layer"), ("f3", "erased_f3_layer")):
             layer = getattr(self, layer_name, None)
             if not layer:
                 continue
@@ -1258,21 +1271,22 @@ class SpectrogramPanel:
 
         # 提交共振峰剔除，同时保留原始坐标供红色图层持续显示
         if hasattr(self, 'session_erased_formant_indices') and (
-            self.session_erased_formant_indices.get("f1") or self.session_erased_formant_indices.get("f2")
+            self.session_erased_formant_indices.get("f1") or self.session_erased_formant_indices.get("f2") or self.session_erased_formant_indices.get("f3")
         ):
             if item.get('formant_data'):
                 f1 = item['formant_data']['f1']
                 f2 = item['formant_data']['f2']
-                self._remember_erased_formant_points(item['formant_data']['xs'], f1, f2)
+                f3 = item['formant_data'].get('f3')
+                self._remember_erased_formant_points(item['formant_data']['xs'], f1, f2, f3)
 
-                for idx in self.session_erased_formant_indices.get("f1", set()):
-                    if 0 <= idx < len(f1) and not np.isnan(f1[idx]):
-                        f1[idx] = np.nan
-                        applied_formant = True
-                for idx in self.session_erased_formant_indices.get("f2", set()):
-                    if 0 <= idx < len(f2) and not np.isnan(f2[idx]):
-                        f2[idx] = np.nan
-                        applied_formant = True
+                for curve in ("f1", "f2", "f3"):
+                    arr = item["formant_data"].get(curve)
+                    if arr is None:
+                        continue
+                    for idx in self.session_erased_formant_indices.get(curve, set()):
+                        if 0 <= idx < len(arr) and not np.isnan(arr[idx]):
+                            arr[idx] = np.nan
+                            applied_formant = True
 
         # 提交 F0 擦除，同时保留原始坐标供红色图层持续显示
         if hasattr(self, 'session_erased_pitch_indices') and self.session_erased_pitch_indices:
@@ -1311,11 +1325,18 @@ class SpectrogramPanel:
                 if applied_formant:
                     pts = int(app_params.get('pts', 11))
                     strategy = app_params.get('formant_sample_strategy', '整段11点')
+                    show_f3 = bool(item.get("show_f3", app_params.get("show_f3", False)))
                     try:
-                        res = self.app.sample_formant_points(item, pts, strategy)
-                        if isinstance(res, (tuple, list)) and len(res) == 3:
-                            _, preview_f1, preview_f2 = res
-                            item['preview_formants'] = {"f1": preview_f1, "f2": preview_f2}
+                        if show_f3:
+                            res = self.app.sample_formant_points_with_f3(item, pts, strategy)
+                            if isinstance(res, (tuple, list)) and len(res) == 4:
+                                _, preview_f1, preview_f2, preview_f3 = res
+                                item['preview_formants'] = {"f1": preview_f1, "f2": preview_f2, "f3": preview_f3}
+                        else:
+                            res = self.app.sample_formant_points(item, pts, strategy)
+                            if isinstance(res, (tuple, list)) and len(res) == 3:
+                                _, preview_f1, preview_f2 = res
+                                item['preview_formants'] = {"f1": preview_f1, "f2": preview_f2}
                     except Exception:
                         pass
 
@@ -1344,6 +1365,8 @@ class SpectrogramPanel:
             self.erased_f1_layer.set_offsets(np.empty((0, 2)))
         if hasattr(self, 'erased_f2_layer') and self.erased_f2_layer:
             self.erased_f2_layer.set_offsets(np.empty((0, 2)))
+        if hasattr(self, 'erased_f3_layer') and self.erased_f3_layer:
+            self.erased_f3_layer.set_offsets(np.empty((0, 2)))
 
         self.canvas.draw_idle()
 
@@ -1388,55 +1411,38 @@ class SpectrogramPanel:
             f2 = item['formant_data']['f2']
             if len(xs) == 0: return
 
-            # 已剔除点临时设为 NaN，确保下一次选择相邻点
-            f1_temp = f1.copy()
-            for idx in self.session_erased_formant_indices["f1"]:
-                if 0 <= idx < len(f1_temp):
-                    f1_temp[idx] = np.nan
+            show_f3 = bool(item.get("show_f3", app_params.get("show_f3", False)))
+            f3 = item['formant_data'].get('f3')
 
-            f2_temp = f2.copy()
-            for idx in self.session_erased_formant_indices["f2"]:
-                if 0 <= idx < len(f2_temp):
-                    f2_temp[idx] = np.nan
+            candidate_curves = [("f1", f1), ("f2", f2)]
+            if show_f3 and f3 is not None:
+                candidate_curves.append(("f3", f3))
 
-            f1_clean = f1_temp.copy()
-            f1_clean[np.isnan(f1_clean)] = 0.0
-            pts_f1 = np.column_stack((xs, f1_clean))
-            pixels_f1 = self.ax.transData.transform(pts_f1)
-            dists_f1 = np.hypot(pixels_f1[:, 0] - event.x, pixels_f1[:, 1] - event.y)
-            dists_f1[np.isnan(f1_temp)] = np.inf
+            best_curve = None
+            best_idx = -1
+            best_dist = np.inf
 
-            f2_clean = f2_temp.copy()
-            f2_clean[np.isnan(f2_clean)] = 0.0
-            pts_f2 = np.column_stack((xs, f2_clean))
-            pixels_f2 = self.ax.transData.transform(pts_f2)
-            dists_f2 = np.hypot(pixels_f2[:, 0] - event.x, pixels_f2[:, 1] - event.y)
-            dists_f2[np.isnan(f2_temp)] = np.inf
+            for curve, values in candidate_curves:
+                temp = values.copy()
+                for idx in self.session_erased_formant_indices.get(curve, set()):
+                    if 0 <= idx < len(temp):
+                        temp[idx] = np.nan
 
-            erase_radius = self.erase_radius
-            nearest_f1_idx = int(np.argmin(dists_f1)) if len(dists_f1) > 0 else -1
-            nearest_f2_idx = int(np.argmin(dists_f2)) if len(dists_f2) > 0 else -1
-            nearest_f1_dist = dists_f1[nearest_f1_idx] if nearest_f1_idx >= 0 else np.inf
-            nearest_f2_dist = dists_f2[nearest_f2_idx] if nearest_f2_idx >= 0 else np.inf
+                clean = temp.copy()
+                clean[np.isnan(clean)] = 0.0
+                pixels = self.ax.transData.transform(np.column_stack((xs, clean)))
+                dists = np.hypot(pixels[:, 0] - event.x, pixels[:, 1] - event.y)
+                dists[np.isnan(temp)] = np.inf
 
-            target_curve = None
-            target_idx = -1
-            nearest_dist = min(nearest_f1_dist, nearest_f2_dist)
-            if nearest_dist <= erase_radius:
-                if nearest_f1_dist <= nearest_f2_dist:
-                    target_curve = "f1"
-                    target_idx = nearest_f1_idx
-                else:
-                    target_curve = "f2"
-                    target_idx = nearest_f2_idx
+                idx = int(np.argmin(dists)) if len(dists) > 0 else -1
+                if idx >= 0 and dists[idx] < best_dist:
+                    best_curve = curve
+                    best_idx = idx
+                    best_dist = dists[idx]
 
-            if target_idx >= 0:
-                if target_curve == "f1":
-                    self.session_erased_formant_indices["f1"].add(target_idx)
-                else:
-                    self.session_erased_formant_indices["f2"].add(target_idx)
-
-                self._remember_erased_formant_points(xs, f1, f2)
+            if best_idx >= 0 and best_dist <= self.erase_radius:
+                self.session_erased_formant_indices[best_curve].add(best_idx)
+                self._remember_erased_formant_points(xs, f1, f2, f3 if show_f3 else None)
                 self._update_erased_formant_layers()
                 self.canvas.draw_idle()
         else:

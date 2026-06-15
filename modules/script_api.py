@@ -645,7 +645,8 @@ def build_dataset_snapshot(teproj_path):
                                     xs = data["xs"].tolist()
                                     f1 = data["f1"].tolist()
                                     f2 = data["f2"].tolist()
-                                    loaded_formants[item_id] = (xs, f1, f2)
+                                    f3 = data["f3"].tolist() if "f3" in data else []
+                                    loaded_formants[item_id] = (xs, f1, f2, f3)
                             except Exception:
                                 pass
 
@@ -680,16 +681,23 @@ def build_dataset_snapshot(teproj_path):
                             t_values.append(np.nan)
 
                     # 共振峰数据
-                    xs_f, f1, f2 = loaded_formants.get(item_id, ([], [], []))
+                    loaded_val = loaded_formants.get(item_id, ([], [], [], []))
+                    if len(loaded_val) == 3:
+                        xs_f, f1, f2 = loaded_val
+                        f3 = []
+                    else:
+                        xs_f, f1, f2, f3 = loaded_val
+
                     f1_clean = [f if not np.isnan(f) else np.nan for f in f1]
                     f2_clean = [f if not np.isnan(f) else np.nan for f in f2]
+                    f3_clean = [f if not np.isnan(f) else np.nan for f in f3]
 
                     # 提取每个音节的 F0 数据 (syl_data)、T值数据 (syl_t_values) 与共振峰数据 (syl_formants)
                     syl_data = []
                     syl_t_values = []
                     syl_formants = []
                     try:
-                        from modules.data_utils import get_item_syllable_bounds, split_into_syllables, sample_formant_points_by_bounds
+                        from modules.data_utils import get_item_syllable_bounds, split_into_syllables, sample_formant_points_by_bounds_extended
                         
                         # 构造临时字典用于获取音节边界和单字
                         tmp_item = {
@@ -744,6 +752,9 @@ def build_dataset_snapshot(teproj_path):
                                 "f1": np.asarray(f1_clean),
                                 "f2": np.asarray(f2_clean)
                             }
+                            if f3_clean:
+                                f_data_mock["f3"] = np.asarray(f3_clean)
+
                             mock_item = {
                                 "start": start,
                                 "end": end,
@@ -753,7 +764,13 @@ def build_dataset_snapshot(teproj_path):
                                 "formant_data": f_data_mock
                             }
                             strategy = item.get("formant_sample_strategy", spk.get("last_params", {}).get("formant_sample_strategy", "整段11点"))
-                            times_f, f1_vals, f2_vals = sample_formant_points_by_bounds(mock_item, bounds, 11, strategy)
+                            show_f3 = bool(item.get("show_f3", spk.get("last_params", {}).get("show_f3", False)))
+                            res_samp = sample_formant_points_by_bounds_extended(mock_item, bounds, 11, strategy, include_f3=show_f3)
+                            times_f = res_samp["times"]
+                            f1_vals = res_samp["f1"]
+                            f2_vals = res_samp["f2"]
+                            f3_vals = res_samp["f3"]
+
                             for idx_syl, (c_s, c_e) in enumerate(bounds):
                                 char = syls[idx_syl] if idx_syl < len(syls) else f"字{idx_syl+1}"
                                 s_idx = idx_syl * 11
@@ -761,14 +778,17 @@ def build_dataset_snapshot(teproj_path):
                                 s_times = times_f[s_idx:e_idx]
                                 s_f1 = f1_vals[s_idx:e_idx]
                                 s_f2 = f2_vals[s_idx:e_idx]
-                                syl_formants.append({
+                                s_dict = {
                                     "syllable_index": idx_syl,
                                     "char": char,
                                     "bounds": [c_s, c_e],
                                     "times": s_times,
                                     "f1": s_f1,
                                     "f2": s_f2
-                                })
+                                }
+                                if show_f3:
+                                    s_dict["f3"] = f3_vals[s_idx:e_idx]
+                                syl_formants.append(s_dict)
                     except Exception as ex:
                         print(f"Error extracting syllable data in snapshot: {ex}")
 
@@ -800,7 +820,8 @@ def build_dataset_snapshot(teproj_path):
                         "formant": {
                             "xs": xs_f,
                             "f1": f1_clean,
-                            "f2": f2_clean
+                            "f2": f2_clean,
+                            "f3": f3_clean
                         },
                         "syl_data": syl_data,
                         "syl_t_values": syl_t_values,

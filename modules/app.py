@@ -1102,6 +1102,23 @@ class PhoneticsApp:
         self.option_formant_sample_strategy.set(self.last_params.get('formant_sample_strategy', '整段11点'))
         self.option_formant_sample_strategy.pack(side=tk.RIGHT)
 
+        # 共振峰参数 row 6: Show F3 Toggle ("显示/导出 F3")
+        row_formant_f3 = ctk.CTkFrame(self.formant_params_container, fg_color="transparent")
+        row_formant_f3.pack(fill=tk.X, padx=15, pady=4)
+        ctk.CTkLabel(row_formant_f3, text=" F3:", image=self.icons.get("tag"), compound="left", text_color="#374151", font=self.font_main).pack(side=tk.LEFT)
+
+        self.var_show_f3 = ctk.BooleanVar(value=bool(self.last_params.get("show_f3", False)))
+        self.switch_show_f3 = ctk.CTkSwitch(
+            row_formant_f3,
+            text="显示/导出",
+            variable=self.var_show_f3,
+            command=self.on_show_f3_toggle,
+            font=self.font_main,
+            progress_color="#10B981",
+            text_color="#374151"
+        )
+        self.switch_show_f3.pack(side=tk.RIGHT)
+
         self.row_trim = ctk.CTkFrame(self.params_content_frame, fg_color="transparent")
         self.row_trim.pack(fill=tk.X, padx=15, pady=(10, 15))
         self.lbl_trim_icon = ctk.CTkLabel(self.row_trim, text="", image=self.icons.get("trim"))
@@ -1235,6 +1252,18 @@ class PhoneticsApp:
             self.entry_formant_pre_emphasis.delete(0, tk.END)
             self.entry_formant_pre_emphasis.insert(0, str(float(formant_pre_emphasis)))
             self.entry_formant_pre_emphasis._last_val = str(float(formant_pre_emphasis))
+
+        if hasattr(self, 'option_formant_sample_strategy'):
+            strategy = item.get('formant_sample_strategy', self.last_params.get('formant_sample_strategy', '整段11点'))
+            self.option_formant_sample_strategy.set(strategy)
+
+        if hasattr(self, 'switch_show_f3'):
+            show_f3 = item.get('show_f3', self.last_params.get('show_f3', False))
+            self.var_show_f3.set(show_f3)
+            if show_f3:
+                self.switch_show_f3.select()
+            else:
+                self.switch_show_f3.deselect()
 
         self.spectrogram_panel.load_item(item)
 
@@ -1507,6 +1536,13 @@ class PhoneticsApp:
             self.entry_formant_pre_emphasis.delete(0, tk.END)
             self.entry_formant_pre_emphasis.insert(0, str(self.last_params.get('formant_pre_emphasis', 50.0)))
             self.option_formant_sample_strategy.set(self.last_params.get('formant_sample_strategy', '整段11点'))
+            if hasattr(self, 'switch_show_f3'):
+                show_f3 = self.last_params.get('show_f3', False)
+                self.var_show_f3.set(show_f3)
+                if show_f3:
+                    self.switch_show_f3.select()
+                else:
+                    self.switch_show_f3.deselect()
 
         if self.pending_long_snd: self.lbl_long_file.configure(text="已加载音频", text_color="#2563EB")
         else: self.lbl_long_file.configure(text="未选择", text_color="#6B7280")
@@ -1704,6 +1740,7 @@ class PhoneticsApp:
             'formant_pre_emphasis': self.last_params.get('formant_pre_emphasis', 50.0),
             'formant_sample_strategy': self.last_params.get('formant_sample_strategy', '整段11点'),
             'pts': self.last_params.get('pts', 11),
+            'show_f3': self.last_params.get('show_f3', False),
         }
 
     def _stamp_formant_params_on_item(self, item, params=None):
@@ -1714,6 +1751,7 @@ class PhoneticsApp:
         item['formant_window_length'] = params.get('formant_window_length', self.last_params.get('formant_window_length', 0.025))
         item['formant_pre_emphasis'] = params.get('formant_pre_emphasis', self.last_params.get('formant_pre_emphasis', 50.0))
         item['formant_sample_strategy'] = params.get('formant_sample_strategy', self.last_params.get('formant_sample_strategy', '整段11点'))
+        item['show_f3'] = params.get('show_f3', self.last_params.get('show_f3', False))
 
     def _maybe_refresh_formants_after_import(self):
         analysis_mode = self.last_params.get('analysis_mode', 'f0')
@@ -1852,6 +1890,16 @@ class PhoneticsApp:
     def on_formant_strategy_change(self, value):
         self.last_params['formant_sample_strategy'] = value
         self.on_param_change()
+
+    def on_show_f3_toggle(self):
+        val = bool(self.var_show_f3.get())
+        self.last_params["show_f3"] = val
+        curr_item = getattr(self, 'spectrogram_panel', None) and self.spectrogram_panel.current_item
+        if curr_item:
+            curr_item["show_f3"] = val
+        self.mark_modified()
+        if hasattr(self, 'spectrogram_panel') and self.spectrogram_panel:
+            self.spectrogram_panel.plot_item_spectrogram()
 
     def _mode_state_key(self, mode):
         return f"_mode_state_{mode}"
@@ -2064,6 +2112,19 @@ class PhoneticsApp:
                         preview_f2.append(float(np.interp(t, xs[f2_valid_idx], f2_arr[f2_valid_idx])))
 
         return preview_times.tolist(), preview_f1, preview_f2
+
+    def sample_formant_points_with_f3(self, item, pts=11, strategy='整段11点'):
+        from .data_utils import sample_formant_points_by_bounds_extended
+        start = item['start']
+        end = item['end']
+        sampled = sample_formant_points_by_bounds_extended(
+            item,
+            [[start, end]],
+            pts=pts,
+            strategy=strategy,
+            include_f3=True,
+        )
+        return sampled["times"], sampled["f1"], sampled["f2"], sampled["f3"]
 
     def recalculate_all_audio(self, only_trim_silence=False, recompute_pitch=True, only_pitch_changed=False):
         if hasattr(self, 'spectrogram_panel') and self.spectrogram_panel:
@@ -4967,7 +5028,8 @@ class PhoneticsApp:
                     'formant_window_length': float(window_length),
                     'formant_pre_emphasis': float(pre_emphasis),
                     'formant_sample_strategy': (curr_item or {}).get('formant_sample_strategy', self.last_params.get('formant_sample_strategy', '整段11点')),
-                    'analysis_mode': (curr_item or {}).get('analysis_mode', self.last_params.get('analysis_mode', 'f0'))
+                    'analysis_mode': (curr_item or {}).get('analysis_mode', self.last_params.get('analysis_mode', 'f0')),
+                    'show_f3': (curr_item or {}).get('show_f3', self.last_params.get('show_f3', False))
                 }
             )
         else:
@@ -5006,7 +5068,8 @@ class PhoneticsApp:
                 'formant_pre_emphasis': self.last_params.get('formant_pre_emphasis', 50.0),
                 'formant_sample_strategy': self.last_params.get('formant_sample_strategy', '整段11点'),
                 'pts': self.last_params.get('pts', 11),
-                'analysis_mode': 'formant'
+                'analysis_mode': 'formant',
+                'show_f3': self.last_params.get('show_f3', False)
             }
 
             for i, (iid, item) in enumerate(items_snapshot):
@@ -5054,6 +5117,7 @@ class PhoneticsApp:
                         item['formant_window_length'] = params['formant_window_length']
                         item['formant_pre_emphasis'] = params['formant_pre_emphasis']
                         item['formant_sample_strategy'] = params['formant_sample_strategy']
+                        item['show_f3'] = params['show_f3']
 
                         if item.get('path'):
                             if item['path'] in self.audio_cache:
@@ -5065,6 +5129,7 @@ class PhoneticsApp:
                                 cache_item['formant_window_length'] = params['formant_window_length']
                                 cache_item['formant_pre_emphasis'] = params['formant_pre_emphasis']
                                 cache_item['formant_sample_strategy'] = params['formant_sample_strategy']
+                                cache_item['show_f3'] = params['show_f3']
                     except Exception as e:
                         import logging
                         logging.getLogger(__name__).error(f"Error recalculating formant: {e}")

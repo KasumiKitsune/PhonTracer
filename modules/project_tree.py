@@ -562,7 +562,7 @@ class ItemPropertiesDialog(ctk.CTkToplevel):
         # Buttons frame
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
         btn_frame.pack(fill=tk.X, padx=22, pady=(0, 18))
-        
+
         # Close button on the right
         ctk.CTkButton(
             btn_frame,
@@ -596,28 +596,28 @@ class ItemPropertiesDialog(ctk.CTkToplevel):
         card = ctk.CTkFrame(parent, fg_color=("#F9FAFB", "#262930"), corner_radius=8, border_width=1, border_color=("#E5E7EB", "#374151"))
         card.pack(fill=tk.X, pady=7)
         ctk.CTkLabel(card, text=title, font=self.font_title, text_color=("#111827", "#F9FAFB")).pack(anchor="w", padx=14, pady=(10, 4))
-        
+
         grid_frame = ctk.CTkFrame(card, fg_color="transparent")
         grid_frame.pack(fill=tk.X, padx=14, pady=(0, 6))
         grid_frame.grid_columnconfigure(0, weight=0)
         grid_frame.grid_columnconfigure(1, weight=1, uniform="val_cols")
         grid_frame.grid_columnconfigure(2, weight=0)
         grid_frame.grid_columnconfigure(3, weight=1, uniform="val_cols")
-        
+
         val_labels = []
         for i, (label, value) in enumerate(rows):
             r = i // 2
             c = (i % 2) * 2
-            
+
             lbl_padx = (10, 5) if c == 2 else (0, 5)
             lbl = ctk.CTkLabel(grid_frame, text=label, width=110, anchor="w", font=self.font_main, text_color=("#6B7280", "#9CA3AF"))
             lbl.grid(row=r, column=c, sticky="w", padx=lbl_padx, pady=2)
-            
+
             val_text = self._empty_to_dash(value)
             val = ctk.CTkLabel(grid_frame, text=val_text, anchor="w", justify="left", font=self.font_main, text_color=("#1F2937", "#E5E7EB"), wraplength=200)
             val.grid(row=r, column=c+1, sticky="ew", padx=(0, 10), pady=2)
             val_labels.append(val)
-            
+
         def on_configure(event):
             if event.widget == grid_frame:
                 col_width = (event.width - 220 - 30) // 2
@@ -625,7 +625,7 @@ class ItemPropertiesDialog(ctk.CTkToplevel):
                     col_width = 100
                 for v_lbl in val_labels:
                     v_lbl.configure(wraplength=col_width)
-                
+
         grid_frame.bind("<Configure>", on_configure)
         ctk.CTkFrame(card, height=6, fg_color="transparent").pack(fill=tk.X)
 
@@ -680,7 +680,13 @@ class ItemPropertiesDialog(ctk.CTkToplevel):
             ("共振峰个数", self._value_with_source('formant_count', 5)),
             ("共振峰窗长", self._value_with_source('formant_window_length', 0.025)),
             ("预加重系数", self._value_with_source('formant_pre_emphasis', 50.0)),
+            ("显示/导出 F3", self._value_with_source_bool('show_f3', False)),
         ]
+
+    def _value_with_source_bool(self, key, default):
+        val = self.item.get(key) if key in self.item else self.app_state_params.get(key, default)
+        source = " (条目自定)" if key in self.item else " (发音人默认)"
+        return f"{'是' if bool(val) else '否'}{source}"
 
     def _empty_to_dash(self, value):
         text = str(value) if value is not None else ""
@@ -727,20 +733,20 @@ class ItemPropertiesDialog(ctk.CTkToplevel):
             ("【边界与切分】", self._boundary_rows()),
             ("【声学参数】", self._acoustic_rows())
         ]
-        
+
         lines = []
         for sec_title, rows in sections:
             lines.append(sec_title)
             for label, value in rows:
                 lines.append(f"{label}: {self._empty_to_dash(value)}")
             lines.append("")
-            
+
         text = "\n".join(lines).strip()
-        
+
         self.clipboard_clear()
         self.clipboard_append(text)
         self.update()
-        
+
         old_text = self.btn_copy.cget("text")
         self.btn_copy.configure(text="已复制")
         self.after(1500, lambda: self.btn_copy.configure(text=old_text))
@@ -2149,7 +2155,7 @@ class ProjectTreePanel:
         for prefix in ("[致命]", "[警告]", "[提示]"):
             if msg.startswith(prefix):
                 msg = msg[len(prefix):].strip()
-        
+
         if "时间边界" in msg and "无效" in msg:
             return "边界无效"
         if "时间边界" in msg and "缺失" in msg:
@@ -2204,7 +2210,7 @@ class ProjectTreePanel:
         msg = re.sub(r"音节\[.*?\]", "", msg)
         msg = msg.split("(")[0]
         msg = msg.split("（")[0]
-        
+
         if len(msg) > 6:
             return msg[:6]
         return msg
@@ -2242,7 +2248,7 @@ class ProjectTreePanel:
         if item.get('is_excluded', False):
             reason = item.get('exclusion_reason', '')
             return self._shorten_exclusion_reason(reason)
-        
+
         warn_msgs = item.get('warnings', [])
         short_warns = []
         for w in warn_msgs:
@@ -4477,7 +4483,10 @@ class ProjectTreePanel:
         ws_raw = workbook.add_worksheet("原始数据")
 
         # ══════════ Sheet 1: 提取数据 ══════════
+        show_f3 = bool(self.app.last_params.get("show_f3", False))
         data_headers = ["发音人", "组别", "编号", "词语", "音节序号", "单字", "时间点序号", "时间(s)", "F1(Hz)", "F2(Hz)"]
+        if show_f3:
+            data_headers.append("F3(Hz)")
         for col, h in enumerate(data_headers):
             ws_data.write(0, col, h)
 
@@ -4517,7 +4526,12 @@ class ProjectTreePanel:
 
                     bounds = get_item_syllable_bounds(item)
                     syls = split_into_syllables(item.get('label', ''))
-                    preview_times, f1_vals, f2_vals = sample_formant_points_by_bounds(item, bounds, pts, strategy)
+                    from .data_utils import sample_formant_points_by_bounds_extended
+                    res_samp = sample_formant_points_by_bounds_extended(item, bounds, pts, strategy, include_f3=show_f3)
+                    preview_times = res_samp["times"]
+                    f1_vals = res_samp["f1"]
+                    f2_vals = res_samp["f2"]
+                    f3_vals = res_samp["f3"]
 
                     # 记录原始帧数据入口
                     raw_formant_entries.append({
@@ -4560,6 +4574,13 @@ class ProjectTreePanel:
                                 ws_data.write(data_row, 9, "")
                             else:
                                 ws_data.write(data_row, 9, round(f2_v, 1))
+
+                            if show_f3:
+                                f3_v = f3_vals[flat_start + idx_pt]
+                                if np.isnan(f3_v):
+                                    ws_data.write(data_row, 10, "")
+                                else:
+                                    ws_data.write(data_row, 10, round(f3_v, 1))
                             data_row += 1
 
                     global_idx += 1
@@ -4577,8 +4598,11 @@ class ProjectTreePanel:
         # ══════════ Sheet 3: 原始数据（逐帧共振峰帧数据） ══════════
         raw_headers = [
             "发音人", "组别", "编号", "词语", "音节序号", "单字",
-            "绝对时间(s)", "字内相对时间(s)", "F1(Hz)", "F2(Hz)", "状态"
+            "绝对时间(s)", "字内相对时间(s)", "F1(Hz)", "F2(Hz)"
         ]
+        if show_f3:
+            raw_headers.append("F3(Hz)")
+        raw_headers.append("状态")
         for col, h in enumerate(raw_headers):
             ws_raw.write(0, col, h)
 
@@ -4596,6 +4620,7 @@ class ProjectTreePanel:
             bounds = get_item_syllable_bounds(item)
             syls = split_into_syllables(item.get('label', ''))
 
+            f3_arr = f_data.get('f3') if show_f3 else None
             for syl_idx, (c_s, c_e) in enumerate(bounds):
                 char = syls[syl_idx] if syl_idx < len(syls) else f"字{syl_idx+1}"
                 mask = (xs >= c_s) & (xs <= c_e)
@@ -4605,6 +4630,8 @@ class ProjectTreePanel:
                     t = float(xs[frame_idx])
                     f1 = float(f1_arr[frame_idx]) if frame_idx < len(f1_arr) and np.isfinite(f1_arr[frame_idx]) else 0.0
                     f2 = float(f2_arr[frame_idx]) if frame_idx < len(f2_arr) and np.isfinite(f2_arr[frame_idx]) else 0.0
+                    if show_f3:
+                        f3 = float(f3_arr[frame_idx]) if f3_arr is not None and frame_idx < len(f3_arr) and np.isfinite(f3_arr[frame_idx]) else 0.0
 
                     status = "有效" if (f1 > 0 and f2 > 0 and f2 > f1) else "无效"
 
@@ -4618,7 +4645,11 @@ class ProjectTreePanel:
                     ws_raw.write(raw_row, 7, round(t - c_s, 6))
                     ws_raw.write(raw_row, 8, round(f1, 1) if f1 > 0 else 0.0)
                     ws_raw.write(raw_row, 9, round(f2, 1) if f2 > 0 else 0.0)
-                    ws_raw.write(raw_row, 10, status)
+                    if show_f3:
+                        ws_raw.write(raw_row, 10, round(f3, 1) if f3 > 0 else 0.0)
+                        ws_raw.write(raw_row, 11, status)
+                    else:
+                        ws_raw.write(raw_row, 10, status)
                     raw_row += 1
 
         ws_raw.freeze_panes(1, 0)
@@ -4633,8 +4664,11 @@ class ProjectTreePanel:
         if all_speakers is None:
             all_speakers = [self.app.speaker_manager.get_active_speaker()]
 
+        show_f3 = bool(self.app.last_params.get("show_f3", False))
         with open(out_file, "w", encoding="utf-8-sig") as f:
             raw_headers = ["发音人", "组别", "编号", "词语", "音节序号", "单字", "时间点序号", "时间(s)", "F1(Hz)", "F2(Hz)"]
+            if show_f3:
+                raw_headers.append("F3(Hz)")
             f.write("\t".join(raw_headers) + "\n")
 
             for spk in all_speakers:
@@ -4668,7 +4702,12 @@ class ProjectTreePanel:
 
                         bounds = get_item_syllable_bounds(item)
                         syls = split_into_syllables(item.get('label', ''))
-                        preview_times, f1_vals, f2_vals = sample_formant_points_by_bounds(item, bounds, pts, strategy)
+                        from .data_utils import sample_formant_points_by_bounds_extended
+                        res_samp = sample_formant_points_by_bounds_extended(item, bounds, pts, strategy, include_f3=show_f3)
+                        preview_times = res_samp["times"]
+                        f1_vals = res_samp["f1"]
+                        f2_vals = res_samp["f2"]
+                        f3_vals = res_samp["f3"]
 
                         for idx_syl, (c_s, c_e) in enumerate(bounds):
                             char = syls[idx_syl] if idx_syl < len(syls) else f"字{idx_syl+1}"
@@ -4677,6 +4716,7 @@ class ProjectTreePanel:
 
                             f1_slice = f1_vals[flat_start:flat_end]
                             f2_slice = f2_vals[flat_start:flat_end]
+                            f3_slice = f3_vals[flat_start:flat_end] if show_f3 else []
 
                             for idx_pt in range(pts):
                                 f1_v = f1_slice[idx_pt]
@@ -4697,5 +4737,9 @@ class ProjectTreePanel:
                                     f1_str,
                                     f2_str
                                 ]
+                                if show_f3:
+                                    f3_v = f3_slice[idx_pt]
+                                    f3_str = "--" if np.isnan(f3_v) else f"{f3_v:.1f}"
+                                    line_parts.append(f3_str)
                                 f.write("\t".join(line_parts) + "\n")
                         global_idx += 1
