@@ -228,6 +228,8 @@ Type 'help' or '?' to list commands. Use 'agent_guide' for AI operating rules.
     def params(self):
         if 'trim_silence' not in self.current_speaker.last_params:
             self.current_speaker.last_params['trim_silence'] = True
+        if 'show_f3' not in self.current_speaker.last_params:
+            self.current_speaker.last_params['show_f3'] = False
         return self.current_speaker.last_params
 
     @property
@@ -387,7 +389,7 @@ Type 'help' or '?' to list commands. Use 'agent_guide' for AI operating rules.
         """
         Set analysis parameters.
         Usage: set_params key=value [key=value ...]
-        Valid keys: pts, db, skip_front, pitch_floor, pitch_ceiling, voicing_threshold, trim_silence, analysis_mode, formant_max_hz, formant_count, formant_window_length, formant_pre_emphasis, formant_sample_strategy
+        Valid keys: pts, db, skip_front, pitch_floor, pitch_ceiling, voicing_threshold, trim_silence, analysis_mode, formant_max_hz, formant_count, formant_window_length, formant_pre_emphasis, formant_sample_strategy, show_f3
         Example: set_params db=50.0 trim_silence=False analysis_mode=formant formant_max_hz=5500
         """
         args = shlex.split(arg)
@@ -401,7 +403,7 @@ Type 'help' or '?' to list commands. Use 'agent_guide' for AI operating rules.
                 k, v = kv.split('=', 1)
                 if k in self.params:
                     try:
-                        if k == 'trim_silence':
+                        if k in ('trim_silence', 'show_f3'):
                             self.params[k] = v.lower() in ('true', '1', 'yes')
                         elif k in ('pts', 'pitch_floor', 'pitch_ceiling', 'formant_count'):
                             self.params[k] = int(v)
@@ -500,6 +502,7 @@ PhonTracer 是一款高精度的声学声调/共振峰格局分析工具。
 * formant_window_length: 共振峰分析窗长（秒，默认：0.025）
 * formant_pre_emphasis: 共振峰预加重系数（Hz，默认：50.0）
 * formant_sample_strategy: 共振峰提取采样策略（可选 '整段11点', '中段均值'，默认：'整段11点'）
+* show_f3: 是否显示/导出 F3 共振峰（默认：False）
 
 --- 核心命令速查表 ---
 - `status`: 获取项目当前模式、状态指标、警告统计等。
@@ -589,6 +592,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
   * formant_window_length: Formant analysis window length in seconds (default: 0.025)
   * formant_pre_emphasis: Formant pre-emphasis filter value (default: 50.0)
   * formant_sample_strategy: Strategy to sample formant points (e.g., '整段11点', '中段均值')
+  * show_f3: Whether to show/export F3 formant (default: False)
 
 --- ALL COMMANDS REFERENCE ---
 - `status`: Show current project state, active parameters, item warnings.
@@ -4898,7 +4902,10 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
         ws_raw = workbook.add_worksheet("逐点数据")
         ws_sum = workbook.add_worksheet("摘要数据")
 
+        show_f3 = bool(self.params.get('show_f3', False))
         raw_headers = ["发音人", "组别", "编号", "词语", "音节序号", "单字", "时间点序号", "时间(s)", "F1(Hz)", "F2(Hz)"]
+        if show_f3:
+            raw_headers.append("F3(Hz)")
         for col, h in enumerate(raw_headers):
             ws_raw.write(0, col, h)
 
@@ -4940,7 +4947,12 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
 
                     bounds = get_item_syllable_bounds(item)
                     syls = split_into_syllables(item.get('label', ''))
-                    preview_times, f1_vals, f2_vals = sample_formant_points_by_bounds(item, bounds, pts, strategy)
+                    from modules.data_utils import sample_formant_points_by_bounds_extended
+                    res_samp = sample_formant_points_by_bounds_extended(item, bounds, pts, strategy, include_f3=show_f3)
+                    preview_times = res_samp["times"]
+                    f1_vals = res_samp["f1"]
+                    f2_vals = res_samp["f2"]
+                    f3_vals = res_samp["f3"]
 
                     # 逐字写入逐点数据和摘要数据
                     for idx_syl, (c_s, c_e) in enumerate(bounds):
@@ -4974,6 +4986,13 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                                 ws_raw.write_string(raw_row, 9, "--")
                             else:
                                 ws_raw.write(raw_row, 9, round(f2_v, 1))
+
+                            if show_f3:
+                                f3_v = f3_vals[flat_start + idx_pt]
+                                if np.isnan(f3_v):
+                                    ws_raw.write_string(raw_row, 10, "--")
+                                else:
+                                    ws_raw.write(raw_row, 10, round(f3_v, 1))
                             raw_row += 1
 
                         # 计算共振峰的成对有效统计特征

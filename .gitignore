@@ -42,6 +42,8 @@
 **/*.bak
 .DS_Store
 desktop.ini
+assets/manual/manual_2026-05-25_to_2026-05-30_supplement.md
+assets/manual/manual_2026-06-01_to_2026-06-13_supplement.md
 
 # 7. 排除本地环境与构建产物
 .venv/
