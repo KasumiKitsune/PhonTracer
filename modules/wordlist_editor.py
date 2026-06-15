@@ -217,25 +217,26 @@ class VisualWordlistEditor(ctk.CTkFrame):
         self._build_ui()
         self.set_document(self.document)
 
-    def _button(self, parent, text, command, tone="primary", width=None):
+    def _button(self, parent, text, command, tone="primary", width=None, height=34):
         palette = {
-            "primary": (self.colors["primary"], self.colors.get("primary_hover", "#1D4ED8"), "#FFFFFF"),
-            "success": (self.colors.get("success", "#10B981"), "#059669", "#FFFFFF"),
-            "warning": (self.colors.get("warning", "#F59E0B"), "#D97706", "#FFFFFF"),
-            "danger": (self.colors.get("danger", "#EF4444"), "#DC2626", "#FFFFFF"),
-            "purple": ("#6366F1", "#4F46E5", "#FFFFFF"),
+            "primary": (self.colors["primary"], self.colors.get("primary_hover", "#1D4ED8"), "white"),
+            "success": (self.colors.get("success", "#10B981"), self.colors.get("success_hover", "#059669"), "white"),
+            "warning": (self.colors.get("warning", "#F59E0B"), self.colors.get("warning_hover", "#D97706"), "white"),
+            "danger": (self.colors.get("danger", "#EF4444"), self.colors.get("danger_hover", "#DC2626"), "white"),
+            "purple": (self.colors.get("purple", "#6366F1"), self.colors.get("purple_hover", "#4F46E5"), "white"),
             "secondary": ("#E2E8F0", "#CBD5E1", self.colors["text_soft"]),
+            "ghost": (self.colors.get("surface", "#FFFFFF"), "#F1F5F9", self.colors["text_soft"]),
         }
         fg, hover, tc = palette.get(tone, palette["primary"])
         options = {
             "text": text,
             "command": command,
-            "height": 30,
-            "corner_radius": 15,
+            "height": height,
+            "corner_radius": 999,
             "fg_color": fg,
             "hover_color": hover,
             "text_color": tc,
-            "font": self.font_small,
+            "font": ctk.CTkFont(family=self.font_family, size=12, weight="bold"),
         }
         if width is not None:
             options["width"] = width
@@ -339,12 +340,10 @@ class VisualWordlistEditor(ctk.CTkFrame):
             ("新建字表", lambda: self.set_document({}), "secondary"),
             ("另存为", lambda: self.save_ptwl_dialog(save_as=True), "success"),
             ("检查字表", self.check_document, "warning"),
-            ("导入 v1 文本", self.import_v1_dialog, "secondary"),
+            ("转换普通字表", self.import_v1_dialog, "secondary"),
             ("导入 CSV", self.import_csv_dialog, "secondary"),
-            ("导出 v1 文本", self.export_v1_dialog, "secondary"),
+            ("导出为普通字表", self.export_v1_dialog, "secondary"),
             ("导出 CSV", self.export_csv_dialog, "secondary"),
-            ("删除当前组", self.delete_group, "danger"),
-            ("删除当前词项", self.delete_item, "danger"),
         ]
         actions.extend(self.extra_actions)
 
@@ -353,6 +352,17 @@ class VisualWordlistEditor(ctk.CTkFrame):
                 popup.destroy()
                 cmd()
             self._button(grid, text, run, tone=tone).grid(row=idx // 2, column=idx % 2, sticky="ew", padx=5, pady=5)
+
+        danger_start_row = (len(actions) + 1) // 2
+        danger_actions = [
+            ("删除当前组", self.delete_group, "danger"),
+            ("删除当前词项", self.delete_item, "danger"),
+        ]
+        for idx, (text, command, tone) in enumerate(danger_actions):
+            def run(cmd=command):
+                popup.destroy()
+                cmd()
+            self._button(grid, text, run, tone=tone).grid(row=danger_start_row, column=idx, sticky="ew", padx=5, pady=5)
 
         self._button(popup, "关闭", popup.destroy, "secondary").pack(fill=tk.X, padx=22, pady=(0, 18))
 
@@ -507,7 +517,7 @@ class VisualWordlistEditor(ctk.CTkFrame):
         row.pack(fill=tk.X, padx=12)
         label_widget = ctk.CTkLabel(row, text=label, font=self.font_small, text_color=self.colors["muted"])
         label_widget.pack(side=tk.LEFT)
-        self._button(row, "常用", lambda v=variable, p=presets: self._show_tag_menu(row, v, p), "secondary", width=58).pack(side=tk.RIGHT)
+        self._button(row, "常用", lambda v=variable, p=presets: self._show_tag_menu(row, v, p), "secondary", width=58, height=26).pack(side=tk.RIGHT)
         self._bind_child_to_scroll_frame(row, parent)
         placeholder = "用分号分隔，例如 目标词；单字；阴平"
         entry = self._entry(parent, variable, placeholder=placeholder)

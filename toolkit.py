@@ -3018,7 +3018,9 @@ class ToolkitApp(ctk.CTk):
             colors=self.colors,
             font_family=self.font_family,
             bottom_actions=[
-                ("复制 Agent 生成字表提示词", self.copy_wordlist_agent_prompt, "warning"),
+                ("Agent提示词复制", self.copy_wordlist_agent_prompt, "warning"),
+            ],
+            extra_actions=[
                 ("同步到音频拆分", self.sync_wordlist_from_editor, "purple"),
             ],
         )
