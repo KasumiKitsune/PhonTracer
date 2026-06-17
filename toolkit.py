@@ -2,6 +2,7 @@ import os
 import sys
 import threading
 import re
+import csv
 import subprocess
 import platform
 import tkinter as tk
@@ -96,7 +97,7 @@ import datetime
 import uuid
 import zipfile
 import json
-from modules.data_utils import fuzzy_match_word_to_path, parse_wordlist as parse_grouped_wordlist
+from modules.data_utils import fuzzy_match_word_to_path, make_textgrid_export_stem, parse_wordlist as parse_grouped_wordlist
 from modules.project_manager import read_project_metadata_from_archive
 from modules.report_generator import get_pitch_floor, get_pitch_ceiling
 from modules.textgrid_converter import (
@@ -4882,6 +4883,154 @@ class ToolkitApp(ctk.CTk):
 
         return extracted_count
 
+    @staticmethod
+    def _safe_export_name(value, default="未命名"):
+        text = str(value or default).strip()
+        text = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", text).strip(" ._")
+        return text or default
+
+    @staticmethod
+    def _unique_output_path(folder, filename):
+        stem, ext = os.path.splitext(filename)
+        candidate = os.path.join(folder, filename)
+        counter = 2
+        while os.path.exists(candidate):
+            candidate = os.path.join(folder, f"{stem}_{counter}{ext}")
+            counter += 1
+        return candidate
+
+    @staticmethod
+    def _resolve_extracted_resource(raw_root, rel_path):
+        rel = str(rel_path or "").replace("\\", "/").strip("/")
+        if not rel:
+            return None
+        parts = [part for part in rel.split("/") if part not in ("", ".")]
+        if not parts or any(part == ".." for part in parts):
+            return None
+        candidate = os.path.abspath(os.path.join(raw_root, *parts))
+        raw_root_abs = os.path.abspath(raw_root)
+        if os.path.commonpath([raw_root_abs, candidate]) != raw_root_abs:
+            return None
+        return candidate if os.path.exists(candidate) else None
+
+    @classmethod
+    def _copy_named_resource(cls, raw_root, rel_path, dest_folder, filename, index_rows, row_info, index_base=None):
+        source_path = cls._resolve_extracted_resource(raw_root, rel_path)
+        if not source_path:
+            index_rows.append({
+                **row_info,
+                "原始路径": str(rel_path or ""),
+                "整理后路径": "",
+                "状态": "源文件缺失",
+            })
+            return 0
+
+        os.makedirs(dest_folder, exist_ok=True)
+        dest_path = cls._unique_output_path(dest_folder, filename)
+        import shutil
+        shutil.copy2(source_path, dest_path)
+        index_rows.append({
+            **row_info,
+            "原始路径": str(rel_path or ""),
+            "整理后路径": os.path.relpath(dest_path, index_base or os.path.dirname(dest_folder)).replace("\\", "/"),
+            "状态": "已复制",
+        })
+        return 1
+
+    @classmethod
+    def _export_named_project_files(cls, project_data, raw_root, named_root, index_path):
+        speakers = project_data.get("speakers", {}) if isinstance(project_data, dict) else {}
+        index_rows = []
+        copied_count = 0
+
+        for spk_order, (spk_id, spk) in enumerate(speakers.items(), 1):
+            spk_name = cls._safe_export_name(spk.get("name") or spk_id or f"发音人{spk_order}", f"发音人{spk_order}")
+            spk_folder = os.path.join(named_root, "音频", f"{spk_order:02d}_{spk_name}")
+            items = spk.get("items", {}) if isinstance(spk.get("items", {}), dict) else {}
+            item_paths = set()
+
+            long_audio_path = spk.get("long_audio_path")
+            if long_audio_path:
+                ext = os.path.splitext(str(long_audio_path))[1] or ".wav"
+                base = make_textgrid_export_stem(long_audio_path, "长音频", "长音频")
+                filename = cls._safe_export_name(f"长音频_{base}", "长音频") + ext
+                copied_count += cls._copy_named_resource(
+                    raw_root,
+                    long_audio_path,
+                    os.path.join(spk_folder, "长音频"),
+                    filename,
+                    index_rows,
+                    {
+                        "类别": "长音频",
+                        "发音人": spk_name,
+                        "组别": "",
+                        "条目": "",
+                        "开始秒": "",
+                        "结束秒": "",
+                    },
+                    os.path.dirname(named_root),
+                )
+
+            for item_order, (item_id, item) in enumerate(items.items(), 1):
+                rel_path = item.get("path")
+                if not rel_path:
+                    continue
+                item_paths.add(str(rel_path).replace("\\", "/"))
+                label = cls._safe_export_name(item.get("label") or make_textgrid_export_stem(rel_path, item_id, item_id), f"条目{item_order}")
+                group = cls._safe_export_name(item.get("group") or "未分组", "未分组")
+                ext = os.path.splitext(str(rel_path))[1] or ".wav"
+                filename = cls._safe_export_name(f"{item_order:03d}_{group}_{label}", f"{item_order:03d}_条目") + ext
+                copied_count += cls._copy_named_resource(
+                    raw_root,
+                    rel_path,
+                    os.path.join(spk_folder, "条目"),
+                    filename,
+                    index_rows,
+                    {
+                        "类别": "条目音频",
+                        "发音人": spk_name,
+                        "组别": group,
+                        "条目": label,
+                        "开始秒": item.get("start", ""),
+                        "结束秒": item.get("end", ""),
+                    },
+                    os.path.dirname(named_root),
+                )
+
+            for batch_order, rel_path in enumerate(spk.get("pending_batch_paths", []) or [], 1):
+                norm_rel = str(rel_path or "").replace("\\", "/")
+                if norm_rel in item_paths:
+                    continue
+                ext = os.path.splitext(norm_rel)[1] or ".wav"
+                base = make_textgrid_export_stem(norm_rel, f"批量音频{batch_order}", f"批量音频{batch_order}")
+                filename = cls._safe_export_name(f"{batch_order:03d}_{base}", f"{batch_order:03d}_批量音频") + ext
+                copied_count += cls._copy_named_resource(
+                    raw_root,
+                    rel_path,
+                    os.path.join(spk_folder, "批量音频"),
+                    filename,
+                    index_rows,
+                    {
+                        "类别": "批量音频",
+                        "发音人": spk_name,
+                        "组别": "",
+                        "条目": "",
+                        "开始秒": "",
+                        "结束秒": "",
+                    },
+                    os.path.dirname(named_root),
+                )
+
+        os.makedirs(os.path.dirname(index_path), exist_ok=True)
+        columns = ["类别", "发音人", "组别", "条目", "开始秒", "结束秒", "原始路径", "整理后路径", "状态"]
+        with open(index_path, "w", encoding="utf-8-sig", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=columns)
+            writer.writeheader()
+            for row in index_rows:
+                writer.writerow({key: row.get(key, "") for key in columns})
+
+        return copied_count, len(index_rows)
+
     def extract_project_files(self):
         if not hasattr(self, 'loaded_teproj_path') or not self.loaded_teproj_path:
             return messagebox.showwarning("提示", "请先选择并加载 .teproj 文件")
@@ -4892,12 +5041,25 @@ class ToolkitApp(ctk.CTk):
 
         target_dir = self._make_project_extract_dir(output_dir)
         try:
-            extracted_count = self._safe_extract_project_archive(self.loaded_teproj_path, target_dir)
+            raw_dir = os.path.join(target_dir, "原始工程结构")
+            named_dir = os.path.join(target_dir, "按名称整理")
+            index_path = os.path.join(target_dir, "文件索引.csv")
+            project_data, _namelist = read_project_metadata_from_archive(self.loaded_teproj_path)
+            extracted_count = self._safe_extract_project_archive(self.loaded_teproj_path, raw_dir)
+            named_count, index_count = self._export_named_project_files(project_data, raw_dir, named_dir, index_path)
             messagebox.showinfo(
                 "提取成功",
-                f"工程文件已提取到：\n{target_dir}\n\n共提取 {extracted_count} 个文件。"
+                f"工程文件已提取到：\n{target_dir}\n\n"
+                f"原始工程结构：{extracted_count} 个文件\n"
+                f"按名称整理：{named_count} 个文件\n"
+                f"文件索引：{index_count} 条记录"
             )
         except Exception as e:
+            try:
+                import shutil
+                shutil.rmtree(target_dir, ignore_errors=True)
+            except Exception:
+                pass
             messagebox.showerror("错误", f"提取工程文件失败：\n{str(e)}")
 
     def show_export_report_dialog(self):
