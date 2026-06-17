@@ -4,7 +4,6 @@ import threading
 import re
 import subprocess
 import platform
-import shutil
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import customtkinter as ctk
@@ -3099,7 +3098,7 @@ class ToolkitApp(ctk.CTk):
         left_panel = self._make_card(content, fg_color=self.colors["surface_soft"], width=310)
         left_panel.grid(row=0, column=0, sticky="ns", padx=(0, 16))
         left_panel.grid_propagate(False)
-        self._section_header(left_panel, "工程操作", "打开 .teproj 后可预览结构，也可另存为 zip。", icon_text="04")
+        self._section_header(left_panel, "工程操作", "打开 .teproj 后可预览结构，也可提取内部文件。", icon_text="04")
 
         actions = ctk.CTkFrame(left_panel, fg_color="transparent")
         actions.pack(fill=tk.X, padx=20, pady=(4, 18))
@@ -3112,15 +3111,15 @@ class ToolkitApp(ctk.CTk):
         )
         self.btn_open_project.pack(fill=tk.X, pady=(0, 10))
 
-        self.btn_convert_zip = self._make_button(
+        self.btn_extract_project = self._make_button(
             actions,
-            "转换为 ZIP 压缩包",
-            self.convert_project_to_zip,
+            "提取工程文件",
+            self.extract_project_files,
             tone="purple",
             image=self.icons.get("tab_batch"),
         )
-        self.btn_convert_zip.pack(fill=tk.X, pady=(0, 10))
-        self.btn_convert_zip.configure(state="disabled")  # Disabled until a project is loaded
+        self.btn_extract_project.pack(fill=tk.X, pady=(0, 10))
+        self.btn_extract_project.configure(state="disabled")  # Disabled until a project is loaded
 
         self.btn_export_report = self._make_button(
             actions,
@@ -3280,9 +3279,14 @@ class ToolkitApp(ctk.CTk):
 
         self._section_header(right_panel, "运行与输出", subtitle=None)
 
-        # 1. 脚本信息栏
-        info_frame = ctk.CTkFrame(right_panel, fg_color=self.colors["surface_soft"], corner_radius=10, border_width=1, border_color=self.colors["border"])
-        info_frame.pack(fill=tk.X, padx=20, pady=5)
+        # 1. 脚本信息栏与工程加载入口
+        top_frame = ctk.CTkFrame(right_panel, fg_color="transparent")
+        top_frame.pack(fill=tk.X, padx=20, pady=5)
+        top_frame.grid_columnconfigure(0, weight=3)
+        top_frame.grid_columnconfigure(1, weight=2)
+
+        info_frame = ctk.CTkFrame(top_frame, fg_color=self.colors["surface_soft"], corner_radius=10, border_width=1, border_color=self.colors["border"])
+        info_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 14))
         info_frame.grid_columnconfigure(0, weight=1)
 
         self.lbl_selected_script_name = ctk.CTkLabel(
@@ -3302,9 +3306,10 @@ class ToolkitApp(ctk.CTk):
             text_color=self.colors["muted"],
             anchor="w",
             justify="left",
-            wraplength=480
+            wraplength=420
         )
         self.lbl_selected_script_desc.grid(row=1, column=0, sticky="w", padx=15, pady=(0, 10))
+        self._bind_adaptive_wrap(self.lbl_selected_script_desc, info_frame, reserved_width=30, min_wrap=260)
 
         # 源码预览区
         ctk.CTkLabel(info_frame, text="源码预览:", font=ctk.CTkFont(family=self.font_family, size=11, weight="bold"), text_color=self.colors["muted"]).grid(row=2, column=0, sticky="w", padx=15, pady=(0, 2))
@@ -3320,6 +3325,56 @@ class ToolkitApp(ctk.CTk):
         )
         self.txt_script_code_preview.grid(row=3, column=0, sticky="ew", padx=15, pady=(0, 15))
         self.txt_script_code_preview.configure(state="disabled")
+
+        project_card = ctk.CTkFrame(top_frame, fg_color=self.colors["surface_soft"], corner_radius=10, border_width=1, border_color=self.colors["border"])
+        project_card.grid(row=0, column=1, sticky="nsew")
+        project_card.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(
+            project_card,
+            text="加载工程",
+            font=ctk.CTkFont(family=self.font_family, size=14, weight="bold"),
+            text_color=self.colors["text"],
+            anchor="w",
+        ).grid(row=0, column=0, sticky="w", padx=15, pady=(10, 2))
+        self.lbl_script_project_status = ctk.CTkLabel(
+            project_card,
+            text="未加载工程",
+            font=self.font_small,
+            text_color=self.colors["muted"],
+            anchor="w",
+            justify="left",
+            wraplength=260,
+        )
+        self.lbl_script_project_status.grid(row=1, column=0, sticky="ew", padx=15, pady=(0, 6))
+        self._bind_adaptive_wrap(self.lbl_script_project_status, project_card, reserved_width=30, min_wrap=220)
+        self.lbl_script_project_detail = ctk.CTkLabel(
+            project_card,
+            text="可在此处或“工程预览”页选择同一个 .teproj 工程。",
+            font=self.font_caption,
+            text_color=self.colors["muted"],
+            anchor="w",
+            justify="left",
+            wraplength=260,
+        )
+        self.lbl_script_project_detail.grid(row=2, column=0, sticky="ew", padx=15, pady=(0, 10))
+        self._bind_adaptive_wrap(self.lbl_script_project_detail, project_card, reserved_width=30, min_wrap=220)
+        self.btn_script_load_project = self._make_button(
+            project_card,
+            "选择工程文件",
+            self.select_project_file,
+            tone="primary",
+            image=self.icons.get("import_white"),
+            height=34,
+        )
+        self.btn_script_load_project.grid(row=3, column=0, sticky="ew", padx=15, pady=(0, 8))
+        self.btn_script_show_project = self._make_button(
+            project_card,
+            "查看工程预览",
+            lambda: self.tabview.set(self.tab_project_name),
+            tone="secondary",
+            height=32,
+        )
+        self.btn_script_show_project.grid(row=4, column=0, sticky="ew", padx=15, pady=(0, 14))
 
         # 加速源码预览滚轮
         def speed_up_preview_scroll(event):
@@ -4296,6 +4351,43 @@ class ToolkitApp(ctk.CTk):
         self.txt_script_log.insert(tk.END, "=== 工程数据状态 ===\n" + summary_text + "\n")
         self.txt_script_log.configure(state="disabled")
 
+    def _set_script_project_card_loading(self, path):
+        if not hasattr(self, "lbl_script_project_status"):
+            return
+        file_name = os.path.basename(path) if path else "未选择"
+        self.lbl_script_project_status.configure(text=f"正在加载：{file_name}", text_color=self.colors["primary"])
+        self.lbl_script_project_detail.configure(text="正在读取工程元数据，并同步刷新工程预览页。", text_color=self.colors["muted"])
+
+    def _set_script_project_card_error(self, message):
+        if not hasattr(self, "lbl_script_project_status"):
+            return
+        self.lbl_script_project_status.configure(text="工程解析失败", text_color=self.colors["danger"])
+        self.lbl_script_project_detail.configure(text=message, text_color=self.colors["danger"])
+
+    def _set_script_project_card_summary(self, project_data=None):
+        if not hasattr(self, "lbl_script_project_status"):
+            return
+        project_data = project_data or getattr(self, "project_data", None)
+        path = getattr(self, "loaded_teproj_path", None)
+        if not path or not project_data:
+            self.lbl_script_project_status.configure(text="未加载工程", text_color=self.colors["muted"])
+            self.lbl_script_project_detail.configure(
+                text="可在此处或“工程预览”页选择同一个 .teproj 工程。",
+                text_color=self.colors["muted"],
+            )
+            return
+
+        speakers = project_data.get("speakers", {})
+        item_count = sum(len(spk.get("items", {})) for spk in speakers.values())
+        self.lbl_script_project_status.configure(
+            text=f"已加载：{os.path.basename(path)}",
+            text_color=self.colors["success"],
+        )
+        self.lbl_script_project_detail.configure(
+            text=f"发音人数：{len(speakers)}；条目总数：{item_count}。工程预览页已同步。",
+            text_color=self.colors["muted"],
+        )
+
     def show_prompt_dialog(self):
         script_type = "chart"
         script = next((s for s in self.local_scripts if s.get("id") == self.selected_script_id), None)
@@ -4593,10 +4685,12 @@ class ToolkitApp(ctk.CTk):
             return
 
         self.loaded_teproj_path = path
-        self.lbl_proj_file.configure(
-            text=f"已加载工程:\n{os.path.basename(path)}\n\n大小: {os.path.getsize(path) / (1024 * 1024):.2f} MB",
-            text_color=self.colors["success"]
-        )
+        if hasattr(self, "lbl_proj_file"):
+            self.lbl_proj_file.configure(
+                text=f"已加载工程:\n{os.path.basename(path)}\n\n大小: {os.path.getsize(path) / (1024 * 1024):.2f} MB",
+                text_color=self.colors["success"]
+            )
+        self._set_script_project_card_loading(path)
 
         self.show_loading_placeholder()
         if hasattr(self, "btn_clear_script_runs"):
@@ -4614,20 +4708,23 @@ class ToolkitApp(ctk.CTk):
 
     def _finish_project_preview(self, project_data, namelist):
         self.display_project_preview(project_data, namelist)
-        self.btn_convert_zip.configure(state="normal")
+        self.btn_extract_project.configure(state="normal")
         self.btn_export_report.configure(state="normal")
         if hasattr(self, "btn_clear_script_runs"):
             self.btn_clear_script_runs.configure(state="normal")
+        self._set_script_project_card_summary(project_data)
         self.update_script_tab_project_summary()
 
     def _show_project_preview_error(self, message):
         err_msg = f"❌ 无法解析工程文件: {message}"
         self.show_error_placeholder(err_msg)
-        self.btn_convert_zip.configure(state="disabled")
+        self.btn_extract_project.configure(state="disabled")
         self.btn_export_report.configure(state="disabled")
         if hasattr(self, "btn_clear_script_runs"):
             self.btn_clear_script_runs.configure(state="disabled")
-        self.lbl_proj_file.configure(text="解析失败", text_color=self.colors["danger"])
+        if hasattr(self, "lbl_proj_file"):
+            self.lbl_proj_file.configure(text="解析失败", text_color=self.colors["danger"])
+        self._set_script_project_card_error(message)
         messagebox.showerror("错误", f"解析 .teproj 文件失败:\n{message}")
 
     def format_project_preview(self, project_data, namelist):
@@ -4728,25 +4825,80 @@ class ToolkitApp(ctk.CTk):
 
         return "\n".join(lines)
 
-    def convert_project_to_zip(self):
+    def _make_project_extract_dir(self, output_dir):
+        stem = os.path.splitext(os.path.basename(self.loaded_teproj_path))[0].strip()
+        safe_stem = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", stem).strip(" ._")
+        if not safe_stem:
+            safe_stem = "extracted_project"
+
+        candidate = os.path.join(output_dir, safe_stem)
+        if not os.path.exists(candidate):
+            return candidate
+
+        counter = 2
+        while True:
+            numbered = os.path.join(output_dir, f"{safe_stem}_{counter}")
+            if not os.path.exists(numbered):
+                return numbered
+            counter += 1
+
+    @staticmethod
+    def _safe_extract_project_archive(archive_path, target_dir):
+        target_root = os.path.abspath(target_dir)
+        os.makedirs(target_root, exist_ok=False)
+        extracted_count = 0
+
+        try:
+            with zipfile.ZipFile(archive_path, "r") as archive:
+                for member in archive.infolist():
+                    member_name = member.filename.replace("\\", "/")
+                    parts = [part for part in member_name.split("/") if part not in ("", ".")]
+                    if not parts or any(part == ".." for part in parts):
+                        raise ValueError(f"工程包中存在非法路径：{member.filename}")
+
+                    dest_path = os.path.abspath(os.path.join(target_root, *parts))
+                    if os.path.commonpath([target_root, dest_path]) != target_root:
+                        raise ValueError(f"工程包中存在越界路径：{member.filename}")
+
+                    if member.is_dir() or member_name.endswith("/"):
+                        os.makedirs(dest_path, exist_ok=True)
+                        continue
+
+                    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+                    with archive.open(member, "r") as src, open(dest_path, "wb") as dst:
+                        while True:
+                            chunk = src.read(1024 * 1024)
+                            if not chunk:
+                                break
+                            dst.write(chunk)
+                    extracted_count += 1
+        except Exception:
+            try:
+                import shutil
+                shutil.rmtree(target_root, ignore_errors=True)
+            except Exception:
+                pass
+            raise
+
+        return extracted_count
+
+    def extract_project_files(self):
         if not hasattr(self, 'loaded_teproj_path') or not self.loaded_teproj_path:
             return messagebox.showwarning("提示", "请先选择并加载 .teproj 文件")
 
-        default_name = os.path.splitext(os.path.basename(self.loaded_teproj_path))[0] + ".zip"
-        zip_path = filedialog.asksaveasfilename(
-            defaultextension=".zip",
-            initialfile=default_name,
-            filetypes=[("ZIP Archive", "*.zip")],
-            title="另存为 ZIP 压缩包"
-        )
-        if not zip_path:
+        output_dir = filedialog.askdirectory(title="选择工程文件提取到的目录")
+        if not output_dir:
             return
 
+        target_dir = self._make_project_extract_dir(output_dir)
         try:
-            shutil.copy2(self.loaded_teproj_path, zip_path)
-            messagebox.showinfo("转换成功", f"工程已成功另存为 ZIP 压缩包：\n{zip_path}")
+            extracted_count = self._safe_extract_project_archive(self.loaded_teproj_path, target_dir)
+            messagebox.showinfo(
+                "提取成功",
+                f"工程文件已提取到：\n{target_dir}\n\n共提取 {extracted_count} 个文件。"
+            )
         except Exception as e:
-            messagebox.showerror("错误", f"另存为 ZIP 失败：\n{str(e)}")
+            messagebox.showerror("错误", f"提取工程文件失败：\n{str(e)}")
 
     def show_export_report_dialog(self):
         if not hasattr(self, 'loaded_teproj_path') or not self.loaded_teproj_path:
@@ -4825,6 +4977,7 @@ class ScriptEditorDialog(ctk.CTkToplevel):
         self._auto_filled_name = ""
         self._auto_filled_desc = ""
         self._metadata_parse_after_id = None
+        self._line_number_after_id = None
 
         self.title("新建自定义脚本" if not script_id else "编辑自定义脚本")
         self.geometry("720x640")
@@ -4900,24 +5053,50 @@ class ScriptEditorDialog(ctk.CTkToplevel):
 
         # 代码编辑区
         ctk.CTkLabel(content, text="代码编辑区 (Python 3):", font=parent.font_main, text_color=parent.colors["text"]).pack(anchor="w", pady=(10, 4))
-        self.txt_code = ctk.CTkTextbox(
+        editor_frame = ctk.CTkFrame(
             content,
-            font=ctk.CTkFont(family="Consolas", size=13),
-            wrap="none",
+            fg_color=("#FFFFFF", "#262930"),
+            corner_radius=8,
             border_width=1,
             border_color=("#D1D5DB", "#374151"),
+        )
+        editor_frame.pack(fill="both", expand=True, pady=(0, 10))
+        editor_frame.grid_columnconfigure(1, weight=1)
+        editor_frame.grid_rowconfigure(0, weight=1)
+
+        self.txt_code_lines = ctk.CTkTextbox(
+            editor_frame,
+            width=48,
+            font=ctk.CTkFont(family="Consolas", size=13),
+            wrap="none",
+            border_width=0,
+            activate_scrollbars=False,
+            fg_color=("#F3F4F6", "#1F2937"),
+            text_color=("#64748B", "#94A3B8"),
+        )
+        self.txt_code_lines.grid(row=0, column=0, sticky="nsw")
+        self.txt_code = ctk.CTkTextbox(
+            editor_frame,
+            font=ctk.CTkFont(family="Consolas", size=13),
+            wrap="none",
+            border_width=0,
             fg_color=("#FFFFFF", "#262930"),
-            text_color=("#111827", "#F9FAFB")
+            text_color=("#111827", "#F9FAFB"),
+            scrollbar_button_color=("#9CA3AF", "#6B7280"),
+            scrollbar_button_hover_color=("#6B7280", "#9CA3AF"),
         )
         self.txt_code.insert("1.0", script_code)
-        self.txt_code.pack(fill="both", expand=True, pady=(0, 10))
+        self.txt_code.grid(row=0, column=1, sticky="nsew")
+        self._setup_code_editor_widgets()
         self._bind_metadata_autofill()
+        self._refresh_code_line_numbers()
         self._schedule_script_metadata_parse()
 
         # 加速滚动
         def speed_up_edit_scroll(event):
             scroll_units = int(-1 * (event.delta / 120) * 4)
             self.txt_code.yview_scroll(scroll_units, "units")
+            self._sync_code_line_numbers()
             return "break"
         self.txt_code.bind("<MouseWheel>", speed_up_edit_scroll)
         if hasattr(self.txt_code, "_textbox"):
@@ -4940,6 +5119,67 @@ class ScriptEditorDialog(ctk.CTkToplevel):
             command=self.save_script
         )
         btn_save.pack(side="right")
+
+    def _setup_code_editor_widgets(self):
+        for textbox in (self.txt_code, self.txt_code_lines):
+            if hasattr(textbox, "_textbox"):
+                textbox._textbox.configure(
+                    padx=8,
+                    pady=8,
+                    insertwidth=2,
+                    spacing1=1,
+                    spacing3=1,
+                )
+        if hasattr(self.txt_code_lines, "_textbox"):
+            self.txt_code_lines._textbox.configure(takefocus=0, cursor="arrow")
+        self.txt_code_lines.configure(state="disabled")
+        if hasattr(self.txt_code, "_textbox") and hasattr(self.txt_code, "_y_scrollbar"):
+            self.txt_code._textbox.configure(yscrollcommand=self._on_code_y_scroll)
+        for event_name in ("<ButtonRelease-1>", "<KeyRelease>", "<<Paste>>", "<<Cut>>", "<Configure>"):
+            self.txt_code.bind(event_name, self._schedule_code_line_number_refresh, add="+")
+            if hasattr(self.txt_code, "_textbox"):
+                self.txt_code._textbox.bind(event_name, self._schedule_code_line_number_refresh, add="+")
+
+    def _on_code_y_scroll(self, first, last):
+        if hasattr(self.txt_code, "_y_scrollbar"):
+            self.txt_code._y_scrollbar.set(first, last)
+        self._sync_code_line_numbers(first)
+
+    def _sync_code_line_numbers(self, first=None):
+        if not hasattr(self, "txt_code_lines"):
+            return
+        if first is None:
+            try:
+                first = self.txt_code.yview()[0]
+            except Exception:
+                return
+        try:
+            self.txt_code_lines.yview_moveto(first)
+        except Exception:
+            pass
+
+    def _schedule_code_line_number_refresh(self, _event=None):
+        if getattr(self, "_line_number_after_id", None):
+            try:
+                self.after_cancel(self._line_number_after_id)
+            except Exception:
+                pass
+        self._line_number_after_id = self.after(30, self._refresh_code_line_numbers)
+
+    def _refresh_code_line_numbers(self):
+        self._line_number_after_id = None
+        try:
+            line_count = int(self.txt_code.index("end-1c").split(".")[0])
+        except Exception:
+            line_count = 1
+        line_count = max(1, line_count)
+        width = max(2, len(str(line_count)))
+        numbers = "\n".join(f"{idx:>{width}}" for idx in range(1, line_count + 1))
+        self.txt_code_lines.configure(state="normal")
+        self.txt_code_lines.delete("1.0", tk.END)
+        self.txt_code_lines.insert("1.0", numbers)
+        self.txt_code_lines.configure(state="disabled")
+        self._sync_code_line_numbers()
 
     def _bind_metadata_autofill(self):
         events = ("<<Paste>>", "<KeyRelease>")
