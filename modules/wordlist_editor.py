@@ -12,6 +12,7 @@ from .wordlist_v2 import (
     DEFAULT_REVIEW_STATUS,
     REVIEWED_STATUS,
     build_document_from_csv_text,
+    build_document_from_structured_text,
     build_document_from_v1_text,
     document_to_csv_text,
     document_to_v1_text,
@@ -22,6 +23,8 @@ from .wordlist_v2 import (
     save_wordlist_document,
     summarize_wordlist_document,
     validate_wordlist_document,
+    looks_like_csv_wordlist_text,
+    looks_like_structured_wordlist_text,
 )
 
 
@@ -340,8 +343,6 @@ class VisualWordlistEditor(ctk.CTkFrame):
             ("新建字表", lambda: self.set_document({}), "secondary"),
             ("另存为", lambda: self.save_ptwl_dialog(save_as=True), "success"),
             ("检查字表", self.check_document, "warning"),
-            ("转换普通字表", self.import_v1_dialog, "secondary"),
-            ("导入 CSV", self.import_csv_dialog, "secondary"),
             ("导出为普通字表", self.export_v1_dialog, "secondary"),
             ("导出 CSV", self.export_csv_dialog, "secondary"),
         ]
@@ -490,16 +491,20 @@ class VisualWordlistEditor(ctk.CTkFrame):
 
         footer = ctk.CTkFrame(self, fg_color=self.colors["surface"], corner_radius=12, border_width=1, border_color=self.colors["border"])
         footer.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(10, 0))
-        footer.grid_columnconfigure(6, weight=1)
         footer_actions = [
             ("打开 .ptwl", self.load_ptwl_dialog, "primary", 96),
             ("保存", self.save_ptwl_dialog, "success", 76),
             ("全部标记为已复核", self.mark_ai_reviewed, "secondary", 135),
         ]
-        footer_actions.extend([(text, command, tone, 196 if "提示词" in text else (135 if "同步" in text else 104)) for text, command, tone in self.bottom_actions])
+        footer_actions.extend([
+            (text, command, tone, 178 if "导入文本" in text else (96 if "Agent" in text else (135 if "同步" in text else 104)))
+            for text, command, tone in self.bottom_actions
+        ])
+        spacer_col = len(footer_actions)
+        footer.grid_columnconfigure(spacer_col, weight=1)
         for idx, (text, command, tone, width) in enumerate(footer_actions):
             self._button(footer, text, command, tone, width=width).grid(row=0, column=idx, padx=(10 if idx == 0 else 0, 8), pady=10, sticky="w")
-        self._button(footer, "更多", self.show_more_actions, "secondary", width=72).grid(row=0, column=7, padx=(0, 10), pady=10, sticky="e")
+        self._button(footer, "更多", self.show_more_actions, "secondary", width=72).grid(row=0, column=spacer_col + 1, padx=(0, 10), pady=10, sticky="e")
 
     def _property_entry(self, parent, label, variable):
         label_widget = ctk.CTkLabel(parent, text=label, font=self.font_small, text_color=self.colors["muted"])
@@ -1026,6 +1031,23 @@ class VisualWordlistEditor(ctk.CTkFrame):
     def import_csv_text(self, text: str):
         self.set_document(build_document_from_csv_text(text or ""))
 
+    def import_structured_text(self, text: str):
+        self.set_document(build_document_from_structured_text(text or ""))
+
+    @staticmethod
+    def _read_text_file_with_fallback(path, encodings=("utf-8-sig", "utf-8", "gbk")):
+        last_error = None
+        for encoding in encodings:
+            try:
+                with open(path, "r", encoding=encoding) as f:
+                    return f.read()
+            except UnicodeDecodeError as e:
+                last_error = e
+        if last_error:
+            raise last_error
+        with open(path, "r", encoding=encodings[0]) as f:
+            return f.read()
+
     def import_v1_dialog(self):
         path = filedialog.askopenfilename(filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")])
         if not path:
@@ -1044,21 +1066,82 @@ class VisualWordlistEditor(ctk.CTkFrame):
             return None
 
     def import_csv_dialog(self):
-        path = filedialog.askopenfilename(filetypes=[("CSV Files", "*.csv"), ("All Files", "*.*")])
-        if not path:
-            return None
-        try:
+        popup = ctk.CTkToplevel(self)
+        popup.title("导入字表文本")
+        popup.geometry("620x460")
+        popup.configure(fg_color=self.colors.get("surface", "#FFFFFF"))
+        popup.transient(self.winfo_toplevel())
+        popup.grab_set()
+        popup.update_idletasks()
+        x = self.winfo_toplevel().winfo_rootx() + 90
+        y = self.winfo_toplevel().winfo_rooty() + 70
+        popup.geometry(f"+{x}+{y}")
+
+        ctk.CTkLabel(
+            popup,
+            text="粘贴文本并转换为高级字表",
+            font=ctk.CTkFont(family=self.font_family, size=16, weight="bold"),
+            text_color=self.colors["text"],
+        ).pack(anchor="w", padx=20, pady=(18, 4))
+        ctk.CTkLabel(
+            popup,
+            text="支持结构化字表文本、CSV 和普通字表；系统会自动识别格式。",
+            font=self.font_small,
+            text_color=self.colors["muted"],
+        ).pack(anchor="w", padx=20, pady=(0, 10))
+
+        text_box = ctk.CTkTextbox(
+            popup,
+            font=ctk.CTkFont(family="Consolas", size=12),
+            corner_radius=12,
+            border_width=1,
+            border_color=self.colors["border"],
+            fg_color=self.colors.get("surface_soft", "#F8FAFC"),
+            text_color=self.colors.get("text", "#17202A"),
+            wrap="none",
+        )
+        text_box.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 12))
+
+        button_row = ctk.CTkFrame(popup, fg_color="transparent")
+        button_row.pack(fill=tk.X, padx=20, pady=(0, 18))
+
+        def import_text_auto(text):
+            if looks_like_structured_wordlist_text(text):
+                self.import_structured_text(text)
+            elif looks_like_csv_wordlist_text(text):
+                self.import_csv_text(text)
+            else:
+                self.import_v1_text(text)
+
+        def import_from_file():
+            path = filedialog.askopenfilename(
+                parent=popup,
+                filetypes=[("字表文件", "*.txt *.csv"), ("普通字表", "*.txt"), ("CSV 文件", "*.csv")],
+            )
+            if not path:
+                return
             try:
-                with open(path, "r", encoding="utf-8-sig") as f:
-                    text = f.read()
-            except UnicodeDecodeError:
-                with open(path, "r", encoding="gbk") as f:
-                    text = f.read()
-            self.import_csv_text(text)
-            return path
-        except Exception as e:
-            messagebox.showerror("错误", f"导入 CSV 失败：{e}")
-            return None
+                text = self._read_text_file_with_fallback(path)
+                import_text_auto(text)
+                popup.destroy()
+            except Exception as e:
+                messagebox.showerror("错误", f"导入字表文件失败：{e}", parent=popup)
+
+        def do_import():
+            text = text_box.get("1.0", tk.END).strip()
+            if not text:
+                messagebox.showwarning("提示", "请先粘贴字表文本。", parent=popup)
+                return
+            try:
+                import_text_auto(text)
+                popup.destroy()
+            except Exception as e:
+                messagebox.showerror("错误", f"导入字表文本失败：{e}", parent=popup)
+
+        self._button(button_row, "选择文件", import_from_file, "primary", width=104).pack(side=tk.LEFT)
+        self._button(button_row, "取消", popup.destroy, "secondary", width=92).pack(side=tk.LEFT, padx=(8, 0))
+        self._button(button_row, "导入", do_import, "success", width=112).pack(side=tk.RIGHT)
+        return None
 
     def load_ptwl_dialog(self):
         path = filedialog.askopenfilename(filetypes=[("PhonTracer 高级字表", "*.ptwl"), ("All Files", "*.*")])

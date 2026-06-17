@@ -113,7 +113,7 @@ from modules.textgrid_converter import (
     recommend_tier_names,
 )
 from modules.wordlist_editor import RoundedGroupList, VisualWordlistEditor
-from modules.wordlist_v2 import ADVANCED_WORDLIST_AGENT_PROMPT, build_document_from_csv_text, document_to_v1_text, flatten_wordlist_document, load_wordlist_document
+from modules.wordlist_v2 import ADVANCED_WORDLIST_AGENT_PROMPT, build_document_from_csv_text, build_document_from_structured_text, build_document_from_v1_text, document_to_v1_text, flatten_wordlist_document, load_wordlist_document, looks_like_structured_wordlist_text
 
 try:
     import sounddevice as sd
@@ -1085,6 +1085,8 @@ class ToolkitApp(ctk.CTk):
         self.merge_files = []
         self.split_source = None
         self.wordlist = []
+        self.split_wordlist_document = None
+        self.split_wordlist_text_snapshot = ""
         self.custom_segments = None  # 存储用户微调后的分段数据
         self.textgrid_source_path = None
         self.textgrid_source_paths = []
@@ -2675,6 +2677,47 @@ class ToolkitApp(ctk.CTk):
             new_list.append(path)
         self.merge_files = new_list
 
+    @staticmethod
+    def _read_text_file_with_fallback(path, encodings=("utf-8-sig", "utf-8", "gbk")):
+        last_error = None
+        for encoding in encodings:
+            try:
+                with open(path, "r", encoding=encoding) as f:
+                    return f.read()
+            except UnicodeDecodeError as e:
+                last_error = e
+        if last_error:
+            raise last_error
+        with open(path, "r", encoding=encodings[0]) as f:
+            return f.read()
+
+    @classmethod
+    def _load_wordlist_source(cls, path):
+        lower = path.lower()
+        title = os.path.splitext(os.path.basename(path))[0] or "字表"
+        if lower.endswith(".ptwl"):
+            doc = load_wordlist_document(path)
+        elif lower.endswith(".csv"):
+            text = cls._read_text_file_with_fallback(path)
+            doc = build_document_from_csv_text(text, title=title)
+        else:
+            text = cls._read_text_file_with_fallback(path)
+            if looks_like_structured_wordlist_text(text):
+                doc = build_document_from_structured_text(text, title=title)
+            else:
+                doc = build_document_from_v1_text(text, title=title)
+
+        _groups, flat_words, _records = flatten_wordlist_document(doc)
+        return {
+            "document": doc,
+            "text": document_to_v1_text(doc),
+            "flat_words": flat_words,
+        }
+
+    def _set_split_wordlist_document(self, doc, text):
+        self.split_wordlist_document = doc
+        self.split_wordlist_text_snapshot = (text or "").strip()
+
     def import_wordlist_for_sort(self):
         if not self.merge_files:
             return messagebox.showwarning("提示", "合并列表为空，请先添加音频文件")
@@ -2684,23 +2727,10 @@ class ToolkitApp(ctk.CTk):
             return
 
         try:
-            if path.lower().endswith(".ptwl"):
-                doc = load_wordlist_document(path)
-                _groups, flat_words, _records = flatten_wordlist_document(doc)
-                text = document_to_v1_text(doc)
-            else:
-                with open(path, 'r', encoding='utf-8') as f:
-                    text = f.read()
-                flat_words = parse_wordlist(text)
-        except UnicodeDecodeError:
-            try:
-                with open(path, 'r', encoding='gbk') as f:
-                    text = f.read()
-                flat_words = parse_wordlist(text)
-            except Exception:
-                return messagebox.showerror("错误", "读取文件失败")
-        except Exception:
-            return messagebox.showerror("错误", "读取文件失败")
+            loaded = self._load_wordlist_source(path)
+            flat_words = loaded["flat_words"]
+        except Exception as e:
+            return messagebox.showerror("错误", f"读取字表失败：{e}")
 
         if not flat_words:
             return messagebox.showwarning("提示", "字表解析结果为空")
@@ -2740,20 +2770,14 @@ class ToolkitApp(ctk.CTk):
         path = filedialog.askopenfilename(filetypes=[("Supported Files", "*.txt *.csv *.ptwl"), ("Text/CSV Files", "*.txt *.csv"), ("高级字表", "*.ptwl"), ("All Files", "*.*")])
         if not path: return
         try:
-            if path.lower().endswith(".ptwl"):
-                doc = load_wordlist_document(path)
-                text = document_to_v1_text(doc)
-                if hasattr(self, "wordlist_editor"):
-                    self.wordlist_editor.set_document(doc, path=path)
-            else:
-                with open(path, 'r', encoding='utf-8') as f:
-                    text = f.read()
-        except UnicodeDecodeError:
-            try:
-                with open(path, 'r', encoding='gbk') as f:
-                    text = f.read()
-            except Exception as e:
-                return messagebox.showerror("错误", f"读取文件失败: {e}")
+            loaded = self._load_wordlist_source(path)
+            doc = loaded["document"]
+            text = loaded["text"]
+            if hasattr(self, "wordlist_editor"):
+                self.wordlist_editor.set_document(doc, path=path if path.lower().endswith(".ptwl") else None)
+            self._set_split_wordlist_document(doc, text)
+        except Exception as e:
+            return messagebox.showerror("错误", f"读取字表失败: {e}")
         self.txt_wordlist.delete("1.0", tk.END)
         self.txt_wordlist.insert("1.0", text)
         self.validate_wordlist()
@@ -2761,6 +2785,9 @@ class ToolkitApp(ctk.CTk):
     def validate_wordlist(self, event=None):
         text = self.txt_wordlist.get("1.0", tk.END).strip()
         self.wordlist = parse_wordlist(text)
+        if self.split_wordlist_text_snapshot and text != self.split_wordlist_text_snapshot:
+            self.split_wordlist_document = None
+            self.split_wordlist_text_snapshot = ""
         count = len(self.wordlist)
         if count > 0:
             self.lbl_wordlist_status.configure(text=f"已加载 {count} 个词汇", text_color="#10B981")
@@ -2936,7 +2963,11 @@ class ToolkitApp(ctk.CTk):
         if not self.split_source: return messagebox.showwarning("提示", "请选择长音频源文件")
 
         raw_text = self.txt_wordlist.get("1.0", tk.END)
-        wordlist = parse_wordlist(raw_text)
+        current_text = raw_text.strip()
+        if self.split_wordlist_document is not None and current_text == self.split_wordlist_text_snapshot:
+            _groups, wordlist, _records = flatten_wordlist_document(self.split_wordlist_document)
+        else:
+            wordlist = parse_wordlist(raw_text)
         if not wordlist: return messagebox.showwarning("提示", "字表为空，请粘贴字表。")
 
         try: buffer_sec = float(self.var_buffer.get())
@@ -3018,7 +3049,8 @@ class ToolkitApp(ctk.CTk):
             colors=self.colors,
             font_family=self.font_family,
             bottom_actions=[
-                ("Agent提示词复制", self.copy_wordlist_agent_prompt, "warning"),
+                ("导入文本并转换为高级字表", self.import_csv_into_wordlist_editor, "secondary"),
+                ("复制Agent提示词", self.copy_wordlist_agent_prompt, "warning"),
             ],
             extra_actions=[
                 ("同步到音频拆分", self.sync_wordlist_from_editor, "purple"),
@@ -3057,20 +3089,11 @@ class ToolkitApp(ctk.CTk):
             messagebox.showerror("错误", f"导入普通字表失败：{e}")
 
     def import_csv_into_wordlist_editor(self):
-        path = filedialog.askopenfilename(filetypes=[("CSV Files", "*.csv"), ("All Files", "*.*")])
-        if not path:
-            return
         try:
-            try:
-                with open(path, "r", encoding="utf-8-sig") as f:
-                    text = f.read()
-            except UnicodeDecodeError:
-                with open(path, "r", encoding="gbk") as f:
-                    text = f.read()
-            self.wordlist_editor.import_csv_text(text)
+            self.wordlist_editor.import_csv_dialog()
             self.tabview.set(self.tab_wordlist_name)
         except Exception as e:
-            messagebox.showerror("错误", f"导入 CSV 失败：{e}")
+            messagebox.showerror("错误", f"导入文本失败：{e}")
 
     def export_wordlist_editor_v1(self):
         self.wordlist_editor.export_v1_dialog()
@@ -3085,6 +3108,7 @@ class ToolkitApp(ctk.CTk):
         text = document_to_v1_text(doc)
         self.txt_wordlist.delete("1.0", tk.END)
         self.txt_wordlist.insert("1.0", text)
+        self._set_split_wordlist_document(doc, text)
         self.validate_wordlist()
         self.tabview.set(self.tab_split_name)
         messagebox.showinfo("完成", f"已同步 {len(flat_words)} 个词项到拆分页。")
