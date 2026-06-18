@@ -66,3 +66,13 @@ Test/
 # 9. 本地打包与测试输出文件夹
 Cli_test/
 !modules/formant_optimizer.py
+
+# 10. PhonRec Recording Suite Whitelist
+!PhonRec/backend/main.py
+!PhonRec/backend/test_backend.py
+!PhonRec/frontend/**
+PhonRec/frontend/node_modules/
+PhonRec/frontend/dist/
+PhonRec/frontend/eslint_errors.txt
+PhonRec/backend/workspace/
+PhonRec/backend/__pycache__/
