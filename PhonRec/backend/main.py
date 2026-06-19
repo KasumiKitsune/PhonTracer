@@ -67,7 +67,6 @@ def init_workspace():
     os.makedirs(AUDIO_DIR, exist_ok=True)
     os.makedirs(DATA_DIR, exist_ok=True)
 
-init_workspace()
 
 def clear_workspace():
     if os.path.exists(WORKSPACE_DIR):
