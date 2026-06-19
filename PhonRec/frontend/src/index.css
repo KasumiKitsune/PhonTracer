@@ -875,24 +875,24 @@ body {
 /* Capsule Tab Bar */
 .visualizer-tabs {
   display: flex;
+  width: fit-content;
   background: var(--bg-secondary);
-  padding: 3px;
+  padding: 2px;
   border-radius: 9999px;
-  margin: 0.75rem;
+  margin: 0.5rem;
   border: 1px solid var(--border-color);
 }
 
 .tab-btn {
-  flex: 1;
   background: transparent;
   border: none;
   color: var(--text-secondary);
-  padding: 0.4rem 0.8rem;
+  padding: 0.25rem 0.75rem;
   font-weight: 500;
   cursor: pointer;
   transition: all var(--transition-fast);
   font-family: inherit;
-  font-size: 0.8rem;
+  font-size: 0.75rem;
   border-radius: 9999px;
 }
 
