@@ -149,7 +149,7 @@ body {
 /* Grid Layout - 4 clean columns in order, no overlaps */
 .app-workspace {
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr) 320px;
+  grid-template-columns: 260px minmax(0, 1fr) 260px;
   flex: 1;
   gap: 1rem;
   min-height: 0;
@@ -907,7 +907,7 @@ body {
 }
 
 .visualizer-viewport {
-  flex: 1;
+  height: 150px;
   background: #f8fafc;
   position: relative;
   display: flex;
@@ -1253,8 +1253,7 @@ input:checked + .slider:before {
 }
 
 .right-column .visualizer-viewport {
-  flex: 1;
-  min-height: 80px;
+  height: 150px;
 }
 
 .right-column .project-actions {
@@ -1433,7 +1432,7 @@ input:checked + .slider:before {
 @media (max-width: 1000px) {
   .app-workspace {
     /* Hide column 1 from the grid track flow, only render Column 2 (minmax(0, 1fr)) and Column 3 (280px) */
-    grid-template-columns: minmax(0, 1fr) 280px !important;
+    grid-template-columns: minmax(0, 1fr) 260px !important;
   }
 
   .main-recording-card {
