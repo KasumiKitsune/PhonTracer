@@ -1242,8 +1242,8 @@ export default function App() {
               <div className="panel-title" style={{ fontSize: '0.8rem', marginBottom: '0.25rem', textTransform: 'none' }}>
                 <BookIcon /> 字段显示设置
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
                   <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>列表角标:</span>
                   <CustomSelect 
                     value={badgeMetaKey} 
@@ -1253,10 +1253,10 @@ export default function App() {
                       { value: 'note', label: '提示信息 (note)' },
                       ...getAvailableMetaKeys().map(k => ({ value: k, label: k }))
                     ]}
-                    style={{ minWidth: '135px' }}
+                    style={{ width: '100%' }}
                   />
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
                   <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>中心提示:</span>
                   <CustomSelect 
                     value={primaryMetaKey} 
@@ -1266,7 +1266,7 @@ export default function App() {
                       { value: 'note', label: '提示信息 (note)' },
                       ...getAvailableMetaKeys().map(k => ({ value: k, label: k }))
                     ]}
-                    style={{ minWidth: '135px' }}
+                    style={{ width: '100%' }}
                   />
                 </div>
               </div>

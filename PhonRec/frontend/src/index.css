@@ -155,11 +155,6 @@ body {
   min-height: 0;
 }
 
-@media (max-width: 1200px) {
-  .app-workspace {
-    grid-template-columns: 220px minmax(0, 1fr) 280px;
-  }
-}
 
 /* Glassmorphism Card base */
 .glass-panel {
@@ -1389,8 +1384,8 @@ input:checked + .slider:before {
   pointer-events: auto;
 }
 
-/* Drawer mode for screen sizes <= 1024px */
-@media (max-width: 1024px) {
+/* Drawer mode for screen sizes <= 1200px */
+@media (max-width: 1200px) {
   .app-workspace {
     /* Hide column 1 from the grid, only render Column 2 (minmax(0, 1fr)) and Column 3 (280px) */
     grid-template-columns: minmax(0, 1fr) 280px !important;
