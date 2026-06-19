@@ -257,5 +257,64 @@ class TestPhonRecBackend(unittest.TestCase):
         self.assertEqual(groups[0]["name"], "单字阴平")
         self.assertEqual(groups[0]["items"][0]["label"], "妈")
 
+    def test_project_import_normalization(self):
+        # Build mock project.json representing a ToneExtractor project (no groups, flat audio)
+        te_project_state = {
+            "version": "1.0",
+            "active_speaker_id": "spk_1",
+            "speakers": {
+                "spk_1": {
+                    "id": "spk_1",
+                    "name": "发音人1",
+                    "items": {
+                        "word_1": {
+                            "label": "测试词",
+                            "group": "我的自定义组",
+                            "path": "audio/spk_1_word_1.wav"
+                        }
+                    }
+                }
+            }
+        }
+        
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as zip_file:
+            zip_file.writestr("project.json", json.dumps(te_project_state, ensure_ascii=False))
+            zip_file.writestr("audio/spk_1_word_1.wav", b"dummy wav data")
+        archive.seek(0)
+        
+        upload = UploadFile(filename="test_te_import.teproj", file=archive)
+        
+        import asyncio
+        async def run_import():
+            return await backend.api_import_project(upload)
+            
+        result = asyncio.run(run_import())
+        self.assertEqual(result["status"], "success")
+        
+        # Verify groups reconstruction
+        state = result["state"]
+        self.assertIn("groups", state)
+        groups = state["groups"]
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0]["name"], "我的自定义组")
+        self.assertEqual(len(groups[0]["items"]), 1)
+        self.assertEqual(groups[0]["items"][0]["label"], "测试词")
+        self.assertEqual(groups[0]["items"][0]["id"], "word_1")
+        
+        # Verify audio file normalization
+        standard_audio_path = os.path.join(backend.AUDIO_DIR, "spk_1", "spk_1_word_1.wav")
+        self.assertTrue(os.path.exists(standard_audio_path))
+        with open(standard_audio_path, "rb") as f:
+            self.assertEqual(f.read(), b"dummy wav data")
+            
+        # Verify that the flat layout file was cleaned up/removed
+        flat_audio_path = os.path.join(backend.AUDIO_DIR, "spk_1_word_1.wav")
+        self.assertFalse(os.path.exists(flat_audio_path))
+        
+        # Verify that path inside project.json has been updated
+        spk_items = state["speakers"]["spk_1"]["items"]
+        self.assertEqual(spk_items["word_1"]["path"], "audio/spk_1/spk_1_word_1.wav")
+
 if __name__ == '__main__':
     unittest.main()

@@ -1419,8 +1419,8 @@ input:checked + .slider:before {
   }
 }
 
-/* Drawer mode for screen sizes <= 1200px */
-@media (max-width: 1200px) {
+/* Drawer mode for screen sizes <= 1000px */
+@media (max-width: 1000px) {
   .app-workspace {
     /* Hide column 1 from the grid track flow, only render Column 2 (minmax(0, 1fr)) and Column 3 (280px) */
     grid-template-columns: minmax(0, 1fr) 280px !important;
@@ -1475,7 +1475,7 @@ input:checked + .slider:before {
 }
 
 /* Hide previous and next arrow buttons when screen space is tight */
-@media (max-width: 960px) {
+@media (max-width: 1200px) {
   .recording-buttons .prev-btn,
   .recording-buttons .next-btn {
     display: none !important;

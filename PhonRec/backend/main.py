@@ -278,8 +278,12 @@ async def api_get_project_state():
     if not os.path.exists(path):
         return {"version": "1.0", "speakers": {}}
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            state = json.load(f)
+        with open(path, "rb") as f:
+            raw_bytes = f.read()
+        try:
+            state = json.loads(raw_bytes.decode("utf-8"))
+        except UnicodeDecodeError:
+            state = json.loads(raw_bytes.decode("gb18030"))
         return state
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to read project state: {e}")
@@ -592,6 +596,127 @@ async def api_import_wordlist(file: UploadFile = File(...)):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to parse wordlist: {e}")
 
+def normalize_workspace_after_import(state: dict) -> dict:
+    """标准化解压后的工作区，重建缺失的字表并标准化音频位置。"""
+    # 1. 自动重建缺失或为空的字表 (groups)
+    total_group_items = 0
+    if "groups" in state and isinstance(state["groups"], list):
+        for g in state["groups"]:
+            if isinstance(g, dict) and "items" in g and isinstance(g["items"], list):
+                total_group_items += len(g["items"])
+
+    if "groups" not in state or not state["groups"] or total_group_items == 0:
+        all_items_map = {}
+        for spk_id, spk_data in state.get("speakers", {}).items():
+            for item_id, item_data in spk_data.get("items", {}).items():
+                if item_id not in all_items_map:
+                    all_items_map[item_id] = {
+                        "id": item_id,
+                        "label": item_data.get("label") or item_data.get("word") or "未命名",
+                        "note": item_data.get("note") or "",
+                        "tags": item_data.get("tags") or [],
+                        "aliases": item_data.get("aliases") or [],
+                        "meta": item_data.get("meta") or {},
+                        "metadata_source": item_data.get("metadata_source") or "导入工程",
+                        "group": item_data.get("group") or "默认组"
+                    }
+        
+        # 按组别归类词条
+        grouped = {}
+        for item_id, item in all_items_map.items():
+            grp_name = item.pop("group")
+            if grp_name not in grouped:
+                grouped[grp_name] = []
+            grouped[grp_name].append(item)
+            
+        groups = []
+        for grp_name, items in grouped.items():
+            groups.append({
+                "id": f"grp_{uuid.uuid4().hex[:8]}",
+                "name": grp_name,
+                "note": "",
+                "tags": [],
+                "items": items
+            })
+        state["groups"] = groups
+
+    # 2. 自动定位、移动音频文件到标准路径，并重写项目路径
+    for spk_id, spk_data in state.get("speakers", {}).items():
+        # 标准目标目录
+        target_spk_dir = os.path.join(AUDIO_DIR, spk_id)
+        os.makedirs(target_spk_dir, exist_ok=True)
+        
+        for word_id, item_data in spk_data.get("items", {}).items():
+            standard_filename = f"{spk_id}_{word_id}.wav"
+            standard_dest_path = os.path.join(target_spk_dir, standard_filename)
+            standard_rel_path = f"audio/{spk_id}/{standard_filename}"
+            
+            # 搜索实际的源文件
+            source_path = None
+            
+            # 候选1：项目原 path 属性指向的相对路径
+            if "path" in item_data and item_data["path"]:
+                candidate = os.path.abspath(os.path.join(WORKSPACE_DIR, item_data["path"]))
+                if os.path.exists(candidate) and os.path.isfile(candidate):
+                    source_path = candidate
+                    
+            # 候选2：标准 PhonRec 路径
+            if not source_path:
+                candidate = os.path.join(AUDIO_DIR, spk_id, f"{spk_id}_{word_id}.wav")
+                if os.path.exists(candidate) and os.path.isfile(candidate):
+                    source_path = candidate
+                    
+            # 候选3：标准 ToneExtractor 路径
+            if not source_path:
+                candidate = os.path.join(AUDIO_DIR, f"{spk_id}_{word_id}.wav")
+                if os.path.exists(candidate) and os.path.isfile(candidate):
+                    source_path = candidate
+
+            # 候选4：音频文件夹下任何以 `spk_id_word_id.wav` 结尾的文件
+            if not source_path:
+                suffix = f"{spk_id}_{word_id}.wav".lower()
+                for root, _, files in os.walk(AUDIO_DIR):
+                    for f in files:
+                        if f.lower().endswith(suffix):
+                            source_path = os.path.join(root, f)
+                            break
+                    if source_path:
+                        break
+
+            # 如果找到了源文件，则移动/复制至目标路径
+            if source_path:
+                source_path = os.path.abspath(source_path)
+                standard_dest_path = os.path.abspath(standard_dest_path)
+                if source_path != standard_dest_path:
+                    # 复制以防破坏原有结构，稍后会删除
+                    shutil.copy2(source_path, standard_dest_path)
+                    try:
+                        os.remove(source_path)
+                    except OSError:
+                        pass
+                item_data["path"] = standard_rel_path
+            else:
+                # 如果没有找到对应的音频文件，删除 path 引用
+                # 这样前端就知道这个词条还没有被录制
+                item_data.pop("path", None)
+
+    # 清理音频目录下的空文件夹及冗余文件
+    for root, dirs, files in os.walk(AUDIO_DIR, topdown=False):
+        for d in dirs:
+            dir_path = os.path.join(root, d)
+            try:
+                if not os.listdir(dir_path):
+                    os.rmdir(dir_path)
+            except OSError:
+                pass
+
+    # 3. 将标准化后的 project.json 写回工作区
+    project_json_path = os.path.join(WORKSPACE_DIR, "project.json")
+    with open(project_json_path, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
+        
+    return state
+
 @app.post("/api/project/import")
 async def api_import_project(file: UploadFile = File(...)):
     """安全校验并导入 .teproj，失败时保留当前工作区。"""
@@ -614,12 +739,40 @@ async def api_import_project(file: UploadFile = File(...)):
         if not os.path.exists(project_json_path):
             raise HTTPException(status_code=400, detail="工程无效：缺少 project.json")
 
-        with open(project_json_path, "r", encoding="utf-8") as f:
-            state = json.load(f)
+        with open(project_json_path, "rb") as f:
+            raw_bytes = f.read()
+        try:
+            state = json.loads(raw_bytes.decode("utf-8"))
+        except UnicodeDecodeError:
+            state = json.loads(raw_bytes.decode("gb18030"))
 
-        clear_workspace()
-        shutil.copytree(staging_dir, WORKSPACE_DIR, dirs_exist_ok=True)
-        return {"status": "success", "state": state}
+        # 备份当前工作区以实现安全回滚
+        backup_dir = os.path.join(workspace_parent, "workspace_backup")
+        if os.path.exists(backup_dir):
+            shutil.rmtree(backup_dir)
+        if os.path.exists(WORKSPACE_DIR):
+            shutil.copytree(WORKSPACE_DIR, backup_dir)
+
+        try:
+            clear_workspace()
+            shutil.copytree(staging_dir, WORKSPACE_DIR, dirs_exist_ok=True)
+            
+            # 运行工作区标准化
+            state = normalize_workspace_after_import(state)
+            
+            # 清理备份
+            if os.path.exists(backup_dir):
+                shutil.rmtree(backup_dir)
+                
+            return {"status": "success", "state": state}
+        except Exception as e:
+            # 回滚当前工作区
+            clear_workspace()
+            if os.path.exists(backup_dir):
+                shutil.copytree(backup_dir, WORKSPACE_DIR, dirs_exist_ok=True)
+                shutil.rmtree(backup_dir)
+            raise e
+
     except HTTPException:
         raise
     except Exception as e:

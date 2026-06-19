@@ -246,6 +246,9 @@ export default function App() {
   const activeSpeakerIdRef = useRef(activeSpeakerId);
   activeSpeakerIdRef.current = activeSpeakerId;
 
+  const groupsRef = useRef(groups);
+  groupsRef.current = groups;
+
   const displayedItemsRef = useRef(displayedItems);
   displayedItemsRef.current = displayedItems;
 
@@ -600,12 +603,12 @@ export default function App() {
     }
   };
 
-  const saveProjectState = async (updatedSpeakers, updatedGroups = groups) => {
+  const saveProjectState = async (updatedSpeakers, updatedGroups = groupsRef.current) => {
     const state = {
       version: "1.0",
       software_version: "PhonRec-1.0.0",
       save_time: new Date().toISOString(),
-      active_speaker_id: activeSpeakerId,
+      active_speaker_id: activeSpeakerIdRef.current,
       speakers: updatedSpeakers,
       groups: updatedGroups
     };
@@ -771,6 +774,19 @@ export default function App() {
     
     try {
       setIsProcessing(true);
+      
+      // Clear/Reset all workspace UI states immediately
+      setSpectrogramUrl('');
+      setQualityResults(null);
+      clearCanvas();
+      setSpeakers({});
+      setActiveSpeakerId('');
+      setGroups([]);
+      setWordlistInfo({ title: '导入中...', count: 0 });
+      setDisplayedItems([]);
+      setActiveGroupIndex('all');
+      setActiveItemIndex(0);
+
       const res = await apiFetch('/project/import', {
         method: 'POST',
         body: formData
@@ -779,27 +795,39 @@ export default function App() {
       const data = await res.json();
       
       const state = data.state;
-      if (state.speakers) setSpeakers(state.speakers);
-      if (state.active_speaker_id) setActiveSpeakerId(state.active_speaker_id);
-      if (state.groups) {
-        setGroups(state.groups);
+      
+      // Apply imported project state (with fallback defaults to clear old data)
+      const importedSpeakers = state.speakers || {};
+      setSpeakers(importedSpeakers);
+      
+      const importedActiveSpeakerId = state.active_speaker_id || '';
+      setActiveSpeakerId(importedActiveSpeakerId);
+      
+      const importedGroups = state.groups || [];
+      setGroups(importedGroups);
+      
+      if (importedGroups.length > 0) {
         setWordlistInfo({
           title: '已导入工程字表',
-          count: state.groups.reduce((acc, g) => acc + g.items.length, 0)
+          count: importedGroups.reduce((acc, g) => acc + g.items.length, 0)
         });
         
         // Auto select first meta key if available
-        if (state.groups.length > 0) {
-          const firstItem = state.groups[0].items?.[0];
-          if (firstItem && firstItem.meta) {
-            const keys = Object.keys(firstItem.meta);
-            if (keys.length > 0) {
-              setPrimaryMetaKey(keys[0]);
-              setBadgeMetaKey(keys[0]);
-            }
+        const firstItem = importedGroups[0].items?.[0];
+        if (firstItem && firstItem.meta) {
+          const keys = Object.keys(firstItem.meta);
+          if (keys.length > 0) {
+            setPrimaryMetaKey(keys[0]);
+            setBadgeMetaKey(keys[0]);
           }
         }
+      } else {
+        setWordlistInfo({
+          title: '无字表',
+          count: 0
+        });
       }
+      
       setActiveGroupIndex('all');
       setActiveItemIndex(0);
       await customAlert('工程导入成功！');
@@ -813,11 +841,13 @@ export default function App() {
   const handleWordlistUpload = (e) => {
     const file = e.target.files[0];
     if (file) uploadWordlistFile(file);
+    e.target.value = null;
   };
 
   const handleProjectUpload = (e) => {
     const file = e.target.files[0];
     if (file) uploadProjectFile(file);
+    e.target.value = null;
   };
 
   const handleProjectExport = async () => {
@@ -1014,10 +1044,16 @@ export default function App() {
       // If backend analysis returns quality checks, sync them back into speakers state
       if (data.quality) {
         setQualityResults(data.quality);
-        const recordMeta = speakers[activeSpeakerId]?.items?.[wordId];
+        const recordMeta = speakersRef.current[speakerId]?.items?.[wordId];
         if (recordMeta && !recordMeta.quality) {
-          const updated = { ...speakers };
-          updated[activeSpeakerId].items[wordId].quality = data.quality;
+          const updated = { ...speakersRef.current };
+          updated[speakerId].items = {
+            ...updated[speakerId].items,
+            [wordId]: {
+              ...updated[speakerId].items[wordId],
+              quality: data.quality
+            }
+          };
           setSpeakers(updated);
           saveProjectState(updated);
         }
