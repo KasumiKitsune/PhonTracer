@@ -365,8 +365,8 @@ body {
   padding: 1.5rem;
   gap: 1.5rem;
   background: white;
+  flex: 1 1 500px;
   min-width: 0;
-  flex-shrink: 1;
 }
 
 .main-recording-card {
@@ -655,9 +655,8 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  width: 280px;
+  flex: 0 1 280px;
   min-width: 160px;
-  flex-shrink: 1;
 }
 
 .word-list-container {
@@ -1475,6 +1474,7 @@ input:checked + .slider:before {
   }
   
   .word-scroll-panel {
+    flex: none !important;
     width: 100% !important;
     min-width: 100% !important;
     height: 240px !important;

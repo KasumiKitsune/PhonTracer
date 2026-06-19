@@ -1359,7 +1359,7 @@ export default function App() {
         <section className="glass-panel main-recording-card" style={{ display: 'flex', flexDirection: 'row', padding: 0, minHeight: 0 }}>
           
           {/* Left side: Big Word display & Buttons */}
-          <div className="center-column" style={{ flex: 1, padding: '1.25rem', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+          <div className="center-column" style={{ padding: '1.25rem', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
           {activeItem ? (
             <div className="character-card">
               <span className="char-group-indicator">
