@@ -1514,7 +1514,7 @@ input:checked + .slider:before {
   .word-scroll-panel .panel-header .panel-title {
     writing-mode: vertical-lr !important;
     display: flex !important;
-    flex-direction: column !important;
+    flex-direction: row !important;
     align-items: center !important;
     gap: 0.25rem !important;
     letter-spacing: 2px !important;
