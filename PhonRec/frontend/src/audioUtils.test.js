@@ -27,6 +27,8 @@ describe('WAV 编码', () => {
     });
     const view = new DataView(arrayBuffer);
     expect(view.getUint32(24, true)).toBe(16000);
+    expect(view.getUint32(28, true)).toBe(32000);
+    expect(view.getUint16(32, true)).toBe(2);
     expect(view.getUint16(22, true)).toBe(1);
     expect(view.getUint16(34, true)).toBe(16);
     expect(blob.size).toBe(44 + 1600 * 2);

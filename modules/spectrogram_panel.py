@@ -740,7 +740,9 @@ class SpectrogramPanel:
         min_dist = 15 # px threshold
         closest_priority = 99
 
-        for i, (c_s, c_e) in enumerate(chars_bounds):
+        # 条目切换或异步重绘期间，数据边界和图元可能短暂不同步；只处理已配对部分。
+        paired_bounds = list(zip(chars_bounds, self.bound_lines))
+        for i, ((c_s, c_e), _line_pair) in enumerate(paired_bounds):
             s_px = self.ax.transData.transform((c_s, 0))[0]
             s_dist = abs(event.x - s_px)
             # If two character boundaries overlap, prefer the start of the following
@@ -757,7 +759,7 @@ class SpectrogramPanel:
                 min_dist = e_dist
                 closest_priority = 1
 
-        if self.cursor_x is not None:
+        if self.cursor_x is not None and self.cursor_line is not None:
             c_px = self.ax.transData.transform((self.cursor_x, 0))[0]
             c_dist = abs(event.x - c_px)
             if c_dist < min_dist:
@@ -783,8 +785,9 @@ class SpectrogramPanel:
                 self.bound_lines[idx][1].set_color('#047857')
                 self.bound_lines[idx][1].set_linewidth(4)
         elif closest == 'cursor':
-            self.cursor_line.set_color('#064E3B')
-            self.cursor_line.set_linewidth(2.5)
+            if self.cursor_line is not None:
+                self.cursor_line.set_color('#064E3B')
+                self.cursor_line.set_linewidth(2.5)
 
         if self.dragging:
             self.canvas.draw_idle()
@@ -794,8 +797,9 @@ class SpectrogramPanel:
                 self.selection_anchor_x = self.cursor_x
                 self.selection_drag_started = False
                 self.dragging = 'play_select'
-                self.cursor_line.set_color('#064E3B')
-                self.cursor_line.set_linewidth(2.5)
+                if self.cursor_line is not None:
+                    self.cursor_line.set_color('#064E3B')
+                    self.cursor_line.set_linewidth(2.5)
 
     def update_cursor_graphics(self, prefer_blit=False):
         if not self.cursor_line or not self.cursor_text: return
@@ -841,35 +845,37 @@ class SpectrogramPanel:
         if not self.dragging:
             is_hovering = False
             needs_redraw = False
-            for i, (c_s, c_e) in enumerate(chars_bounds):
+            if event.x is None:
+                return
+            for (c_s, c_e), (line_s, line_e) in zip(chars_bounds, self.bound_lines):
                 s_px = self.ax.transData.transform((c_s, 0))[0]
                 e_px = self.ax.transData.transform((c_e, 0))[0]
 
                 if abs(event.x - s_px) < 15:
-                    if self.bound_lines[i][0].get_linewidth() != 4:
-                        self.bound_lines[i][0].set_linewidth(4)
-                        self.bound_lines[i][0].set_color('#B91C1C')
+                    if line_s.get_linewidth() != 4:
+                        line_s.set_linewidth(4)
+                        line_s.set_color('#B91C1C')
                         needs_redraw = True
                     is_hovering = True
                 else:
-                    if self.bound_lines[i][0].get_linewidth() != 2:
-                        self.bound_lines[i][0].set_linewidth(2)
-                        self.bound_lines[i][0].set_color('#EF4444')
+                    if line_s.get_linewidth() != 2:
+                        line_s.set_linewidth(2)
+                        line_s.set_color('#EF4444')
                         needs_redraw = True
 
                 if abs(event.x - e_px) < 15:
-                    if self.bound_lines[i][1].get_linewidth() != 4:
-                        self.bound_lines[i][1].set_linewidth(4)
-                        self.bound_lines[i][1].set_color('#B91C1C')
+                    if line_e.get_linewidth() != 4:
+                        line_e.set_linewidth(4)
+                        line_e.set_color('#B91C1C')
                         needs_redraw = True
                     is_hovering = True
                 else:
-                    if self.bound_lines[i][1].get_linewidth() != 2:
-                        self.bound_lines[i][1].set_linewidth(2)
-                        self.bound_lines[i][1].set_color('#EF4444')
+                    if line_e.get_linewidth() != 2:
+                        line_e.set_linewidth(2)
+                        line_e.set_color('#EF4444')
                         needs_redraw = True
 
-            if self.cursor_x is not None:
+            if self.cursor_x is not None and self.cursor_line is not None:
                 c_px = self.ax.transData.transform((self.cursor_x, 0))[0]
                 if abs(event.x - c_px) < 15:
                     if self.cursor_line.get_linewidth() != 2.5:
@@ -907,6 +913,9 @@ class SpectrogramPanel:
 
         if isinstance(self.dragging, tuple):
             bound_type, idx = self.dragging
+            if idx >= len(chars_bounds):
+                self.dragging = None
+                return
             if bound_type == 'start':
                 chars_bounds[idx][0] = min(event.xdata, chars_bounds[idx][1] - 0.01)
                 self.cursor_x = chars_bounds[idx][0]

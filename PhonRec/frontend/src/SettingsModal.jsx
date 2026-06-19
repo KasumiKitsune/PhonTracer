@@ -154,6 +154,14 @@ export default function SettingsModal({
   const [activeTab, setActiveTab] = useState('appearance');
   const [localProjName, setLocalProjName] = useState('');
 
+  const THEME_COLORS = [
+    { id: 'navy', label: '深蓝色', hex: '#0b2559' },
+    { id: 'red', label: '红色', hex: '#ef4444' },
+    { id: 'green', label: '绿色', hex: '#10b981' },
+    { id: 'blue', label: '蓝色', hex: '#0284c7' },
+    { id: 'purple', label: '紫色', hex: '#8b5cf6' }
+  ];
+
   // Sync local default project name state when settings are loaded/changed
   useEffect(() => {
     if (settings?.default_project_name !== undefined) {
@@ -296,6 +304,45 @@ export default function SettingsModal({
                           { value: 'system', label: '跟随系统' }
                         ]}
                       />
+                    </div>
+                    <div className="form-group settings-grid-full">
+                      <label className="form-label" style={{ marginBottom: '0.5rem' }}>颜色主题</label>
+                      <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', height: '36px' }}>
+                        {THEME_COLORS.map(color => (
+                          <button
+                            key={color.id}
+                            type="button"
+                            className={`color-dot-btn ${settings.accent_color === color.id ? 'active' : ''}`}
+                            style={{ 
+                              width: '28px', 
+                              height: '28px', 
+                              borderRadius: '50%', 
+                              border: 'none',
+                              backgroundColor: color.hex, 
+                              cursor: 'pointer',
+                              padding: 0,
+                              outline: 'none',
+                              transition: 'transform 0.15s ease, box-shadow 0.15s ease',
+                              boxShadow: settings.accent_color === color.id 
+                                ? `0 0 0 2px var(--bg-primary), 0 0 0 4px ${color.hex}` 
+                                : 'none',
+                              transform: settings.accent_color === color.id ? 'scale(1.1)' : 'scale(1)'
+                            }}
+                            onMouseEnter={(e) => {
+                              if (settings.accent_color !== color.id) {
+                                e.currentTarget.style.transform = 'scale(1.15)';
+                              }
+                            }}
+                            onMouseLeave={(e) => {
+                              if (settings.accent_color !== color.id) {
+                                e.currentTarget.style.transform = 'scale(1)';
+                              }
+                            }}
+                            onClick={() => onUpdate({ accent_color: color.id })}
+                            title={color.label}
+                          />
+                        ))}
+                      </div>
                     </div>
                     <div className="form-group">
                       <label className="form-label">界面缩放</label>
@@ -498,6 +545,22 @@ export default function SettingsModal({
                           { value: 'disabled', label: '关闭全局快捷键' }
                         ]}
                       />
+                    </div>
+                    <div className="form-group settings-grid-full">
+                      <label className="form-label">操作提示显示</label>
+                      <div style={{ display: 'flex', alignItems: 'center', height: '36px' }}>
+                        <label className="switch">
+                          <input
+                            type="checkbox"
+                            checked={settings.show_shortcut_hints !== false}
+                            onChange={(e) => onUpdate({ show_shortcut_hints: e.target.checked })}
+                          />
+                          <span className="slider"></span>
+                        </label>
+                        <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginLeft: '0.5rem' }}>
+                          {settings.show_shortcut_hints !== false ? '显示快捷键操作提示' : '已隐藏快捷键操作提示'}
+                        </span>
+                      </div>
                     </div>
                     <div className="form-group settings-grid-full" style={{ background: 'var(--bg-secondary)', padding: '0.65rem 0.75rem', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
                       <span style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: '0.2rem' }}>

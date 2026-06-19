@@ -507,20 +507,44 @@ impl Default for QualityRule {
     }
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+fn default_enabled_rule() -> QualityRule {
+    QualityRule::default()
+}
+
+fn default_disabled_rule() -> QualityRule {
+    QualityRule {
+        enabled: false,
+        level: "medium".to_string(),
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct QualityRules {
-    #[serde(default)]
+    #[serde(default = "default_disabled_rule")]
     speech: QualityRule,
-    #[serde(default)]
+    #[serde(default = "default_enabled_rule")]
     volume: QualityRule,
-    #[serde(default)]
+    #[serde(default = "default_enabled_rule")]
     clipping: QualityRule,
-    #[serde(default)]
+    #[serde(default = "default_disabled_rule")]
     noise: QualityRule,
-    #[serde(default)]
+    #[serde(default = "default_enabled_rule")]
     creak: QualityRule,
-    #[serde(default)]
+    #[serde(default = "default_disabled_rule")]
     dc_offset: QualityRule,
+}
+
+impl Default for QualityRules {
+    fn default() -> Self {
+        Self {
+            speech: default_disabled_rule(),
+            volume: default_enabled_rule(),
+            clipping: default_enabled_rule(),
+            noise: default_disabled_rule(),
+            creak: default_enabled_rule(),
+            dc_offset: default_disabled_rule(),
+        }
+    }
 }
 
 impl QualityRules {
@@ -567,6 +591,12 @@ fn default_live_input_monitor() -> bool {
 fn default_default_project_name() -> String {
     "PhonRec_Project".to_string()
 }
+fn default_show_shortcut_hints() -> bool {
+    true
+}
+fn default_accent_color() -> String {
+    "blue".to_string()
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct LocalSettings {
@@ -605,6 +635,10 @@ struct LocalSettings {
     live_input_monitor: bool,
     #[serde(default = "default_default_project_name")]
     default_project_name: String,
+    #[serde(default = "default_show_shortcut_hints")]
+    show_shortcut_hints: bool,
+    #[serde(default = "default_accent_color")]
+    accent_color: String,
 }
 
 impl Default for LocalSettings {
@@ -633,6 +667,8 @@ impl Default for LocalSettings {
             shortcut_preset: default_shortcut_preset(),
             live_input_monitor: default_live_input_monitor(),
             default_project_name: default_default_project_name(),
+            show_shortcut_hints: default_show_shortcut_hints(),
+            accent_color: default_accent_color(),
         }
     }
 }
@@ -1355,12 +1391,12 @@ mod tests {
         let loaded: LocalSettings = serde_json::from_str(&loaded_content).unwrap();
         assert_eq!(loaded.sample_rate, 48_000);
         assert!(!loaded.realtime_quality);
-        assert!(loaded.quality_rules.speech.enabled);
+        assert!(!loaded.quality_rules.speech.enabled);
         assert!(loaded.quality_rules.volume.enabled);
         assert!(loaded.quality_rules.clipping.enabled);
-        assert!(loaded.quality_rules.noise.enabled);
+        assert!(!loaded.quality_rules.noise.enabled);
         assert!(loaded.quality_rules.creak.enabled);
-        assert!(loaded.quality_rules.dc_offset.enabled);
+        assert!(!loaded.quality_rules.dc_offset.enabled);
         assert!(!path.with_extension("tmp").exists());
         assert!(!path.with_extension("bak").exists());
 
@@ -1427,6 +1463,12 @@ mod tests {
 
         let channels = u16::from_le_bytes([header[22], header[23]]);
         assert_eq!(channels, 1);
+
+        let byte_rate = u32::from_le_bytes([header[28], header[29], header[30], header[31]]);
+        assert_eq!(byte_rate, 32000);
+
+        let block_align = u16::from_le_bytes([header[32], header[33]]);
+        assert_eq!(block_align, 2);
     }
 
     #[test]

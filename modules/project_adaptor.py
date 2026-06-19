@@ -4,6 +4,8 @@ import uuid
 import zipfile
 import shutil
 import stat
+import struct
+import math
 import numpy as np
 
 MAX_ARCHIVE_MEMBERS = 10000
@@ -103,6 +105,144 @@ def resolve_workspace_path(path, workspace_dir):
         return path
     return os.path.join(workspace_dir, path)
 
+
+def repair_wav_header(path):
+    """修复旧版 PhonRec 写错的 PCM WAV 平均字节率字段。
+
+    旧版录音文件可能把单声道 16-bit WAV 的 ``nAvgBytesPerSec`` 写成
+    采样率的四倍。音频数据本身没有损坏，但 libsndfile/Praat 会拒绝读取。
+    这里只在 RIFF/WAVE、fmt 块完整且其他关键字段可信时修正该字段。
+    """
+    if not path or os.path.splitext(str(path))[1].lower() not in {".wav", ".wave"}:
+        return False
+
+    try:
+        with open(path, "r+b") as wav_file:
+            header = wav_file.read(12)
+            if len(header) != 12 or header[:4] not in {b"RIFF", b"RF64"} or header[8:12] != b"WAVE":
+                return False
+
+            while True:
+                chunk_header = wav_file.read(8)
+                if len(chunk_header) != 8:
+                    return False
+                chunk_id, chunk_size = struct.unpack("<4sI", chunk_header)
+                chunk_data_offset = wav_file.tell()
+
+                if chunk_id == b"fmt ":
+                    if chunk_size < 16:
+                        return False
+                    fmt_data = wav_file.read(16)
+                    if len(fmt_data) != 16:
+                        return False
+                    audio_format, channels, sample_rate, byte_rate, block_align, bits_per_sample = struct.unpack(
+                        "<HHIIHH", fmt_data
+                    )
+                    if audio_format not in {1, 3, 0xFFFE}:
+                        return False
+                    if channels <= 0 or sample_rate <= 0 or block_align <= 0 or bits_per_sample <= 0:
+                        return False
+                    expected_block_align = channels * ((bits_per_sample + 7) // 8)
+                    if block_align != expected_block_align:
+                        return False
+
+                    expected_byte_rate = sample_rate * block_align
+                    if expected_byte_rate > 0xFFFFFFFF or byte_rate == expected_byte_rate:
+                        return False
+
+                    wav_file.seek(chunk_data_offset + 8)
+                    wav_file.write(struct.pack("<I", expected_byte_rate))
+                    wav_file.flush()
+                    return True
+
+                wav_file.seek(chunk_data_offset + chunk_size + (chunk_size % 2))
+    except (OSError, ValueError, OverflowError, struct.error):
+        return False
+
+
+def load_compatible_sound(path):
+    """读取音频，并兼容修复旧版 PhonRec 的 WAV 头。"""
+    repair_wav_header(path)
+    import parselmouth
+    return parselmouth.Sound(path)
+
+
+def normalize_independent_item_boundaries(item, duration, label=None):
+    """为独立音频补齐并校正本地时间轴边界，返回是否发生修改。"""
+    try:
+        duration = float(duration)
+    except (TypeError, ValueError):
+        return False
+    if not math.isfinite(duration) or duration <= 0:
+        return False
+
+    changed = False
+
+    def valid_pair(start, end, lower=0.0, upper=duration):
+        try:
+            start = float(start)
+            end = float(end)
+        except (TypeError, ValueError):
+            return None
+        tolerance = max(1e-6, duration * 1e-7)
+        if not math.isfinite(start) or not math.isfinite(end):
+            return None
+        if start < lower - tolerance or end > upper + tolerance or start >= end:
+            return None
+        return max(lower, start), min(upper, end)
+
+    local_pair = valid_pair(item.get("start"), item.get("end"))
+    if local_pair is None:
+        local_pair = (0.0, duration)
+        changed = True
+    start, end = local_pair
+    if item.get("start") != start or item.get("end") != end:
+        changed = True
+    item["start"], item["end"] = start, end
+
+    for start_key, end_key, fallback in (
+        ("raw_start", "raw_end", (start, end)),
+        ("macro_start", "macro_end", (0.0, duration)),
+    ):
+        pair = valid_pair(item.get(start_key), item.get(end_key))
+        if pair is None:
+            pair = fallback
+            changed = True
+        if item.get(start_key) != pair[0] or item.get(end_key) != pair[1]:
+            changed = True
+        item[start_key], item[end_key] = pair
+
+    from .data_utils import split_into_syllables
+    syllable_count = max(1, len(split_into_syllables(label if label is not None else item.get("label", ""))))
+    old_bounds = item.get("chars_bounds")
+    normalized_bounds = []
+    if isinstance(old_bounds, (list, tuple)) and len(old_bounds) == syllable_count:
+        previous_end = start
+        for pair in old_bounds:
+            if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+                normalized_bounds = []
+                break
+            valid = valid_pair(pair[0], pair[1], start, end)
+            if valid is None or valid[0] < previous_end - 1e-6:
+                normalized_bounds = []
+                break
+            normalized_bounds.append([valid[0], valid[1]])
+            previous_end = valid[1]
+
+    if len(normalized_bounds) != syllable_count:
+        edges = np.linspace(start, end, syllable_count + 1).tolist()
+        normalized_bounds = [[float(edges[i]), float(edges[i + 1])] for i in range(syllable_count)]
+        changed = True
+    if not isinstance(old_bounds, (list, tuple)) or old_bounds != normalized_bounds:
+        changed = True
+    item["chars_bounds"] = normalized_bounds
+
+    inner_splits = [bound[1] for bound in normalized_bounds[:-1]]
+    if item.get("inner_splits") != inner_splits:
+        changed = True
+    item["inner_splits"] = inner_splits
+    return changed
+
 def _iter_state_resource_refs(state):
     for spk_id, spk_data in state.get("speakers", {}).items():
         if not isinstance(spk_data, dict):
@@ -160,9 +300,8 @@ def validate_project_resources(state, workspace_dir):
         elif key == "formant_data_file":
             cache_paths[file_path] = ("xs", "f1", "f2")
 
-    import parselmouth
     for audio_path in sorted(audio_paths):
-        parselmouth.Sound(audio_path)
+        load_compatible_sound(audio_path)
 
     for cache_path, required_keys in cache_paths.items():
         with np.load(cache_path) as loaded:
@@ -364,10 +503,18 @@ def adapt_project_state(state: dict, workspace_dir: str):
         is_long_mode = "单条" in tab_mode or bool(spk_data.get("long_audio_path") and not has_item_audio)
 
         long_audio_abs = None
+        long_source_sound = None
+        long_audio_error = None
         if is_long_mode:
             long_audio_rel = spk_data.get("long_audio_path")
             if long_audio_rel:
                 long_audio_abs = resolve_workspace_path(long_audio_rel, workspace_dir)
+                if os.path.isfile(long_audio_abs):
+                    try:
+                        # 长音频只读取一次，避免按条目重复解析大文件。
+                        long_source_sound = load_compatible_sound(long_audio_abs)
+                    except Exception as exc:
+                        long_audio_error = exc
 
         new_items = {}
 
@@ -400,10 +547,9 @@ def adapt_project_state(state: dict, workspace_dir: str):
                         end = item_data.get("end")
 
                     sliced_successfully = False
-                    if long_audio_abs and os.path.exists(long_audio_abs) and start is not None and end is not None:
+                    if long_source_sound is not None and start is not None and end is not None:
                         try:
-                            import parselmouth
-                            source_sound = parselmouth.Sound(long_audio_abs)
+                            source_sound = long_source_sound
                             duration = source_sound.duration
                             if start < 0 or end > duration or start >= end:
                                 raise ValueError(f"切分边界无效 [{start}, {end}], 音频总长: {duration:.2f}s")
@@ -438,12 +584,23 @@ def adapt_project_state(state: dict, workspace_dir: str):
                                 "chars_bounds", "inner_splits", "analysis_params", "analysis_state",
                             ):
                                 item_data.pop(cache_key, None)
+                            normalize_independent_item_boundaries(
+                                item_data,
+                                duration_local,
+                                label=canonical_item["label"],
+                            )
                             
                             summary["sliced_items"] += 1
                             sliced_successfully = True
                         except Exception as e:
                             warnings.append(f"发音人 {spk_name} 词项 '{word_label}' (ID: {canonical_id}) 的长音频切片失败: {e}")
                             summary["downgraded_items"] += 1
+
+                    elif long_audio_error is not None:
+                        warnings.append(
+                            f"发音人 {spk_name} 词项 '{word_label}' (ID: {canonical_id}) 的长音频切片失败: {long_audio_error}"
+                        )
+                        summary["downgraded_items"] += 1
 
                     if not sliced_successfully:
                         # 降级为未录制
@@ -491,6 +648,25 @@ def adapt_project_state(state: dict, workspace_dir: str):
                                 except OSError:
                                     pass
                             item_data["path"] = dest_rel
+
+                            try:
+                                independent_sound = load_compatible_sound(dest_abs)
+                                normalize_independent_item_boundaries(
+                                    item_data,
+                                    independent_sound.duration,
+                                    label=canonical_item["label"],
+                                )
+                            except Exception as exc:
+                                item_data.pop("path", None)
+                                for cache_key in (
+                                    "pitch_data_file", "formant_data_file", "pitch_data", "formant_data",
+                                    "preview_f0", "preview_formants", "has_empty_data",
+                                ):
+                                    item_data.pop(cache_key, None)
+                                warnings.append(
+                                    f"发音人 {spk_name} 词项 '{word_label}' (ID: {canonical_id}) 的独立音频读取失败: {exc}"
+                                )
+                                summary["downgraded_items"] += 1
 
                             # 同样重命名 pitch and formantNPZ cache files
                             for cache_key, cache_suffix in (("pitch_data_file", ".npz"), ("formant_data_file", "_formant.npz")):

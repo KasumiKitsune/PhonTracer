@@ -1,8 +1,10 @@
 import json
 import math
 import os
+import struct
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -13,7 +15,10 @@ from modules.project_adaptor import (
     read_project_metadata_from_archive,
     safe_extract_zip,
     adapt_project_state,
+    repair_wav_header,
+    normalize_independent_item_boundaries,
     prune_unreferenced_resources,
+    validate_project_resources,
 )
 
 def _write_test_wav(path, duration=0.2, frequency=220.0):
@@ -25,6 +30,82 @@ def _write_test_wav(path, duration=0.2, frequency=220.0):
     snd = parselmouth.Sound(np.array([samples]), sampling_frequency=sample_rate)
     snd.save(str(path), "WAV")
     return path
+
+
+def _corrupt_wav_byte_rate(path):
+    data = bytearray(path.read_bytes())
+    fmt_offset = data.index(b"fmt ") + 8
+    sample_rate = struct.unpack_from("<I", data, fmt_offset + 4)[0]
+    block_align = struct.unpack_from("<H", data, fmt_offset + 12)[0]
+    struct.pack_into("<I", data, fmt_offset + 8, sample_rate * block_align * 2)
+    path.write_bytes(data)
+    return sample_rate * block_align
+
+
+def test_repair_legacy_phonrec_wav_header(tmp_path):
+    wav_path = _write_test_wav(tmp_path / "legacy.wav")
+    expected_byte_rate = _corrupt_wav_byte_rate(wav_path)
+
+    assert repair_wav_header(wav_path) is True
+    data = wav_path.read_bytes()
+    fmt_offset = data.index(b"fmt ") + 8
+    assert struct.unpack_from("<I", data, fmt_offset + 8)[0] == expected_byte_rate
+    assert repair_wav_header(wav_path) is False
+
+
+def test_normalize_independent_item_boundaries():
+    item = {"label": "开来"}
+
+    assert normalize_independent_item_boundaries(item, 1.2) is True
+    assert item["start"] == 0.0
+    assert item["end"] == 1.2
+    assert item["chars_bounds"] == [[0.0, 0.6], [0.6, 1.2]]
+    assert item["inner_splits"] == [0.6]
+
+
+def test_project_manager_restores_phonrec_audio_with_valid_boundaries(tmp_path):
+    from modules.project_manager import ProjectManager
+
+    workspace = tmp_path / "workspace"
+    audio_dir = workspace / "audio" / "spk1"
+    audio_dir.mkdir(parents=True)
+    wav_path = _write_test_wav(audio_dir / "spk1_item1.wav", duration=0.6)
+    expected_byte_rate = _corrupt_wav_byte_rate(wav_path)
+    state = {
+        "version": "1.0",
+        "active_speaker_id": "spk1",
+        "speakers": {
+            "spk1": {
+                "id": "spk1",
+                "name": "录音发音人",
+                "tab_mode": "多条独立音频",
+                "items": {
+                    "item1": {
+                        "id": "item1",
+                        "label": "开来",
+                        "path": "audio/spk1/spk1_item1.wav",
+                    }
+                },
+            }
+        },
+    }
+
+    validate_project_resources(state, str(workspace))
+    wav_data = wav_path.read_bytes()
+    fmt_offset = wav_data.index(b"fmt ") + 8
+    assert struct.unpack_from("<I", wav_data, fmt_offset + 8)[0] == expected_byte_rate
+
+    manager = ProjectManager.__new__(ProjectManager)
+    manager.workspace_dir = str(workspace)
+    manager.app = SimpleNamespace(speaker_manager=SimpleNamespace(speakers={}))
+    restored, active_id = manager._build_restored_state(state, workspace_dir=str(workspace))
+
+    item = restored["spk1"].items["item1"]
+    assert active_id == "spk1"
+    assert item["start"] == 0.0
+    assert item["end"] == pytest.approx(0.6)
+    assert len(item["chars_bounds"]) == 2
+    assert item["chars_bounds"][-1][1] == pytest.approx(item["end"])
 
 def test_validate_project_version():
     # Test valid version
@@ -138,6 +219,7 @@ def test_adapt_project_state_slicing_long_audio(tmp_path):
     
     long_audio = audio_dir / "long.wav"
     _write_test_wav(long_audio, duration=1.0)
+    _corrupt_wav_byte_rate(long_audio)
     
     state = {
         "version": "1.0",
@@ -188,6 +270,7 @@ def test_adapt_project_state_slicing_long_audio(tmp_path):
         assert "formant_data_file" not in item_data
         assert item_data["start"] == 0.0
         assert item_data["end"] > 0.0
+        assert item_data["chars_bounds"]
     
     assert summary["sliced_items"] == 2
     
@@ -230,7 +313,8 @@ def test_long_audio_is_detected_even_if_legacy_tab_mode_is_wrong(tmp_path):
     assert item["source_segment"]["start"] == 0.1
     assert "pitch_data" not in item
     assert "preview_formants" not in item
-    assert "chars_bounds" not in item
+    assert item["chars_bounds"][0][0] == 0.0
+    assert item["chars_bounds"][0][1] == pytest.approx(0.4)
     assert adapted["speakers"]["spk1"]["pending_batch_paths"] == [item["path"]]
 
 def test_prune_unreferenced_resources(tmp_path):
@@ -309,4 +393,3 @@ def test_project_manager_collect_file_refs():
         "data/spk1/spk1_item1_formant.npz",
     }
     assert refs == expected_refs
-

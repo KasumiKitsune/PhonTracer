@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { createDefaultQualityRules, hasEnabledQualityRule, normalizeQualityRules } from './qualitySettings.js';
 
 describe('质量检测设置', () => {
-  it('默认启用全部质量检测规则', () => {
+  it('默认仅启用音量、截断和嘎裂声检测', () => {
     const rules = createDefaultQualityRules();
-    expect(Object.values(rules).every(rule => rule.enabled)).toBe(true);
+    expect(Object.entries(rules)
+      .filter(([, rule]) => rule.enabled)
+      .map(([key]) => key)).toEqual(['volume', 'clipping', 'creak']);
   });
 
   it('兼容旧版总开关', () => {

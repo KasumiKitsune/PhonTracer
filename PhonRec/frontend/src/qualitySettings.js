@@ -13,8 +13,13 @@ export const QUALITY_ITEMS = [
   { key: 'dc_offset', label: '直流偏移', description: '检测录音设备产生的波形偏移' },
 ];
 
-export const createDefaultQualityRules = (enabled = true) => Object.fromEntries(
-  QUALITY_ITEMS.map(({ key }) => [key, { enabled, level: 'medium' }])
+export const createDefaultQualityRules = (enabled = null) => Object.fromEntries(
+  QUALITY_ITEMS.map(({ key }) => {
+    const isEnabled = enabled === null
+      ? ['volume', 'clipping', 'creak'].includes(key)
+      : enabled;
+    return [key, { enabled: isEnabled, level: 'medium' }];
+  })
 );
 
 export const normalizeQualityRules = (rules, legacyEnabled = true) => {

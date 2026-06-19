@@ -8,15 +8,11 @@
   --bg-card: rgba(255, 255, 255, 0.85);
   --bg-card-hover: rgba(255, 255, 255, 0.95);
   --border-color: #e2e8f0;
-  --border-color-active: #6366f1;
+  --border-color-active: var(--color-accent);
 
   --text-primary: #0f172a;      /* Dark slate 900 */
   --text-secondary: #475569;    /* slate 600 */
   --text-muted: #94a3b8;        /* slate 400 */
-
-  --color-accent: #6366f1;      /* Indigo 500 */
-  --color-accent-hover: #4f46e5;
-  --color-accent-glow: rgba(99, 102, 241, 0.08);
 
   --color-success: #10b981;      /* Emerald 500 */
   --color-success-bg: rgba(16, 185, 129, 0.08);
@@ -35,6 +31,70 @@
   --transition-normal: 0.25s ease;
 }
 
+/* Accent Colors - Light Theme (default) */
+[data-accent="navy"], :root:not([data-accent]) {
+  --color-accent: #0b2559;
+  --color-accent-hover: #061533;
+  --color-accent-glow: rgba(11, 37, 89, 0.08);
+  --color-accent-secondary: #1d4ed8;
+}
+[data-accent="red"] {
+  --color-accent: #ef4444;
+  --color-accent-hover: #dc2626;
+  --color-accent-glow: rgba(239, 68, 68, 0.08);
+  --color-accent-secondary: #f87171;
+}
+[data-accent="green"] {
+  --color-accent: #10b981;
+  --color-accent-hover: #059669;
+  --color-accent-glow: rgba(16, 185, 129, 0.08);
+  --color-accent-secondary: #34d399;
+}
+[data-accent="blue"] {
+  --color-accent: #0284c7;
+  --color-accent-hover: #0369a1;
+  --color-accent-glow: rgba(2, 132, 199, 0.08);
+  --color-accent-secondary: #38bdf8;
+}
+[data-accent="purple"] {
+  --color-accent: #6366f1;
+  --color-accent-hover: #4f46e5;
+  --color-accent-glow: rgba(99, 102, 241, 0.08);
+  --color-accent-secondary: #818cf8;
+}
+
+/* Accent Colors - Dark Theme */
+[data-theme="dark"][data-accent="navy"], [data-theme="dark"]:not([data-accent]) {
+  --color-accent: #60a5fa;
+  --color-accent-hover: #3b82f6;
+  --color-accent-glow: rgba(96, 165, 250, 0.15);
+  --color-accent-secondary: #2563eb;
+}
+[data-theme="dark"][data-accent="red"] {
+  --color-accent: #fb7185;
+  --color-accent-hover: #f43f5e;
+  --color-accent-glow: rgba(251, 113, 133, 0.15);
+  --color-accent-secondary: #f43f5e;
+}
+[data-theme="dark"][data-accent="green"] {
+  --color-accent: #34d399;
+  --color-accent-hover: #10b981;
+  --color-accent-glow: rgba(52, 211, 153, 0.15);
+  --color-accent-secondary: #10b981;
+}
+[data-theme="dark"][data-accent="blue"] {
+  --color-accent: #38bdf8;
+  --color-accent-hover: #0284c7;
+  --color-accent-glow: rgba(56, 189, 248, 0.15);
+  --color-accent-secondary: #0284c7;
+}
+[data-theme="dark"][data-accent="purple"] {
+  --color-accent: #818cf8;
+  --color-accent-hover: #6366f1;
+  --color-accent-glow: rgba(129, 140, 248, 0.15);
+  --color-accent-secondary: #6366f1;
+}
+
 * {
   box-sizing: border-box;
   margin: 0;
@@ -45,7 +105,7 @@ body {
   font-family: 'Outfit', 'Noto Sans SC', system-ui, -apple-system, sans-serif;
   background-color: var(--bg-secondary);
   background-image:
-    radial-gradient(at 0% 0%, rgba(99, 102, 241, 0.04) 0px, transparent 50%),
+    radial-gradient(at 0% 0%, var(--color-accent-glow) 0px, transparent 50%),
     radial-gradient(at 100% 100%, rgba(16, 185, 129, 0.02) 0px, transparent 50%);
   color: var(--text-primary);
   min-height: 100vh;
@@ -103,7 +163,7 @@ body {
 .brand-logo {
   width: 32px;
   height: 32px;
-  background: linear-gradient(135deg, var(--color-accent), #818cf8);
+  background: linear-gradient(135deg, var(--color-accent), var(--color-accent-secondary));
   border-radius: 8px;
   display: flex;
   align-items: center;
@@ -111,7 +171,7 @@ body {
   font-weight: 700;
   font-size: 1.1rem;
   color: white;
-  box-shadow: 0 4px 10px rgba(99, 102, 241, 0.2);
+  box-shadow: 0 4px 10px var(--color-accent-glow);
 }
 
 .brand-title {
@@ -2458,15 +2518,11 @@ input:checked + .slider:before {
   --bg-card: rgba(30, 41, 59, 0.7); /* slate 800 with transparency */
   --bg-card-hover: rgba(30, 41, 59, 0.85);
   --border-color: #334155;     /* slate 700 */
-  --border-color-active: #818cf8; /* Indigo 400 */
+  --border-color-active: var(--color-accent);
 
   --text-primary: #f8fafc;     /* slate 50 */
   --text-secondary: #cbd5e1;   /* slate 300 */
   --text-muted: #64748b;       /* slate 500 */
-
-  --color-accent: #818cf8;     /* Indigo 400 */
-  --color-accent-hover: #6366f1; /* Indigo 500 */
-  --color-accent-glow: rgba(129, 140, 248, 0.15);
 
   --color-success: #34d399;     /* Emerald 400 */
   --color-success-bg: rgba(52, 211, 153, 0.1);
@@ -2732,4 +2788,9 @@ input:checked + .slider:before {
 
 [data-theme="dark"] .custom-slider-pill {
   background: var(--bg-card) !important;
+}
+
+[data-theme="dark"] .visualizer-image,
+[data-theme="dark"] .zoomed-spectrogram-image {
+  filter: invert(1) hue-rotate(180deg);
 }

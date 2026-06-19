@@ -232,6 +232,7 @@ export default function App() {
 
   // Redesigned visual and behavioral settings states
   const [themeSetting, setThemeSetting] = useState('light');
+  const [accentColorSetting, setAccentColorSetting] = useState('navy');
   const [uiScaleSetting, setUiScaleSetting] = useState('100%');
   const [uiDensitySetting, setUiDensitySetting] = useState('standard');
   const [animationsEnabledSetting, setAnimationsEnabledSetting] = useState(true);
@@ -239,6 +240,7 @@ export default function App() {
   const [shortcutPresetSetting, setShortcutPresetSetting] = useState('standard');
   const [liveInputMonitorSetting, setLiveInputMonitorSetting] = useState(true);
   const [defaultProjectNameSetting, setDefaultProjectNameSetting] = useState('PhonRec_Project.teproj');
+  const [showShortcutHintsSetting, setShowShortcutHintsSetting] = useState(true);
 
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [settingsModalClosing, setSettingsModalClosing] = useState(false);
@@ -361,6 +363,7 @@ export default function App() {
     save_format: saveFormatSetting,
     folder_path: folderPathSetting,
     theme: themeSetting,
+    accent_color: accentColorSetting,
     ui_scale: uiScaleSetting,
     ui_density: uiDensitySetting,
     animations_enabled: animationsEnabledSetting,
@@ -371,6 +374,7 @@ export default function App() {
     shortcut_preset: shortcutPresetSetting,
     live_input_monitor: liveInputMonitorSetting,
     default_project_name: defaultProjectNameSetting,
+    show_shortcut_hints: showShortcutHintsSetting,
     channels: 1,
     format: 'wav'
   };
@@ -407,6 +411,7 @@ export default function App() {
 
         // New fields
         setThemeSetting(settings.theme || 'light');
+        setAccentColorSetting(settings.accent_color || 'navy');
         setUiScaleSetting(settings.ui_scale || '100%');
         setUiDensitySetting(settings.ui_density || 'standard');
         setAnimationsEnabledSetting(settings.animations_enabled !== false);
@@ -417,6 +422,7 @@ export default function App() {
         setShortcutPresetSetting(settings.shortcut_preset || 'standard');
         setLiveInputMonitorSetting(settings.live_input_monitor !== false);
         setDefaultProjectNameSetting(settings.default_project_name || 'PhonRec_Project.teproj');
+        setShowShortcutHintsSetting(settings.show_shortcut_hints !== false);
       }
       return settings;
     } catch (err) {
@@ -462,6 +468,7 @@ export default function App() {
     setSaveFormatSetting(snapshot.save_format);
     setFolderPathSetting(snapshot.folder_path);
     setThemeSetting(snapshot.theme);
+    setAccentColorSetting(snapshot.accent_color);
     setUiScaleSetting(snapshot.ui_scale);
     setUiDensitySetting(snapshot.ui_density);
     setAnimationsEnabledSetting(snapshot.animations_enabled);
@@ -472,6 +479,7 @@ export default function App() {
     setShortcutPresetSetting(snapshot.shortcut_preset);
     setLiveInputMonitorSetting(snapshot.live_input_monitor);
     setDefaultProjectNameSetting(snapshot.default_project_name);
+    setShowShortcutHintsSetting(snapshot.show_shortcut_hints !== false);
 
     qualityRulesRef.current = snapshot.quality_rules;
     qualityChecksEnabledRef.current = snapshot.realtime_quality;
@@ -906,10 +914,11 @@ export default function App() {
             const ctx = canvas.getContext('2d');
             const width = canvas.width;
             const height = canvas.height;
-            ctx.fillStyle = '#f8fafc';
+            const styles = getComputedStyle(document.documentElement);
+            ctx.fillStyle = styles.getPropertyValue('--bg-primary').trim() || '#f8fafc';
             ctx.fillRect(0, 0, width, height);
             ctx.lineWidth = 2;
-            ctx.strokeStyle = '#6366f1';
+            ctx.strokeStyle = styles.getPropertyValue('--color-accent').trim() || '#6366f1';
             ctx.beginPath();
 
             const sliceWidth = width / waveform.length;
@@ -1014,6 +1023,11 @@ export default function App() {
       mediaQuery.removeEventListener('change', handleSystemThemeChange);
     };
   }, [themeSetting, uiScaleSetting, uiDensitySetting, animationsEnabledSetting]);
+
+  // Apply accent color theme
+  useEffect(() => {
+    document.documentElement.setAttribute('data-accent', accentColorSetting || 'blue');
+  }, [accentColorSetting]);
 
   // Background stream lifecycle
   useEffect(() => {
@@ -1180,7 +1194,7 @@ export default function App() {
       setQualityResults(null);
       clearCanvas();
     }
-  }, [activeItemIndex, activeSpeakerId, displayedItems, visualizerTab]);
+  }, [activeItemIndex, activeSpeakerId, displayedItems, visualizerTab, themeSetting, accentColorSetting]);
 
   // Auto-scroll word list to center active item
   useEffect(() => {
@@ -2101,7 +2115,8 @@ export default function App() {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
-    ctx.fillStyle = '#f8fafc';
+    const styles = getComputedStyle(document.documentElement);
+    ctx.fillStyle = styles.getPropertyValue('--bg-primary').trim() || '#f8fafc';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
   };
 
@@ -2112,10 +2127,11 @@ export default function App() {
     const width = canvas.width;
     const height = canvas.height;
 
-    ctx.fillStyle = '#f8fafc';
+    const styles = getComputedStyle(document.documentElement);
+    ctx.fillStyle = styles.getPropertyValue('--bg-primary').trim() || '#f8fafc';
     ctx.fillRect(0, 0, width, height);
     ctx.lineWidth = 1.5;
-    ctx.strokeStyle = '#10b981';
+    ctx.strokeStyle = styles.getPropertyValue('--color-success').trim() || '#10b981';
     ctx.beginPath();
 
     const step = Math.ceil(floatBuffer.length / width);
@@ -2586,15 +2602,17 @@ export default function App() {
             </div>
 
             {/* Keyboard hints at the bottom of controls card */}
-            <div className="keyboard-hints" style={{ display: 'flex', flexWrap: 'wrap', width: '100%', justifyContent: 'center', alignItems: 'center', gap: '1rem', fontSize: '0.75rem', color: 'var(--text-secondary)', borderTop: '1px solid var(--border-color)', paddingTop: '0.75rem', marginTop: '0.5rem' }}>
-              <span><KeyboardIcon /> [空格] 录音/停止</span>
-              <span>[← / →] 切换字表词条</span>
-              {activeItem && speakers[activeSpeakerId]?.items?.[activeItem.id]?.path && (
-                <span style={{ color: 'var(--color-accent)', cursor: 'pointer', fontWeight: 'bold' }} onClick={playRecordedAudio}>
-                  [R] 播放录音
-                </span>
-              )}
-            </div>
+            {showShortcutHintsSetting && (
+              <div className="keyboard-hints" style={{ display: 'flex', flexWrap: 'wrap', width: '100%', justifyContent: 'center', alignItems: 'center', gap: '1rem', fontSize: '0.75rem', color: 'var(--text-secondary)', borderTop: '1px solid var(--border-color)', paddingTop: '0.75rem', marginTop: '0.5rem' }}>
+                <span><KeyboardIcon /> [空格] 录音/停止</span>
+                <span>[← / →] 切换字表词条</span>
+                {activeItem && speakers[activeSpeakerId]?.items?.[activeItem.id]?.path && (
+                  <span style={{ color: 'var(--color-accent)', cursor: 'pointer', fontWeight: 'bold' }} onClick={playRecordedAudio}>
+                    [R] 播放录音
+                  </span>
+                )}
+              </div>
+            )}
           </div>
           
           {/* Center Column Bottom Bar: Project Management Actions */}
@@ -2948,6 +2966,7 @@ export default function App() {
         onClose={closeSettingsModal}
         settings={{
           theme: themeSetting,
+          accent_color: accentColorSetting,
           ui_scale: uiScaleSetting,
           ui_density: uiDensitySetting,
           animations_enabled: animationsEnabledSetting,
@@ -2966,7 +2985,8 @@ export default function App() {
           live_input_monitor: liveInputMonitorSetting,
           default_project_name: defaultProjectNameSetting,
           realtime_quality: qualityChecksEnabled,
-          quality_rules: qualityRules
+          quality_rules: qualityRules,
+          show_shortcut_hints: showShortcutHintsSetting
         }}
         onUpdate={updateSettings}
         onReset={async () => {
@@ -3192,6 +3212,7 @@ export default function App() {
             <img 
               src={spectrogramUrl} 
               alt="语谱图放大" 
+              className="zoomed-spectrogram-image"
               style={{ 
                 width: '100%', 
                 height: 'auto', 

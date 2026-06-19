@@ -32,7 +32,8 @@ if workspace_root not in sys.path:
 from modules.project_adaptor import (
     safe_extract_zip,
     adapt_project_state,
-    prune_unreferenced_resources
+    prune_unreferenced_resources,
+    repair_wav_header,
 )
 
 ENGINE_VERSION = "1.3.0"
@@ -558,6 +559,9 @@ async def api_save_audio(
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
+        # 兼容旧版录音端写错的 WAV 平均字节率，避免错误继续进入工程包。
+        repair_wav_header(file_path)
+
         rel_path = f"audio/{safe_speaker_id}/{filename}"
 
         # Run analysis immediately to return quality and spectrogram
@@ -623,6 +627,7 @@ async def api_analyze_audio(
 
     try:
         # Read WAV file
+        repair_wav_header(file_path)
         sr, y_int = wavfile.read(file_path)
 
         y = normalize_audio_samples(y_int)

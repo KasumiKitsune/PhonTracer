@@ -24,6 +24,7 @@ from .project_adaptor import (
     resolve_workspace_path,
     prune_unreferenced_resources,
     validate_project_resources,
+    normalize_independent_item_boundaries,
     _iter_state_resource_refs
 )
 
@@ -800,6 +801,11 @@ class ProjectManager:
 
                 if spk.tab_mode == "多条独立音频" and item.get('path') and os.path.exists(item['path']):
                     item['snd'] = parselmouth.Sound(item['path'])
+                    normalize_independent_item_boundaries(
+                        item,
+                        item['snd'].duration,
+                        label=item.get('label', ''),
+                    )
                 elif spk.tab_mode == "单条长音频" and spk.pending_long_snd:
                     item['snd'] = spk.pending_long_snd
 
