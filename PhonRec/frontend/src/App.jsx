@@ -1427,7 +1427,7 @@ export default function App() {
 
               {/* Previous arrow */}
               <button 
-                className="nav-arrow" 
+                className="nav-arrow prev-btn" 
                 onClick={() => navigateItem(-1)} 
                 disabled={activeItemIndex === 0}
                 title="上一个 (左方向键)"
@@ -1455,7 +1455,7 @@ export default function App() {
 
               {/* Next arrow */}
               <button 
-                className="nav-arrow" 
+                className="nav-arrow next-btn" 
                 onClick={() => navigateItem(1)}
                 disabled={activeItemIndex === displayedItems.length - 1}
                 title="下一个 (右方向键)"
@@ -1488,7 +1488,7 @@ export default function App() {
           </div>
 
           {/* Right side: Word scroll list */}
-          <div className="word-scroll-panel" style={{ width: '280px', borderLeft: '1px solid var(--border-color)', background: 'transparent' }}>
+          <div className="word-scroll-panel" style={{ borderLeft: '1px solid var(--border-color)', background: 'transparent' }}>
           <div className="panel-header" style={{ padding: '0.75rem 1rem' }}>
             <span className="panel-title" style={{ fontSize: '0.8rem' }}>
               <BookIcon /> 字表词条

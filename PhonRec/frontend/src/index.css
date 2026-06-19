@@ -78,7 +78,7 @@ body {
   padding: 1rem;
   gap: 1rem;
   position: relative;
-  min-width: 680px;
+  min-width: 560px;
 }
 
 /* Header */
@@ -655,7 +655,9 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  flex-shrink: 0;
+  width: 280px;
+  min-width: 160px;
+  flex-shrink: 1;
 }
 
 .word-list-container {
@@ -1446,6 +1448,38 @@ input:checked + .slider:before {
     color: var(--color-accent) !important;
     border: 1px solid var(--border-color) !important;
     box-shadow: 0 4px 15px rgba(0, 0, 0, 0.15) !important;
+  }
+}
+
+/* Hide previous and next arrow buttons when screen space is tight */
+@media (max-width: 960px) {
+  .recording-buttons .prev-btn,
+  .recording-buttons .next-btn {
+    display: none !important;
+  }
+}
+
+/* Stack main recording card vertically on screen sizes <= 768px to avoid squeezing */
+@media (max-width: 768px) {
+  .app-workspace {
+    grid-template-columns: minmax(0, 1fr) 240px !important;
+  }
+  
+  .main-recording-card {
+    flex-direction: column !important;
+    min-height: 0 !important;
+  }
+  
+  .center-column {
+    flex-shrink: 0 !important;
+  }
+  
+  .word-scroll-panel {
+    width: 100% !important;
+    min-width: 100% !important;
+    height: 240px !important;
+    border-left: none !important;
+    border-top: 1px solid var(--border-color) !important;
   }
 }
 
