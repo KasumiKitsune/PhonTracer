@@ -1922,3 +1922,8 @@ input:checked + .slider:before {
   align-items: center;
   gap: 0.35rem;
 }
+
+.left-sidebar .panel-body {
+  overflow-y: auto;
+  min-height: 0;
+}
