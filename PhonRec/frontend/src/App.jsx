@@ -630,7 +630,7 @@ export default function App() {
                 const silentDuration = Date.now() - lastSpeechTimeRef.current;
                 if (silentDuration > silenceDurationLimit) {
                   if (stopRecordingRef.current) {
-                    stopRecordingRef.current(true);
+                    stopRecordingRef.current(true, true);
                   }
                 }
               }
@@ -762,7 +762,7 @@ export default function App() {
                 const silentDuration = Date.now() - lastSpeechTimeRef.current;
                 if (silentDuration > silenceDurationLimit) {
                   if (stopRecordingRef.current) {
-                    stopRecordingRef.current(true);
+                    stopRecordingRef.current(true, true);
                   }
                 }
               }
@@ -1479,7 +1479,7 @@ export default function App() {
     }
   };
 
-  const stopRecording = async (shouldAutoAdvance = true) => {
+  const stopRecording = async (shouldAutoAdvance = true, isAutoVAD = false) => {
     if (isStartingRef.current) {
       shouldCancelRef.current = true;
       return;
@@ -1508,7 +1508,7 @@ export default function App() {
         drawStaticWaveform(floatBuffer);
         tempCtx.close();
 
-        await uploadAudio(wavBlob, shouldAutoAdvance);
+        await uploadAudio(wavBlob, shouldAutoAdvance, isAutoVAD);
       } catch (err) {
         console.error(err);
         await customAlert('保存回环录音失败：' + err.message);
@@ -1535,10 +1535,10 @@ export default function App() {
     const targetSR = Number(sampleRateSetting);
     const resampledBuffer = resampleAudio(floatBuffer, sourceSampleRate, targetSR);
     const wavBlob = bufferToWav(resampledBuffer, targetSR);
-    await uploadAudio(wavBlob, shouldAutoAdvance);
+    await uploadAudio(wavBlob, shouldAutoAdvance, isAutoVAD);
   };
 
-  const uploadAudio = async (blob, shouldAutoAdvance) => {
+  const uploadAudio = async (blob, shouldAutoAdvance, isAutoVAD = false) => {
     const activeItem = displayedItemsRef.current[activeItemIndexRef.current];
     const spkId = activeSpeakerIdRef.current;
     if (!activeItem || !spkId) return;
@@ -1560,6 +1560,12 @@ export default function App() {
       if (!res.ok) throw new Error('保存音频失败');
       const data = await res.json();
 
+      const hasQualityIssue = qualityChecksEnabledRef.current && data.quality && (
+        data.quality.clipping?.abnormal ||
+        (data.quality.volume?.status && data.quality.volume.status !== 'normal') ||
+        data.quality.creak?.abnormal
+      );
+
       const updatedSpeakers = { ...speakersRef.current };
       if (!updatedSpeakers[spkId]) {
         console.warn(`Speaker ${spkId} no longer exists in speakers state. Skipping state update.`);
@@ -1569,7 +1575,11 @@ export default function App() {
         updatedSpeakers[spkId].items = {};
       }
 
-      updatedSpeakers[spkId].items[activeItem.id] = buildRecordedItem(activeItem, data);
+      if (hasQualityIssue) {
+        delete updatedSpeakers[spkId].items[activeItem.id];
+      } else {
+        updatedSpeakers[spkId].items[activeItem.id] = buildRecordedItem(activeItem, data);
+      }
 
       setSpeakers(updatedSpeakers);
       await saveProjectState(updatedSpeakers);
@@ -1578,8 +1588,23 @@ export default function App() {
       if (data.spectrogram) setSpectrogramUrl(data.spectrogram);
       if (data.quality) setQualityResults(data.quality);
 
-      if (shouldAutoAdvance) {
-        setTimeout(() => navigateItem(1), 500);
+      if (hasQualityIssue) {
+        if (isAutoVAD) {
+          setTimeout(() => {
+            startRecording();
+          }, 1000);
+        }
+      } else {
+        if (shouldAutoAdvance) {
+          setTimeout(() => {
+            navigateItem(1);
+            if (isAutoVAD) {
+              setTimeout(() => {
+                startRecording();
+              }, 100);
+            }
+          }, 500);
+        }
       }
     } catch (err) {
       console.error(err);
