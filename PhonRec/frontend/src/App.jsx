@@ -7,6 +7,13 @@ import { apiFetch } from './engineApi.js';
 import { bufferToWav, resampleAudio } from './audioUtils.js';
 import { createVadEngine } from './vadEngine.js';
 import {
+  QUALITY_ITEMS,
+  QUALITY_LEVELS,
+  createDefaultQualityRules,
+  hasEnabledQualityRule,
+  normalizeQualityRules,
+} from './qualitySettings.js';
+import {
   buildRecordedItem,
   formatPlaybackTime,
   mergeAudioDevices,
@@ -242,6 +249,7 @@ export default function App() {
   // Settings
   const [recordingMode, setRecordingMode] = useState('click');
   const [qualityChecksEnabled, setQualityChecksEnabled] = useState(true);
+  const [qualityRules, setQualityRules] = useState(() => createDefaultQualityRules());
   const [randomizeOrder, setRandomizeOrder] = useState(false);
 
   const [audioDevices, setAudioDevices] = useState([]);
@@ -252,6 +260,7 @@ export default function App() {
   const [settingsLoaded, setSettingsLoaded] = useState(false);
 
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [settingsModalClosing, setSettingsModalClosing] = useState(false);
   const [activeSettingsTab, setActiveSettingsTab] = useState('behavior');
 
   const [showImportModal, setShowImportModal] = useState(false);
@@ -312,6 +321,7 @@ export default function App() {
   const audioPlayerRef = useRef(null);
   const activeCaptureSourceRef = useRef(null);
   const captureLifecycleRef = useRef(Promise.resolve());
+  const settingsSaveQueueRef = useRef(Promise.resolve());
 
   const vadEngineRef = useRef(null);
   if (!vadEngineRef.current) vadEngineRef.current = createVadEngine();
@@ -330,6 +340,8 @@ export default function App() {
 
   const qualityChecksEnabledRef = useRef(qualityChecksEnabled);
   qualityChecksEnabledRef.current = qualityChecksEnabled;
+  const qualityRulesRef = useRef(qualityRules);
+  qualityRulesRef.current = qualityRules;
 
   const recordingModeRef = useRef(recordingMode);
   recordingModeRef.current = recordingMode;
@@ -371,7 +383,9 @@ export default function App() {
     try {
       const settings = await invoke('load_settings');
       if (settings) {
-        setQualityChecksEnabled(settings.realtime_quality);
+        const loadedQualityRules = normalizeQualityRules(settings.quality_rules, settings.realtime_quality);
+        setQualityRules(loadedQualityRules);
+        setQualityChecksEnabled(hasEnabledQualityRule(loadedQualityRules));
         setVisualizerTab(settings.default_plot);
         setRecordingMode(settings.record_mode);
         setSelectedDeviceId(settings.record_source);
@@ -416,7 +430,8 @@ export default function App() {
   const saveAndApplySettings = async (updates = {}) => {
     const currentSettings = {
       version: 1,
-      realtime_quality: updates.realtime_quality !== undefined ? updates.realtime_quality : qualityChecksEnabled,
+      realtime_quality: updates.realtime_quality !== undefined ? updates.realtime_quality : hasEnabledQualityRule(qualityRulesRef.current),
+      quality_rules: updates.quality_rules !== undefined ? updates.quality_rules : qualityRulesRef.current,
       default_plot: updates.default_plot !== undefined ? updates.default_plot : visualizerTab,
       record_mode: updates.record_mode !== undefined ? updates.record_mode : recordingMode,
       record_source: updates.record_source !== undefined ? updates.record_source : selectedDeviceId,
@@ -429,7 +444,10 @@ export default function App() {
     };
 
     try {
-      await invoke('save_settings', { settings: currentSettings });
+      settingsSaveQueueRef.current = settingsSaveQueueRef.current
+        .catch(() => {})
+        .then(() => invoke('save_settings', { settings: currentSettings }));
+      await settingsSaveQueueRef.current;
       return true;
     } catch (err) {
       console.error('保存设置失败:', err);
@@ -439,8 +457,57 @@ export default function App() {
   };
 
   const updateQualityChecksEnabled = async (val) => {
-    if (await saveAndApplySettings({ realtime_quality: val })) setQualityChecksEnabled(val);
+    const previousRules = qualityRulesRef.current;
+    const nextRules = Object.fromEntries(
+      Object.entries(previousRules).map(([key, rule]) => [key, { ...rule, enabled: val }])
+    );
+    qualityRulesRef.current = nextRules;
+    setQualityRules(nextRules);
+    setQualityChecksEnabled(val);
+    if (!await saveAndApplySettings({ realtime_quality: val, quality_rules: nextRules }) && qualityRulesRef.current === nextRules) {
+      qualityRulesRef.current = previousRules;
+      setQualityRules(previousRules);
+      setQualityChecksEnabled(hasEnabledQualityRule(previousRules));
+    }
   };
+  const updateQualityRule = async (name, updates) => {
+    const previousRules = qualityRulesRef.current;
+    const nextRules = {
+      ...previousRules,
+      [name]: { ...previousRules[name], ...updates }
+    };
+    const anyEnabled = hasEnabledQualityRule(nextRules);
+    qualityRulesRef.current = nextRules;
+    setQualityRules(nextRules);
+    setQualityChecksEnabled(anyEnabled);
+    if (!await saveAndApplySettings({ realtime_quality: anyEnabled, quality_rules: nextRules }) && qualityRulesRef.current === nextRules) {
+      qualityRulesRef.current = previousRules;
+      setQualityRules(previousRules);
+      setQualityChecksEnabled(hasEnabledQualityRule(previousRules));
+    }
+  };
+
+  const openSettingsModal = () => {
+    setSettingsModalClosing(false);
+    setShowSettingsModal(true);
+  };
+  const closeSettingsModal = () => {
+    if (settingsModalClosing) return;
+    setSettingsModalClosing(true);
+    window.setTimeout(() => {
+      setShowSettingsModal(false);
+      setSettingsModalClosing(false);
+    }, 180);
+  };
+
+  useEffect(() => {
+    if (!showSettingsModal) return undefined;
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') closeSettingsModal();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showSettingsModal, settingsModalClosing]);
   const updateVisualizerTab = async (val) => {
     if (await saveAndApplySettings({ default_plot: val })) setVisualizerTab(val);
   };
@@ -1428,7 +1495,9 @@ export default function App() {
 
       // Reset settings to defaults
       const defaults = await invoke('reset_settings');
-      setQualityChecksEnabled(defaults.realtime_quality);
+      const defaultQualityRules = normalizeQualityRules(defaults.quality_rules, defaults.realtime_quality);
+      setQualityRules(defaultQualityRules);
+      setQualityChecksEnabled(hasEnabledQualityRule(defaultQualityRules));
       setVisualizerTab(defaults.default_plot);
       setRecordingMode(defaults.record_mode);
       setSelectedDeviceId(defaults.record_source);
@@ -1624,6 +1693,7 @@ export default function App() {
     formData.append('speaker_id', spkId);
     formData.append('word_id', activeItem.id);
     formData.append('source', deviceName);
+    formData.append('quality_config', JSON.stringify(qualityRulesRef.current));
 
     try {
       const res = await apiFetch('/audio/save', {
@@ -1725,6 +1795,7 @@ export default function App() {
     const formData = new FormData();
     formData.append('speaker_id', speakerId);
     formData.append('word_id', wordId);
+    formData.append('quality_config', JSON.stringify(qualityRulesRef.current));
 
     try {
       const res = await apiFetch('/audio/analyze', {
@@ -2488,7 +2559,7 @@ export default function App() {
             </span>
             <button
               className="btn-icon"
-              onClick={() => setShowSettingsModal(true)}
+              onClick={openSettingsModal}
               title="设置"
               style={{ padding: '0.2rem', display: 'flex', alignItems: 'center' }}
             >
@@ -2549,7 +2620,7 @@ export default function App() {
                   <div className="quality-indicator">
                     <span className={`indicator-led ${
                       !qualityChecksEnabled || !qualityResults ? '' :
-                      (qualityResults.volume.status === 'normal' ? 'green' : 'orange')
+                      (qualityResults.volume.enabled === false ? '' : (qualityResults.volume.status === 'normal' ? 'green' : 'orange'))
                     }`}></span>
                     <span style={{ color: 'var(--text-secondary)' }}>
                       {!qualityChecksEnabled || !qualityResults ? '未检测' : qualityResults.volume.label}
@@ -2561,7 +2632,7 @@ export default function App() {
                   <div className="quality-indicator">
                     <span className={`indicator-led ${
                       !qualityChecksEnabled || !qualityResults ? '' :
-                      (qualityResults.creak.abnormal ? 'red' : 'green')
+                      (qualityResults.creak.enabled === false ? '' : (qualityResults.creak.abnormal ? 'red' : 'green'))
                     }`}></span>
                     <span style={{ color: 'var(--text-secondary)' }}>
                       {!qualityChecksEnabled || !qualityResults ? '未检测' : qualityResults.creak.label}
@@ -2573,7 +2644,7 @@ export default function App() {
                   <div className="quality-indicator">
                     <span className={`indicator-led ${
                       !qualityChecksEnabled || !qualityResults ? '' :
-                      (qualityResults.clipping.abnormal ? 'red' : 'green')
+                      (qualityResults.clipping.enabled === false ? '' : (qualityResults.clipping.abnormal ? 'red' : 'green'))
                     }`}></span>
                     <span style={{ color: 'var(--text-secondary)' }}>
                       {!qualityChecksEnabled || !qualityResults ? '未检测' : qualityResults.clipping.label}
@@ -2583,7 +2654,7 @@ export default function App() {
                 <div className="quality-item">
                   <span>有效语音</span>
                   <div className="quality-indicator">
-                    <span className={`indicator-led ${qualityResults?.speech?.abnormal ? 'red' : (qualityResults?.speech ? 'green' : '')}`}></span>
+                    <span className={`indicator-led ${qualityResults?.speech?.enabled === false ? '' : (qualityResults?.speech?.abnormal ? 'red' : (qualityResults?.speech ? 'green' : ''))}`}></span>
                     <span style={{ color: 'var(--text-secondary)' }}>
                       {!qualityChecksEnabled || !qualityResults?.speech ? '未检测' : qualityResults.speech.label}
                     </span>
@@ -2592,9 +2663,18 @@ export default function App() {
                 <div className="quality-item">
                   <span>背景噪声</span>
                   <div className="quality-indicator">
-                    <span className={`indicator-led ${qualityResults?.noise?.abnormal ? 'red' : (qualityResults?.noise ? 'green' : '')}`}></span>
+                    <span className={`indicator-led ${qualityResults?.noise?.enabled === false ? '' : (qualityResults?.noise?.abnormal ? 'red' : (qualityResults?.noise ? 'green' : ''))}`}></span>
                     <span style={{ color: 'var(--text-secondary)' }}>
                       {!qualityChecksEnabled || !qualityResults?.noise ? '未检测' : qualityResults.noise.label}
+                    </span>
+                  </div>
+                </div>
+                <div className="quality-item">
+                  <span>直流偏移</span>
+                  <div className="quality-indicator">
+                    <span className={`indicator-led ${qualityResults?.dc_offset?.enabled === false ? '' : (qualityResults?.dc_offset?.abnormal ? 'red' : (qualityResults?.dc_offset ? 'green' : ''))}`}></span>
+                    <span style={{ color: 'var(--text-secondary)' }}>
+                      {!qualityChecksEnabled || !qualityResults?.dc_offset ? '未检测' : qualityResults.dc_offset.label}
                     </span>
                   </div>
                 </div>
@@ -2673,15 +2753,21 @@ export default function App() {
 
       {/* Settings Modal */}
       {showSettingsModal && (
-        <div className="modal-overlay" style={{ zIndex: 9999 }}>
-          <div className="modal-content settings-modal">
+        <div
+          className={`modal-overlay settings-overlay ${settingsModalClosing ? 'is-closing' : 'is-open'}`}
+          style={{ zIndex: 9999 }}
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeSettingsModal();
+          }}
+        >
+          <div className="modal-content settings-modal" role="dialog" aria-modal="true" aria-label="设置">
             <div className="modal-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ fontWeight: 650, fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <GearIcon /> 设置
               </span>
               <button
                 className="btn-icon"
-                onClick={() => setShowSettingsModal(false)}
+                onClick={closeSettingsModal}
                 style={{ fontSize: '1.2rem', padding: '0.2rem' }}
               >
                 &times;
@@ -2703,6 +2789,12 @@ export default function App() {
                   录音
                 </button>
                 <button
+                  className={`settings-tab-btn ${activeSettingsTab === 'quality' ? 'active' : ''}`}
+                  onClick={() => setActiveSettingsTab('quality')}
+                >
+                  质量检测
+                </button>
+                <button
                   className={`settings-tab-btn ${activeSettingsTab === 'storage' ? 'active' : ''}`}
                   onClick={() => setActiveSettingsTab('storage')}
                 >
@@ -2718,7 +2810,7 @@ export default function App() {
 
               <div className="settings-form">
                 {activeSettingsTab === 'behavior' && (
-                  <div className="settings-grid">
+                  <div className="settings-grid settings-panel-transition">
                     <div className="form-group">
                       <label className="form-label"><ChartIcon /> 默认图形</label>
                       <CustomSelect
@@ -2743,25 +2835,11 @@ export default function App() {
                         ]}
                       />
                     </div>
-                    <div className="form-group settings-grid-full">
-                      <div className="switch-container">
-                        <span className="form-label" style={{ margin: 0 }}><CheckIcon /> 实时质量检测</span>
-                        <label className="switch">
-                          <input
-                            type="checkbox"
-                            checked={qualityChecksEnabled}
-                            disabled={isRecording || isProcessing}
-                            onChange={(e) => updateQualityChecksEnabled(e.target.checked)}
-                          />
-                          <span className="slider"></span>
-                        </label>
-                      </div>
-                    </div>
                   </div>
                 )}
 
                 {activeSettingsTab === 'recording' && (
-                  <div className="settings-grid">
+                  <div className="settings-grid settings-panel-transition">
                     <div className="form-group">
                       <label className="form-label"><MicIcon active={isRecording} /> 录音模式</label>
                       <CustomSelect
@@ -2823,8 +2901,64 @@ export default function App() {
                   </div>
                 )}
 
+                {activeSettingsTab === 'quality' && (
+                  <div className="quality-settings-panel settings-panel-transition">
+                    <div className="quality-settings-summary">
+                      <div>
+                        <strong>实时质量检测</strong>
+                        <span>已启用 {QUALITY_ITEMS.filter(({ key }) => qualityRules[key]?.enabled).length} / {QUALITY_ITEMS.length} 项</span>
+                      </div>
+                      <label className="switch" title={qualityChecksEnabled ? '关闭全部检测' : '启用全部检测'}>
+                        <input
+                          type="checkbox"
+                          checked={qualityChecksEnabled}
+                          disabled={isRecording || isProcessing}
+                          onChange={(event) => updateQualityChecksEnabled(event.target.checked)}
+                        />
+                        <span className="slider"></span>
+                      </label>
+                    </div>
+                    <p className="quality-settings-hint">可任意多选，也可以全部关闭。检测越严格，越容易要求重录或人工复核。</p>
+                    <div className="quality-rule-list">
+                      {QUALITY_ITEMS.map((item) => {
+                        const rule = qualityRules[item.key];
+                        return (
+                          <div className={`quality-rule-card ${rule?.enabled ? 'enabled' : 'disabled'}`} key={item.key}>
+                            <label className="quality-rule-toggle">
+                              <input
+                                type="checkbox"
+                                checked={Boolean(rule?.enabled)}
+                                disabled={isRecording || isProcessing}
+                                onChange={(event) => updateQualityRule(item.key, { enabled: event.target.checked })}
+                              />
+                              <span className="quality-rule-check" aria-hidden="true"></span>
+                              <span>
+                                <strong>{item.label}</strong>
+                                <small>{item.description}</small>
+                              </span>
+                            </label>
+                            <div className="quality-level-selector" aria-label={`${item.label}检测力度`}>
+                              {QUALITY_LEVELS.map((level) => (
+                                <button
+                                  type="button"
+                                  key={level.value}
+                                  className={rule?.level === level.value ? 'active' : ''}
+                                  disabled={!rule?.enabled || isRecording || isProcessing}
+                                  onClick={() => updateQualityRule(item.key, { level: level.value })}
+                                >
+                                  {level.label}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
                 {activeSettingsTab === 'storage' && (
-                  <div className="settings-grid">
+                  <div className="settings-grid settings-panel-transition">
                     <div className="form-group settings-grid-full">
                       <label className="form-label"><SaveIcon /> 保存形式</label>
                       <CustomSelect
@@ -2869,7 +3003,7 @@ export default function App() {
                 )}
 
                 {activeSettingsTab === 'permission' && (
-                  <div className="settings-grid">
+                  <div className="settings-grid settings-panel-transition">
                     <div className="form-group settings-grid-full">
                       <label className="form-label"><CheckIcon /> 麦克风权限状态</label>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem' }}>
@@ -2945,7 +3079,9 @@ export default function App() {
                   if (!ok) return;
                   try {
                     const defaults = await invoke('reset_settings');
-                    setQualityChecksEnabled(defaults.realtime_quality);
+                    const defaultQualityRules = normalizeQualityRules(defaults.quality_rules, defaults.realtime_quality);
+                    setQualityRules(defaultQualityRules);
+                    setQualityChecksEnabled(hasEnabledQualityRule(defaultQualityRules));
                     setVisualizerTab(defaults.default_plot);
                     setRecordingMode(defaults.record_mode);
                     setSelectedDeviceId(defaults.record_source);
@@ -2964,7 +3100,7 @@ export default function App() {
               <button
                 className="btn-primary"
                 style={{ padding: '0.4rem 1.5rem', fontSize: '0.85rem' }}
-                onClick={() => setShowSettingsModal(false)}
+                onClick={closeSettingsModal}
               >
                 关闭
               </button>

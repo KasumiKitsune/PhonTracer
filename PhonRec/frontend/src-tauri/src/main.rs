@@ -493,9 +493,53 @@ fn quit_app(app: AppHandle) {
 
 // --- Native Local Settings ---
 #[derive(Clone, Debug, Serialize, Deserialize)]
+struct QualityRule {
+    enabled: bool,
+    level: String,
+}
+
+impl Default for QualityRule {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            level: "medium".to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+struct QualityRules {
+    #[serde(default)]
+    speech: QualityRule,
+    #[serde(default)]
+    volume: QualityRule,
+    #[serde(default)]
+    clipping: QualityRule,
+    #[serde(default)]
+    noise: QualityRule,
+    #[serde(default)]
+    creak: QualityRule,
+    #[serde(default)]
+    dc_offset: QualityRule,
+}
+
+impl QualityRules {
+    fn set_all_enabled(&mut self, enabled: bool) {
+        self.speech.enabled = enabled;
+        self.volume.enabled = enabled;
+        self.clipping.enabled = enabled;
+        self.noise.enabled = enabled;
+        self.creak.enabled = enabled;
+        self.dc_offset.enabled = enabled;
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct LocalSettings {
     version: u32,
     realtime_quality: bool,
+    #[serde(default)]
+    quality_rules: QualityRules,
     default_plot: String,  // "waveform" or "spectrogram"
     record_order: String,  // "wordlist" or "random"
     record_mode: String,   // "click" or "hold" or "vad"
@@ -512,6 +556,7 @@ impl Default for LocalSettings {
         Self {
             version: 1,
             realtime_quality: true,
+            quality_rules: QualityRules::default(),
             default_plot: "waveform".to_string(),
             record_order: "wordlist".to_string(),
             record_mode: "click".to_string(),
@@ -563,14 +608,25 @@ fn load_settings(app: AppHandle) -> Result<LocalSettings, String> {
         }
     }
     let content = fs::read_to_string(&path).map_err(|e| format!("无法读取设置文件：{e}"))?;
-    let settings: LocalSettings = serde_json::from_str(&content)
-        .ok()
+    let parse_settings = |raw: &str| -> Option<(LocalSettings, bool)> {
+        let value: serde_json::Value = serde_json::from_str(raw).ok()?;
+        let has_quality_rules = value.get("quality_rules").is_some();
+        serde_json::from_value(value)
+            .ok()
+            .map(|settings| (settings, has_quality_rules))
+    };
+    let (mut settings, has_quality_rules) = parse_settings(&content)
         .or_else(|| {
             fs::read_to_string(&backup_path)
                 .ok()
-                .and_then(|backup| serde_json::from_str(&backup).ok())
+                .and_then(|backup| parse_settings(&backup))
         })
-        .unwrap_or_else(LocalSettings::default);
+        .unwrap_or_else(|| (LocalSettings::default(), true));
+    if !has_quality_rules {
+        settings
+            .quality_rules
+            .set_all_enabled(settings.realtime_quality);
+    }
     if settings.version != 1 {
         return Ok(LocalSettings::default());
     }
@@ -1232,6 +1288,7 @@ mod tests {
         let loaded: LocalSettings = serde_json::from_str(&loaded_content).unwrap();
         assert_eq!(loaded.sample_rate, 48_000);
         assert!(!loaded.realtime_quality);
+        assert!(loaded.quality_rules.speech.enabled);
         assert!(!path.with_extension("tmp").exists());
         assert!(!path.with_extension("bak").exists());
 
@@ -1245,6 +1302,19 @@ mod tests {
         assert_eq!(fallback.sample_rate, 16_000);
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn 旧版设置缺少质量规则时仍可读取() {
+        let mut legacy = serde_json::to_value(LocalSettings::default()).unwrap();
+        legacy["realtime_quality"] = serde_json::Value::Bool(false);
+        legacy.as_object_mut().unwrap().remove("quality_rules");
+        let mut loaded: LocalSettings = serde_json::from_value(legacy).unwrap();
+        loaded
+            .quality_rules
+            .set_all_enabled(loaded.realtime_quality);
+        assert!(!loaded.quality_rules.volume.enabled);
+        assert_eq!(loaded.quality_rules.noise.level, "medium");
     }
 
     #[test]

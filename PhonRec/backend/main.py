@@ -248,7 +248,35 @@ def normalize_audio_samples(samples: np.ndarray) -> np.ndarray:
         y = np.mean(y, axis=1, dtype=np.float32)
     return np.nan_to_num(y, nan=0.0, posinf=1.0, neginf=-1.0)
 
-def analyze_recording_quality(y: np.ndarray, sr: int) -> dict:
+QUALITY_RULE_NAMES = ("speech", "volume", "clipping", "noise", "creak", "dc_offset")
+
+
+def normalize_quality_config(config: Optional[dict] = None) -> dict:
+    """兼容缺失或不完整的前端配置，并限制检测档位。"""
+    source = config if isinstance(config, dict) else {}
+    normalized = {}
+    for name in QUALITY_RULE_NAMES:
+        raw = source.get(name, {})
+        enabled = raw.get("enabled", True) if isinstance(raw, dict) else bool(raw)
+        level = raw.get("level", "medium") if isinstance(raw, dict) else "medium"
+        normalized[name] = {
+            "enabled": bool(enabled),
+            "level": level if level in {"low", "medium", "high"} else "medium",
+        }
+    return normalized
+
+
+def parse_quality_config(raw: str) -> dict:
+    if not raw:
+        return normalize_quality_config()
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail="质量检测配置不是有效 JSON") from exc
+    return normalize_quality_config(parsed)
+
+
+def analyze_recording_quality(y: np.ndarray, sr: int, config: Optional[dict] = None) -> dict:
     """基于有效语音而非整段平均值进行分级，区分重录与人工复核。"""
     y = np.asarray(y, dtype=np.float32).reshape(-1)
     duration = len(y) / sr if sr > 0 else 0.0
@@ -273,38 +301,58 @@ def analyze_recording_quality(y: np.ndarray, sr: int) -> dict:
     peak = float(np.max(np.abs(y))) if len(y) else 0.0
     peak_db = float(20.0 * np.log10(peak + 1e-10))
     dc_offset = float(abs(np.mean(y))) if len(y) else 0.0
+    _, clip_ratio = check_clipping(y)
 
-    clipped, clip_ratio = check_clipping(y)
-    severe_clipping = clip_ratio >= 0.003
-    no_speech = speech_ms < 180 or speech_ratio < 0.08
+    rules = normalize_quality_config(config)
+    speech_thresholds = {
+        "low": (100, 0.04), "medium": (180, 0.08), "high": (300, 0.15),
+    }[rules["speech"]["level"]]
+    volume_thresholds = {
+        "low": (-40.0, -3.0), "medium": (-35.0, -6.0), "high": (-30.0, -9.0),
+    }[rules["volume"]["level"]]
+    clipping_thresholds = {
+        "low": (0.003, 0.01), "medium": (0.0001, 0.003), "high": (0.0, 0.001),
+    }[rules["clipping"]["level"]]
+    noise_thresholds = {
+        "low": (3.0, 8.0), "medium": (6.0, 12.0), "high": (10.0, 16.0),
+    }[rules["noise"]["level"]]
+    creak_threshold = {"low": 0.25, "medium": 0.15, "high": 0.08}[rules["creak"]["level"]]
+    dc_threshold = {"low": 0.05, "medium": 0.03, "high": 0.015}[rules["dc_offset"]["level"]]
+
+    clip_review_threshold, clip_retry_threshold = clipping_thresholds
+    clipped = clip_ratio > clip_review_threshold
+    severe_clipping = clip_ratio >= clip_retry_threshold
+    no_speech = speech_ms < speech_thresholds[0] or speech_ratio < speech_thresholds[1]
     too_short = duration < 0.30
-    too_quiet = active_rms_db < -35.0
-    too_loud = active_rms_db > -6.0 or peak_db > -0.15
-    very_noisy = snr_db < 6.0 and not no_speech
-    moderate_noise = 6.0 <= snr_db < 12.0
-    creaky, creak_ratio = detect_creak(y, sr) if len(y) >= frame_size else (False, 0.0)
+    too_quiet = active_rms_db < volume_thresholds[0]
+    too_loud = active_rms_db > volume_thresholds[1] or peak_db > -0.15
+    very_noisy = snr_db < noise_thresholds[0] and not no_speech
+    moderate_noise = noise_thresholds[0] <= snr_db < noise_thresholds[1]
+    _, creak_ratio = detect_creak(y, sr) if len(y) >= frame_size else (False, 0.0)
+    creaky = creak_ratio > creak_threshold
+    dc_abnormal = dc_offset > dc_threshold
 
     retry_issues = []
     review_issues = []
-    if too_short:
+    if rules["speech"]["enabled"] and too_short:
         retry_issues.append("录音过短")
-    if no_speech:
+    if rules["speech"]["enabled"] and no_speech:
         retry_issues.append("未检测到足够语音")
-    if severe_clipping:
+    if rules["clipping"]["enabled"] and severe_clipping:
         retry_issues.append("严重截断")
-    elif clipped:
+    elif rules["clipping"]["enabled"] and clipped:
         review_issues.append("轻微截断")
-    if too_quiet:
+    if rules["volume"]["enabled"] and too_quiet:
         retry_issues.append("有效语音音量过小")
-    if too_loud:
+    if rules["volume"]["enabled"] and too_loud:
         retry_issues.append("有效语音音量过大")
-    if very_noisy:
+    if rules["noise"]["enabled"] and very_noisy:
         retry_issues.append("信噪比过低")
-    elif moderate_noise:
+    elif rules["noise"]["enabled"] and moderate_noise:
         review_issues.append("背景噪声偏高")
-    if dc_offset > 0.03:
+    if rules["dc_offset"]["enabled"] and dc_abnormal:
         review_issues.append("直流偏移偏高")
-    if creaky:
+    if rules["creak"]["enabled"] and creaky:
         review_issues.append("可能存在嘎裂声")
 
     decision = "retry" if retry_issues else ("review" if review_issues else "accept")
@@ -320,16 +368,19 @@ def analyze_recording_quality(y: np.ndarray, sr: int) -> dict:
         "score": score,
         "issues": labels,
         "recommendations": labels,
-        "clipping": {"abnormal": clipped, "score": clip_ratio, "label": "音频截断" if clipped else "正常"},
+        "config": rules,
+        "clipping": {"enabled": rules["clipping"]["enabled"], "abnormal": rules["clipping"]["enabled"] and clipped, "score": clip_ratio, "label": "未启用" if not rules["clipping"]["enabled"] else ("音频截断" if clipped else "正常")},
         "volume": {
-            "status": vol_status,
+            "enabled": rules["volume"]["enabled"],
+            "status": vol_status if rules["volume"]["enabled"] else "disabled",
             "score": active_rms_db,
-            "label": "音量过小" if too_quiet else ("音量过大" if too_loud else "正常"),
+            "label": "未启用" if not rules["volume"]["enabled"] else ("音量过小" if too_quiet else ("音量过大" if too_loud else "正常")),
         },
         # 嘎裂声只作为复核提示，不再自动判定录音失败。
-        "creak": {"abnormal": creaky, "score": creak_ratio, "label": "可能有嘎裂声" if creaky else "正常"},
-        "speech": {"abnormal": no_speech, "score": speech_ratio, "label": "语音不足" if no_speech else "正常"},
-        "noise": {"abnormal": very_noisy, "score": snr_db, "label": "噪声过高" if very_noisy else "正常"},
+        "creak": {"enabled": rules["creak"]["enabled"], "abnormal": rules["creak"]["enabled"] and creaky, "score": creak_ratio, "label": "未启用" if not rules["creak"]["enabled"] else ("可能有嘎裂声" if creaky else "正常")},
+        "speech": {"enabled": rules["speech"]["enabled"], "abnormal": rules["speech"]["enabled"] and no_speech, "score": speech_ratio, "label": "未启用" if not rules["speech"]["enabled"] else ("语音不足" if no_speech else "正常")},
+        "noise": {"enabled": rules["noise"]["enabled"], "abnormal": rules["noise"]["enabled"] and very_noisy, "score": snr_db, "label": "未启用" if not rules["noise"]["enabled"] else ("噪声过高" if very_noisy else "正常")},
+        "dc_offset": {"enabled": rules["dc_offset"]["enabled"], "abnormal": rules["dc_offset"]["enabled"] and dc_abnormal, "score": dc_offset, "label": "未启用" if not rules["dc_offset"]["enabled"] else ("偏移过高" if dc_abnormal else "正常")},
         "metrics": {
             "duration_ms": int(duration * 1000), "speech_ms": speech_ms, "speech_ratio": speech_ratio,
             "noise_floor_dbfs": noise_db, "speech_threshold_dbfs": speech_threshold_db,
@@ -483,10 +534,12 @@ async def api_save_audio(
     file: UploadFile = File(...),
     speaker_id: str = Form(...),
     word_id: str = Form(...),
-    source: str = Form("系统默认麦克风")
+    source: str = Form("系统默认麦克风"),
+    quality_config: str = Form("")
 ):
     """Save recorded audio blob and automatically analyze it in a single step."""
     init_workspace()
+    resolved_quality_config = parse_quality_config(quality_config)
     safe_speaker_id = sanitize_path_component(speaker_id, "speaker", 64)
     safe_word_id = sanitize_path_component(word_id, "item", 64)
     # Ensure speaker audio directory exists
@@ -509,7 +562,7 @@ async def api_save_audio(
 
         spec_b64 = generate_spectrogram(y, sr)
 
-        quality = analyze_recording_quality(y, sr)
+        quality = analyze_recording_quality(y, sr, resolved_quality_config)
 
         import datetime
         recorded_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -551,7 +604,8 @@ async def api_get_audio_file(speaker_id: str, word_id: str):
 @app.post("/api/audio/analyze")
 async def api_analyze_audio(
     speaker_id: str = Form(...),
-    word_id: str = Form(...)
+    word_id: str = Form(...),
+    quality_config: str = Form("")
 ):
     """Analyze a WAV audio file for quality parameters and generate spectrogram."""
     safe_speaker_id = sanitize_path_component(speaker_id, "speaker", 64)
@@ -561,6 +615,7 @@ async def api_analyze_audio(
 
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Audio file not found")
+    resolved_quality_config = parse_quality_config(quality_config)
 
     try:
         # Read WAV file
@@ -573,7 +628,7 @@ async def api_analyze_audio(
 
         return {
             "status": "success",
-            "quality": analyze_recording_quality(y, sr),
+            "quality": analyze_recording_quality(y, sr, resolved_quality_config),
             "spectrogram": f"data:image/png;base64,{spec_b64}"
         }
     except Exception as e:
