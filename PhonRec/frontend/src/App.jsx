@@ -162,6 +162,10 @@ const CustomSelect = ({ value, onChange, options, style }) => {
   );
 };
 
+const generateSpeakerId = () => {
+  return 'spk_' + Math.random().toString(36).substring(2, 11);
+};
+
 export default function App() {
   // --- State Variables ---
   const [, setConnectionStatus] = useState(true);
@@ -297,7 +301,7 @@ export default function App() {
       } else {
         showOverlay = true;
       }
-    } catch (e) {
+    } catch {
       showOverlay = true;
     }
 
@@ -646,7 +650,7 @@ export default function App() {
       setIsAddingSpeaker(false);
       return;
     }
-    const id = 'spk_' + Math.random().toString(36).substr(2, 9);
+    const id = generateSpeakerId();
     
     const updated = {
       ...speakers,
