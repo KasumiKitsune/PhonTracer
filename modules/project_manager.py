@@ -181,6 +181,15 @@ class ProjectManager:
         return rel_path
 
 
+    def _collect_project_file_refs(self, state):
+        refs = set()
+        for _owner, _key, _index, rel_path in _iter_state_resource_refs(state):
+            if rel_path:
+                norm = str(rel_path).replace("\\", "/")
+                if norm.startswith("audio/") or norm.startswith("data/"):
+                    refs.add(norm)
+        return refs
+
     def _iter_project_archive_files(self):
         project_json = os.path.join(self.workspace_dir, "project.json")
         if not os.path.exists(project_json):

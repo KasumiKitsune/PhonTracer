@@ -272,3 +272,41 @@ def test_prune_unreferenced_resources(tmp_path):
     
     assert ref_audio.exists()
     assert not unref_audio.exists()
+
+
+def test_project_manager_collect_file_refs():
+    from modules.project_manager import ProjectManager
+
+    state = {
+        "version": "1.0",
+        "speakers": {
+            "spk1": {
+                "id": "spk1",
+                "name": "发音人1",
+                "tab_mode": "多条独立音频",
+                "long_audio_path": "audio/spk1/long_audio.wav",
+                "pending_batch_paths": ["audio/spk1/batch1.wav", "audio/spk1/batch2.wav"],
+                "items": {
+                    "item1": {
+                        "label": "字1",
+                        "group": "组1",
+                        "path": "audio/spk1/spk1_item1.wav",
+                        "pitch_data_file": "data/spk1/spk1_item1_pitch.npz",
+                        "formant_data_file": "data/spk1/spk1_item1_formant.npz",
+                    }
+                }
+            }
+        }
+    }
+
+    refs = ProjectManager._collect_project_file_refs(None, state)
+    expected_refs = {
+        "audio/spk1/long_audio.wav",
+        "audio/spk1/batch1.wav",
+        "audio/spk1/batch2.wav",
+        "audio/spk1/spk1_item1.wav",
+        "data/spk1/spk1_item1_pitch.npz",
+        "data/spk1/spk1_item1_formant.npz",
+    }
+    assert refs == expected_refs
+

@@ -404,9 +404,9 @@ def generate_spectrogram(y: np.ndarray, sr: int) -> str:
     # Convert power to dB
     Sxx_db = 10 * np.log10(Sxx + 1e-10)
 
-    # Size in inches (900x375 pixels at 150 DPI)
+    # Size in inches (900x450 pixels at 150 DPI) to achieve 2.0 aspect ratio
     # Using white background for the spectrogram card to match Kasumi Light Theme
-    fig = plt.figure(figsize=(6, 2.5), dpi=150, facecolor='#ffffff')
+    fig = plt.figure(figsize=(6, 3), dpi=150, facecolor='#ffffff')
     ax = fig.add_axes([0, 0, 1, 1])
     ax.axis('off')
 
@@ -447,11 +447,10 @@ def generate_spectrogram(y: np.ndarray, sr: int) -> str:
         else:
             spec_max = 3500.0
         spec_max = min(spec_max, sr / 2.0)
-        ax.set_ylim(0, spec_max)
 
         # Plot Formants on the main axes
-        ax.plot(formant_ts, f1_plot, color='#ef4444', linewidth=1.2, linestyle='--')
-        ax.plot(formant_ts, f2_plot, color='#10b981', linewidth=1.2, linestyle='--')
+        ax.plot(formant_ts, f1_plot, color='#ef4444', linewidth=2.5, linestyle='--')
+        ax.plot(formant_ts, f2_plot, color='#10b981', linewidth=2.5, linestyle='--')
 
         # Create a twin y-axis for F0 to show it with custom limits
         ax2 = ax.twinx()
@@ -467,17 +466,22 @@ def generate_spectrogram(y: np.ndarray, sr: int) -> str:
         else:
             y_min = 50.0
             y_max = 500.0
-        ax2.set_ylim(y_min, y_max)
 
         # Plot F0 on the twin axes
-        ax2.plot(pitch_ts, f0_plot, color='#3b82f6', linewidth=1.5, solid_capstyle='round')
+        ax2.plot(pitch_ts, f0_plot, color='#3b82f6', linewidth=3.0, solid_capstyle='round')
+
+        # Strictly set limits after all plots to override autoscale
+        ax.set_ylim(0, spec_max)
+        ax.set_xlim(0, len(y) / sr)
+        ax2.set_ylim(y_min, y_max)
+        ax2.set_xlim(0, len(y) / sr)
     except Exception as e:
         # Graceful fallback: print error and return base spectrogram
         print(f"[generate_spectrogram] F0/Formant analysis failed: {e}")
         ax.set_ylim(0, min(4000, sr / 2))
 
     buf = io.BytesIO()
-    plt.savefig(buf, format='png', facecolor='#ffffff', bbox_inches='tight', pad_inches=0)
+    plt.savefig(buf, format='png', facecolor='#ffffff')
     plt.close(fig)
     buf.seek(0)
 

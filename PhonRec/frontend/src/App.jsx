@@ -259,6 +259,7 @@ export default function App() {
   const [isSmallScreen, setIsSmallScreen] = useState(window.innerWidth <= 768);
 
   const [visualizerTab, setVisualizerTab] = useState('waveform');
+  const [showZoomedSpectrogram, setShowZoomedSpectrogram] = useState(false);
 
   // Recording states
   const [isRecording, setIsRecording] = useState(false);
@@ -2585,7 +2586,7 @@ export default function App() {
             </div>
 
             {/* Keyboard hints at the bottom of controls card */}
-            <div style={{ display: 'flex', flexWrap: 'wrap', width: '100%', justifyContent: 'center', alignItems: 'center', gap: '1rem', fontSize: '0.75rem', color: 'var(--text-secondary)', borderTop: '1px solid var(--border-color)', paddingTop: '0.75rem', marginTop: '0.5rem' }}>
+            <div className="keyboard-hints" style={{ display: 'flex', flexWrap: 'wrap', width: '100%', justifyContent: 'center', alignItems: 'center', gap: '1rem', fontSize: '0.75rem', color: 'var(--text-secondary)', borderTop: '1px solid var(--border-color)', paddingTop: '0.75rem', marginTop: '0.5rem' }}>
               <span><KeyboardIcon /> [空格] 录音/停止</span>
               <span>[← / →] 切换字表词条</span>
               {activeItem && speakers[activeSpeakerId]?.items?.[activeItem.id]?.path && (
@@ -2893,7 +2894,12 @@ export default function App() {
 
                 {visualizerTab === 'spectrogram' && (
                   spectrogramUrl ? (
-                    <img src={spectrogramUrl} alt="语谱图" className="visualizer-image" />
+                    <img 
+                      src={spectrogramUrl} 
+                      alt="语谱图" 
+                      className="visualizer-image" 
+                      onClick={() => setShowZoomedSpectrogram(true)}
+                    />
                   ) : (
                     <div className="visualizer-placeholder">
                       语谱图将在录制结束后生成
@@ -3149,6 +3155,74 @@ export default function App() {
                 确定
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Zoomed Spectrogram Modal */}
+      {showZoomedSpectrogram && (
+        <div 
+          className="modal-overlay" 
+          style={{ 
+            zIndex: 10000, 
+            display: 'flex', 
+            alignItems: 'center', 
+            justifyContent: 'center', 
+            backgroundColor: 'rgba(15, 23, 42, 0.75)', 
+            backdropFilter: 'blur(4px)', 
+            cursor: 'zoom-out' 
+          }}
+          onClick={() => setShowZoomedSpectrogram(false)}
+        >
+          <div 
+            style={{ 
+              maxWidth: '90vw', 
+              maxHeight: '90vh', 
+              width: '900px', 
+              padding: '0', 
+              background: 'transparent',
+              display: 'flex',
+              flexDirection: 'column',
+              position: 'relative',
+              overflow: 'hidden',
+              animation: 'scaleIn 0.2s ease'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <img 
+              src={spectrogramUrl} 
+              alt="语谱图放大" 
+              style={{ 
+                width: '100%', 
+                height: 'auto', 
+                borderRadius: '8px', 
+                display: 'block',
+                boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)'
+              }} 
+            />
+            <button 
+              style={{ 
+                position: 'absolute', 
+                top: '1rem', 
+                right: '1rem', 
+                width: '2rem', 
+                height: '2rem', 
+                borderRadius: '50%', 
+                background: 'rgba(15, 23, 42, 0.6)', 
+                backdropFilter: 'blur(4px)',
+                border: 'none',
+                color: '#ffffff',
+                fontSize: '1.25rem',
+                display: 'flex', 
+                alignItems: 'center', 
+                justifyContent: 'center', 
+                cursor: 'pointer',
+                transition: 'background-color 0.2s'
+              }}
+              onClick={() => setShowZoomedSpectrogram(false)}
+            >
+              ×
+            </button>
           </div>
         </div>
       )}
