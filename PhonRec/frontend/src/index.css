@@ -669,6 +669,10 @@ body {
   min-width: 160px;
 }
 
+.word-scroll-panel .panel-body {
+  min-height: 0;
+}
+
 .word-list-container {
   display: flex;
   flex-direction: column;
