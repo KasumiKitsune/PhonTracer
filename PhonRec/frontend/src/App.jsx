@@ -7,8 +7,6 @@ import { apiFetch } from './engineApi.js';
 import { bufferToWav, resampleAudio } from './audioUtils.js';
 import { createVadEngine } from './vadEngine.js';
 import {
-  QUALITY_ITEMS,
-  QUALITY_LEVELS,
   createDefaultQualityRules,
   hasEnabledQualityRule,
   normalizeQualityRules,
@@ -19,6 +17,7 @@ import {
   mergeAudioDevices,
   selectAvailableAudioSource,
 } from './appUtils.js';
+import SettingsModal from './SettingsModal.jsx';
 
 // --- Inline SVG Icons ---
 const ImportIcon = () => (
@@ -145,34 +144,6 @@ const InfoIcon = () => (
   </svg>
 );
 
-const FolderIcon = () => (
-  <svg style={{ width: '14px', height: '14px', marginRight: '4px', display: 'inline-block', verticalAlign: 'middle' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-  </svg>
-);
-
-const SaveIcon = () => (
-  <svg style={{ width: '14px', height: '14px', marginRight: '4px', display: 'inline-block', verticalAlign: 'middle' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
-    <polyline points="17 21 17 13 7 13 7 21" />
-    <polyline points="7 3 7 8 15 8" />
-  </svg>
-);
-
-const FormatIcon = () => (
-  <svg style={{ width: '14px', height: '14px', marginRight: '4px', display: 'inline-block', verticalAlign: 'middle' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M9 18V5l12-2v13" />
-    <circle cx="6" cy="18" r="3" />
-    <circle cx="18" cy="16" r="3" />
-  </svg>
-);
-
-const ResetIcon = () => (
-  <svg style={{ width: '14px', height: '14px', marginRight: '4px', display: 'inline-block', verticalAlign: 'middle' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67" />
-  </svg>
-);
-
 const MenuIcon = () => (
   <svg style={{ width: '20px', height: '20px' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
     <line x1="3" y1="12" x2="21" y2="12" />
@@ -259,9 +230,18 @@ export default function App() {
   const [folderPathSetting, setFolderPathSetting] = useState('');
   const [settingsLoaded, setSettingsLoaded] = useState(false);
 
+  // Redesigned visual and behavioral settings states
+  const [themeSetting, setThemeSetting] = useState('light');
+  const [uiScaleSetting, setUiScaleSetting] = useState('100%');
+  const [uiDensitySetting, setUiDensitySetting] = useState('standard');
+  const [animationsEnabledSetting, setAnimationsEnabledSetting] = useState(true);
+  const [vadPresetSetting, setVadPresetSetting] = useState('standard');
+  const [shortcutPresetSetting, setShortcutPresetSetting] = useState('standard');
+  const [liveInputMonitorSetting, setLiveInputMonitorSetting] = useState(true);
+  const [defaultProjectNameSetting, setDefaultProjectNameSetting] = useState('PhonRec_Project.teproj');
+
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [settingsModalClosing, setSettingsModalClosing] = useState(false);
-  const [activeSettingsTab, setActiveSettingsTab] = useState('behavior');
 
   const [showImportModal, setShowImportModal] = useState(false);
   const [importResult, setImportResult] = useState(null);
@@ -322,6 +302,10 @@ export default function App() {
   const activeCaptureSourceRef = useRef(null);
   const captureLifecycleRef = useRef(Promise.resolve());
   const settingsSaveQueueRef = useRef(Promise.resolve());
+  const settingsSnapshotRef = useRef(null);
+  const settingsRevisionRef = useRef(0);
+  const charFontSizeSaveTimeoutRef = useRef(null);
+  const charFontSizeRollbackRef = useRef(null);
 
   const vadEngineRef = useRef(null);
   if (!vadEngineRef.current) vadEngineRef.current = createVadEngine();
@@ -364,6 +348,32 @@ export default function App() {
 
   const stopRecordingRef = useRef(null);
 
+  settingsSnapshotRef.current = {
+    version: 1,
+    realtime_quality: qualityChecksEnabled,
+    quality_rules: qualityRules,
+    default_plot: visualizerTab,
+    record_order: randomizeOrder ? 'random' : 'wordlist',
+    record_mode: recordingMode,
+    record_source: selectedDeviceId,
+    sample_rate: Number(sampleRateSetting),
+    save_format: saveFormatSetting,
+    folder_path: folderPathSetting,
+    theme: themeSetting,
+    ui_scale: uiScaleSetting,
+    ui_density: uiDensitySetting,
+    animations_enabled: animationsEnabledSetting,
+    primary_meta_key: primaryMetaKey,
+    badge_meta_key: badgeMetaKey,
+    char_font_size: Number(charFontSize),
+    vad_preset: vadPresetSetting,
+    shortcut_preset: shortcutPresetSetting,
+    live_input_monitor: liveInputMonitorSetting,
+    default_project_name: defaultProjectNameSetting,
+    channels: 1,
+    format: 'wav'
+  };
+
   handleVadSampleRef.current = (rms) => {
     if (!isRecordingRef.current || recordingModeRef.current !== 'vad') {
       vadEngineRef.current.observeNoise(rms);
@@ -386,13 +396,26 @@ export default function App() {
         const loadedQualityRules = normalizeQualityRules(settings.quality_rules, settings.realtime_quality);
         setQualityRules(loadedQualityRules);
         setQualityChecksEnabled(hasEnabledQualityRule(loadedQualityRules));
-        setVisualizerTab(settings.default_plot);
-        setRecordingMode(settings.record_mode);
-        setSelectedDeviceId(settings.record_source);
-        setSampleRateSetting(settings.sample_rate);
-        setSaveFormatSetting(settings.save_format);
-        setFolderPathSetting(settings.folder_path);
+        setVisualizerTab(settings.default_plot || 'waveform');
+        setRecordingMode(settings.record_mode || 'click');
+        setSelectedDeviceId(settings.record_source || 'default');
+        setSampleRateSetting(settings.sample_rate || 16000);
+        setSaveFormatSetting(settings.save_format || 'teproj');
+        setFolderPathSetting(settings.folder_path || '');
         setRandomizeOrder(settings.record_order === 'random');
+
+        // New fields
+        setThemeSetting(settings.theme || 'light');
+        setUiScaleSetting(settings.ui_scale || '100%');
+        setUiDensitySetting(settings.ui_density || 'standard');
+        setAnimationsEnabledSetting(settings.animations_enabled !== false);
+        setPrimaryMetaKey(settings.primary_meta_key || '拼音');
+        setBadgeMetaKey(settings.badge_meta_key || '拼音');
+        setCharFontSize(settings.char_font_size || 120);
+        setVadPresetSetting(settings.vad_preset || 'standard');
+        setShortcutPresetSetting(settings.shortcut_preset || 'standard');
+        setLiveInputMonitorSetting(settings.live_input_monitor !== false);
+        setDefaultProjectNameSetting(settings.default_project_name || 'PhonRec_Project.teproj');
       }
       return settings;
     } catch (err) {
@@ -414,7 +437,7 @@ export default function App() {
       if (availableSource !== preferredSource) {
         setSelectedDeviceId(availableSource);
         if (settingsLoaded) {
-          await saveAndApplySettings({ record_source: availableSource });
+          await updateSettings({ record_source: availableSource });
         }
       }
       return { devices, availableSource };
@@ -427,64 +450,169 @@ export default function App() {
     }
   };
 
-  const saveAndApplySettings = async (updates = {}) => {
-    const currentSettings = {
-      version: 1,
-      realtime_quality: updates.realtime_quality !== undefined ? updates.realtime_quality : hasEnabledQualityRule(qualityRulesRef.current),
-      quality_rules: updates.quality_rules !== undefined ? updates.quality_rules : qualityRulesRef.current,
-      default_plot: updates.default_plot !== undefined ? updates.default_plot : visualizerTab,
-      record_mode: updates.record_mode !== undefined ? updates.record_mode : recordingMode,
-      record_source: updates.record_source !== undefined ? updates.record_source : selectedDeviceId,
-      sample_rate: updates.sample_rate !== undefined ? Number(updates.sample_rate) : Number(sampleRateSetting),
-      save_format: updates.save_format !== undefined ? updates.save_format : saveFormatSetting,
-      folder_path: updates.folder_path !== undefined ? updates.folder_path : folderPathSetting,
-      record_order: updates.record_order !== undefined ? updates.record_order : (randomizeOrder ? 'random' : 'wordlist'),
+  const applySettingsSnapshot = (snapshot) => {
+    setQualityRules(snapshot.quality_rules);
+    setQualityChecksEnabled(snapshot.realtime_quality);
+    setVisualizerTab(snapshot.default_plot);
+    setRandomizeOrder(snapshot.record_order === 'random');
+    setRecordingMode(snapshot.record_mode);
+    setSelectedDeviceId(snapshot.record_source);
+    setSampleRateSetting(Number(snapshot.sample_rate));
+    setSaveFormatSetting(snapshot.save_format);
+    setFolderPathSetting(snapshot.folder_path);
+    setThemeSetting(snapshot.theme);
+    setUiScaleSetting(snapshot.ui_scale);
+    setUiDensitySetting(snapshot.ui_density);
+    setAnimationsEnabledSetting(snapshot.animations_enabled);
+    setPrimaryMetaKey(snapshot.primary_meta_key);
+    setBadgeMetaKey(snapshot.badge_meta_key);
+    setCharFontSize(Number(snapshot.char_font_size));
+    setVadPresetSetting(snapshot.vad_preset);
+    setShortcutPresetSetting(snapshot.shortcut_preset);
+    setLiveInputMonitorSetting(snapshot.live_input_monitor);
+    setDefaultProjectNameSetting(snapshot.default_project_name);
+
+    qualityRulesRef.current = snapshot.quality_rules;
+    qualityChecksEnabledRef.current = snapshot.realtime_quality;
+    recordingModeRef.current = snapshot.record_mode;
+  };
+
+  const enqueueSettingsSave = (snapshot) => {
+    settingsSaveQueueRef.current = settingsSaveQueueRef.current
+      .catch(() => {})
+      .then(() => invoke('save_settings', { settings: snapshot }));
+    return settingsSaveQueueRef.current;
+  };
+
+  const handleSettingsSaveFailure = async (error, rollbackSnapshot, revision) => {
+    console.error('保存设置失败:', error);
+    if (settingsRevisionRef.current !== revision) return false;
+
+    settingsSnapshotRef.current = rollbackSnapshot;
+    applySettingsSnapshot(rollbackSnapshot);
+    await customAlert(`保存设置失败，已恢复修改前的设置：${error}`);
+    return false;
+  };
+
+  const updateSettings = async (updates) => {
+    const previousSnapshot = settingsSnapshotRef.current;
+    const nextSnapshot = {
+      ...previousSnapshot,
+      ...updates,
+      sample_rate: updates.sample_rate !== undefined
+        ? Number(updates.sample_rate)
+        : previousSnapshot.sample_rate,
+      char_font_size: updates.char_font_size !== undefined
+        ? Number(updates.char_font_size)
+        : previousSnapshot.char_font_size,
       channels: 1,
       format: 'wav'
     };
 
-    try {
-      settingsSaveQueueRef.current = settingsSaveQueueRef.current
-        .catch(() => {})
-        .then(() => invoke('save_settings', { settings: currentSettings }));
-      await settingsSaveQueueRef.current;
+    if (updates.quality_rules !== undefined) {
+      nextSnapshot.quality_rules = updates.quality_rules;
+      nextSnapshot.realtime_quality = hasEnabledQualityRule(updates.quality_rules);
+    } else if (updates.realtime_quality !== undefined) {
+      nextSnapshot.quality_rules = Object.fromEntries(
+        Object.entries(previousSnapshot.quality_rules).map(([key, rule]) => [
+          key,
+          { ...rule, enabled: updates.realtime_quality }
+        ])
+      );
+      nextSnapshot.realtime_quality = updates.realtime_quality;
+    }
+
+    settingsSnapshotRef.current = nextSnapshot;
+    const revision = ++settingsRevisionRef.current;
+    applySettingsSnapshot(nextSnapshot);
+
+    const onlyFontSize = Object.keys(updates).length === 1 && updates.char_font_size !== undefined;
+    if (onlyFontSize) {
+      if (!charFontSizeSaveTimeoutRef.current) {
+        charFontSizeRollbackRef.current = previousSnapshot;
+      } else {
+        clearTimeout(charFontSizeSaveTimeoutRef.current);
+      }
+
+      charFontSizeSaveTimeoutRef.current = window.setTimeout(async () => {
+        charFontSizeSaveTimeoutRef.current = null;
+        const latestSnapshot = settingsSnapshotRef.current;
+        const rollbackSnapshot = charFontSizeRollbackRef.current;
+        charFontSizeRollbackRef.current = null;
+        try {
+          await enqueueSettingsSave(latestSnapshot);
+        } catch (error) {
+          await handleSettingsSaveFailure(error, rollbackSnapshot, revision);
+        }
+      }, 400);
       return true;
-    } catch (err) {
-      console.error('保存设置失败:', err);
-      await customAlert(`保存设置失败：${err}`);
-      return false;
+    }
+
+    let rollbackSnapshot = previousSnapshot;
+    if (charFontSizeSaveTimeoutRef.current) {
+      clearTimeout(charFontSizeSaveTimeoutRef.current);
+      charFontSizeSaveTimeoutRef.current = null;
+      rollbackSnapshot = charFontSizeRollbackRef.current || previousSnapshot;
+      charFontSizeRollbackRef.current = null;
+    }
+
+    try {
+      await enqueueSettingsSave(nextSnapshot);
+      return true;
+    } catch (error) {
+      return handleSettingsSaveFailure(error, rollbackSnapshot, revision);
     }
   };
 
-  const updateQualityChecksEnabled = async (val) => {
-    const previousRules = qualityRulesRef.current;
-    const nextRules = Object.fromEntries(
-      Object.entries(previousRules).map(([key, rule]) => [key, { ...rule, enabled: val }])
-    );
-    qualityRulesRef.current = nextRules;
-    setQualityRules(nextRules);
-    setQualityChecksEnabled(val);
-    if (!await saveAndApplySettings({ realtime_quality: val, quality_rules: nextRules }) && qualityRulesRef.current === nextRules) {
-      qualityRulesRef.current = previousRules;
-      setQualityRules(previousRules);
-      setQualityChecksEnabled(hasEnabledQualityRule(previousRules));
+  const resetAllSettings = async () => {
+    if (charFontSizeSaveTimeoutRef.current) {
+      clearTimeout(charFontSizeSaveTimeoutRef.current);
+      charFontSizeSaveTimeoutRef.current = null;
+      charFontSizeRollbackRef.current = null;
     }
-  };
-  const updateQualityRule = async (name, updates) => {
-    const previousRules = qualityRulesRef.current;
-    const nextRules = {
-      ...previousRules,
-      [name]: { ...previousRules[name], ...updates }
+
+    const revision = ++settingsRevisionRef.current;
+    settingsSaveQueueRef.current = settingsSaveQueueRef.current
+      .catch(() => {})
+      .then(() => invoke('reset_settings'));
+    const defaults = await settingsSaveQueueRef.current;
+    const qualityRules = normalizeQualityRules(defaults.quality_rules, defaults.realtime_quality);
+    const normalizedDefaults = {
+      ...defaults,
+      quality_rules: qualityRules,
+      realtime_quality: hasEnabledQualityRule(qualityRules)
     };
-    const anyEnabled = hasEnabledQualityRule(nextRules);
-    qualityRulesRef.current = nextRules;
-    setQualityRules(nextRules);
-    setQualityChecksEnabled(anyEnabled);
-    if (!await saveAndApplySettings({ realtime_quality: anyEnabled, quality_rules: nextRules }) && qualityRulesRef.current === nextRules) {
-      qualityRulesRef.current = previousRules;
-      setQualityRules(previousRules);
-      setQualityChecksEnabled(hasEnabledQualityRule(previousRules));
+
+    if (settingsRevisionRef.current === revision) {
+      settingsSnapshotRef.current = normalizedDefaults;
+      applySettingsSnapshot(normalizedDefaults);
     }
+    return normalizedDefaults;
+  };
+
+  const updateQualityChecksEnabled = async (val) => {
+    await updateSettings({ realtime_quality: val });
+  };
+  const updateRecordingMode = async (val) => {
+    await updateSettings({ record_mode: val });
+  };
+  const updateVisualizerTab = async (val) => {
+    await updateSettings({ default_plot: val });
+  };
+  const updateRandomizeOrder = async (val) => {
+    await updateSettings({ record_order: val ? 'random' : 'wordlist' });
+  };
+  const updateFolderPathSetting = async (val) => {
+    await updateSettings({ folder_path: val });
+  };
+  const updateBadgeMetaKey = async (val) => {
+    await updateSettings({ badge_meta_key: val });
+  };
+  const updatePrimaryMetaKey = async (val) => {
+    await updateSettings({ primary_meta_key: val });
+  };
+  const updateCharFontSize = async (val) => {
+    await updateSettings({ char_font_size: val });
   };
 
   const openSettingsModal = () => {
@@ -508,27 +636,6 @@ export default function App() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [showSettingsModal, settingsModalClosing]);
-  const updateVisualizerTab = async (val) => {
-    if (await saveAndApplySettings({ default_plot: val })) setVisualizerTab(val);
-  };
-  const updateRecordingMode = async (val) => {
-    if (await saveAndApplySettings({ record_mode: val })) setRecordingMode(val);
-  };
-  const updateRandomizeOrder = async (val) => {
-    if (await saveAndApplySettings({ record_order: val ? 'random' : 'wordlist' })) setRandomizeOrder(val);
-  };
-  const updateSelectedDeviceId = async (val) => {
-    if (await saveAndApplySettings({ record_source: val })) setSelectedDeviceId(val);
-  };
-  const updateSampleRateSetting = async (val) => {
-    if (await saveAndApplySettings({ sample_rate: Number(val) })) setSampleRateSetting(Number(val));
-  };
-  const updateSaveFormatSetting = async (val) => {
-    if (await saveAndApplySettings({ save_format: val })) setSaveFormatSetting(val);
-  };
-  const updateFolderPathSetting = async (val) => {
-    if (await saveAndApplySettings({ folder_path: val })) setFolderPathSetting(val);
-  };
 
   const handleSeekChange = (e) => {
     const player = audioPlayerRef.current;
@@ -880,6 +987,33 @@ export default function App() {
     };
   }, []);
 
+  // Apply visual settings (theme, scale, density, animations)
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const handleSystemThemeChange = () => {
+      if (themeSetting === 'system') {
+        const activeTheme = mediaQuery.matches ? 'dark' : 'light';
+        document.documentElement.setAttribute('data-theme', activeTheme);
+      }
+    };
+
+    if (themeSetting === 'system') {
+      const activeTheme = mediaQuery.matches ? 'dark' : 'light';
+      document.documentElement.setAttribute('data-theme', activeTheme);
+      mediaQuery.addEventListener('change', handleSystemThemeChange);
+    } else {
+      document.documentElement.setAttribute('data-theme', themeSetting);
+    }
+
+    document.documentElement.style.fontSize = uiScaleSetting;
+    document.documentElement.setAttribute('data-density', uiDensitySetting);
+    document.documentElement.setAttribute('data-motion', animationsEnabledSetting ? 'enabled' : 'disabled');
+
+    return () => {
+      mediaQuery.removeEventListener('change', handleSystemThemeChange);
+    };
+  }, [themeSetting, uiScaleSetting, uiDensitySetting, animationsEnabledSetting]);
+
   // Background stream lifecycle
   useEffect(() => {
     if (!settingsLoaded) return;
@@ -887,14 +1021,14 @@ export default function App() {
       .catch(() => {})
       .then(async () => {
         await closeMicStream();
-        if (qualityChecksEnabled) {
+        if (qualityChecksEnabled && liveInputMonitorSetting) {
           await ensureMicStream(selectedDeviceId);
         }
       })
       .catch(err => {
         console.error('初始化实时音量监听失败:', err);
       });
-  }, [settingsLoaded, qualityChecksEnabled, selectedDeviceId]);
+  }, [settingsLoaded, qualityChecksEnabled, selectedDeviceId, liveInputMonitorSetting]);
 
   // Pause playing audio when navigating items
   useEffect(() => {
@@ -904,11 +1038,45 @@ export default function App() {
   // Sync keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e) => {
-      if (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'SELECT') {
+      const activeEl = document.activeElement;
+      if (
+        !activeEl ||
+        activeEl.tagName === 'INPUT' ||
+        activeEl.tagName === 'SELECT' ||
+        activeEl.tagName === 'TEXTAREA' ||
+        activeEl.tagName === 'BUTTON' ||
+        activeEl.isContentEditable ||
+        activeEl.closest('[role="dialog"]') ||
+        activeEl.closest('.modal-content')
+      ) {
         return;
       }
 
-      if (e.code === 'Space') {
+      if (shortcutPresetSetting === 'disabled') return;
+
+      let isRecordKey = false;
+      let isPrevKey = false;
+      let isNextKey = false;
+      let isPlayKey = false;
+
+      if (shortcutPresetSetting === 'standard') {
+        isRecordKey = e.code === 'Space';
+        isPrevKey = e.code === 'ArrowLeft';
+        isNextKey = e.code === 'ArrowRight';
+        isPlayKey = e.code === 'KeyR';
+      } else if (shortcutPresetSetting === 'left') {
+        isRecordKey = e.code === 'Space';
+        isPrevKey = e.code === 'KeyA';
+        isNextKey = e.code === 'KeyD';
+        isPlayKey = e.code === 'KeyS';
+      } else if (shortcutPresetSetting === 'right') {
+        isRecordKey = e.code === 'Enter' || e.code === 'NumpadEnter';
+        isPrevKey = e.code === 'KeyJ';
+        isNextKey = e.code === 'KeyL';
+        isPlayKey = e.code === 'KeyK';
+      }
+
+      if (isRecordKey) {
         e.preventDefault();
         if (isProcessingRef.current) return;
         if (recordingMode === 'click' || recordingMode === 'vad') {
@@ -918,15 +1086,15 @@ export default function App() {
             startRecording();
           }
         }
-      } else if (e.code === 'ArrowLeft') {
+      } else if (isPrevKey) {
         e.preventDefault();
         if (isRecordingRef.current || isProcessingRef.current) return;
         navigateItem(-1);
-      } else if (e.code === 'ArrowRight') {
+      } else if (isNextKey) {
         e.preventDefault();
         if (isRecordingRef.current || isProcessingRef.current) return;
         navigateItem(1);
-      } else if (e.code === 'KeyR' && !isRecordingRef.current && !isProcessingRef.current) {
+      } else if (isPlayKey && !isRecordingRef.current && !isProcessingRef.current) {
         e.preventDefault();
         playRecordedAudio();
       }
@@ -934,7 +1102,7 @@ export default function App() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [displayedItems, activeItemIndex, speakers, activeSpeakerId, recordingMode]);
+  }, [displayedItems, activeItemIndex, speakers, activeSpeakerId, recordingMode, shortcutPresetSetting]);
 
   // Handle window resize for small screen detection
   useEffect(() => {
@@ -1455,8 +1623,17 @@ export default function App() {
           const errData = await res.json();
           throw new Error(errData.detail || '导出工程失败');
         }
+        const sanitizeProjectName = (name) => {
+          if (!name) return 'PhonRec_Project.teproj';
+          let sanitized = name.replace(/[<>:"/\\|?*]/g, '').trim();
+          if (!sanitized) sanitized = 'PhonRec_Project';
+          if (!sanitized.endsWith('.teproj')) {
+            sanitized += '.teproj';
+          }
+          return sanitized;
+        };
         const destination = await save({
-          defaultPath: 'PhonRec_Project.teproj',
+          defaultPath: sanitizeProjectName(defaultProjectNameSetting),
           filters: [{ name: 'PhonTracer 工程', extensions: ['teproj'] }],
         });
         if (!destination) return;
@@ -1494,17 +1671,7 @@ export default function App() {
       clearCanvas();
 
       // Reset settings to defaults
-      const defaults = await invoke('reset_settings');
-      const defaultQualityRules = normalizeQualityRules(defaults.quality_rules, defaults.realtime_quality);
-      setQualityRules(defaultQualityRules);
-      setQualityChecksEnabled(hasEnabledQualityRule(defaultQualityRules));
-      setVisualizerTab(defaults.default_plot);
-      setRecordingMode(defaults.record_mode);
-      setSelectedDeviceId(defaults.record_source);
-      setSampleRateSetting(defaults.sample_rate);
-      setSaveFormatSetting(defaults.save_format);
-      setFolderPathSetting(defaults.folder_path);
-      setRandomizeOrder(defaults.record_order === 'random');
+      await resetAllSettings();
 
       await customAlert('工作区已清空，并已重置所有设置');
     } catch (err) {
@@ -1565,6 +1732,12 @@ export default function App() {
       setQualityResults(null);
 
       audioChunksRef.current = [];
+      const vadPresetOptions = {
+        robust: { minSpeechMs: 350, trailingSilenceMs: 1000, enterRatio: 3.5, exitRatio: 2.0 },
+        standard: { minSpeechMs: 220, trailingSilenceMs: 700, enterRatio: 3.2, exitRatio: 1.8 },
+        sensitive: { minSpeechMs: 150, trailingSilenceMs: 450, enterRatio: 2.8, exitRatio: 1.5 }
+      }[vadPresetSetting] || { minSpeechMs: 220, trailingSilenceMs: 700, enterRatio: 3.2, exitRatio: 1.8 };
+      vadEngineRef.current = createVadEngine(vadPresetOptions);
       vadEngineRef.current.reset();
 
       resetPlayback();
@@ -1577,7 +1750,7 @@ export default function App() {
         shouldCancelRef.current = false;
         setIsRecording(false);
         isRecordingRef.current = false;
-        if (!qualityChecksEnabledRef.current) {
+        if (!qualityChecksEnabledRef.current || !liveInputMonitorSetting) {
           await closeMicStream();
         }
         isStartingRef.current = false;
@@ -1641,7 +1814,7 @@ export default function App() {
     }
 
     // Otherwise browser microphone
-    if (!qualityChecksEnabledRef.current) {
+    if (!qualityChecksEnabledRef.current || !liveInputMonitorSetting) {
       await closeMicStream();
     }
 
@@ -2127,7 +2300,7 @@ export default function App() {
                   <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>列表角标:</span>
                   <CustomSelect
                     value={badgeMetaKey}
-                    onChange={setBadgeMetaKey}
+                    onChange={updateBadgeMetaKey}
                     options={[
                       { value: 'none', label: '无' },
                       { value: 'note', label: '提示信息 (note)' },
@@ -2140,7 +2313,7 @@ export default function App() {
                   <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>中心提示:</span>
                   <CustomSelect
                     value={primaryMetaKey}
-                    onChange={setPrimaryMetaKey}
+                    onChange={updatePrimaryMetaKey}
                     options={[
                       { value: 'none', label: '无' },
                       { value: 'note', label: '提示信息 (note)' },
@@ -2257,7 +2430,7 @@ export default function App() {
                   min="60"
                   max="200"
                   value={charFontSize}
-                  onChange={(e) => setCharFontSize(Number(e.target.value))}
+                  onChange={(e) => updateCharFontSize(Number(e.target.value))}
                   className="font-size-slider"
                 />
                 <span style={{ fontSize: '1.05rem', fontWeight: 700 }}>A</span>
@@ -2561,7 +2734,6 @@ export default function App() {
               className="btn-icon"
               onClick={openSettingsModal}
               title="设置"
-              style={{ padding: '0.2rem', display: 'flex', alignItems: 'center' }}
             >
               <GearIcon />
             </button>
@@ -2615,69 +2787,81 @@ export default function App() {
               )}
 
               <div className="quality-grid">
-                <div className="quality-item">
-                  <span>音量检测</span>
-                  <div className="quality-indicator">
-                    <span className={`indicator-led ${
-                      !qualityChecksEnabled || !qualityResults ? '' :
-                      (qualityResults.volume.enabled === false ? '' : (qualityResults.volume.status === 'normal' ? 'green' : 'orange'))
-                    }`}></span>
-                    <span style={{ color: 'var(--text-secondary)' }}>
-                      {!qualityChecksEnabled || !qualityResults ? '未检测' : qualityResults.volume.label}
-                    </span>
+                {qualityRules.volume?.enabled !== false && (
+                  <div className="quality-item">
+                    <span>音量检测</span>
+                    <div className="quality-indicator">
+                      <span className={`indicator-led ${
+                        !qualityChecksEnabled || !qualityResults ? '' :
+                        (qualityResults.volume.enabled === false ? '' : (qualityResults.volume.status === 'normal' ? 'green' : 'orange'))
+                      }`}></span>
+                      <span style={{ color: 'var(--text-secondary)' }}>
+                        {!qualityChecksEnabled || !qualityResults ? '未检测' : qualityResults.volume.label}
+                      </span>
+                    </div>
                   </div>
-                </div>
-                <div className="quality-item">
-                  <span>嘎裂声</span>
-                  <div className="quality-indicator">
-                    <span className={`indicator-led ${
-                      !qualityChecksEnabled || !qualityResults ? '' :
-                      (qualityResults.creak.enabled === false ? '' : (qualityResults.creak.abnormal ? 'red' : 'green'))
-                    }`}></span>
-                    <span style={{ color: 'var(--text-secondary)' }}>
-                      {!qualityChecksEnabled || !qualityResults ? '未检测' : qualityResults.creak.label}
-                    </span>
+                )}
+                {qualityRules.creak?.enabled !== false && (
+                  <div className="quality-item">
+                    <span>嘎裂声</span>
+                    <div className="quality-indicator">
+                      <span className={`indicator-led ${
+                        !qualityChecksEnabled || !qualityResults ? '' :
+                        (qualityResults.creak.enabled === false ? '' : (qualityResults.creak.abnormal ? 'red' : 'green'))
+                      }`}></span>
+                      <span style={{ color: 'var(--text-secondary)' }}>
+                        {!qualityChecksEnabled || !qualityResults ? '未检测' : qualityResults.creak.label}
+                      </span>
+                    </div>
                   </div>
-                </div>
-                <div className="quality-item">
-                  <span>音频截断</span>
-                  <div className="quality-indicator">
-                    <span className={`indicator-led ${
-                      !qualityChecksEnabled || !qualityResults ? '' :
-                      (qualityResults.clipping.enabled === false ? '' : (qualityResults.clipping.abnormal ? 'red' : 'green'))
-                    }`}></span>
-                    <span style={{ color: 'var(--text-secondary)' }}>
-                      {!qualityChecksEnabled || !qualityResults ? '未检测' : qualityResults.clipping.label}
-                    </span>
+                )}
+                {qualityRules.clipping?.enabled !== false && (
+                  <div className="quality-item">
+                    <span>音频截断</span>
+                    <div className="quality-indicator">
+                      <span className={`indicator-led ${
+                        !qualityChecksEnabled || !qualityResults ? '' :
+                        (qualityResults.clipping.enabled === false ? '' : (qualityResults.clipping.abnormal ? 'red' : 'green'))
+                      }`}></span>
+                      <span style={{ color: 'var(--text-secondary)' }}>
+                        {!qualityChecksEnabled || !qualityResults ? '未检测' : qualityResults.clipping.label}
+                      </span>
+                    </div>
                   </div>
-                </div>
-                <div className="quality-item">
-                  <span>有效语音</span>
-                  <div className="quality-indicator">
-                    <span className={`indicator-led ${qualityResults?.speech?.enabled === false ? '' : (qualityResults?.speech?.abnormal ? 'red' : (qualityResults?.speech ? 'green' : ''))}`}></span>
-                    <span style={{ color: 'var(--text-secondary)' }}>
-                      {!qualityChecksEnabled || !qualityResults?.speech ? '未检测' : qualityResults.speech.label}
-                    </span>
+                )}
+                {qualityRules.speech?.enabled !== false && (
+                  <div className="quality-item">
+                    <span>有效语音</span>
+                    <div className="quality-indicator">
+                      <span className={`indicator-led ${qualityResults?.speech?.enabled === false ? '' : (qualityResults?.speech?.abnormal ? 'red' : (qualityResults?.speech ? 'green' : ''))}`}></span>
+                      <span style={{ color: 'var(--text-secondary)' }}>
+                        {!qualityChecksEnabled || !qualityResults?.speech ? '未检测' : qualityResults.speech.label}
+                      </span>
+                    </div>
                   </div>
-                </div>
-                <div className="quality-item">
-                  <span>背景噪声</span>
-                  <div className="quality-indicator">
-                    <span className={`indicator-led ${qualityResults?.noise?.enabled === false ? '' : (qualityResults?.noise?.abnormal ? 'red' : (qualityResults?.noise ? 'green' : ''))}`}></span>
-                    <span style={{ color: 'var(--text-secondary)' }}>
-                      {!qualityChecksEnabled || !qualityResults?.noise ? '未检测' : qualityResults.noise.label}
-                    </span>
+                )}
+                {qualityRules.noise?.enabled !== false && (
+                  <div className="quality-item">
+                    <span>背景噪声</span>
+                    <div className="quality-indicator">
+                      <span className={`indicator-led ${qualityResults?.noise?.enabled === false ? '' : (qualityResults?.noise?.abnormal ? 'red' : (qualityResults?.noise ? 'green' : ''))}`}></span>
+                      <span style={{ color: 'var(--text-secondary)' }}>
+                        {!qualityChecksEnabled || !qualityResults?.noise ? '未检测' : qualityResults.noise.label}
+                      </span>
+                    </div>
                   </div>
-                </div>
-                <div className="quality-item">
-                  <span>直流偏移</span>
-                  <div className="quality-indicator">
-                    <span className={`indicator-led ${qualityResults?.dc_offset?.enabled === false ? '' : (qualityResults?.dc_offset?.abnormal ? 'red' : (qualityResults?.dc_offset ? 'green' : ''))}`}></span>
-                    <span style={{ color: 'var(--text-secondary)' }}>
-                      {!qualityChecksEnabled || !qualityResults?.dc_offset ? '未检测' : qualityResults.dc_offset.label}
-                    </span>
+                )}
+                {qualityRules.dc_offset?.enabled !== false && (
+                  <div className="quality-item">
+                    <span>直流偏移</span>
+                    <div className="quality-indicator">
+                      <span className={`indicator-led ${qualityResults?.dc_offset?.enabled === false ? '' : (qualityResults?.dc_offset?.abnormal ? 'red' : (qualityResults?.dc_offset ? 'green' : ''))}`}></span>
+                      <span style={{ color: 'var(--text-secondary)' }}>
+                        {!qualityChecksEnabled || !qualityResults?.dc_offset ? '未检测' : qualityResults.dc_offset.label}
+                      </span>
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
             </div>
 
@@ -2751,363 +2935,92 @@ export default function App() {
 
       </main>
 
-      {/* Settings Modal */}
-      {showSettingsModal && (
-        <div
-          className={`modal-overlay settings-overlay ${settingsModalClosing ? 'is-closing' : 'is-open'}`}
-          style={{ zIndex: 9999 }}
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) closeSettingsModal();
-          }}
-        >
-          <div className="modal-content settings-modal" role="dialog" aria-modal="true" aria-label="设置">
-            <div className="modal-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontWeight: 650, fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <GearIcon /> 设置
-              </span>
-              <button
-                className="btn-icon"
-                onClick={closeSettingsModal}
-                style={{ fontSize: '1.2rem', padding: '0.2rem' }}
-              >
-                &times;
-              </button>
-            </div>
-
-            <div className="modal-body" style={{ padding: '1rem 1.25rem' }}>
-              <div className="settings-tabs">
-                <button
-                  className={`settings-tab-btn ${activeSettingsTab === 'behavior' ? 'active' : ''}`}
-                  onClick={() => setActiveSettingsTab('behavior')}
-                >
-                  默认行为
-                </button>
-                <button
-                  className={`settings-tab-btn ${activeSettingsTab === 'recording' ? 'active' : ''}`}
-                  onClick={() => setActiveSettingsTab('recording')}
-                >
-                  录音
-                </button>
-                <button
-                  className={`settings-tab-btn ${activeSettingsTab === 'quality' ? 'active' : ''}`}
-                  onClick={() => setActiveSettingsTab('quality')}
-                >
-                  质量检测
-                </button>
-                <button
-                  className={`settings-tab-btn ${activeSettingsTab === 'storage' ? 'active' : ''}`}
-                  onClick={() => setActiveSettingsTab('storage')}
-                >
-                  保存形式
-                </button>
-                <button
-                  className={`settings-tab-btn ${activeSettingsTab === 'permission' ? 'active' : ''}`}
-                  onClick={() => setActiveSettingsTab('permission')}
-                >
-                  权限
-                </button>
-              </div>
-
-              <div className="settings-form">
-                {activeSettingsTab === 'behavior' && (
-                  <div className="settings-grid settings-panel-transition">
-                    <div className="form-group">
-                      <label className="form-label"><ChartIcon /> 默认图形</label>
-                      <CustomSelect
-                        value={visualizerTab}
-                        onChange={updateVisualizerTab}
-                        disabled={isRecording || isProcessing}
-                        options={[
-                          { value: 'waveform', label: '波形图' },
-                          { value: 'spectrogram', label: '语谱图' }
-                        ]}
-                      />
-                    </div>
-                    <div className="form-group">
-                      <label className="form-label"><BookIcon /> 录制顺序</label>
-                      <CustomSelect
-                        value={randomizeOrder ? 'random' : 'wordlist'}
-                        onChange={(val) => updateRandomizeOrder(val === 'random')}
-                        disabled={isRecording || isProcessing}
-                        options={[
-                          { value: 'wordlist', label: '字表顺序' },
-                          { value: 'random', label: '随机顺序' }
-                        ]}
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {activeSettingsTab === 'recording' && (
-                  <div className="settings-grid settings-panel-transition">
-                    <div className="form-group">
-                      <label className="form-label"><MicIcon active={isRecording} /> 录音模式</label>
-                      <CustomSelect
-                        value={recordingMode}
-                        onChange={updateRecordingMode}
-                        disabled={isRecording || isProcessing}
-                        options={[
-                          { value: 'click', label: '点击开关' },
-                          { value: 'hold', label: '按住 (对讲机)' },
-                          { value: 'vad', label: '智能 VAD 跳转' }
-                        ]}
-                      />
-                    </div>
-                    <div className="form-group">
-                      <label className="form-label"><FormatIcon /> 采样率</label>
-                      <CustomSelect
-                        value={String(sampleRateSetting)}
-                        onChange={updateSampleRateSetting}
-                        disabled={isRecording || isProcessing}
-                        options={[
-                          { value: '16000', label: '16 kHz (推荐)' },
-                          { value: '44100', label: '44.1 kHz' },
-                          { value: '48000', label: '48 kHz' }
-                        ]}
-                      />
-                    </div>
-                    <div className="form-group settings-grid-full">
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <label className="form-label"><MicIcon active={isRecording} /> 录音源</label>
-                        <button
-                          className="btn-secondary"
-                          style={{ padding: '0.1rem 0.4rem', fontSize: '0.7rem' }}
-                          onClick={() => fetchAudioDevices(selectedDeviceId)}
-                          disabled={isRecording || isProcessing}
-                        >
-                          刷新设备
-                        </button>
-                      </div>
-                      <CustomSelect
-                        value={selectedDeviceId}
-                        onChange={updateSelectedDeviceId}
-                        disabled={isRecording || isProcessing}
-                        options={audioDevices.map(d => ({ value: d.id, label: d.name }))}
-                      />
-                      {selectedDeviceId.startsWith('loopback:') && (
-                        <div style={{ fontSize: '0.72rem', color: 'var(--color-accent)', marginTop: '0.2rem', display: 'flex', alignItems: 'center' }}>
-                          <InfoIcon /> 提示：系统声音回环录制仅在 Windows 系统下支持。
-                        </div>
-                      )}
-                    </div>
-                    <div className="form-group" style={{ opacity: 0.7 }}>
-                      <label className="form-label"><FormatIcon /> 声道 (只读)</label>
-                      <input type="text" className="form-input" value="单声道 (Mono)" readOnly />
-                    </div>
-                    <div className="form-group" style={{ opacity: 0.7 }}>
-                      <label className="form-label"><FormatIcon /> 格式 (只读)</label>
-                      <input type="text" className="form-input" value="16位 PCM WAV" readOnly />
-                    </div>
-                  </div>
-                )}
-
-                {activeSettingsTab === 'quality' && (
-                  <div className="quality-settings-panel settings-panel-transition">
-                    <div className="quality-settings-summary">
-                      <div>
-                        <strong>实时质量检测</strong>
-                        <span>已启用 {QUALITY_ITEMS.filter(({ key }) => qualityRules[key]?.enabled).length} / {QUALITY_ITEMS.length} 项</span>
-                      </div>
-                      <label className="switch" title={qualityChecksEnabled ? '关闭全部检测' : '启用全部检测'}>
-                        <input
-                          type="checkbox"
-                          checked={qualityChecksEnabled}
-                          disabled={isRecording || isProcessing}
-                          onChange={(event) => updateQualityChecksEnabled(event.target.checked)}
-                        />
-                        <span className="slider"></span>
-                      </label>
-                    </div>
-                    <p className="quality-settings-hint">可任意多选，也可以全部关闭。检测越严格，越容易要求重录或人工复核。</p>
-                    <div className="quality-rule-list">
-                      {QUALITY_ITEMS.map((item) => {
-                        const rule = qualityRules[item.key];
-                        return (
-                          <div className={`quality-rule-card ${rule?.enabled ? 'enabled' : 'disabled'}`} key={item.key}>
-                            <label className="quality-rule-toggle">
-                              <input
-                                type="checkbox"
-                                checked={Boolean(rule?.enabled)}
-                                disabled={isRecording || isProcessing}
-                                onChange={(event) => updateQualityRule(item.key, { enabled: event.target.checked })}
-                              />
-                              <span className="quality-rule-check" aria-hidden="true"></span>
-                              <span>
-                                <strong>{item.label}</strong>
-                                <small>{item.description}</small>
-                              </span>
-                            </label>
-                            <div className="quality-level-selector" aria-label={`${item.label}检测力度`}>
-                              {QUALITY_LEVELS.map((level) => (
-                                <button
-                                  type="button"
-                                  key={level.value}
-                                  className={rule?.level === level.value ? 'active' : ''}
-                                  disabled={!rule?.enabled || isRecording || isProcessing}
-                                  onClick={() => updateQualityRule(item.key, { level: level.value })}
-                                >
-                                  {level.label}
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {activeSettingsTab === 'storage' && (
-                  <div className="settings-grid settings-panel-transition">
-                    <div className="form-group settings-grid-full">
-                      <label className="form-label"><SaveIcon /> 保存形式</label>
-                      <CustomSelect
-                        value={saveFormatSetting}
-                        onChange={updateSaveFormatSetting}
-                        disabled={isRecording || isProcessing}
-                        options={[
-                          { value: 'teproj', label: '.teproj 工程归档' },
-                          { value: 'folder', label: '外部目录文件夹' }
-                        ]}
-                      />
-                    </div>
-                    {saveFormatSetting === 'folder' && (
-                      <div className="form-group settings-grid-full">
-                        <label className="form-label"><FolderIcon /> 导出文件夹路径</label>
-                        <div style={{ display: 'flex', gap: '0.5rem' }}>
-                          <input
-                            type="text"
-                            className="form-input"
-                            value={folderPathSetting}
-                            style={{ flex: 1, textOverflow: 'ellipsis' }}
-                            readOnly
-                            placeholder="请选择保存目录..."
-                          />
-                          <button
-                            className="btn-secondary"
-                            style={{ borderRadius: '9999px', padding: '0.4rem 1rem', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
-                            disabled={isRecording || isProcessing}
-                            onClick={async () => {
-                              const selected = await open({ directory: true, multiple: false });
-                              if (selected) {
-                                updateFolderPathSetting(selected);
-                              }
-                            }}
-                          >
-                            选择
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {activeSettingsTab === 'permission' && (
-                  <div className="settings-grid settings-panel-transition">
-                    <div className="form-group settings-grid-full">
-                      <label className="form-label"><CheckIcon /> 麦克风权限状态</label>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem' }}>
-                        <span className={`indicator-led ${micBlocked === true ? 'red' : micBlocked === false ? 'green' : ''}`}></span>
-                        <span>
-                          {selectedDeviceId.startsWith('loopback:')
-                            ? '系统声音录制无需麦克风权限'
-                            : micBlocked === true
-                              ? '被拒绝 / 未授权'
-                              : micBlocked === false
-                                ? '已授权使用'
-                                : '尚未检测'}
-                        </span>
-                      </div>
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '0.5rem' }} className="settings-grid-full">
-                      <button
-                        className="btn-primary"
-                        style={{ fontSize: '0.8rem', padding: '0.5rem 1rem', justifyContent: 'center' }}
-                        onClick={async () => {
-                          try {
-                            if (selectedDeviceId.startsWith('loopback:')) {
-                              await customAlert('当前使用系统声音回环，不需要麦克风权限。');
-                              return;
-                            }
-                            await closeMicStream();
-                            const permission = navigator.permissions?.query
-                              ? await navigator.permissions.query({ name: 'microphone' })
-                              : null;
-                            if (permission?.state === 'denied') {
-                              await invoke('reset_microphone_permission');
-                              await customAlert('已清除应用内的权限拒绝记录。界面刷新后将重新请求麦克风权限；如果系统仍然阻止，请在下方打开系统隐私设置。');
-                              window.location.reload();
-                              return;
-                            }
-                            await ensureMicStream(selectedDeviceId, { force: true });
-                            await fetchAudioDevices(selectedDeviceId);
-                            await customAlert('麦克风权限检测成功！');
-                          } catch (error) {
-                            console.error('重新请求麦克风权限失败:', error);
-                            await customAlert('麦克风请求失败，请确保设备存在并允许权限。');
-                          }
-                        }}
-                      >
-                        <CheckIcon /> 重新检测并请求权限
-                      </button>
-                      <button
-                        className="btn-secondary"
-                        style={{ fontSize: '0.8rem', padding: '0.5rem 1rem', justifyContent: 'center' }}
-                        onClick={async () => {
-                          try {
-                            await invoke('open_system_permission_settings');
-                          } catch (err) {
-                            await customAlert('无法打开系统权限设置：' + err);
-                          }
-                        }}
-                      >
-                        <GearIcon /> 打开系统隐私设置
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="modal-footer" style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
-              <button
-                className="btn-secondary"
-                style={{ padding: '0.4rem 1.25rem', fontSize: '0.85rem', color: 'var(--color-danger)', borderColor: 'var(--border-color)' }}
-                disabled={isRecording || isProcessing}
-                onClick={async () => {
-                  const ok = await customConfirm('确定要恢复所有设置到默认值吗？');
-                  if (!ok) return;
-                  try {
-                    const defaults = await invoke('reset_settings');
-                    const defaultQualityRules = normalizeQualityRules(defaults.quality_rules, defaults.realtime_quality);
-                    setQualityRules(defaultQualityRules);
-                    setQualityChecksEnabled(hasEnabledQualityRule(defaultQualityRules));
-                    setVisualizerTab(defaults.default_plot);
-                    setRecordingMode(defaults.record_mode);
-                    setSelectedDeviceId(defaults.record_source);
-                    setSampleRateSetting(defaults.sample_rate);
-                    setSaveFormatSetting(defaults.save_format);
-                    setFolderPathSetting(defaults.folder_path);
-                    setRandomizeOrder(defaults.record_order === 'random');
-                    await customAlert('设置已恢复默认值');
-                  } catch (err) {
-                    await customAlert('恢复默认设置失败：' + err);
-                  }
-                }}
-              >
-                <ResetIcon /> 恢复默认
-              </button>
-              <button
-                className="btn-primary"
-                style={{ padding: '0.4rem 1.5rem', fontSize: '0.85rem' }}
-                onClick={closeSettingsModal}
-              >
-                关闭
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Redesigned Settings Modal */}
+      <SettingsModal
+        isOpen={showSettingsModal}
+        isClosing={settingsModalClosing}
+        onClose={closeSettingsModal}
+        settings={{
+          theme: themeSetting,
+          ui_scale: uiScaleSetting,
+          ui_density: uiDensitySetting,
+          animations_enabled: animationsEnabledSetting,
+          default_plot: visualizerTab,
+          record_order: randomizeOrder ? 'random' : 'wordlist',
+          record_mode: recordingMode,
+          record_source: selectedDeviceId,
+          sample_rate: sampleRateSetting,
+          save_format: saveFormatSetting,
+          folder_path: folderPathSetting,
+          primary_meta_key: primaryMetaKey,
+          badge_meta_key: badgeMetaKey,
+          char_font_size: charFontSize,
+          vad_preset: vadPresetSetting,
+          shortcut_preset: shortcutPresetSetting,
+          live_input_monitor: liveInputMonitorSetting,
+          default_project_name: defaultProjectNameSetting,
+          realtime_quality: qualityChecksEnabled,
+          quality_rules: qualityRules
+        }}
+        onUpdate={updateSettings}
+        onReset={async () => {
+          const ok = await customConfirm('确定要恢复所有设置到默认值吗？');
+          if (!ok) return;
+          try {
+            await resetAllSettings();
+            await customAlert('设置已恢复默认值');
+          } catch (err) {
+            await customAlert('恢复默认设置失败：' + err);
+          }
+        }}
+        audioDevices={audioDevices}
+        onRefreshDevices={() => fetchAudioDevices(selectedDeviceId)}
+        micBlocked={micBlocked}
+        onCheckPermission={async () => {
+          try {
+            if (selectedDeviceId.startsWith('loopback:')) {
+              await customAlert('当前使用系统声音回环，不需要麦克风权限。');
+              return;
+            }
+            await closeMicStream();
+            const permission = navigator.permissions?.query
+              ? await navigator.permissions.query({ name: 'microphone' })
+              : null;
+            if (permission?.state === 'denied') {
+              await invoke('reset_microphone_permission');
+              await customAlert('已清除应用内的权限拒绝记录。界面刷新后将重新请求麦克风权限；如果系统仍然阻止，请在下方打开系统隐私设置。');
+              window.location.reload();
+              return;
+            }
+            await ensureMicStream(selectedDeviceId, { force: true });
+            await fetchAudioDevices(selectedDeviceId);
+            await customAlert('麦克风权限检测成功！');
+          } catch (error) {
+            console.error('重新请求麦克风权限失败:', error);
+            await customAlert('麦克风请求失败，请确保设备存在并允许权限。');
+          }
+        }}
+        onOpenPrivacy={async () => {
+          try {
+            await invoke('open_system_permission_settings');
+          } catch (err) {
+            await customAlert('无法打开系统权限设置：' + err);
+          }
+        }}
+        onSelectFolder={async () => {
+          const selected = await open({ directory: true, multiple: false });
+          if (selected) {
+            updateFolderPathSetting(selected);
+          }
+        }}
+        isRecording={isRecording}
+        isProcessing={isProcessing}
+        metaKeyOptions={[
+          { value: 'none', label: '无' },
+          { value: 'note', label: '提示信息 (note)' },
+          ...getAvailableMetaKeys().map(k => ({ value: k, label: k }))
+        ]}
+      />
 
       {/* Import Choice Modal */}
       {showImportModal && (

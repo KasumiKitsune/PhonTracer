@@ -2,6 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { createDefaultQualityRules, hasEnabledQualityRule, normalizeQualityRules } from './qualitySettings.js';
 
 describe('质量检测设置', () => {
+  it('默认启用全部质量检测规则', () => {
+    const rules = createDefaultQualityRules();
+    expect(Object.values(rules).every(rule => rule.enabled)).toBe(true);
+  });
+
   it('兼容旧版总开关', () => {
     expect(hasEnabledQualityRule(normalizeQualityRules(undefined, false))).toBe(false);
     expect(hasEnabledQualityRule(normalizeQualityRules(undefined, true))).toBe(true);

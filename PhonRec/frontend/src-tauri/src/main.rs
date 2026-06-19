@@ -534,6 +534,40 @@ impl QualityRules {
     }
 }
 
+fn default_theme() -> String {
+    "light".to_string()
+}
+fn default_ui_scale() -> String {
+    "100%".to_string()
+}
+fn default_ui_density() -> String {
+    "standard".to_string()
+}
+fn default_animations_enabled() -> bool {
+    true
+}
+fn default_primary_meta_key() -> String {
+    "拼音".to_string()
+}
+fn default_badge_meta_key() -> String {
+    "拼音".to_string()
+}
+fn default_char_font_size() -> u32 {
+    120
+}
+fn default_vad_preset() -> String {
+    "standard".to_string()
+}
+fn default_shortcut_preset() -> String {
+    "standard".to_string()
+}
+fn default_live_input_monitor() -> bool {
+    true
+}
+fn default_default_project_name() -> String {
+    "PhonRec_Project".to_string()
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct LocalSettings {
     version: u32,
@@ -549,6 +583,28 @@ struct LocalSettings {
     format: String,        // "wav" (read-only)
     save_format: String,   // "teproj" or "folder"
     folder_path: String,   // folder path
+    #[serde(default = "default_theme")]
+    theme: String,
+    #[serde(default = "default_ui_scale")]
+    ui_scale: String,
+    #[serde(default = "default_ui_density")]
+    ui_density: String,
+    #[serde(default = "default_animations_enabled")]
+    animations_enabled: bool,
+    #[serde(default = "default_primary_meta_key")]
+    primary_meta_key: String,
+    #[serde(default = "default_badge_meta_key")]
+    badge_meta_key: String,
+    #[serde(default = "default_char_font_size")]
+    char_font_size: u32,
+    #[serde(default = "default_vad_preset")]
+    vad_preset: String,
+    #[serde(default = "default_shortcut_preset")]
+    shortcut_preset: String,
+    #[serde(default = "default_live_input_monitor")]
+    live_input_monitor: bool,
+    #[serde(default = "default_default_project_name")]
+    default_project_name: String,
 }
 
 impl Default for LocalSettings {
@@ -566,6 +622,17 @@ impl Default for LocalSettings {
             format: "wav".to_string(),
             save_format: "teproj".to_string(),
             folder_path: "".to_string(),
+            theme: default_theme(),
+            ui_scale: default_ui_scale(),
+            ui_density: default_ui_density(),
+            animations_enabled: default_animations_enabled(),
+            primary_meta_key: default_primary_meta_key(),
+            badge_meta_key: default_badge_meta_key(),
+            char_font_size: default_char_font_size(),
+            vad_preset: default_vad_preset(),
+            shortcut_preset: default_shortcut_preset(),
+            live_input_monitor: default_live_input_monitor(),
+            default_project_name: default_default_project_name(),
         }
     }
 }
@@ -1289,6 +1356,11 @@ mod tests {
         assert_eq!(loaded.sample_rate, 48_000);
         assert!(!loaded.realtime_quality);
         assert!(loaded.quality_rules.speech.enabled);
+        assert!(loaded.quality_rules.volume.enabled);
+        assert!(loaded.quality_rules.clipping.enabled);
+        assert!(loaded.quality_rules.noise.enabled);
+        assert!(loaded.quality_rules.creak.enabled);
+        assert!(loaded.quality_rules.dc_offset.enabled);
         assert!(!path.with_extension("tmp").exists());
         assert!(!path.with_extension("bak").exists());
 
@@ -1309,12 +1381,16 @@ mod tests {
         let mut legacy = serde_json::to_value(LocalSettings::default()).unwrap();
         legacy["realtime_quality"] = serde_json::Value::Bool(false);
         legacy.as_object_mut().unwrap().remove("quality_rules");
+        legacy.as_object_mut().unwrap().remove("theme");
+        legacy.as_object_mut().unwrap().remove("ui_scale");
         let mut loaded: LocalSettings = serde_json::from_value(legacy).unwrap();
         loaded
             .quality_rules
             .set_all_enabled(loaded.realtime_quality);
         assert!(!loaded.quality_rules.volume.enabled);
         assert_eq!(loaded.quality_rules.noise.level, "medium");
+        assert_eq!(loaded.theme, "light");
+        assert_eq!(loaded.ui_scale, "100%");
     }
 
     #[test]
