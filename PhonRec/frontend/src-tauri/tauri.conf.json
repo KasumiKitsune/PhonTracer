@@ -16,8 +16,8 @@
         "title": "PhonRec 语音学多发音人录音软件",
         "width": 1380,
         "height": 850,
-        "minWidth": 1200,
-        "minHeight": 750,
+        "minWidth": 560,
+        "minHeight": 600,
         "backgroundColor": "#f6f7fb",
         "dragDropEnabled": false
       }
