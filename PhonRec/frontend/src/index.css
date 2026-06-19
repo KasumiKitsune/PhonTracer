@@ -460,7 +460,7 @@ body {
 .recording-buttons {
   display: flex;
   align-items: center;
-  gap: 2rem;
+  gap: 1.25rem;
 }
 
 .nav-arrow {
@@ -1402,6 +1402,21 @@ input:checked + .slider:before {
 .drawer-backdrop.active {
   opacity: 1;
   pointer-events: auto;
+}
+
+/* Responsive overrides for medium screens to prevent recording controls overflow */
+@media (max-width: 1300px) {
+  .center-column {
+    padding: 1rem !important;
+  }
+  
+  .controls-card {
+    padding: 0.75rem !important;
+  }
+  
+  .recording-buttons {
+    gap: 0.85rem !important;
+  }
 }
 
 /* Drawer mode for screen sizes <= 1200px */
