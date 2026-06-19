@@ -1561,6 +1561,10 @@ export default function App() {
       const data = await res.json();
 
       const updatedSpeakers = { ...speakersRef.current };
+      if (!updatedSpeakers[spkId]) {
+        console.warn(`Speaker ${spkId} no longer exists in speakers state. Skipping state update.`);
+        return;
+      }
       if (!updatedSpeakers[spkId].items) {
         updatedSpeakers[spkId].items = {};
       }
