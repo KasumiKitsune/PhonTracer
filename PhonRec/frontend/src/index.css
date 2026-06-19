@@ -869,7 +869,7 @@ body {
 }
 
 .visualizer-card {
-  flex: 1;
+  flex: none;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -1248,8 +1248,7 @@ input:checked + .slider:before {
 }
 
 .right-column .visualizer-card {
-  flex: 1;
-  min-height: 140px;
+  flex: none;
 }
 
 .right-column .visualizer-tabs {

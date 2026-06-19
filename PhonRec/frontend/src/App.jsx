@@ -2140,6 +2140,37 @@ export default function App() {
               )}
             </div>
           </div>
+          
+          {/* Center Column Bottom Bar: Project Management Actions */}
+          <div className="center-bottom-bar" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', borderTop: '1px solid var(--border-color)', paddingTop: '0.75rem', marginTop: '0.5rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+            <div className="switch-container" style={{ margin: 0, gap: '0.35rem', fontSize: '0.8rem' }}>
+              <span>随机排序录制</span>
+              <label className="switch" style={{ margin: 0 }}>
+                <input
+                  type="checkbox"
+                  checked={randomizeOrder}
+                  onChange={(e) => updateRandomizeOrder(e.target.checked)}
+                />
+                <span className="slider"></span>
+              </label>
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+              <button className="btn-secondary" style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }} onClick={handleImportButtonClick}>
+                <ExportIcon /> 导入
+              </button>
+              <input
+                type="file"
+                ref={projectInputRef}
+                style={{ display: 'none' }}
+                accept=".teproj"
+                onChange={handleProjectUpload}
+              />
+              <button className="btn-primary" style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }} onClick={handleProjectExport}>
+                <ImportIcon /> 保存
+              </button>
+            </div>
+          </div>
           </div>
 
           {/* Right side: Word scroll list */}
@@ -2366,7 +2397,7 @@ export default function App() {
             </div>
 
             {/* Recording settings */}
-            <div className="info-card" style={{ padding: '0.75rem' }}>
+            <div className="info-card" style={{ padding: '0.75rem', marginTop: 'auto' }}>
               <div className="panel-title" style={{ fontSize: '0.8rem', marginBottom: '0.5rem', textTransform: 'none' }}>
                 <MicIcon active={isRecording} /> 录音模式设置
               </div>
@@ -2386,39 +2417,11 @@ export default function App() {
               </div>
             </div>
 
-            {/* Project actions */}
-            <div className="project-actions" style={{ borderTop: 'none', background: 'transparent', padding: 0 }}>
-              <div className="switch-container" style={{ marginBottom: '0.4rem' }}>
-                <span>随机排序录制</span>
-                <label className="switch">
-                  <input
-                    type="checkbox"
-                    checked={randomizeOrder}
-                    onChange={(e) => updateRandomizeOrder(e.target.checked)}
-                  />
-                  <span className="slider"></span>
-                </label>
-              </div>
+            <button className="btn-secondary" style={{ fontSize: '0.8rem', color: 'var(--color-danger)', borderColor: 'var(--border-color)', width: '100%', marginTop: '0.2rem' }} onClick={handleProjectClear}>
+              <SweepIcon /> 清空工作区
+            </button>
 
-              <div className="project-action-row">
-                <button className="btn-secondary" style={{ fontSize: '0.8rem' }} onClick={handleImportButtonClick}>
-                  <ImportIcon /> 导入
-                </button>
-                <input
-                  type="file"
-                  ref={projectInputRef}
-                  style={{ display: 'none' }}
-                  accept=".teproj"
-                  onChange={handleProjectUpload}
-                />
-                <button className="btn-primary" style={{ fontSize: '0.8rem' }} onClick={handleProjectExport}>
-                  <ExportIcon /> 保存
-                </button>
-              </div>
-              <button className="btn-secondary" style={{ fontSize: '0.8rem', color: 'var(--color-danger)', borderColor: 'var(--border-color)', marginTop: '0.2rem' }} onClick={handleProjectClear}>
-                <SweepIcon /> 清空工作区
-              </button>
-            </div>
+
           </div>
         </section>
 
@@ -2732,7 +2735,7 @@ export default function App() {
           <div className="modal-content" style={{ maxWidth: '380px' }}>
             <div className="modal-header">
               <span style={{ fontWeight: 650, fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <ImportIcon /> 导入工程
+                <ExportIcon /> 导入工程
               </span>
             </div>
             <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', padding: '1.25rem 1rem' }}>
