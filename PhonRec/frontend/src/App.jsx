@@ -966,7 +966,7 @@ export default function App() {
     if (activeItem) {
       const el = document.getElementById(`word-item-${activeItem.id}`);
       if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
     }
   }, [activeItemIndex, displayedItems]);
