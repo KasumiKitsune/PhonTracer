@@ -132,7 +132,7 @@ const CustomSelect = ({ value, onChange, options, style }) => {
   const selectedOption = options.find(opt => opt.value === value) || options[0];
 
   return (
-    <div className="custom-select-container" ref={dropdownRef} style={style}>
+    <div className={`custom-select-container ${isOpen ? 'open' : ''}`} ref={dropdownRef} style={style}>
       <div 
         className={`custom-select-trigger ${isOpen ? 'open' : ''}`} 
         onClick={() => setIsOpen(!isOpen)}
@@ -1125,7 +1125,7 @@ export default function App() {
     >
       {/* Floating Toggle Button for Drawer Sidebar (Visible on small screens) */}
       <button 
-        className="sidebar-toggle-btn"
+        className={`sidebar-toggle-btn ${isLeftSidebarOpen ? 'drawer-open' : ''}`}
         onClick={() => setIsLeftSidebarOpen(!isLeftSidebarOpen)}
         title="展开/折叠发音人与字表"
       >
