@@ -78,7 +78,7 @@ body {
   padding: 1rem;
   gap: 1rem;
   position: relative;
-  min-width: 900px;
+  min-width: 680px;
 }
 
 /* Header */
@@ -149,7 +149,7 @@ body {
 /* Grid Layout - 4 clean columns in order, no overlaps */
 .app-workspace {
   display: grid;
-  grid-template-columns: 260px 1fr 320px;
+  grid-template-columns: 260px minmax(0, 1fr) 320px;
   flex: 1;
   gap: 1rem;
   min-height: 0;
@@ -157,7 +157,7 @@ body {
 
 @media (max-width: 1200px) {
   .app-workspace {
-    grid-template-columns: 220px 1fr 280px;
+    grid-template-columns: 220px minmax(0, 1fr) 280px;
   }
 }
 
@@ -230,6 +230,7 @@ body {
   box-shadow: 0 4px 10px rgba(99, 102, 241, 0.15);
   font-family: inherit;
   font-size: 0.85rem;
+  white-space: nowrap;
 }
 
 .btn-primary:hover {
@@ -257,6 +258,7 @@ body {
   font-family: inherit;
   font-size: 0.85rem;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
+  white-space: nowrap;
 }
 
 .btn-secondary:hover {
@@ -1332,4 +1334,246 @@ input:checked + .slider:before {
 .engine-gate-actions button:disabled {
   cursor: wait;
   opacity: 0.65;
+}
+
+/* ==========================================
+   Responsive Drawer Layout & Microphone Guidance
+   ========================================== */
+
+/* Sidebar Toggle Floating Button (hidden on large screens) */
+.sidebar-toggle-btn {
+  display: none;
+  position: fixed;
+  left: 1.5rem;
+  bottom: 1.5rem;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--color-accent), #4f46e5);
+  color: white;
+  border: none;
+  box-shadow: 0 4px 15px rgba(99, 102, 241, 0.4);
+  z-index: 1001;
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.sidebar-toggle-btn:hover {
+  transform: scale(1.1) rotate(5deg);
+  box-shadow: 0 6px 20px rgba(99, 102, 241, 0.5);
+}
+
+.sidebar-toggle-btn:active {
+  transform: scale(0.95);
+}
+
+/* Drawer Backdrop Overlay (hidden by default) */
+.drawer-backdrop {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(15, 23, 42, 0.3);
+  backdrop-filter: blur(4px);
+  z-index: 998;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+}
+
+.drawer-backdrop.active {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Drawer mode for screen sizes <= 1024px */
+@media (max-width: 1024px) {
+  .app-workspace {
+    /* Hide column 1 from the grid, only render Column 2 (minmax(0, 1fr)) and Column 3 (280px) */
+    grid-template-columns: minmax(0, 1fr) 280px !important;
+  }
+
+  /* Left sidebar becomes a slide-out drawer */
+  .left-sidebar {
+    position: fixed !important;
+    top: 1rem;
+    bottom: 1rem;
+    left: -290px; /* Hidden offscreen plus card shadow margin */
+    width: 270px;
+    height: calc(100vh - 2rem);
+    z-index: 999;
+    transition: left 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2) !important;
+  }
+
+  .left-sidebar.drawer-open {
+    left: 1rem !important; /* Slide in from left */
+  }
+
+  .sidebar-toggle-btn {
+    display: flex; /* Show floating toggle button */
+  }
+}
+
+/* Mic Guidance Overlay */
+.mic-guidance-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(15, 23, 42, 0.5);
+  backdrop-filter: blur(8px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 99999;
+}
+
+.mic-guidance-card {
+  background: white;
+  border-radius: 20px;
+  padding: 2.25rem 2rem;
+  width: 90%;
+  max-width: 440px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  animation: modalScaleIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.mic-guidance-card h3 {
+  margin: 0.75rem 0 0.5rem 0;
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.mic-guidance-card p {
+  font-size: 0.88rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  margin: 0.5rem 0;
+}
+
+.mic-guidance-alert {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  padding: 0.75rem 1rem;
+  border-radius: 12px;
+  color: var(--color-accent) !important;
+  font-weight: 500;
+  margin-top: 1rem !important;
+}
+
+.mic-guidance-icon-wrapper {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: var(--color-accent-glow);
+  color: var(--color-accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 0.5rem;
+}
+
+.mic-pulse-icon.pulsing {
+  animation: pulseIcon 1.5s infinite;
+}
+
+.mic-pulse-icon.error {
+  color: var(--color-danger);
+}
+
+.mic-guidance-steps {
+  width: 100%;
+  text-align: left;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 1rem;
+  margin-top: 1rem;
+  font-size: 0.82rem;
+  color: var(--text-primary);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+/* Arrow pointer to top-left corner */
+.mic-guidance-arrow {
+  position: fixed;
+  top: 1rem;
+  left: 2rem;
+  color: white;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  animation: bounceArrow 1.5s infinite ease-in-out;
+  z-index: 100000;
+}
+
+.mic-guidance-arrow svg {
+  filter: drop-shadow(0 4px 6px rgba(0, 0, 0, 0.3));
+}
+
+.arrow-pulse {
+  position: absolute;
+  top: -4px;
+  left: -4px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid white;
+  animation: rippleArrow 1.5s infinite ease-out;
+}
+
+@keyframes bounceArrow {
+  0%, 100% {
+    transform: translate(0, 0);
+  }
+  50% {
+    transform: translate(8px, 8px);
+  }
+}
+
+@keyframes rippleArrow {
+  0% {
+    transform: scale(0.8);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(2.2);
+    opacity: 0;
+  }
+}
+
+@keyframes pulseIcon {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.1);
+    opacity: 0.7;
+  }
+}
+
+@keyframes modalScaleIn {
+  from {
+    transform: scale(0.9);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
 }

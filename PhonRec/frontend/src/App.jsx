@@ -107,6 +107,14 @@ const PlayIcon = () => (
   </svg>
 );
 
+const MenuIcon = () => (
+  <svg style={{ width: '20px', height: '20px' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="3" y1="12" x2="21" y2="12" />
+    <line x1="3" y1="6" x2="21" y2="6" />
+    <line x1="3" y1="18" x2="21" y2="18" />
+  </svg>
+);
+
 const CustomSelect = ({ value, onChange, options, style }) => {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef(null);
@@ -157,6 +165,9 @@ const CustomSelect = ({ value, onChange, options, style }) => {
 export default function App() {
   // --- State Variables ---
   const [, setConnectionStatus] = useState(true);
+  const [showMicGuidance, setShowMicGuidance] = useState(false);
+  const [micBlocked, setMicBlocked] = useState(false);
+  const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(false);
   const [speakers, setSpeakers] = useState({});
   const [activeSpeakerId, setActiveSpeakerId] = useState('');
   const [groups, setGroups] = useState([]);
@@ -269,6 +280,27 @@ export default function App() {
       return streamRef.current;
     }
     
+    let showOverlay = false;
+    try {
+      if (navigator.permissions && navigator.permissions.query) {
+        const status = await navigator.permissions.query({ name: 'microphone' });
+        if (status.state === 'prompt') {
+          showOverlay = true;
+        } else if (status.state === 'denied') {
+          setMicBlocked(true);
+          showOverlay = true;
+        }
+      } else {
+        showOverlay = true;
+      }
+    } catch (e) {
+      showOverlay = true;
+    }
+
+    if (showOverlay) {
+      setShowMicGuidance(true);
+    }
+    
     try {
       const AudioContext = window.AudioContext || window.webkitAudioContext;
       // 让 WebView 使用设备的真实采样率，停止录音时再统一重采样到 16 kHz。
@@ -283,6 +315,8 @@ export default function App() {
         } 
       });
       streamRef.current = stream;
+      setMicBlocked(false);
+      setShowMicGuidance(false);
       
       const source = audioContextRef.current.createMediaStreamSource(stream);
       const processor = audioContextRef.current.createScriptProcessor(4096, 1, 1);
@@ -362,6 +396,12 @@ export default function App() {
       return stream;
     } catch (err) {
       console.error(err);
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        setMicBlocked(true);
+        setShowMicGuidance(true);
+      } else {
+        setShowMicGuidance(false);
+      }
       throw err;
     }
   };
@@ -1083,6 +1123,64 @@ export default function App() {
       className="app-container"
       onDragOver={handleDragOver}
     >
+      {/* Floating Toggle Button for Drawer Sidebar (Visible on small screens) */}
+      <button 
+        className="sidebar-toggle-btn"
+        onClick={() => setIsLeftSidebarOpen(!isLeftSidebarOpen)}
+        title="展开/折叠发音人与字表"
+      >
+        <MenuIcon />
+      </button>
+
+      {/* Drawer Backdrop Overlay (Visible on small screens when drawer is open) */}
+      <div 
+        className={`drawer-backdrop ${isLeftSidebarOpen ? 'active' : ''}`}
+        onClick={() => setIsLeftSidebarOpen(false)}
+      ></div>
+
+      {/* Microphone Permission Guidance Overlay */}
+      {showMicGuidance && (
+        <div className="mic-guidance-overlay" style={{ zIndex: 99999 }}>
+          <div className="mic-guidance-arrow">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <line x1="20" y1="20" x2="4" y2="4" />
+              <polyline points="4 12 4 4 12 4" />
+            </svg>
+            <div className="arrow-pulse"></div>
+          </div>
+          
+          <div className="mic-guidance-card">
+            <div className="mic-guidance-icon-wrapper">
+              <svg className={`mic-pulse-icon ${!micBlocked ? 'pulsing' : 'error'}`} width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8" />
+              </svg>
+            </div>
+            
+            {micBlocked ? (
+              <>
+                <h3>🎤 麦克风访问被拒绝</h3>
+                <p>我们无法使用您的麦克风。请按照以下步骤重新授予权限：</p>
+                <div className="mic-guidance-steps">
+                  <div>1. 点击窗口左上角的 <strong>设置/锁</strong> 按钮</div>
+                  <div>2. 找到 <strong>麦克风权限</strong> 并将其开启</div>
+                  <div>3. 开启后点击下方“重新检测”或刷新软件</div>
+                </div>
+                <button className="btn-primary" style={{ marginTop: '1rem', width: '100%' }} onClick={() => setShowMicGuidance(false)}>
+                  知道了
+                </button>
+              </>
+            ) : (
+              <>
+                <h3>🎤 请求麦克风使用权限</h3>
+                <p>为了支持 <strong>实时音量检测</strong> 和 <strong>音频质量检测</strong>，我们需要使用您的麦克风。</p>
+                <p className="mic-guidance-alert">请在窗口左上角弹出的系统提示中点击 <strong>「允许 (Allow)」</strong> 以继续。</p>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Drag and Drop Visual Overlay */}
       {isDragging && (
         <div 
@@ -1106,7 +1204,7 @@ export default function App() {
       <main className="app-workspace">
         
         {/* Column 1: Import and Speakers */}
-        <section className="glass-panel">
+        <section className={`glass-panel left-sidebar ${isLeftSidebarOpen ? 'drawer-open' : ''}`}>
           <div className="panel-header">
             <span className="panel-title">
               <BookIcon /> 发音人与字表
@@ -1377,7 +1475,7 @@ export default function App() {
             </div>
 
             {/* Keyboard hints at the bottom of controls card */}
-            <div style={{ display: 'flex', width: '100%', justifyContent: 'center', alignItems: 'center', gap: '1rem', fontSize: '0.75rem', color: 'var(--text-secondary)', borderTop: '1px solid var(--border-color)', paddingTop: '0.75rem', marginTop: '0.5rem' }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', width: '100%', justifyContent: 'center', alignItems: 'center', gap: '1rem', fontSize: '0.75rem', color: 'var(--text-secondary)', borderTop: '1px solid var(--border-color)', paddingTop: '0.75rem', marginTop: '0.5rem' }}>
               <span><KeyboardIcon /> [空格] 录音/停止</span>
               <span>[← / →] 切换字表词条</span>
               {activeItem && speakers[activeSpeakerId]?.items?.[activeItem.id] && (
