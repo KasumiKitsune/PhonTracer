@@ -22,7 +22,6 @@ from .project_adaptor import (
     read_project_metadata_from_archive,
     safe_extract_zip,
     resolve_workspace_path,
-    adapt_project_state,
     prune_unreferenced_resources,
     validate_project_resources,
     _iter_state_resource_refs
@@ -352,11 +351,6 @@ class ProjectManager:
                 "speakers": {},
                 "custom_script_runs": getattr(self.app, "custom_script_runs", [])
             }
-            if getattr(self, "imported_groups", None) is not None:
-                state["groups"] = self.imported_groups
-            if getattr(self, "imported_phonrec", None) is not None:
-                state["phonrec"] = self.imported_phonrec
-
             data_dir = self._get_data_dir()
             audio_dir = self._get_audio_dir()
             copy_cache = {}
@@ -603,13 +597,7 @@ class ProjectManager:
             with zipfile.ZipFile(zip_path, 'r') as zf:
                 safe_extract_zip(zf, temp_workspace)
 
-            # Adapt project state and resource paths in temp workspace
-            state, warnings, summary = adapt_project_state(state, temp_workspace)
-
-            project_json = os.path.join(temp_workspace, "project.json")
-            with open(project_json, "w", encoding="utf-8") as f:
-                json.dump(state, f, ensure_ascii=False, indent=2)
-
+            # PhonTracer 保留自身工程模型；面向 PhonRec 的转换只在 PhonRec 导入端执行。
             validate_project_resources(state, temp_workspace)
 
             with self._save_lock:
@@ -632,8 +620,6 @@ class ProjectManager:
                     self._remap_restored_workspace_paths(restored, old_staged_workspace, self.workspace_dir)
                     self._apply_restored_state(restored, active_id, overlay=False)
                     self._restore_app_state(state)
-                    self.imported_groups = state.get("groups")
-                    self.imported_phonrec = state.get("phonrec")
                     prune_unreferenced_resources(state, self.workspace_dir)
                 else:
                     staged_workspace = self._make_import_workspace(prefix="workspace_overlay")
@@ -650,8 +636,6 @@ class ProjectManager:
                     staged_workspace = None
                     self._remap_restored_workspace_paths(restored, old_staged_workspace, self.workspace_dir)
                     self._apply_restored_state(restored, active_id, overlay=True)
-                    self.imported_groups = remapped_state.get("groups")
-                    self.imported_phonrec = remapped_state.get("phonrec")
                     self.save_to_workspace()
 
                 self._discard_workspace_backup(backup_workspace)
@@ -684,15 +668,8 @@ class ProjectManager:
             with open(project_json, "r", encoding="utf-8") as f:
                 state = json.load(f)
 
-            # Run compatibility adaptation on workspace!
-            state, warnings, summary = adapt_project_state(state, self.workspace_dir)
-            with open(project_json, "w", encoding="utf-8") as f:
-                json.dump(state, f, ensure_ascii=False, indent=2)
-
             with self._save_lock:
                 validate_project_resources(state, self.workspace_dir)
-                self.imported_groups = state.get("groups")
-                self.imported_phonrec = state.get("phonrec")
                 self._restore_state(state, overlay=False)
                 self._restore_app_state(state)
                 # Restore the project path if autosave_meta.json exists

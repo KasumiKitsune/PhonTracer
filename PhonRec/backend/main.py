@@ -8,7 +8,6 @@ import os
 import secrets
 import shutil
 import socket
-import stat
 import tempfile
 import uuid
 import zipfile
@@ -232,6 +231,113 @@ def detect_creak(y: np.ndarray, sr: int) -> tuple[bool, float]:
     # Flag as creaky voice if > 15% of speech frames fall into vocal fry range
     return creak_ratio > 0.15, creak_ratio
 
+def normalize_audio_samples(samples: np.ndarray) -> np.ndarray:
+    """将各种 WAV 位深和声道布局统一为单声道 float32。"""
+    if samples.dtype == np.int16:
+        y = samples.astype(np.float32) / 32768.0
+    elif samples.dtype == np.int32:
+        y = samples.astype(np.float32) / 2147483648.0
+    elif samples.dtype == np.uint8:
+        y = (samples.astype(np.float32) - 128.0) / 128.0
+    elif np.issubdtype(samples.dtype, np.integer):
+        scale = max(abs(np.iinfo(samples.dtype).min), np.iinfo(samples.dtype).max)
+        y = samples.astype(np.float32) / float(scale)
+    else:
+        y = samples.astype(np.float32)
+    if y.ndim > 1:
+        y = np.mean(y, axis=1, dtype=np.float32)
+    return np.nan_to_num(y, nan=0.0, posinf=1.0, neginf=-1.0)
+
+def analyze_recording_quality(y: np.ndarray, sr: int) -> dict:
+    """基于有效语音而非整段平均值进行分级，区分重录与人工复核。"""
+    y = np.asarray(y, dtype=np.float32).reshape(-1)
+    duration = len(y) / sr if sr > 0 else 0.0
+    frame_size = max(1, int(sr * 0.02))
+    frame_count = max(1, int(np.ceil(len(y) / frame_size)))
+    rms = np.empty(frame_count, dtype=np.float64)
+    for index in range(frame_count):
+        frame = y[index * frame_size:(index + 1) * frame_size]
+        rms[index] = np.sqrt(np.mean(frame * frame)) if len(frame) else 0.0
+    rms_db = 20.0 * np.log10(rms + 1e-10)
+
+    noise_db = float(np.percentile(rms_db, 20)) if len(rms_db) else -100.0
+    # 没有前后静音的紧凑录音不能把整段语音误当作噪声底。
+    if len(rms_db) and float(np.percentile(rms_db, 80) - np.percentile(rms_db, 20)) < 3.0 and float(np.median(rms_db)) > -45.0:
+        noise_db = min(-55.0, float(np.median(rms_db) - 20.0))
+    speech_threshold_db = float(np.clip(noise_db + 10.0, -45.0, -25.0))
+    speech_mask = rms_db >= speech_threshold_db
+    speech_ratio = float(np.mean(speech_mask)) if len(speech_mask) else 0.0
+    speech_ms = int(np.sum(speech_mask) * 20)
+    active_rms_db = float(20.0 * np.log10(np.mean(rms[speech_mask]) + 1e-10)) if np.any(speech_mask) else -100.0
+    snr_db = float(active_rms_db - noise_db) if np.any(speech_mask) else 0.0
+    peak = float(np.max(np.abs(y))) if len(y) else 0.0
+    peak_db = float(20.0 * np.log10(peak + 1e-10))
+    dc_offset = float(abs(np.mean(y))) if len(y) else 0.0
+
+    clipped, clip_ratio = check_clipping(y)
+    severe_clipping = clip_ratio >= 0.003
+    no_speech = speech_ms < 180 or speech_ratio < 0.08
+    too_short = duration < 0.30
+    too_quiet = active_rms_db < -35.0
+    too_loud = active_rms_db > -6.0 or peak_db > -0.15
+    very_noisy = snr_db < 6.0 and not no_speech
+    moderate_noise = 6.0 <= snr_db < 12.0
+    creaky, creak_ratio = detect_creak(y, sr) if len(y) >= frame_size else (False, 0.0)
+
+    retry_issues = []
+    review_issues = []
+    if too_short:
+        retry_issues.append("录音过短")
+    if no_speech:
+        retry_issues.append("未检测到足够语音")
+    if severe_clipping:
+        retry_issues.append("严重截断")
+    elif clipped:
+        review_issues.append("轻微截断")
+    if too_quiet:
+        retry_issues.append("有效语音音量过小")
+    if too_loud:
+        retry_issues.append("有效语音音量过大")
+    if very_noisy:
+        retry_issues.append("信噪比过低")
+    elif moderate_noise:
+        review_issues.append("背景噪声偏高")
+    if dc_offset > 0.03:
+        review_issues.append("直流偏移偏高")
+    if creaky:
+        review_issues.append("可能存在嘎裂声")
+
+    decision = "retry" if retry_issues else ("review" if review_issues else "accept")
+    score = 100
+    score -= 45 if retry_issues else 0
+    score -= min(30, 8 * len(review_issues))
+    score = max(0, score)
+    vol_status = "too_quiet" if too_quiet else ("too_loud" if too_loud else "normal")
+    labels = retry_issues + review_issues
+    return {
+        "decision": decision,
+        "grade": "需重录" if decision == "retry" else ("建议复核" if decision == "review" else "良好"),
+        "score": score,
+        "issues": labels,
+        "recommendations": labels,
+        "clipping": {"abnormal": clipped, "score": clip_ratio, "label": "音频截断" if clipped else "正常"},
+        "volume": {
+            "status": vol_status,
+            "score": active_rms_db,
+            "label": "音量过小" if too_quiet else ("音量过大" if too_loud else "正常"),
+        },
+        # 嘎裂声只作为复核提示，不再自动判定录音失败。
+        "creak": {"abnormal": creaky, "score": creak_ratio, "label": "可能有嘎裂声" if creaky else "正常"},
+        "speech": {"abnormal": no_speech, "score": speech_ratio, "label": "语音不足" if no_speech else "正常"},
+        "noise": {"abnormal": very_noisy, "score": snr_db, "label": "噪声过高" if very_noisy else "正常"},
+        "metrics": {
+            "duration_ms": int(duration * 1000), "speech_ms": speech_ms, "speech_ratio": speech_ratio,
+            "noise_floor_dbfs": noise_db, "speech_threshold_dbfs": speech_threshold_db,
+            "active_rms_dbfs": active_rms_db, "peak_dbfs": peak_db, "snr_db": snr_db,
+            "clipping_ratio": clip_ratio, "dc_offset": dc_offset,
+        },
+    }
+
 def generate_spectrogram(y: np.ndarray, sr: int) -> str:
     """Generate a clean colormapped spectrogram image base64 string with F0/F1/F2 curves."""
     import matplotlib
@@ -366,7 +472,7 @@ async def api_save_project_state(state: Dict[str, Any]):
             json.dump(state, f, ensure_ascii=False, indent=2)
         os.replace(tmp_path, path)
         prune_unreferenced_resources(state, WORKSPACE_DIR)
-        return {"status": "success", "warnings": warnings, "summary": summary}
+        return {"status": "success", "state": state, "warnings": warnings, "summary": summary}
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -381,54 +487,29 @@ async def api_save_audio(
 ):
     """Save recorded audio blob and automatically analyze it in a single step."""
     init_workspace()
+    safe_speaker_id = sanitize_path_component(speaker_id, "speaker", 64)
+    safe_word_id = sanitize_path_component(word_id, "item", 64)
     # Ensure speaker audio directory exists
-    speaker_dir = os.path.join(AUDIO_DIR, speaker_id)
+    speaker_dir = os.path.join(AUDIO_DIR, safe_speaker_id)
     os.makedirs(speaker_dir, exist_ok=True)
 
     # Save file
-    filename = f"{speaker_id}_{word_id}.wav"
+    filename = f"{safe_speaker_id}_{safe_word_id}.wav"
     file_path = os.path.join(speaker_dir, filename)
 
     try:
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        rel_path = f"audio/{speaker_id}/{filename}"
+        rel_path = f"audio/{safe_speaker_id}/{filename}"
 
         # Run analysis immediately to return quality and spectrogram
         sr, y_int = wavfile.read(file_path)
-        if y_int.dtype == np.int16:
-            y = y_int.astype(np.float32) / 32768.0
-        elif y_int.dtype == np.int32:
-            y = y_int.astype(np.float32) / 2147483648.0
-        elif y_int.dtype == np.uint8:
-            y = (y_int.astype(np.float32) - 128.0) / 128.0
-        else:
-            y = y_int.astype(np.float32)
-
-        is_clipped, clip_ratio = check_clipping(y)
-        vol_status, vol_db = check_volume(y, sr)
-        is_creaky, creak_ratio = detect_creak(y, sr)
+        y = normalize_audio_samples(y_int)
 
         spec_b64 = generate_spectrogram(y, sr)
 
-        quality = {
-            "clipping": {
-                "abnormal": is_clipped,
-                "score": clip_ratio,
-                "label": "音频截断" if is_clipped else "正常"
-            },
-            "volume": {
-                "status": vol_status,
-                "score": vol_db,
-                "label": "音量过小" if vol_status == "too_quiet" else ("音量过大" if vol_status == "too_loud" else "正常")
-            },
-            "creak": {
-                "abnormal": is_creaky,
-                "score": creak_ratio,
-                "label": "有嘎裂声" if is_creaky else "正常"
-            }
-        }
+        quality = analyze_recording_quality(y, sr)
 
         import datetime
         recorded_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -442,20 +523,27 @@ async def api_save_audio(
             "recorded_at": recorded_at,
             "duration_ms": duration_ms,
             "sample_rate_hz": int(sr),
-            "channels": 1,
+            "channels": int(y_int.shape[1]) if y_int.ndim > 1 else 1,
             "format": "wav",
             "source": source
         }
     except Exception as e:
         import traceback
         traceback.print_exc()
+        try:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+        except OSError:
+            pass
         raise HTTPException(status_code=500, detail=f"Failed to save and analyze audio file: {e}")
 
 @app.get("/api/audio/file")
 async def api_get_audio_file(speaker_id: str, word_id: str):
     """Retrieve the WAV file for playback or decoding."""
-    filename = f"{speaker_id}_{word_id}.wav"
-    file_path = os.path.join(AUDIO_DIR, speaker_id, filename)
+    safe_speaker_id = sanitize_path_component(speaker_id, "speaker", 64)
+    safe_word_id = sanitize_path_component(word_id, "item", 64)
+    filename = f"{safe_speaker_id}_{safe_word_id}.wav"
+    file_path = os.path.join(AUDIO_DIR, safe_speaker_id, filename)
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Audio file not found")
     return FileResponse(file_path, media_type="audio/wav")
@@ -466,8 +554,10 @@ async def api_analyze_audio(
     word_id: str = Form(...)
 ):
     """Analyze a WAV audio file for quality parameters and generate spectrogram."""
-    filename = f"{speaker_id}_{word_id}.wav"
-    file_path = os.path.join(AUDIO_DIR, speaker_id, filename)
+    safe_speaker_id = sanitize_path_component(speaker_id, "speaker", 64)
+    safe_word_id = sanitize_path_component(word_id, "item", 64)
+    filename = f"{safe_speaker_id}_{safe_word_id}.wav"
+    file_path = os.path.join(AUDIO_DIR, safe_speaker_id, filename)
 
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Audio file not found")
@@ -476,43 +566,14 @@ async def api_analyze_audio(
         # Read WAV file
         sr, y_int = wavfile.read(file_path)
 
-        # Normalize to float32 between -1.0 and 1.0
-        if y_int.dtype == np.int16:
-            y = y_int.astype(np.float32) / 32768.0
-        elif y_int.dtype == np.int32:
-            y = y_int.astype(np.float32) / 2147483648.0
-        elif y_int.dtype == np.uint8:
-            y = (y_int.astype(np.float32) - 128.0) / 128.0
-        else:
-            y = y_int.astype(np.float32)
-
-        # Run checks
-        is_clipped, clip_ratio = check_clipping(y)
-        vol_status, vol_db = check_volume(y, sr)
-        is_creaky, creak_ratio = detect_creak(y, sr)
+        y = normalize_audio_samples(y_int)
 
         # Spectrogram
         spec_b64 = generate_spectrogram(y, sr)
 
         return {
             "status": "success",
-            "quality": {
-                "clipping": {
-                    "abnormal": is_clipped,
-                    "score": clip_ratio,
-                    "label": "音频截断" if is_clipped else "正常"
-                },
-                "volume": {
-                    "status": vol_status,
-                    "score": vol_db,
-                    "label": "音量过小" if vol_status == "too_quiet" else ("音量过大" if vol_status == "too_loud" else "正常")
-                },
-                "creak": {
-                    "abnormal": is_creaky,
-                    "score": creak_ratio,
-                    "label": "有嘎裂声" if is_creaky else "正常"
-                }
-            },
+            "quality": analyze_recording_quality(y, sr),
             "spectrogram": f"data:image/png;base64,{spec_b64}"
         }
     except Exception as e:
@@ -711,7 +772,7 @@ async def api_import_project(file: UploadFile = File(...)):
             shutil.copyfileobj(file.file, buffer)
 
         with zipfile.ZipFile(temp_zip, "r") as zip_ref:
-            _safe_extract_zip(zip_ref, staging_dir)
+            safe_extract_zip(zip_ref, staging_dir)
 
         project_json_path = os.path.join(staging_dir, "project.json")
         if not os.path.exists(project_json_path):
@@ -822,29 +883,6 @@ async def api_export_project():
             except:
                 pass
         raise HTTPException(status_code=500, detail=f"Failed to export project: {e}")
-
-def _safe_extract_zip(zip_ref: zipfile.ZipFile, destination: str) -> None:
-    """拒绝目录穿越、绝对路径和符号链接后再展开工程。"""
-    root = Path(destination).resolve()
-    for member in zip_ref.infolist():
-        mode = member.external_attr >> 16
-        if stat.S_ISLNK(mode):
-            raise HTTPException(status_code=400, detail="工程压缩包不得包含符号链接")
-
-        normalized = member.filename.replace("\\", "/")
-        target = (root / normalized).resolve()
-        try:
-            target.relative_to(root)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail="工程压缩包包含非法路径") from exc
-
-        if member.is_dir():
-            target.mkdir(parents=True, exist_ok=True)
-            continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        with zip_ref.open(member, "r") as source, open(target, "wb") as output:
-            shutil.copyfileobj(source, output)
-
 
 def is_target_folder_valid(path_str: str) -> bool:
     path = Path(path_str)

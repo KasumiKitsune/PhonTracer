@@ -5,7 +5,6 @@ import zipfile
 import shutil
 import stat
 import numpy as np
-from scipy.io import wavfile
 
 MAX_ARCHIVE_MEMBERS = 10000
 MAX_ARCHIVE_MEMBER_BYTES = 2 * 1024 * 1024 * 1024
@@ -356,7 +355,13 @@ def adapt_project_state(state: dict, workspace_dir: str):
     for spk_id, spk_data in list(state.get("speakers", {}).items()):
         spk_name = spk_data.get("name", spk_id)
         tab_mode = spk_data.get("tab_mode", "多条独立音频")
-        is_long_mode = "单条" in tab_mode
+        old_items = spk_data.get("items", {})
+        has_item_audio = any(
+            isinstance(item, dict) and item.get("path")
+            for item in old_items.values()
+        )
+        # 旧工程的 tab_mode 曾出现错误值；长音频存在且条目没有独立音频时仍按长音频转换。
+        is_long_mode = "单条" in tab_mode or bool(spk_data.get("long_audio_path") and not has_item_audio)
 
         long_audio_abs = None
         if is_long_mode:
@@ -364,7 +369,6 @@ def adapt_project_state(state: dict, workspace_dir: str):
             if long_audio_rel:
                 long_audio_abs = resolve_workspace_path(long_audio_rel, workspace_dir)
 
-        old_items = spk_data.get("items", {})
         new_items = {}
 
         # 扫描发音人的条目，映射到规范字表 slot
@@ -398,25 +402,21 @@ def adapt_project_state(state: dict, workspace_dir: str):
                     sliced_successfully = False
                     if long_audio_abs and os.path.exists(long_audio_abs) and start is not None and end is not None:
                         try:
-                            sr, y = wavfile.read(long_audio_abs)
-                            duration = len(y) / sr
+                            import parselmouth
+                            source_sound = parselmouth.Sound(long_audio_abs)
+                            duration = source_sound.duration
                             if start < 0 or end > duration or start >= end:
                                 raise ValueError(f"切分边界无效 [{start}, {end}], 音频总长: {duration:.2f}s")
-                            
-                            start_idx = int(start * sr)
-                            end_idx = int(end * sr)
-                            
-                            # Handle multi-channel audio
-                            if y.ndim > 1:
-                                slice_data = y[start_idx:end_idx, :]
-                            else:
-                                slice_data = y[start_idx:end_idx]
-                            
+
                             dest_dir = os.path.join(workspace_dir, "audio", spk_id)
                             os.makedirs(dest_dir, exist_ok=True)
                             dest_filename = f"{spk_id}_{canonical_id}.wav"
                             dest_path = os.path.join(dest_dir, dest_filename)
-                            wavfile.write(dest_path, sr, slice_data)
+                            source_sound.extract_part(
+                                from_time=float(start),
+                                to_time=float(end),
+                                preserve_times=False,
+                            ).save(dest_path, "WAV")
 
                             item_data["path"] = f"audio/{spk_id}/{dest_filename}"
                             # 边界转换到单项音频本地时间轴
@@ -426,8 +426,17 @@ def adapt_project_state(state: dict, workspace_dir: str):
                             item_data["macro_start"] = 0.0
                             item_data["macro_end"] = duration_local
                             
-                            # 旧 F0、共振峰及预览缓存作废
-                            for cache_key in ("pitch_data_file", "formant_data_file", "preview_f0", "has_empty_data"):
+                            # 时间轴改变后，所有分析结果均作废；保留来源边界便于追溯。
+                            item_data["source_segment"] = {
+                                "path": spk_data.get("long_audio_path"),
+                                "start": float(start),
+                                "end": float(end),
+                            }
+                            for cache_key in (
+                                "pitch_data_file", "formant_data_file", "pitch_data", "formant_data",
+                                "preview_f0", "preview_formants", "has_empty_data", "raw_start", "raw_end",
+                                "chars_bounds", "inner_splits", "analysis_params", "analysis_state",
+                            ):
                                 item_data.pop(cache_key, None)
                             
                             summary["sliced_items"] += 1
@@ -439,7 +448,11 @@ def adapt_project_state(state: dict, workspace_dir: str):
                     if not sliced_successfully:
                         # 降级为未录制
                         item_data.pop("path", None)
-                        for k in ("start", "end", "macro_start", "macro_end", "pitch_data_file", "formant_data_file", "preview_f0", "has_empty_data"):
+                        for k in (
+                            "start", "end", "macro_start", "macro_end", "pitch_data_file", "formant_data_file",
+                            "pitch_data", "formant_data", "preview_f0", "preview_formants", "has_empty_data",
+                            "raw_start", "raw_end", "chars_bounds", "inner_splits", "analysis_params", "analysis_state",
+                        ):
                             item_data.pop(k, None)
                 else:
                     # 独立音频重命名并映射
@@ -536,6 +549,10 @@ def adapt_project_state(state: dict, workspace_dir: str):
                 summary["missing_items"] += 1
 
         spk_data["items"] = new_items
+        spk_data["pending_batch_paths"] = list(dict.fromkeys(
+            item["path"] for item in new_items.values()
+            if isinstance(item, dict) and item.get("path")
+        ))
         
         # 强制转换为多条独立音频
         spk_data["tab_mode"] = "多条独立音频"

@@ -198,6 +198,41 @@ def test_adapt_project_state_slicing_long_audio(tmp_path):
     assert not (data_dir / "spk1_item1_pitch.npz").exists()
     assert not (data_dir / "spk1_item2_formant.npz").exists()
 
+def test_long_audio_is_detected_even_if_legacy_tab_mode_is_wrong(tmp_path):
+    workspace_dir = tmp_path / "workspace"
+    (workspace_dir / "audio").mkdir(parents=True)
+    _write_test_wav(workspace_dir / "audio" / "long.wav", duration=0.8)
+    state = {
+        "version": "1.0",
+        "speakers": {
+            "spk1": {
+                "id": "spk1",
+                "name": "旧工程发音人",
+                "tab_mode": "多条独立音频",
+                "long_audio_path": "audio/long.wav",
+                "pending_batch_paths": ["audio/old_missing.wav"],
+                "items": {
+                    "item1": {
+                        "label": "字1", "group": "组1", "macro_start": 0.1, "macro_end": 0.5,
+                        "pitch_data": {"xs": [0.1], "freqs": [220]},
+                        "preview_formants": {"f1": [500]}, "chars_bounds": [[0.1, 0.2]],
+                    }
+                },
+            }
+        },
+    }
+
+    adapted, warnings, summary = adapt_project_state(state, str(workspace_dir))
+    item = next(iter(adapted["speakers"]["spk1"]["items"].values()))
+    assert warnings == []
+    assert summary["sliced_items"] == 1
+    assert item["path"].endswith(".wav")
+    assert item["source_segment"]["start"] == 0.1
+    assert "pitch_data" not in item
+    assert "preview_formants" not in item
+    assert "chars_bounds" not in item
+    assert adapted["speakers"]["spk1"]["pending_batch_paths"] == [item["path"]]
+
 def test_prune_unreferenced_resources(tmp_path):
     workspace_dir = tmp_path / "workspace"
     workspace_dir.mkdir()

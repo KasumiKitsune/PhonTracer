@@ -83,7 +83,7 @@ if is_win:
 
 # --- 4. 分析 PhonRec 配套分析引擎 ---
 engine_hidden_imports = [
-    'scipy.io', 'scipy.signal', 'matplotlib.backends.backend_agg',
+    'scipy.io', 'scipy.signal', 'matplotlib.backends.backend_agg', 'parselmouth',
     'uvicorn.loops', 'uvicorn.loops.auto',
     'uvicorn.protocols', 'uvicorn.protocols.http', 'uvicorn.protocols.http.auto',
     'uvicorn.protocols.websockets', 'uvicorn.protocols.websockets.auto',

@@ -5,6 +5,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { apiFetch } from './engineApi.js';
 import { bufferToWav, resampleAudio } from './audioUtils.js';
+import { createVadEngine } from './vadEngine.js';
 import {
   buildRecordedItem,
   formatPlaybackTime,
@@ -312,10 +313,10 @@ export default function App() {
   const activeCaptureSourceRef = useRef(null);
   const captureLifecycleRef = useRef(Promise.resolve());
 
-  const vadThreshold = 0.025;
-  const silenceDurationLimit = 850;
-  const lastSpeechTimeRef = useRef(0);
-  const speechDetectedRef = useRef(false);
+  const vadEngineRef = useRef(null);
+  if (!vadEngineRef.current) vadEngineRef.current = createVadEngine();
+  const vadRetryRef = useRef(new Map());
+  const handleVadSampleRef = useRef(null);
 
   const isRecordingRef = useRef(isRecording);
   isRecordingRef.current = isRecording;
@@ -341,6 +342,7 @@ export default function App() {
 
   const groupsRef = useRef(groups);
   groupsRef.current = groups;
+  const projectStateRef = useRef({ version: '1.0' });
 
   const displayedItemsRef = useRef(displayedItems);
   displayedItemsRef.current = displayedItems;
@@ -349,6 +351,20 @@ export default function App() {
   activeItemIndexRef.current = activeItemIndex;
 
   const stopRecordingRef = useRef(null);
+
+  handleVadSampleRef.current = (rms) => {
+    if (!isRecordingRef.current || recordingModeRef.current !== 'vad') {
+      vadEngineRef.current.observeNoise(rms);
+      return;
+    }
+    const result = vadEngineRef.current.process(rms);
+    setVadSpeaking(result.state === 'speaking' || result.state === 'trailing');
+    if (result.event === 'speech-end' || result.event === 'max-duration') {
+      stopRecordingRef.current?.(true, true);
+    } else if (result.event === 'no-speech-timeout') {
+      stopRecordingRef.current?.(false, true, 'no_speech');
+    }
+  };
 
   // Settings helpers
   const loadAndApplySettings = async () => {
@@ -619,24 +635,7 @@ export default function App() {
         if (isRecordingRef.current) {
           setVadLevel(levelPercent);
 
-          if (recordingModeRef.current === 'vad') {
-            if (rms > vadThreshold) {
-              if (!speechDetectedRef.current) {
-                speechDetectedRef.current = true;
-                setVadSpeaking(true);
-              }
-              lastSpeechTimeRef.current = Date.now();
-            } else {
-              if (speechDetectedRef.current) {
-                const silentDuration = Date.now() - lastSpeechTimeRef.current;
-                if (silentDuration > silenceDurationLimit) {
-                  if (stopRecordingRef.current) {
-                    stopRecordingRef.current(true, true);
-                  }
-                }
-              }
-            }
-          }
+          handleVadSampleRef.current?.(rms);
         }
       };
 
@@ -750,25 +749,7 @@ export default function App() {
             ctx.stroke();
           }
 
-          if (recordingModeRef.current === 'vad') {
-            const rms = volume / 400.0;
-            if (rms > vadThreshold) {
-              if (!speechDetectedRef.current) {
-                speechDetectedRef.current = true;
-                setVadSpeaking(true);
-              }
-              lastSpeechTimeRef.current = Date.now();
-            } else {
-              if (speechDetectedRef.current) {
-                const silentDuration = Date.now() - lastSpeechTimeRef.current;
-                if (silentDuration > silenceDurationLimit) {
-                  if (stopRecordingRef.current) {
-                    stopRecordingRef.current(true, true);
-                  }
-                }
-              }
-            }
-          }
+          handleVadSampleRef.current?.(volume / 400.0);
         }
       });
 
@@ -982,6 +963,7 @@ export default function App() {
       const res = await apiFetch('/project/state');
       if (!res.ok) throw new Error('API Error');
       const data = await res.json();
+      projectStateRef.current = data;
 
       if (data.speakers) setSpeakers(data.speakers);
       if (data.active_speaker_id) setActiveSpeakerId(data.active_speaker_id);
@@ -999,6 +981,7 @@ export default function App() {
 
   const saveProjectState = async (updatedSpeakers, updatedGroups = groupsRef.current, customActiveSpeakerId = null) => {
     const state = {
+      ...projectStateRef.current,
       version: "1.0",
       software_version: "PhonRec-1.0.0",
       save_time: new Date().toISOString(),
@@ -1023,6 +1006,8 @@ export default function App() {
         }
         throw new Error(errMsg);
       }
+      const saved = await res.json();
+      projectStateRef.current = saved.state || state;
     } catch (err) {
       console.error('Failed to save project state:', err);
       await customAlert(`保存项目状态失败：${err.message || err}`);
@@ -1215,6 +1200,7 @@ export default function App() {
       setQualityResults(null);
       clearCanvas();
       const state = data.state;
+      projectStateRef.current = state;
 
       // Apply imported project state (with fallback defaults to clear old data)
       const importedSpeakers = state.speakers || {};
@@ -1303,6 +1289,7 @@ export default function App() {
       setQualityResults(null);
       clearCanvas();
       const state = data.state;
+      projectStateRef.current = state;
 
       // Apply imported project state
       const importedSpeakers = state.speakers || {};
@@ -1429,6 +1416,7 @@ export default function App() {
       resetPlayback();
       await closeMicStream();
       setSpeakers({});
+      projectStateRef.current = { version: '1.0' };
       setActiveSpeakerId('');
       setGroups([]);
       setActiveGroupIndex('all');
@@ -1508,8 +1496,7 @@ export default function App() {
       setQualityResults(null);
 
       audioChunksRef.current = [];
-      speechDetectedRef.current = false;
-      lastSpeechTimeRef.current = Date.now();
+      vadEngineRef.current.reset();
 
       resetPlayback();
 
@@ -1542,7 +1529,7 @@ export default function App() {
     }
   };
 
-  const stopRecording = async (shouldAutoAdvance = true, isAutoVAD = false) => {
+  const stopRecording = async (shouldAutoAdvance = true, isAutoVAD = false, discardReason = null) => {
     if (isStartingRef.current) {
       shouldCancelRef.current = true;
       return;
@@ -1571,7 +1558,11 @@ export default function App() {
         drawStaticWaveform(floatBuffer);
         tempCtx.close();
 
-        await uploadAudio(wavBlob, shouldAutoAdvance, isAutoVAD);
+        if (discardReason) {
+          await handleVadDiscard(discardReason);
+        } else {
+          await uploadAudio(wavBlob, shouldAutoAdvance, isAutoVAD);
+        }
       } catch (err) {
         console.error(err);
         await customAlert('保存回环录音失败：' + err.message);
@@ -1598,7 +1589,26 @@ export default function App() {
     const targetSR = Number(sampleRateSetting);
     const resampledBuffer = resampleAudio(floatBuffer, sourceSampleRate, targetSR);
     const wavBlob = bufferToWav(resampledBuffer, targetSR);
-    await uploadAudio(wavBlob, shouldAutoAdvance, isAutoVAD);
+    if (discardReason) {
+      await handleVadDiscard(discardReason);
+    } else {
+      await uploadAudio(wavBlob, shouldAutoAdvance, isAutoVAD);
+    }
+  };
+
+  const handleVadDiscard = async () => {
+    const item = displayedItemsRef.current[activeItemIndexRef.current];
+    const key = `${activeSpeakerIdRef.current}:${item?.id || ''}`;
+    const retryCount = (vadRetryRef.current.get(key) || 0) + 1;
+    vadRetryRef.current.set(key, retryCount);
+    setIsProcessing(false);
+    isProcessingRef.current = false;
+    if (retryCount <= 2) {
+      setTimeout(() => startRecording(), 600);
+    } else {
+      vadRetryRef.current.delete(key);
+      await customAlert('连续三次未检测到有效语音，智能跳转已暂停。请检查输入设备或改用手动录音。');
+    }
   };
 
   const uploadAudio = async (blob, shouldAutoAdvance, isAutoVAD = false) => {
@@ -1623,11 +1633,7 @@ export default function App() {
       if (!res.ok) throw new Error('保存音频失败');
       const data = await res.json();
 
-      const hasQualityIssue = qualityChecksEnabledRef.current && data.quality && (
-        data.quality.clipping?.abnormal ||
-        (data.quality.volume?.status && data.quality.volume.status !== 'normal') ||
-        data.quality.creak?.abnormal
-      );
+      const needsRetry = qualityChecksEnabledRef.current && data.quality?.decision === 'retry';
 
       const updatedSpeakers = { ...speakersRef.current };
       if (!updatedSpeakers[spkId]) {
@@ -1638,7 +1644,7 @@ export default function App() {
         updatedSpeakers[spkId].items = {};
       }
 
-      if (hasQualityIssue) {
+      if (needsRetry) {
         if (updatedSpeakers[spkId].items[activeItem.id]) {
           const item = updatedSpeakers[spkId].items[activeItem.id];
           updatedSpeakers[spkId].items[activeItem.id] = {
@@ -1682,13 +1688,20 @@ export default function App() {
       if (data.spectrogram) setSpectrogramUrl(data.spectrogram);
       if (data.quality) setQualityResults(data.quality);
 
-      if (hasQualityIssue) {
+      if (needsRetry) {
         if (isAutoVAD) {
-          setTimeout(() => {
-            startRecording();
-          }, 1000);
+          const key = `${spkId}:${activeItem.id}`;
+          const retryCount = (vadRetryRef.current.get(key) || 0) + 1;
+          vadRetryRef.current.set(key, retryCount);
+          if (retryCount <= 2) {
+            setTimeout(() => startRecording(), 1000);
+          } else {
+            vadRetryRef.current.delete(key);
+            await customAlert(`连续三次质量检测未通过：${data.quality.issues?.join('、') || '请检查录音环境'}。智能跳转已暂停。`);
+          }
         }
       } else {
+        vadRetryRef.current.delete(`${spkId}:${activeItem.id}`);
         if (shouldAutoAdvance) {
           setTimeout(() => {
             navigateItem(1);
@@ -2516,6 +2529,20 @@ export default function App() {
                 </div>
               )}
 
+              {qualityChecksEnabled && qualityResults?.decision && (
+                <div style={{
+                  marginBottom: '0.65rem', padding: '0.5rem 0.6rem', borderRadius: '0.55rem',
+                  background: qualityResults.decision === 'accept' ? 'rgba(34,197,94,0.1)' :
+                    (qualityResults.decision === 'review' ? 'rgba(245,158,11,0.12)' : 'rgba(239,68,68,0.1)'),
+                  fontSize: '0.75rem', color: 'var(--text-secondary)'
+                }}>
+                  <strong>{qualityResults.grade}</strong> · {qualityResults.score} 分
+                  {qualityResults.metrics && (
+                    <span> · 语音 {Math.round(qualityResults.metrics.speech_ratio * 100)}% · 信噪比 {qualityResults.metrics.snr_db.toFixed(1)} dB</span>
+                  )}
+                </div>
+              )}
+
               <div className="quality-grid">
                 <div className="quality-item">
                   <span>音量检测</span>
@@ -2550,6 +2577,24 @@ export default function App() {
                     }`}></span>
                     <span style={{ color: 'var(--text-secondary)' }}>
                       {!qualityChecksEnabled || !qualityResults ? '未检测' : qualityResults.clipping.label}
+                    </span>
+                  </div>
+                </div>
+                <div className="quality-item">
+                  <span>有效语音</span>
+                  <div className="quality-indicator">
+                    <span className={`indicator-led ${qualityResults?.speech?.abnormal ? 'red' : (qualityResults?.speech ? 'green' : '')}`}></span>
+                    <span style={{ color: 'var(--text-secondary)' }}>
+                      {!qualityChecksEnabled || !qualityResults?.speech ? '未检测' : qualityResults.speech.label}
+                    </span>
+                  </div>
+                </div>
+                <div className="quality-item">
+                  <span>背景噪声</span>
+                  <div className="quality-indicator">
+                    <span className={`indicator-led ${qualityResults?.noise?.abnormal ? 'red' : (qualityResults?.noise ? 'green' : '')}`}></span>
+                    <span style={{ color: 'var(--text-secondary)' }}>
+                      {!qualityChecksEnabled || !qualityResults?.noise ? '未检测' : qualityResults.noise.label}
                     </span>
                   </div>
                 </div>
