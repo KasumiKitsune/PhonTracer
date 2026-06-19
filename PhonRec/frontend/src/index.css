@@ -1481,6 +1481,10 @@ input:checked + .slider:before {
   .center-column {
     flex-shrink: 0 !important;
   }
+
+  .sidebar-toggle-btn {
+    bottom: 130px !important;
+  }
   
   .word-scroll-panel {
     flex: none !important;
