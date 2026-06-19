@@ -1,8 +1,16 @@
-import { useState, useEffect, useRef } from 'react';
-import { save } from '@tauri-apps/plugin-dialog';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { save, open } from '@tauri-apps/plugin-dialog';
 import { writeFile } from '@tauri-apps/plugin-fs';
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { apiFetch } from './engineApi.js';
 import { bufferToWav, resampleAudio } from './audioUtils.js';
+import {
+  buildRecordedItem,
+  formatPlaybackTime,
+  mergeAudioDevices,
+  selectAvailableAudioSource,
+} from './appUtils.js';
 
 // --- Inline SVG Icons ---
 const ImportIcon = () => (
@@ -107,6 +115,56 @@ const PlayIcon = () => (
   </svg>
 );
 
+const PauseIcon = () => (
+  <svg style={{ width: '18px', height: '18px' }} viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="6" y="4" width="4" height="16" />
+    <rect x="14" y="4" width="4" height="16" />
+  </svg>
+);
+
+const GearIcon = () => (
+  <svg className="settings-gear-btn" style={{ width: '18px', height: '18px', cursor: 'pointer', color: 'var(--text-secondary)' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="3" />
+    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+  </svg>
+);
+
+const InfoIcon = () => (
+  <svg style={{ width: '14px', height: '14px', marginRight: '4px', display: 'inline-block', verticalAlign: 'middle', color: 'var(--color-accent)' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="10" />
+    <line x1="12" y1="16" x2="12" y2="12" />
+    <line x1="12" y1="8" x2="12.01" y2="8" />
+  </svg>
+);
+
+const FolderIcon = () => (
+  <svg style={{ width: '14px', height: '14px', marginRight: '4px', display: 'inline-block', verticalAlign: 'middle' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+  </svg>
+);
+
+const SaveIcon = () => (
+  <svg style={{ width: '14px', height: '14px', marginRight: '4px', display: 'inline-block', verticalAlign: 'middle' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+    <polyline points="17 21 17 13 7 13 7 21" />
+    <polyline points="7 3 7 8 15 8" />
+  </svg>
+);
+
+const FormatIcon = () => (
+  <svg style={{ width: '14px', height: '14px', marginRight: '4px', display: 'inline-block', verticalAlign: 'middle' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M9 18V5l12-2v13" />
+    <circle cx="6" cy="18" r="3" />
+    <circle cx="18" cy="16" r="3" />
+  </svg>
+);
+
+const ResetIcon = () => (
+  <svg style={{ width: '14px', height: '14px', marginRight: '4px', display: 'inline-block', verticalAlign: 'middle' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67" />
+  </svg>
+);
+
 const MenuIcon = () => (
   <svg style={{ width: '20px', height: '20px' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
     <line x1="3" y1="12" x2="21" y2="12" />
@@ -133,8 +191,8 @@ const CustomSelect = ({ value, onChange, options, style }) => {
 
   return (
     <div className={`custom-select-container ${isOpen ? 'open' : ''}`} ref={dropdownRef} style={style}>
-      <div 
-        className={`custom-select-trigger ${isOpen ? 'open' : ''}`} 
+      <div
+        className={`custom-select-trigger ${isOpen ? 'open' : ''}`}
         onClick={() => setIsOpen(!isOpen)}
       >
         <span>{selectedOption ? selectedOption.label : ''}</span>
@@ -145,8 +203,8 @@ const CustomSelect = ({ value, onChange, options, style }) => {
       {isOpen && (
         <div className="custom-select-dropdown">
           {options.map(opt => (
-            <div 
-              key={opt.value} 
+            <div
+              key={opt.value}
               className={`custom-select-option ${value === opt.value ? 'selected' : ''}`}
               onClick={() => {
                 onChange(opt.value);
@@ -170,55 +228,75 @@ export default function App() {
   // --- State Variables ---
   const [, setConnectionStatus] = useState(true);
   const [showMicGuidance, setShowMicGuidance] = useState(false);
-  const [micBlocked, setMicBlocked] = useState(false);
+  const [micBlocked, setMicBlocked] = useState(null);
   const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(false);
   const [speakers, setSpeakers] = useState({});
   const [activeSpeakerId, setActiveSpeakerId] = useState('');
   const [groups, setGroups] = useState([]);
-  
+
   // Navigation index & active group (can be index or 'all')
   const [activeGroupIndex, setActiveGroupIndex] = useState('all'); // default to All
   const [activeItemIndex, setActiveItemIndex] = useState(0);
-  
+
   // Settings
   const [recordingMode, setRecordingMode] = useState('click');
   const [qualityChecksEnabled, setQualityChecksEnabled] = useState(true);
   const [randomizeOrder, setRandomizeOrder] = useState(false);
-  
+
+  const [audioDevices, setAudioDevices] = useState([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState('default');
+  const [sampleRateSetting, setSampleRateSetting] = useState(16000);
+  const [saveFormatSetting, setSaveFormatSetting] = useState('teproj');
+  const [folderPathSetting, setFolderPathSetting] = useState('');
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
+
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [activeSettingsTab, setActiveSettingsTab] = useState('behavior');
+
+  const [showImportModal, setShowImportModal] = useState(false);
+
+  const [playbackState, setPlaybackState] = useState({
+    isPlaying: false,
+    currentTime: 0,
+    duration: 0,
+    currentSpeakerId: '',
+    currentWordId: ''
+  });
+
   // Shuffled items computed state
   const [displayedItems, setDisplayedItems] = useState([]);
   const [isSmallScreen, setIsSmallScreen] = useState(window.innerWidth <= 768);
-  
+
   const [visualizerTab, setVisualizerTab] = useState('waveform');
-  
+
   // Recording states
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [spectrogramUrl, setSpectrogramUrl] = useState('');
   const [qualityResults, setQualityResults] = useState(null);
-  
+
   // Inline Speaker states
   const [isAddingSpeaker, setIsAddingSpeaker] = useState(false);
   const [newSpeakerName, setNewSpeakerName] = useState('');
-  
+
   // VAD & live volume states
   const [vadLevel, setVadLevel] = useState(0);
   const [vadSpeaking, setVadSpeaking] = useState(false);
   const [liveVolume, setLiveVolume] = useState(0);
-  
+
   // Metadata field customization keys
   const [primaryMetaKey, setPrimaryMetaKey] = useState('拼音');
   const [badgeMetaKey, setBadgeMetaKey] = useState('拼音');
-  
+
   // Custom font size for character display
   const [charFontSize, setCharFontSize] = useState(120);
-  
+
   // Custom confirm dialog state
   const [confirmDialog, setConfirmDialog] = useState(null);
-  
+
   // Drag and drop overlay
   const [isDragging, setIsDragging] = useState(false);
-  
+
   const [wordlistInfo, setWordlistInfo] = useState({ title: '无字表', count: 0 });
 
   // --- Refs ---
@@ -229,7 +307,10 @@ export default function App() {
   const canvasRef = useRef(null);
   const fileInputRef = useRef(null);
   const projectInputRef = useRef(null);
-  
+  const audioPlayerRef = useRef(null);
+  const activeCaptureSourceRef = useRef(null);
+  const captureLifecycleRef = useRef(Promise.resolve());
+
   const vadThreshold = 0.025;
   const silenceDurationLimit = 850;
   const lastSpeechTimeRef = useRef(0);
@@ -237,6 +318,9 @@ export default function App() {
 
   const isRecordingRef = useRef(isRecording);
   isRecordingRef.current = isRecording;
+
+  const isProcessingRef = useRef(isProcessing);
+  isProcessingRef.current = isProcessing;
 
   const qualityChecksEnabledRef = useRef(qualityChecksEnabled);
   qualityChecksEnabledRef.current = qualityChecksEnabled;
@@ -261,6 +345,131 @@ export default function App() {
 
   const stopRecordingRef = useRef(null);
 
+  // Settings helpers
+  const loadAndApplySettings = async () => {
+    try {
+      const settings = await invoke('load_settings');
+      if (settings) {
+        setQualityChecksEnabled(settings.realtime_quality);
+        setVisualizerTab(settings.default_plot);
+        setRecordingMode(settings.record_mode);
+        setSelectedDeviceId(settings.record_source);
+        setSampleRateSetting(settings.sample_rate);
+        setSaveFormatSetting(settings.save_format);
+        setFolderPathSetting(settings.folder_path);
+        setRandomizeOrder(settings.record_order === 'random');
+      }
+      return settings;
+    } catch (err) {
+      console.error('读取设置失败:', err);
+      return null;
+    }
+  };
+
+  const fetchAudioDevices = async (preferredSource = selectedDeviceId) => {
+    try {
+      const nativeDevices = await invoke('list_audio_devices');
+      let mediaDevices = [];
+      if (navigator.mediaDevices?.enumerateDevices) {
+        mediaDevices = await navigator.mediaDevices.enumerateDevices();
+      }
+      const devices = mergeAudioDevices(nativeDevices, mediaDevices);
+      const availableSource = selectAvailableAudioSource(preferredSource, devices);
+      setAudioDevices(devices);
+      if (availableSource !== preferredSource) {
+        setSelectedDeviceId(availableSource);
+        if (settingsLoaded) {
+          await saveAndApplySettings({ record_source: availableSource });
+        }
+      }
+      return { devices, availableSource };
+    } catch (err) {
+      console.error('枚举录音设备失败:', err);
+      const fallbackDevices = mergeAudioDevices([], []);
+      setAudioDevices(fallbackDevices);
+      setSelectedDeviceId('default');
+      return { devices: fallbackDevices, availableSource: 'default' };
+    }
+  };
+
+  const saveAndApplySettings = async (updates = {}) => {
+    const currentSettings = {
+      version: 1,
+      realtime_quality: updates.realtime_quality !== undefined ? updates.realtime_quality : qualityChecksEnabled,
+      default_plot: updates.default_plot !== undefined ? updates.default_plot : visualizerTab,
+      record_mode: updates.record_mode !== undefined ? updates.record_mode : recordingMode,
+      record_source: updates.record_source !== undefined ? updates.record_source : selectedDeviceId,
+      sample_rate: updates.sample_rate !== undefined ? Number(updates.sample_rate) : Number(sampleRateSetting),
+      save_format: updates.save_format !== undefined ? updates.save_format : saveFormatSetting,
+      folder_path: updates.folder_path !== undefined ? updates.folder_path : folderPathSetting,
+      record_order: updates.record_order !== undefined ? updates.record_order : (randomizeOrder ? 'random' : 'wordlist'),
+      channels: 1,
+      format: 'wav'
+    };
+
+    try {
+      await invoke('save_settings', { settings: currentSettings });
+      return true;
+    } catch (err) {
+      console.error('保存设置失败:', err);
+      await customAlert(`保存设置失败：${err}`);
+      return false;
+    }
+  };
+
+  const updateQualityChecksEnabled = async (val) => {
+    if (await saveAndApplySettings({ realtime_quality: val })) setQualityChecksEnabled(val);
+  };
+  const updateVisualizerTab = async (val) => {
+    if (await saveAndApplySettings({ default_plot: val })) setVisualizerTab(val);
+  };
+  const updateRecordingMode = async (val) => {
+    if (await saveAndApplySettings({ record_mode: val })) setRecordingMode(val);
+  };
+  const updateRandomizeOrder = async (val) => {
+    if (await saveAndApplySettings({ record_order: val ? 'random' : 'wordlist' })) setRandomizeOrder(val);
+  };
+  const updateSelectedDeviceId = async (val) => {
+    if (await saveAndApplySettings({ record_source: val })) setSelectedDeviceId(val);
+  };
+  const updateSampleRateSetting = async (val) => {
+    if (await saveAndApplySettings({ sample_rate: Number(val) })) setSampleRateSetting(Number(val));
+  };
+  const updateSaveFormatSetting = async (val) => {
+    if (await saveAndApplySettings({ save_format: val })) setSaveFormatSetting(val);
+  };
+  const updateFolderPathSetting = async (val) => {
+    if (await saveAndApplySettings({ folder_path: val })) setFolderPathSetting(val);
+  };
+
+  const handleSeekChange = (e) => {
+    const player = audioPlayerRef.current;
+    if (!player?.src) return;
+    const time = Number(e.target.value);
+    player.currentTime = time;
+    setPlaybackState(prev => ({ ...prev, currentTime: time }));
+  };
+
+  const resetPlayback = useCallback(() => {
+    const player = audioPlayerRef.current;
+    if (player) {
+      player.pause();
+      player.currentTime = 0;
+      if (player.src?.startsWith('blob:')) {
+        URL.revokeObjectURL(player.src);
+      }
+      player.removeAttribute('src');
+      player.load();
+    }
+    setPlaybackState({
+      isPlaying: false,
+      currentTime: 0,
+      duration: 0,
+      currentSpeakerId: '',
+      currentWordId: '',
+    });
+  }, []);
+
   // --- Custom Confirm/Alert Helpers ---
   const customConfirm = (message) => {
     return new Promise((resolve) => {
@@ -282,12 +491,33 @@ export default function App() {
     });
   };
 
-  // --- Background Microphone Helpers ---
-  const ensureMicStream = async () => {
-    if (streamRef.current && audioContextRef.current && audioContextRef.current.state !== 'closed') {
+  // --- Background Microphone & Audio Listeners ---
+  const ensureMicStream = async (sourceId = selectedDeviceId, { force = false } = {}) => {
+    if (sourceId.startsWith('loopback:')) {
+      if (!force && activeCaptureSourceRef.current === sourceId) return;
+      try {
+        await invoke('start_loopback_listener', { deviceName: sourceId });
+        activeCaptureSourceRef.current = sourceId;
+        setMicBlocked(false);
+        setShowMicGuidance(false);
+      } catch (err) {
+        console.error('Tauri loopback listener start failed:', err);
+        setMicBlocked(true);
+        throw err;
+      }
+      return;
+    }
+
+    if (
+      !force
+      && activeCaptureSourceRef.current === sourceId
+      && streamRef.current
+      && audioContextRef.current
+      && audioContextRef.current.state !== 'closed'
+    ) {
       return streamRef.current;
     }
-    
+
     let showOverlay = false;
     try {
       if (navigator.permissions && navigator.permissions.query) {
@@ -308,37 +538,44 @@ export default function App() {
     if (showOverlay) {
       setShowMicGuidance(true);
     }
-    
+
     try {
       const AudioContext = window.AudioContext || window.webkitAudioContext;
-      // 让 WebView 使用设备的真实采样率，停止录音时再统一重采样到 16 kHz。
+      // 让 WebView 使用设备的真实采样率，停止录音时再统一重采样。
       audioContextRef.current = new AudioContext();
-      
-      const stream = await navigator.mediaDevices.getUserMedia({ 
+
+      const constraints = {
         audio: {
           channelCount: 1,
           echoCancellation: false,
           noiseSuppression: false,
           autoGainControl: false
-        } 
-      });
+        }
+      };
+
+      if (sourceId && sourceId !== 'default') {
+        constraints.audio.deviceId = { exact: sourceId };
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
       streamRef.current = stream;
+      activeCaptureSourceRef.current = sourceId;
       setMicBlocked(false);
       setShowMicGuidance(false);
-      
+
       const source = audioContextRef.current.createMediaStreamSource(stream);
       const processor = audioContextRef.current.createScriptProcessor(4096, 1, 1);
       processorNodeRef.current = processor;
-      
+
       processor.onaudioprocess = (e) => {
         const inputData = e.inputBuffer.getChannelData(0);
-        
+
         // Save chunks and draw real-time waveform only when actively recording
         if (isRecordingRef.current) {
           const chunkCopy = new Float32Array(inputData.length);
           chunkCopy.set(inputData);
           audioChunksRef.current.push(chunkCopy);
-          
+
           const canvas = canvasRef.current;
           if (canvas) {
             const ctx = canvas.getContext('2d');
@@ -349,10 +586,10 @@ export default function App() {
             ctx.lineWidth = 2;
             ctx.strokeStyle = '#6366f1';
             ctx.beginPath();
-            
+
             const sliceWidth = width / inputData.length;
             let x = 0;
-            
+
             for (let i = 0; i < inputData.length; i++) {
               const v = inputData[i];
               const y = (v + 1) * (height / 2);
@@ -363,7 +600,7 @@ export default function App() {
             ctx.stroke();
           }
         }
-        
+
         // Always compute live volume
         let sum = 0;
         for (let i = 0; i < inputData.length; i++) {
@@ -372,11 +609,11 @@ export default function App() {
         const rms = Math.sqrt(sum / inputData.length);
         const levelPercent = Math.min(100, Math.round(rms * 400));
         setLiveVolume(levelPercent);
-        
+
         // If recording, update vadLevel and check silent duration for VAD auto-advance
         if (isRecordingRef.current) {
           setVadLevel(levelPercent);
-          
+
           if (recordingModeRef.current === 'vad') {
             if (rms > vadThreshold) {
               if (!speechDetectedRef.current) {
@@ -397,13 +634,18 @@ export default function App() {
           }
         }
       };
-      
+
       source.connect(processor);
       processor.connect(audioContextRef.current.destination);
-      
+
       return stream;
     } catch (err) {
       console.error(err);
+      activeCaptureSourceRef.current = null;
+      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+        await audioContextRef.current.close();
+      }
+      audioContextRef.current = null;
       if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
         setMicBlocked(true);
         setShowMicGuidance(true);
@@ -414,7 +656,16 @@ export default function App() {
     }
   };
 
-  const closeMicStream = () => {
+  const closeMicStream = async () => {
+    const activeSource = activeCaptureSourceRef.current;
+    activeCaptureSourceRef.current = null;
+    if (activeSource?.startsWith('loopback:')) {
+      try {
+        await invoke('stop_loopback_listener');
+      } catch (error) {
+        console.error('停止系统声音监听失败:', error);
+      }
+    }
     if (processorNodeRef.current) {
       processorNodeRef.current.disconnect();
       processorNodeRef.current = null;
@@ -424,20 +675,142 @@ export default function App() {
       streamRef.current = null;
     }
     if (audioContextRef.current) {
-      if (audioContextRef.current.state !== 'closed') {
-        audioContextRef.current.close();
-      }
+      const context = audioContextRef.current;
       audioContextRef.current = null;
+      if (context.state !== 'closed') {
+        await context.close();
+      }
     }
     setLiveVolume(0);
     setVadLevel(0);
     setVadSpeaking(false);
   };
 
-  // --- Load State on Mount ---
+  // --- Single Instance Audio Player & Tauri Event Listeners ---
+  useEffect(() => {
+    const player = new Audio();
+    audioPlayerRef.current = player;
+
+    const onPlay = () => setPlaybackState(prev => ({ ...prev, isPlaying: true }));
+    const onPause = () => setPlaybackState(prev => ({ ...prev, isPlaying: false }));
+    const onEnded = () => {
+      player.currentTime = 0;
+      setPlaybackState(prev => ({ ...prev, isPlaying: false, currentTime: 0 }));
+    };
+    const onTimeUpdate = () => setPlaybackState(prev => ({ ...prev, currentTime: player.currentTime }));
+    const onDurationChange = () => setPlaybackState(prev => ({
+      ...prev,
+      duration: Number.isFinite(player.duration) ? player.duration : 0,
+    }));
+
+    player.addEventListener('play', onPlay);
+    player.addEventListener('pause', onPause);
+    player.addEventListener('ended', onEnded);
+    player.addEventListener('timeupdate', onTimeUpdate);
+    player.addEventListener('durationchange', onDurationChange);
+
+    // Tauri Listeners
+    let unlistenPreview;
+    let unlistenError;
+
+    const setupTauriListeners = async () => {
+      unlistenPreview = await listen('loopback-preview', (event) => {
+        const { volume, waveform } = event.payload;
+        setLiveVolume(volume);
+
+        if (isRecordingRef.current) {
+          setVadLevel(volume);
+
+          // Draw wave preview
+          const canvas = canvasRef.current;
+          if (canvas) {
+            const ctx = canvas.getContext('2d');
+            const width = canvas.width;
+            const height = canvas.height;
+            ctx.fillStyle = '#f8fafc';
+            ctx.fillRect(0, 0, width, height);
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = '#6366f1';
+            ctx.beginPath();
+
+            const sliceWidth = width / waveform.length;
+            let x = 0;
+            for (let i = 0; i < waveform.length; i++) {
+              const v = waveform[i];
+              const y = (v + 1) * (height / 2);
+              if (i === 0) ctx.moveTo(x, y);
+              else ctx.lineTo(x, y);
+              x += sliceWidth;
+            }
+            ctx.stroke();
+          }
+
+          if (recordingModeRef.current === 'vad') {
+            const rms = volume / 400.0;
+            if (rms > vadThreshold) {
+              if (!speechDetectedRef.current) {
+                speechDetectedRef.current = true;
+                setVadSpeaking(true);
+              }
+              lastSpeechTimeRef.current = Date.now();
+            } else {
+              if (speechDetectedRef.current) {
+                const silentDuration = Date.now() - lastSpeechTimeRef.current;
+                if (silentDuration > silenceDurationLimit) {
+                  if (stopRecordingRef.current) {
+                    stopRecordingRef.current(true);
+                  }
+                }
+              }
+            }
+          }
+        }
+      });
+
+      unlistenError = await listen('loopback-error', (event) => {
+        customAlert('音频捕获流错误：' + event.payload);
+      });
+    };
+
+    setupTauriListeners();
+
+    return () => {
+      player.pause();
+      if (player.src?.startsWith('blob:')) {
+        URL.revokeObjectURL(player.src);
+      }
+      player.removeAttribute('src');
+      player.removeEventListener('play', onPlay);
+      player.removeEventListener('pause', onPause);
+      player.removeEventListener('ended', onEnded);
+      player.removeEventListener('timeupdate', onTimeUpdate);
+      player.removeEventListener('durationchange', onDurationChange);
+
+      if (unlistenPreview) unlistenPreview();
+      if (unlistenError) unlistenError();
+    };
+  }, []);
+
+  // --- Load State & Settings on Mount ---
   useEffect(() => {
     fetchProjectState();
-    
+    let cancelled = false;
+    const initializeSettings = async () => {
+      const settings = await loadAndApplySettings();
+      const preferredSource = settings?.record_source || 'default';
+      const { availableSource } = await fetchAudioDevices(preferredSource);
+      if (settings && availableSource !== preferredSource) {
+        await invoke('save_settings', {
+          settings: { ...settings, record_source: availableSource },
+        });
+      }
+      if (!cancelled) setSettingsLoaded(true);
+    };
+    initializeSettings().catch(error => {
+      console.error('初始化设置失败:', error);
+      if (!cancelled) setSettingsLoaded(true);
+    });
+
     const interval = setInterval(async () => {
       try {
         const res = await apiFetch('/project/state');
@@ -446,27 +819,34 @@ export default function App() {
         setConnectionStatus(false);
       }
     }, 5000);
-    
-    return () => clearInterval(interval);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      closeMicStream();
+    };
   }, []);
 
-  // Background mic stream lifecycle based on qualityChecksEnabled
+  // Background stream lifecycle
   useEffect(() => {
-    if (qualityChecksEnabled) {
-      ensureMicStream().catch(err => {
-        console.error('Failed to initialize live volume stream:', err);
+    if (!settingsLoaded) return;
+    captureLifecycleRef.current = captureLifecycleRef.current
+      .catch(() => {})
+      .then(async () => {
+        await closeMicStream();
+        if (qualityChecksEnabled) {
+          await ensureMicStream(selectedDeviceId);
+        }
+      })
+      .catch(err => {
+        console.error('初始化实时音量监听失败:', err);
       });
-    } else {
-      if (!isRecordingRef.current) {
-        closeMicStream();
-      }
-    }
-  }, [qualityChecksEnabled]);
+  }, [settingsLoaded, qualityChecksEnabled, selectedDeviceId]);
 
-  // Clean up mic stream on unmount
+  // Pause playing audio when navigating items
   useEffect(() => {
-    return () => closeMicStream();
-  }, []);
+    resetPlayback();
+  }, [activeSpeakerId, activeGroupIndex, activeItemIndex, resetPlayback]);
 
   // Sync keyboard shortcuts
   useEffect(() => {
@@ -474,9 +854,10 @@ export default function App() {
       if (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'SELECT') {
         return;
       }
-      
+
       if (e.code === 'Space') {
         e.preventDefault();
+        if (isProcessingRef.current) return;
         if (recordingMode === 'click' || recordingMode === 'vad') {
           if (isRecordingRef.current) {
             stopRecording();
@@ -486,11 +867,13 @@ export default function App() {
         }
       } else if (e.code === 'ArrowLeft') {
         e.preventDefault();
+        if (isRecordingRef.current || isProcessingRef.current) return;
         navigateItem(-1);
       } else if (e.code === 'ArrowRight') {
         e.preventDefault();
+        if (isRecordingRef.current || isProcessingRef.current) return;
         navigateItem(1);
-      } else if (e.code === 'KeyR' && !isRecordingRef.current) {
+      } else if (e.code === 'KeyR' && !isRecordingRef.current && !isProcessingRef.current) {
         e.preventDefault();
         playRecordedAudio();
       }
@@ -520,11 +903,11 @@ export default function App() {
         baseItems = groups[idx].items || [];
       }
     }
-    
+
     // Save previous active item ID
     const prevActiveId = displayedItemsRef.current[activeItemIndexRef.current]?.id;
     let finalItems = baseItems;
-    
+
     if (randomizeOrder && baseItems.length > 0) {
       // Create a stable random shuffle
       const shuffled = [...baseItems];
@@ -534,9 +917,9 @@ export default function App() {
       }
       finalItems = shuffled;
     }
-    
+
     setDisplayedItems(finalItems);
-    
+
     // Attempt to restore previous active item index
     if (prevActiveId) {
       const idx = finalItems.findIndex(item => item.id === prevActiveId);
@@ -559,7 +942,7 @@ export default function App() {
       clearCanvas();
       return;
     }
-    
+
     const recordMeta = speakers[activeSpeakerId]?.items?.[activeItem.id];
     if (recordMeta) {
       // Retrieve quality from state if present, or query analysis
@@ -594,7 +977,7 @@ export default function App() {
       const res = await apiFetch('/project/state');
       if (!res.ok) throw new Error('API Error');
       const data = await res.json();
-      
+
       if (data.speakers) setSpeakers(data.speakers);
       if (data.active_speaker_id) setActiveSpeakerId(data.active_speaker_id);
       if (data.groups) {
@@ -618,7 +1001,7 @@ export default function App() {
       speakers: updatedSpeakers,
       groups: updatedGroups
     };
-    
+
     try {
       await apiFetch('/project/state', {
         method: 'POST',
@@ -653,7 +1036,7 @@ export default function App() {
       return;
     }
     const id = generateSpeakerId();
-    
+
     const updated = {
       ...speakers,
       [id]: {
@@ -664,7 +1047,7 @@ export default function App() {
         items: {}
       }
     };
-    
+
     setSpeakers(updated);
     setActiveSpeakerId(id);
     saveProjectState(updated);
@@ -717,10 +1100,10 @@ export default function App() {
     e.stopPropagation();
     const ok = await customConfirm('确定删除该发音人及其录音记录吗？');
     if (!ok) return;
-    
+
     const updated = { ...speakers };
     delete updated[id];
-    
+
     setSpeakers(updated);
     if (activeSpeakerId === id) {
       const keys = Object.keys(updated);
@@ -736,7 +1119,7 @@ export default function App() {
   const uploadWordlistFile = async (file) => {
     const formData = new FormData();
     formData.append('file', file);
-    
+
     try {
       setIsProcessing(true);
       const res = await apiFetch('/wordlist/import', {
@@ -745,7 +1128,7 @@ export default function App() {
       });
       if (!res.ok) throw new Error('解析字表失败');
       const data = await res.json();
-      
+
       setGroups(data.groups);
       setActiveGroupIndex('all'); // Default to show all items
       setActiveItemIndex(0);
@@ -753,7 +1136,7 @@ export default function App() {
         title: file.name,
         count: data.groups.reduce((acc, g) => acc + g.items.length, 0)
       });
-      
+
       // Auto select first meta key if available
       if (data.groups && data.groups.length > 0) {
         const firstItem = data.groups[0].items?.[0];
@@ -765,7 +1148,7 @@ export default function App() {
           }
         }
       }
-      
+
       saveProjectState(speakers, data.groups);
     } catch (err) {
       await customAlert(err.message);
@@ -777,21 +1160,9 @@ export default function App() {
   const uploadProjectFile = async (file) => {
     const formData = new FormData();
     formData.append('file', file);
-    
+
     try {
       setIsProcessing(true);
-      
-      // Clear/Reset all workspace UI states immediately
-      setSpectrogramUrl('');
-      setQualityResults(null);
-      clearCanvas();
-      setSpeakers({});
-      setActiveSpeakerId('');
-      setGroups([]);
-      setWordlistInfo({ title: '导入中...', count: 0 });
-      setDisplayedItems([]);
-      setActiveGroupIndex('all');
-      setActiveItemIndex(0);
 
       const res = await apiFetch('/project/import', {
         method: 'POST',
@@ -799,25 +1170,28 @@ export default function App() {
       });
       if (!res.ok) throw new Error('导入工程失败');
       const data = await res.json();
-      
+      resetPlayback();
+      setSpectrogramUrl('');
+      setQualityResults(null);
+      clearCanvas();
       const state = data.state;
-      
+
       // Apply imported project state (with fallback defaults to clear old data)
       const importedSpeakers = state.speakers || {};
       setSpeakers(importedSpeakers);
-      
+
       const importedActiveSpeakerId = state.active_speaker_id || '';
       setActiveSpeakerId(importedActiveSpeakerId);
-      
+
       const importedGroups = state.groups || [];
       setGroups(importedGroups);
-      
+
       if (importedGroups.length > 0) {
         setWordlistInfo({
           title: '已导入工程字表',
           count: importedGroups.reduce((acc, g) => acc + g.items.length, 0)
         });
-        
+
         // Auto select first meta key if available
         const firstItem = importedGroups[0].items?.[0];
         if (firstItem && firstItem.meta) {
@@ -833,7 +1207,7 @@ export default function App() {
           count: 0
         });
       }
-      
+
       setActiveGroupIndex('all');
       setActiveItemIndex(0);
       await customAlert('工程导入成功！');
@@ -856,19 +1230,123 @@ export default function App() {
     e.target.value = null;
   };
 
-  const handleProjectExport = async () => {
+  const handleImportButtonClick = () => {
+    setShowImportModal(true);
+  };
+
+  const handleImportFolder = async () => {
     try {
-      const res = await apiFetch('/project/export');
-      if (!res.ok) throw new Error('导出工程失败');
-      const destination = await save({
-        defaultPath: 'PhonRec_Project.teproj',
-        filters: [{ name: 'PhonTracer 工程', extensions: ['teproj'] }],
+      const selected = await open({
+        directory: true,
+        multiple: false
       });
-      if (!destination) return;
-      await writeFile(destination, new Uint8Array(await res.arrayBuffer()));
-    } catch (error) {
-      console.error(error);
-      await customAlert(`导出工程失败：${error.message || error}`);
+      if (!selected) return;
+
+      setIsProcessing(true);
+      const res = await apiFetch('/project/import_folder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folder_path: selected })
+      });
+
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.detail || '导入文件夹失败');
+      }
+
+      const data = await res.json();
+      resetPlayback();
+      setSpectrogramUrl('');
+      setQualityResults(null);
+      clearCanvas();
+      const state = data.state;
+
+      // Apply imported project state
+      const importedSpeakers = state.speakers || {};
+      setSpeakers(importedSpeakers);
+
+      const importedActiveSpeakerId = state.active_speaker_id || '';
+      setActiveSpeakerId(importedActiveSpeakerId);
+
+      const importedGroups = state.groups || [];
+      setGroups(importedGroups);
+
+      if (importedGroups.length > 0) {
+        setWordlistInfo({
+          title: '已导入文件夹工程',
+          count: importedGroups.reduce((acc, g) => acc + g.items.length, 0)
+        });
+
+        // Auto select first meta key if available
+        const firstItem = importedGroups[0].items?.[0];
+        if (firstItem && firstItem.meta) {
+          const keys = Object.keys(firstItem.meta);
+          if (keys.length > 0) {
+            setPrimaryMetaKey(keys[0]);
+            setBadgeMetaKey(keys[0]);
+          }
+        }
+      } else {
+        setWordlistInfo({
+          title: '无字表',
+          count: 0
+        });
+      }
+
+      setActiveGroupIndex('all');
+      setActiveItemIndex(0);
+      await customAlert('工程文件夹导入成功！');
+    } catch (err) {
+      await customAlert(err.message);
+      fetchProjectState();
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleProjectExport = async () => {
+    if (saveFormatSetting === 'folder') {
+      let path = folderPathSetting;
+      if (!path) {
+        const selected = await open({ directory: true, multiple: false });
+        if (!selected) return;
+        path = selected;
+        updateFolderPathSetting(selected);
+      }
+
+      try {
+        setIsProcessing(true);
+        const res = await apiFetch('/project/export_folder', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ folder_path: path })
+        });
+        if (!res.ok) {
+          const errData = await res.json();
+          throw new Error(errData.detail || '导出文件夹失败');
+        }
+        await customAlert('工程已成功导出到文件夹：' + path);
+      } catch (error) {
+        console.error(error);
+        await customAlert(`导出文件夹工程失败：${error.message || error}`);
+      } finally {
+        setIsProcessing(false);
+      }
+    } else {
+      try {
+        const res = await apiFetch('/project/export');
+        if (!res.ok) throw new Error('导出工程失败');
+        const destination = await save({
+          defaultPath: 'PhonRec_Project.teproj',
+          filters: [{ name: 'PhonTracer 工程', extensions: ['teproj'] }],
+        });
+        if (!destination) return;
+        await writeFile(destination, new Uint8Array(await res.arrayBuffer()));
+        await customAlert('工程已成功保存！');
+      } catch (error) {
+        console.error(error);
+        await customAlert(`导出工程失败：${error.message || error}`);
+      }
     }
   };
 
@@ -876,7 +1354,13 @@ export default function App() {
     const ok = await customConfirm('确定清空当前工作区，开始全新的录制吗？');
     if (!ok) return;
     try {
-      await apiFetch('/project/clear', { method: 'POST' });
+      const response = await apiFetch('/project/clear', { method: 'POST' });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || '后端未能清空工作区');
+      }
+      resetPlayback();
+      await closeMicStream();
       setSpeakers({});
       setActiveSpeakerId('');
       setGroups([]);
@@ -886,9 +1370,22 @@ export default function App() {
       setSpectrogramUrl('');
       setQualityResults(null);
       clearCanvas();
-      await customAlert('工作区已清空');
+
+      // Reset settings to defaults
+      const defaults = await invoke('reset_settings');
+      setQualityChecksEnabled(defaults.realtime_quality);
+      setVisualizerTab(defaults.default_plot);
+      setRecordingMode(defaults.record_mode);
+      setSelectedDeviceId(defaults.record_source);
+      setSampleRateSetting(defaults.sample_rate);
+      setSaveFormatSetting(defaults.save_format);
+      setFolderPathSetting(defaults.folder_path);
+      setRandomizeOrder(defaults.record_order === 'random');
+
+      await customAlert('工作区已清空，并已重置所有设置');
     } catch (err) {
       console.error(err);
+      await customAlert(`清空工作区失败：${err.message || err}`);
     }
   };
 
@@ -930,40 +1427,69 @@ export default function App() {
       await customAlert('请导入字表以开始录音！');
       return;
     }
-    
+
     try {
       setIsRecording(true);
       setSpectrogramUrl('');
       setQualityResults(null);
-      
+
       audioChunksRef.current = [];
       speechDetectedRef.current = false;
       lastSpeechTimeRef.current = Date.now();
-      
-      // Ensure continuous mic stream is active
+
+      resetPlayback();
+
+      // Ensure stream is active
       await ensureMicStream();
-      
+
+      if (selectedDeviceId.startsWith('loopback:')) {
+        await invoke('start_loopback_recording');
+      }
+
     } catch (err) {
       console.error(err);
       setIsRecording(false);
-      await customAlert('麦克风访问失败，请确认权限并重试！');
+      await customAlert('录音访问失败，请确认权限并重试！');
     }
   };
 
-  const stopRecording = (shouldAutoAdvance = true) => {
+  const stopRecording = async (shouldAutoAdvance = true) => {
     if (!isRecordingRef.current) return;
-    
+
     setIsRecording(false);
     setIsProcessing(true);
     setVadLevel(0);
     setVadSpeaking(false);
-    
-    // If live quality checks are disabled, shut down the microphone stream immediately.
-    // Otherwise, keep it active in the background for the live volume meter.
-    if (!qualityChecksEnabledRef.current) {
-      closeMicStream();
+
+    if (selectedDeviceId.startsWith('loopback:')) {
+      try {
+        const sampleRate = Number(sampleRateSetting);
+        const wavBytes = await invoke('stop_loopback_recording', { sampleRate });
+        const wavBlob = new Blob([new Uint8Array(wavBytes)], { type: 'audio/wav' });
+
+        // draw static waveform
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        const tempCtx = new AudioContext();
+        const arrayBuffer = await wavBlob.arrayBuffer();
+        const audioBuffer = await tempCtx.decodeAudioData(arrayBuffer);
+        const floatBuffer = audioBuffer.getChannelData(0);
+        drawStaticWaveform(floatBuffer);
+        tempCtx.close();
+
+        await uploadAudio(wavBlob, shouldAutoAdvance);
+      } catch (err) {
+        console.error(err);
+        await customAlert('保存回环录音失败：' + err.message);
+        setIsProcessing(false);
+      }
+      return;
     }
-    
+
+    // Otherwise browser microphone
+    if (!qualityChecksEnabledRef.current) {
+      await closeMicStream();
+    }
+
     const totalLength = audioChunksRef.current.reduce((acc, chunk) => acc + chunk.length, 0);
     const floatBuffer = new Float32Array(totalLength);
     let offset = 0;
@@ -971,24 +1497,29 @@ export default function App() {
       floatBuffer.set(chunk, offset);
       offset += chunk.length;
     }
-    
+
     drawStaticWaveform(floatBuffer);
     const sourceSampleRate = audioContextRef.current?.sampleRate || 16000;
-    const resampledBuffer = resampleAudio(floatBuffer, sourceSampleRate, 16000);
-    const wavBlob = bufferToWav(resampledBuffer, 16000);
-    uploadAudio(wavBlob, shouldAutoAdvance);
+    const targetSR = Number(sampleRateSetting);
+    const resampledBuffer = resampleAudio(floatBuffer, sourceSampleRate, targetSR);
+    const wavBlob = bufferToWav(resampledBuffer, targetSR);
+    await uploadAudio(wavBlob, shouldAutoAdvance);
   };
 
   const uploadAudio = async (blob, shouldAutoAdvance) => {
     const activeItem = displayedItemsRef.current[activeItemIndexRef.current];
     const spkId = activeSpeakerIdRef.current;
     if (!activeItem || !spkId) return;
-    
+
+    const device = audioDevices.find(d => d.id === selectedDeviceId);
+    const deviceName = device ? device.name : '未知设备';
+
     const formData = new FormData();
     formData.append('file', blob, `${spkId}_${activeItem.id}.wav`);
     formData.append('speaker_id', spkId);
     formData.append('word_id', activeItem.id);
-    
+    formData.append('source', deviceName);
+
     try {
       const res = await apiFetch('/audio/save', {
         method: 'POST',
@@ -996,31 +1527,21 @@ export default function App() {
       });
       if (!res.ok) throw new Error('保存音频失败');
       const data = await res.json();
-      
+
       const updatedSpeakers = { ...speakersRef.current };
       if (!updatedSpeakers[spkId].items) {
         updatedSpeakers[spkId].items = {};
       }
-      
-      // Cache the quality results directly inside the speaker structure
-      updatedSpeakers[spkId].items[activeItem.id] = {
-        path: data.path,
-        label: activeItem.label,
-        note: activeItem.note,
-        tags: activeItem.tags,
-        aliases: activeItem.aliases || [],
-        meta: activeItem.meta || {},
-        metadata_source: activeItem.metadata_source || '录音软件',
-        quality: data.quality
-      };
-      
+
+      updatedSpeakers[spkId].items[activeItem.id] = buildRecordedItem(activeItem, data);
+
       setSpeakers(updatedSpeakers);
       await saveProjectState(updatedSpeakers);
-      
+
       // Update local view states instantly
       if (data.spectrogram) setSpectrogramUrl(data.spectrogram);
       if (data.quality) setQualityResults(data.quality);
-      
+
       if (shouldAutoAdvance) {
         setTimeout(() => navigateItem(1), 500);
       }
@@ -1036,7 +1557,7 @@ export default function App() {
     const formData = new FormData();
     formData.append('speaker_id', speakerId);
     formData.append('word_id', wordId);
-    
+
     try {
       const res = await apiFetch('/audio/analyze', {
         method: 'POST',
@@ -1044,9 +1565,9 @@ export default function App() {
       });
       if (!res.ok) throw new Error('分析失败');
       const data = await res.json();
-      
+
       if (data.spectrogram) setSpectrogramUrl(data.spectrogram);
-      
+
       // If backend analysis returns quality checks, sync them back into speakers state
       if (data.quality) {
         setQualityResults(data.quality);
@@ -1070,41 +1591,78 @@ export default function App() {
   };
 
   const playRecordedAudio = async () => {
+    if (isRecordingRef.current || isProcessingRef.current) return;
     const activeItem = getActiveItem();
     if (!activeItem || !activeSpeakerId) return;
-    
+
     const recordMeta = speakers[activeSpeakerId]?.items?.[activeItem.id];
     if (!recordMeta) return;
-    
-    try {
-      const res = await apiFetch(`/audio/file?speaker_id=${encodeURIComponent(activeSpeakerId)}&word_id=${encodeURIComponent(activeItem.id)}&t=${Date.now()}`);
-      if (!res.ok) throw new Error('读取录音失败');
-      const audioUrl = URL.createObjectURL(await res.blob());
-      const audio = new Audio(audioUrl);
-      const releaseUrl = () => URL.revokeObjectURL(audioUrl);
-      audio.addEventListener('ended', releaseUrl, { once: true });
-      audio.addEventListener('error', releaseUrl, { once: true });
-      await audio.play();
-    } catch (error) {
-      console.error('播放失败:', error);
+
+    const player = audioPlayerRef.current;
+    if (!player) return;
+
+    const isSameAudio = playbackState.currentSpeakerId === activeSpeakerId && playbackState.currentWordId === activeItem.id;
+
+    if (isSameAudio) {
+      if (playbackState.isPlaying) {
+        player.pause();
+      } else {
+        try {
+          await player.play();
+        } catch (error) {
+          console.error('播放失败:', error);
+        }
+      }
+    } else {
+      try {
+        player.pause();
+        const res = await apiFetch(`/audio/file?speaker_id=${encodeURIComponent(activeSpeakerId)}&word_id=${encodeURIComponent(activeItem.id)}&t=${Date.now()}`);
+        if (!res.ok) throw new Error('读取录音失败');
+
+        if (player.src && player.src.startsWith('blob:')) {
+          URL.revokeObjectURL(player.src);
+        }
+
+        const audioUrl = URL.createObjectURL(await res.blob());
+        player.src = audioUrl;
+
+        setPlaybackState({
+          isPlaying: false,
+          currentTime: 0,
+          duration: 0,
+          currentSpeakerId: activeSpeakerId,
+          currentWordId: activeItem.id
+        });
+
+        await player.play();
+      } catch (error) {
+        console.error('播放新音频失败:', error);
+      }
     }
   };
 
   const discardRecordedAudio = async () => {
     const activeItem = getActiveItem();
     if (!activeItem || !activeSpeakerId) return;
-    
+
     const recordMeta = speakers[activeSpeakerId]?.items?.[activeItem.id];
     if (!recordMeta) return;
-    
+
     const ok = await customConfirm('确定要丢弃当前词条的录音吗？');
     if (!ok) return;
-    
-    const updatedSpeakers = { ...speakers };
+
+    resetPlayback();
+    const updatedSpeakers = {
+      ...speakers,
+      [activeSpeakerId]: {
+        ...speakers[activeSpeakerId],
+        items: { ...speakers[activeSpeakerId].items },
+      },
+    };
     delete updatedSpeakers[activeSpeakerId].items[activeItem.id];
     setSpeakers(updatedSpeakers);
-    saveProjectState(updatedSpeakers);
-    
+    await saveProjectState(updatedSpeakers);
+
     setSpectrogramUrl('');
     setQualityResults(null);
     clearCanvas();
@@ -1127,16 +1685,16 @@ export default function App() {
     const ctx = canvas.getContext('2d');
     const width = canvas.width;
     const height = canvas.height;
-    
+
     ctx.fillStyle = '#f8fafc';
     ctx.fillRect(0, 0, width, height);
     ctx.lineWidth = 1.5;
     ctx.strokeStyle = '#10b981';
     ctx.beginPath();
-    
+
     const step = Math.ceil(floatBuffer.length / width);
     const amp = height / 2;
-    
+
     for (let i = 0; i < width; i++) {
       let min = 1.0;
       let max = -1.0;
@@ -1154,12 +1712,12 @@ export default function App() {
   const drawStaticWaveformFromUrl = async () => {
     const activeItem = getActiveItem();
     if (!activeItem || !activeSpeakerId) return;
-    
+
     try {
       const res = await apiFetch(`/audio/file?speaker_id=${encodeURIComponent(activeSpeakerId)}&word_id=${encodeURIComponent(activeItem.id)}`);
       if (!res.ok) return;
       const arrayBuffer = await res.arrayBuffer();
-      
+
       const AudioContext = window.AudioContext || window.webkitAudioContext;
       const tempCtx = new AudioContext();
       const audioBuffer = await tempCtx.decodeAudioData(arrayBuffer);
@@ -1173,7 +1731,7 @@ export default function App() {
 
   const navigateItem = (direction) => {
     if (displayedItems.length === 0) return;
-    
+
     let newIndex = activeItemIndex + direction;
     if (newIndex >= 0 && newIndex < displayedItems.length) {
       setActiveItemIndex(newIndex);
@@ -1184,12 +1742,12 @@ export default function App() {
   const activeItem = getActiveItem();
 
   return (
-    <div 
+    <div
       className="app-container"
       onDragOver={handleDragOver}
     >
       {/* Floating Toggle Button for Drawer Sidebar (Visible on small screens) */}
-      <button 
+      <button
         className={`sidebar-toggle-btn ${isLeftSidebarOpen ? 'drawer-open' : ''}`}
         onClick={() => setIsLeftSidebarOpen(!isLeftSidebarOpen)}
         title="展开/折叠发音人与字表"
@@ -1198,7 +1756,7 @@ export default function App() {
       </button>
 
       {/* Drawer Backdrop Overlay (Visible on small screens when drawer is open) */}
-      <div 
+      <div
         className={`drawer-backdrop ${isLeftSidebarOpen ? 'active' : ''}`}
         onClick={() => setIsLeftSidebarOpen(false)}
       ></div>
@@ -1213,7 +1771,7 @@ export default function App() {
             </svg>
             <div className="arrow-pulse"></div>
           </div>
-          
+
           <div className="mic-guidance-card">
             <div className="mic-guidance-icon-wrapper">
               <svg className={`mic-pulse-icon ${!micBlocked ? 'pulsing' : 'error'}`} width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1221,10 +1779,12 @@ export default function App() {
                 <path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8" />
               </svg>
             </div>
-            
+
             {micBlocked ? (
               <>
-                <h3>🎤 麦克风访问被拒绝</h3>
+                <h3 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', justifyContent: 'center' }}>
+                  <MicIcon active={false} /> 麦克风访问被拒绝
+                </h3>
                 <p>我们无法使用您的麦克风。请按照以下步骤重新授予权限：</p>
                 <div className="mic-guidance-steps">
                   <div>1. 点击窗口左上角的 <strong>设置/锁</strong> 按钮</div>
@@ -1237,7 +1797,9 @@ export default function App() {
               </>
             ) : (
               <>
-                <h3>🎤 请求麦克风使用权限</h3>
+                <h3 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', justifyContent: 'center' }}>
+                  <MicIcon active={true} /> 请求麦克风使用权限
+                </h3>
                 <p>为了支持 <strong>实时音量检测</strong> 和 <strong>音频质量检测</strong>，我们需要使用您的麦克风。</p>
                 <p className="mic-guidance-alert">请在窗口左上角弹出的系统提示中点击 <strong>「允许 (Allow)」</strong> 以继续。</p>
               </>
@@ -1248,11 +1810,11 @@ export default function App() {
 
       {/* Drag and Drop Visual Overlay */}
       {isDragging && (
-        <div 
-          className="modal-overlay" 
-          style={{ flexDirection: 'column', gap: '1rem', zIndex: 200 }} 
-          onDragLeave={handleDragLeave} 
-          onDrop={handleDrop} 
+        <div
+          className="modal-overlay"
+          style={{ flexDirection: 'column', gap: '1rem', zIndex: 200 }}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
           onDragOver={e => e.preventDefault()}
         >
           <ImportIcon style={{ width: '48px', height: '48px', color: 'var(--color-accent)' }} />
@@ -1267,7 +1829,7 @@ export default function App() {
 
       {/* Main Workspace (3 columns in sequential order) */}
       <main className="app-workspace">
-        
+
         {/* Column 1: Import and Speakers */}
         <section className={`glass-panel left-sidebar ${isLeftSidebarOpen ? 'drawer-open' : ''}`}>
           <div className="panel-header">
@@ -1281,12 +1843,12 @@ export default function App() {
               <button className="btn-primary" onClick={triggerWordlistUpload}>
                 <ImportIcon /> 导入字表
               </button>
-              <input 
-                type="file" 
-                ref={fileInputRef} 
-                style={{ display: 'none' }} 
-                accept=".ptwl,.txt,.csv" 
-                onChange={handleWordlistUpload} 
+              <input
+                type="file"
+                ref={fileInputRef}
+                style={{ display: 'none' }}
+                accept=".ptwl,.txt,.csv"
+                onChange={handleWordlistUpload}
               />
               <div className="info-card">
                 <div className="info-row">
@@ -1310,8 +1872,8 @@ export default function App() {
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
                   <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>列表角标:</span>
-                  <CustomSelect 
-                    value={badgeMetaKey} 
+                  <CustomSelect
+                    value={badgeMetaKey}
                     onChange={setBadgeMetaKey}
                     options={[
                       { value: 'none', label: '无' },
@@ -1323,8 +1885,8 @@ export default function App() {
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
                   <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>中心提示:</span>
-                  <CustomSelect 
-                    value={primaryMetaKey} 
+                  <CustomSelect
+                    value={primaryMetaKey}
                     onChange={setPrimaryMetaKey}
                     options={[
                       { value: 'none', label: '无' },
@@ -1345,11 +1907,11 @@ export default function App() {
                   + 添加
                 </button>
               </div>
-              
+
               <div className="speaker-list">
                 {Object.values(speakers).map(spk => (
-                  <div 
-                    key={spk.id} 
+                  <div
+                    key={spk.id}
                     className={`speaker-item ${activeSpeakerId === spk.id ? 'active' : ''}`}
                     onClick={() => {
                       setActiveSpeakerId(spk.id);
@@ -1422,7 +1984,7 @@ export default function App() {
 
         {/* Column 2: Merged Big Card (Word display & Word list) */}
         <section className="glass-panel main-recording-card" style={{ display: 'flex', flexDirection: 'row', padding: 0, minHeight: 0 }}>
-          
+
           {/* Left side: Big Word display & Buttons */}
           <div className="center-column" style={{ padding: '1.25rem', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
           {activeItem ? (
@@ -1430,14 +1992,14 @@ export default function App() {
               <span className="char-group-indicator">
                 当前: {activeItemIndex + 1} / {displayedItems.length}
               </span>
-              
+
               <div className="font-size-slider-container" title="调整字号大小">
                 <span style={{ fontSize: '0.75rem' }}>A</span>
-                <input 
-                  type="range" 
-                  min="60" 
-                  max="200" 
-                  value={charFontSize} 
+                <input
+                  type="range"
+                  min="60"
+                  max="200"
+                  value={charFontSize}
                   onChange={(e) => setCharFontSize(Number(e.target.value))}
                   className="font-size-slider"
                 />
@@ -1458,12 +2020,36 @@ export default function App() {
             </div>
           )}
 
+          {/* Playback Seek Bar */}
+          {activeItem && speakers[activeSpeakerId]?.items?.[activeItem.id] && (
+            <div className="playback-progress-container">
+              <input
+                type="range"
+                className="playback-slider"
+                min="0"
+                max={playbackState.duration || 100}
+                step="0.01"
+                value={playbackState.currentTime}
+                onChange={handleSeekChange}
+                disabled={
+                  isRecording
+                  || isProcessing
+                  || playbackState.currentSpeakerId !== activeSpeakerId
+                  || playbackState.currentWordId !== activeItem.id
+                }
+              />
+              <div className="playback-time">
+                {formatPlaybackTime(playbackState.currentTime)} / {formatPlaybackTime(playbackState.duration)}
+              </div>
+            </div>
+          )}
+
           {/* Controls Panel */}
           <div className="controls-card">
             <span className={`recording-status ${isRecording ? 'recording' : (isProcessing ? 'processing' : 'ready')}`}>
               {isRecording ? '录音中' : (isProcessing ? '处理中' : '准备就绪')}
             </span>
-            
+
             {/* VAD progress visualizer */}
             {recordingMode === 'vad' && (
               <div style={{ width: '240px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
@@ -1471,8 +2057,8 @@ export default function App() {
                   <MicIcon active={vadSpeaking} /> {vadSpeaking ? '说话中 (静音自动跳转)' : '静音中 (请发音)'}
                 </span>
                 <div className="vad-level-bar">
-                  <div 
-                    className={`vad-level-fill ${vadSpeaking ? 'speaking' : ''}`} 
+                  <div
+                    className={`vad-level-fill ${vadSpeaking ? 'speaking' : ''}`}
                     style={{ width: `${vadLevel}%` }}
                   ></div>
                 </div>
@@ -1481,20 +2067,24 @@ export default function App() {
 
             <div className="recording-buttons">
               {/* Play button */}
-              <button 
-                className="nav-arrow play-btn" 
-                onClick={playRecordedAudio} 
-                disabled={!activeItem || !speakers[activeSpeakerId]?.items?.[activeItem.id]}
+              <button
+                className="nav-arrow play-btn"
+                onClick={playRecordedAudio}
+                disabled={isRecording || isProcessing || !activeItem || !speakers[activeSpeakerId]?.items?.[activeItem.id]}
                 title="播放录音 (R键)"
               >
-                <PlayIcon />
+                {playbackState.isPlaying && playbackState.currentSpeakerId === activeSpeakerId && playbackState.currentWordId === activeItem?.id ? (
+                  <PauseIcon />
+                ) : (
+                  <PlayIcon />
+                )}
               </button>
 
               {/* Previous arrow */}
-              <button 
-                className="nav-arrow prev-btn" 
-                onClick={() => navigateItem(-1)} 
-                disabled={activeItemIndex === 0}
+              <button
+                className="nav-arrow prev-btn"
+                onClick={() => navigateItem(-1)}
+                disabled={isRecording || isProcessing || activeItemIndex === 0}
                 title="上一个 (左方向键)"
               >
                 <ChevronLeft />
@@ -1503,7 +2093,7 @@ export default function App() {
               {/* Record Button */}
               <div className="record-btn-wrapper">
                 <div className={`record-ring ${isRecording ? 'active' : ''}`}></div>
-                <button 
+                <button
                   className={`btn-record ${isRecording ? 'recording' : ''} ${isProcessing ? 'processing' : ''}`}
                   onMouseDown={recordingMode === 'hold' ? startRecording : null}
                   onMouseUp={recordingMode === 'hold' ? () => stopRecording(true) : null}
@@ -1519,20 +2109,20 @@ export default function App() {
               </div>
 
               {/* Next arrow */}
-              <button 
-                className="nav-arrow next-btn" 
+              <button
+                className="nav-arrow next-btn"
                 onClick={() => navigateItem(1)}
-                disabled={activeItemIndex === displayedItems.length - 1}
+                disabled={isRecording || isProcessing || activeItemIndex === displayedItems.length - 1}
                 title="下一个 (右方向键)"
               >
                 <ChevronRight />
               </button>
-              
+
               {/* Discard button */}
-              <button 
-                className="nav-arrow discard-btn" 
-                onClick={discardRecordedAudio} 
-                disabled={!activeItem || !speakers[activeSpeakerId]?.items?.[activeItem.id]}
+              <button
+                className="nav-arrow discard-btn"
+                onClick={discardRecordedAudio}
+                disabled={isRecording || isProcessing || !activeItem || !speakers[activeSpeakerId]?.items?.[activeItem.id]}
                 title="丢弃录音"
               >
                 <TrashIcon />
@@ -1559,12 +2149,12 @@ export default function App() {
               <BookIcon /> 字表词条
             </span>
           </div>
-          
+
           <div className="panel-body" style={{ padding: '0.75rem' }}>
             {/* Group selector - with "All" option */}
             <div className="word-group-selector" style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', marginBottom: '0.5rem' }}>
               <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>当前发音组:</span>
-              <CustomSelect 
+              <CustomSelect
                 style={{ width: '100%' }}
                 value={activeGroupIndex}
                 onChange={setActiveGroupIndex}
@@ -1584,15 +2174,15 @@ export default function App() {
                 const isActive = activeItemIndex === idx;
                 const recordMeta = speakers[activeSpeakerId]?.items?.[item.id];
                 const isRecorded = !!recordMeta;
-                
+
                 let itemClass = 'word-item';
                 if (isActive) itemClass += ' active';
                 if (isRecorded) itemClass += ' recorded';
-                
+
                 return (
-                  <div 
+                  <div
                     id={`word-item-${item.id}`}
-                    key={item.id} 
+                    key={item.id}
                     className={itemClass}
                     onClick={() => setActiveItemIndex(idx)}
                   >
@@ -1604,7 +2194,7 @@ export default function App() {
                         </span>
                       )}
                     </div>
-                    
+
                     <div className="word-item-info-row">
                       <div className="word-item-status-wrapper">
                         <span className="word-item-status-dot"></span>
@@ -1612,7 +2202,7 @@ export default function App() {
                           {isActive ? '录制中' : (isRecorded ? '已录制' : '未录制')}
                         </span>
                       </div>
-                      
+
                       {/* Detailed quality labels */}
                       {isRecorded && recordMeta.quality && (
                         <div className="word-item-quality-tags">
@@ -1627,8 +2217,8 @@ export default function App() {
                           {recordMeta.quality.creak.abnormal && (
                             <span className="quality-tag warning">嘎裂</span>
                           )}
-                          {!recordMeta.quality.clipping.abnormal && 
-                           recordMeta.quality.volume.status === 'normal' && 
+                          {!recordMeta.quality.clipping.abnormal &&
+                           recordMeta.quality.volume.status === 'normal' &&
                            !recordMeta.quality.creak.abnormal && (
                             <span className="quality-tag normal">优质</span>
                           )}
@@ -1650,10 +2240,18 @@ export default function App() {
 
         {/* Column 4: Visualizer & Quality Control */}
         <section className="glass-panel right-column">
-          <div className="panel-header">
+          <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span className="panel-title">
               <CheckIcon /> 检测与配置
             </span>
+            <button
+              className="btn-icon"
+              onClick={() => setShowSettingsModal(true)}
+              title="设置"
+              style={{ padding: '0.2rem', display: 'flex', alignItems: 'center' }}
+            >
+              <GearIcon />
+            </button>
           </div>
 
           <div className="panel-body">
@@ -1664,10 +2262,10 @@ export default function App() {
                   <CheckIcon /> 实时质量检测
                 </span>
                 <label className="switch">
-                  <input 
-                    type="checkbox" 
+                  <input
+                    type="checkbox"
                     checked={qualityChecksEnabled}
-                    onChange={(e) => setQualityChecksEnabled(e.target.checked)}
+                    onChange={(e) => updateQualityChecksEnabled(e.target.checked)}
                   />
                   <span className="slider"></span>
                 </label>
@@ -1681,20 +2279,20 @@ export default function App() {
                     <span>{liveVolume}%</span>
                   </div>
                   <div className="live-volume-bar">
-                    <div 
-                      className="live-volume-fill" 
+                    <div
+                      className="live-volume-fill"
                       style={{ width: `${liveVolume}%` }}
                     ></div>
                   </div>
                 </div>
               )}
-              
+
               <div className="quality-grid">
                 <div className="quality-item">
                   <span>音量检测</span>
                   <div className="quality-indicator">
                     <span className={`indicator-led ${
-                      !qualityChecksEnabled || !qualityResults ? '' : 
+                      !qualityChecksEnabled || !qualityResults ? '' :
                       (qualityResults.volume.status === 'normal' ? 'green' : 'orange')
                     }`}></span>
                     <span style={{ color: 'var(--text-secondary)' }}>
@@ -1706,7 +2304,7 @@ export default function App() {
                   <span>嘎裂声</span>
                   <div className="quality-indicator">
                     <span className={`indicator-led ${
-                      !qualityChecksEnabled || !qualityResults ? '' : 
+                      !qualityChecksEnabled || !qualityResults ? '' :
                       (qualityResults.creak.abnormal ? 'red' : 'green')
                     }`}></span>
                     <span style={{ color: 'var(--text-secondary)' }}>
@@ -1718,7 +2316,7 @@ export default function App() {
                   <span>音频截断</span>
                   <div className="quality-indicator">
                     <span className={`indicator-led ${
-                      !qualityChecksEnabled || !qualityResults ? '' : 
+                      !qualityChecksEnabled || !qualityResults ? '' :
                       (qualityResults.clipping.abnormal ? 'red' : 'green')
                     }`}></span>
                     <span style={{ color: 'var(--text-secondary)' }}>
@@ -1732,29 +2330,29 @@ export default function App() {
             {/* Visualizer panel */}
             <div className="info-card visualizer-card" style={{ padding: 0 }}>
               <div className="visualizer-tabs">
-                <button 
+                <button
                   className={`tab-btn ${visualizerTab === 'waveform' ? 'active' : ''}`}
-                  onClick={() => setVisualizerTab('waveform')}
+                  onClick={() => updateVisualizerTab('waveform')}
                 >
                   波形图
                 </button>
-                <button 
+                <button
                   className={`tab-btn ${visualizerTab === 'spectrogram' ? 'active' : ''}`}
-                  onClick={() => setVisualizerTab('spectrogram')}
+                  onClick={() => updateVisualizerTab('spectrogram')}
                 >
                   语谱图
                 </button>
               </div>
-              
+
               <div className="visualizer-viewport">
-                <canvas 
-                  ref={canvasRef} 
+                <canvas
+                  ref={canvasRef}
                   className="visualizer-canvas"
                   style={{ display: visualizerTab === 'waveform' ? 'block' : 'none' }}
                   width={300}
                   height={150}
                 />
-                
+
                 {visualizerTab === 'spectrogram' && (
                   spectrogramUrl ? (
                     <img src={spectrogramUrl} alt="语谱图" className="visualizer-image" />
@@ -1773,17 +2371,16 @@ export default function App() {
                 <MicIcon active={isRecording} /> 录音模式设置
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
-                  <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>模式:</span>
-                  <CustomSelect 
-                    value={recordingMode} 
-                    onChange={setRecordingMode}
+                <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
+                  <CustomSelect
+                    value={recordingMode}
+                    onChange={updateRecordingMode}
                     options={[
                       { value: 'hold', label: '按住 (对讲机)' },
                       { value: 'click', label: '点击开关' },
                       { value: 'vad', label: '智能 VAD 跳转' }
                     ]}
-                    style={{ minWidth: '160px' }}
+                    style={{ width: '100%' }}
                   />
                 </div>
               </div>
@@ -1794,25 +2391,25 @@ export default function App() {
               <div className="switch-container" style={{ marginBottom: '0.4rem' }}>
                 <span>随机排序录制</span>
                 <label className="switch">
-                  <input 
-                    type="checkbox" 
+                  <input
+                    type="checkbox"
                     checked={randomizeOrder}
-                    onChange={(e) => setRandomizeOrder(e.target.checked)}
+                    onChange={(e) => updateRandomizeOrder(e.target.checked)}
                   />
                   <span className="slider"></span>
                 </label>
               </div>
-              
+
               <div className="project-action-row">
-                <button className="btn-secondary" style={{ fontSize: '0.8rem' }} onClick={triggerProjectUpload}>
+                <button className="btn-secondary" style={{ fontSize: '0.8rem' }} onClick={handleImportButtonClick}>
                   <ImportIcon /> 导入
                 </button>
-                <input 
-                  type="file" 
-                  ref={projectInputRef} 
-                  style={{ display: 'none' }} 
-                  accept=".teproj" 
-                  onChange={handleProjectUpload} 
+                <input
+                  type="file"
+                  ref={projectInputRef}
+                  style={{ display: 'none' }}
+                  accept=".teproj"
+                  onChange={handleProjectUpload}
                 />
                 <button className="btn-primary" style={{ fontSize: '0.8rem' }} onClick={handleProjectExport}>
                   <ExportIcon /> 保存
@@ -1827,6 +2424,352 @@ export default function App() {
 
       </main>
 
+      {/* Settings Modal */}
+      {showSettingsModal && (
+        <div className="modal-overlay" style={{ zIndex: 9999 }}>
+          <div className="modal-content settings-modal">
+            <div className="modal-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontWeight: 650, fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <GearIcon /> 设置
+              </span>
+              <button
+                className="btn-icon"
+                onClick={() => setShowSettingsModal(false)}
+                style={{ fontSize: '1.2rem', padding: '0.2rem' }}
+              >
+                &times;
+              </button>
+            </div>
+
+            <div className="modal-body" style={{ padding: '1rem 1.25rem' }}>
+              <div className="settings-tabs">
+                <button
+                  className={`settings-tab-btn ${activeSettingsTab === 'behavior' ? 'active' : ''}`}
+                  onClick={() => setActiveSettingsTab('behavior')}
+                >
+                  默认行为
+                </button>
+                <button
+                  className={`settings-tab-btn ${activeSettingsTab === 'recording' ? 'active' : ''}`}
+                  onClick={() => setActiveSettingsTab('recording')}
+                >
+                  录音
+                </button>
+                <button
+                  className={`settings-tab-btn ${activeSettingsTab === 'storage' ? 'active' : ''}`}
+                  onClick={() => setActiveSettingsTab('storage')}
+                >
+                  保存形式
+                </button>
+                <button
+                  className={`settings-tab-btn ${activeSettingsTab === 'permission' ? 'active' : ''}`}
+                  onClick={() => setActiveSettingsTab('permission')}
+                >
+                  权限
+                </button>
+              </div>
+
+              <div className="settings-form">
+                {activeSettingsTab === 'behavior' && (
+                  <div className="settings-grid">
+                    <div className="form-group">
+                      <label className="form-label"><ChartIcon /> 默认图形</label>
+                      <CustomSelect
+                        value={visualizerTab}
+                        onChange={updateVisualizerTab}
+                        disabled={isRecording || isProcessing}
+                        options={[
+                          { value: 'waveform', label: '波形图' },
+                          { value: 'spectrogram', label: '语谱图' }
+                        ]}
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label"><BookIcon /> 录制顺序</label>
+                      <CustomSelect
+                        value={randomizeOrder ? 'random' : 'wordlist'}
+                        onChange={(val) => updateRandomizeOrder(val === 'random')}
+                        disabled={isRecording || isProcessing}
+                        options={[
+                          { value: 'wordlist', label: '字表顺序' },
+                          { value: 'random', label: '随机顺序' }
+                        ]}
+                      />
+                    </div>
+                    <div className="form-group settings-grid-full">
+                      <div className="switch-container">
+                        <span className="form-label" style={{ margin: 0 }}><CheckIcon /> 实时质量检测</span>
+                        <label className="switch">
+                          <input
+                            type="checkbox"
+                            checked={qualityChecksEnabled}
+                            disabled={isRecording || isProcessing}
+                            onChange={(e) => updateQualityChecksEnabled(e.target.checked)}
+                          />
+                          <span className="slider"></span>
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {activeSettingsTab === 'recording' && (
+                  <div className="settings-grid">
+                    <div className="form-group">
+                      <label className="form-label"><MicIcon active={isRecording} /> 录音模式</label>
+                      <CustomSelect
+                        value={recordingMode}
+                        onChange={updateRecordingMode}
+                        disabled={isRecording || isProcessing}
+                        options={[
+                          { value: 'click', label: '点击开关' },
+                          { value: 'hold', label: '按住 (对讲机)' },
+                          { value: 'vad', label: '智能 VAD 跳转' }
+                        ]}
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label"><FormatIcon /> 采样率</label>
+                      <CustomSelect
+                        value={String(sampleRateSetting)}
+                        onChange={updateSampleRateSetting}
+                        disabled={isRecording || isProcessing}
+                        options={[
+                          { value: '16000', label: '16 kHz (推荐)' },
+                          { value: '44100', label: '44.1 kHz' },
+                          { value: '48000', label: '48 kHz' }
+                        ]}
+                      />
+                    </div>
+                    <div className="form-group settings-grid-full">
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <label className="form-label"><MicIcon active={isRecording} /> 录音源</label>
+                        <button
+                          className="btn-secondary"
+                          style={{ padding: '0.1rem 0.4rem', fontSize: '0.7rem' }}
+                          onClick={() => fetchAudioDevices(selectedDeviceId)}
+                          disabled={isRecording || isProcessing}
+                        >
+                          刷新设备
+                        </button>
+                      </div>
+                      <CustomSelect
+                        value={selectedDeviceId}
+                        onChange={updateSelectedDeviceId}
+                        disabled={isRecording || isProcessing}
+                        options={audioDevices.map(d => ({ value: d.id, label: d.name }))}
+                      />
+                      {selectedDeviceId.startsWith('loopback:') && (
+                        <div style={{ fontSize: '0.72rem', color: 'var(--color-accent)', marginTop: '0.2rem', display: 'flex', alignItems: 'center' }}>
+                          <InfoIcon /> 提示：系统声音回环录制仅在 Windows 系统下支持。
+                        </div>
+                      )}
+                    </div>
+                    <div className="form-group" style={{ opacity: 0.7 }}>
+                      <label className="form-label"><FormatIcon /> 声道 (只读)</label>
+                      <input type="text" className="form-input" value="单声道 (Mono)" readOnly />
+                    </div>
+                    <div className="form-group" style={{ opacity: 0.7 }}>
+                      <label className="form-label"><FormatIcon /> 格式 (只读)</label>
+                      <input type="text" className="form-input" value="16位 PCM WAV" readOnly />
+                    </div>
+                  </div>
+                )}
+
+                {activeSettingsTab === 'storage' && (
+                  <div className="settings-grid">
+                    <div className="form-group settings-grid-full">
+                      <label className="form-label"><SaveIcon /> 保存形式</label>
+                      <CustomSelect
+                        value={saveFormatSetting}
+                        onChange={updateSaveFormatSetting}
+                        disabled={isRecording || isProcessing}
+                        options={[
+                          { value: 'teproj', label: '.teproj 工程归档' },
+                          { value: 'folder', label: '外部目录文件夹' }
+                        ]}
+                      />
+                    </div>
+                    {saveFormatSetting === 'folder' && (
+                      <div className="form-group settings-grid-full">
+                        <label className="form-label"><FolderIcon /> 导出文件夹路径</label>
+                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                          <input
+                            type="text"
+                            className="form-input"
+                            value={folderPathSetting}
+                            style={{ flex: 1, textOverflow: 'ellipsis' }}
+                            readOnly
+                            placeholder="请选择保存目录..."
+                          />
+                          <button
+                            className="btn-secondary"
+                            style={{ borderRadius: '9999px', padding: '0.4rem 1rem', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
+                            disabled={isRecording || isProcessing}
+                            onClick={async () => {
+                              const selected = await open({ directory: true, multiple: false });
+                              if (selected) {
+                                updateFolderPathSetting(selected);
+                              }
+                            }}
+                          >
+                            选择
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {activeSettingsTab === 'permission' && (
+                  <div className="settings-grid">
+                    <div className="form-group settings-grid-full">
+                      <label className="form-label"><CheckIcon /> 麦克风权限状态</label>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem' }}>
+                        <span className={`indicator-led ${micBlocked === true ? 'red' : micBlocked === false ? 'green' : ''}`}></span>
+                        <span>
+                          {selectedDeviceId.startsWith('loopback:')
+                            ? '系统声音录制无需麦克风权限'
+                            : micBlocked === true
+                              ? '被拒绝 / 未授权'
+                              : micBlocked === false
+                                ? '已授权使用'
+                                : '尚未检测'}
+                        </span>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '0.5rem' }} className="settings-grid-full">
+                      <button
+                        className="btn-primary"
+                        style={{ fontSize: '0.8rem', padding: '0.5rem 1rem', justifyContent: 'center' }}
+                        onClick={async () => {
+                          try {
+                            if (selectedDeviceId.startsWith('loopback:')) {
+                              await customAlert('当前使用系统声音回环，不需要麦克风权限。');
+                              return;
+                            }
+                            await closeMicStream();
+                            const permission = navigator.permissions?.query
+                              ? await navigator.permissions.query({ name: 'microphone' })
+                              : null;
+                            if (permission?.state === 'denied') {
+                              await invoke('reset_microphone_permission');
+                              await customAlert('已清除应用内的权限拒绝记录。界面刷新后将重新请求麦克风权限；如果系统仍然阻止，请在下方打开系统隐私设置。');
+                              window.location.reload();
+                              return;
+                            }
+                            await ensureMicStream(selectedDeviceId, { force: true });
+                            await fetchAudioDevices(selectedDeviceId);
+                            await customAlert('麦克风权限检测成功！');
+                          } catch (error) {
+                            console.error('重新请求麦克风权限失败:', error);
+                            await customAlert('麦克风请求失败，请确保设备存在并允许权限。');
+                          }
+                        }}
+                      >
+                        <CheckIcon /> 重新检测并请求权限
+                      </button>
+                      <button
+                        className="btn-secondary"
+                        style={{ fontSize: '0.8rem', padding: '0.5rem 1rem', justifyContent: 'center' }}
+                        onClick={async () => {
+                          try {
+                            await invoke('open_system_permission_settings');
+                          } catch (err) {
+                            await customAlert('无法打开系统权限设置：' + err);
+                          }
+                        }}
+                      >
+                        <GearIcon /> 打开系统隐私设置
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="modal-footer" style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
+              <button
+                className="btn-secondary"
+                style={{ padding: '0.4rem 1.25rem', fontSize: '0.85rem', color: 'var(--color-danger)', borderColor: 'var(--border-color)' }}
+                disabled={isRecording || isProcessing}
+                onClick={async () => {
+                  const ok = await customConfirm('确定要恢复所有设置到默认值吗？');
+                  if (!ok) return;
+                  try {
+                    const defaults = await invoke('reset_settings');
+                    setQualityChecksEnabled(defaults.realtime_quality);
+                    setVisualizerTab(defaults.default_plot);
+                    setRecordingMode(defaults.record_mode);
+                    setSelectedDeviceId(defaults.record_source);
+                    setSampleRateSetting(defaults.sample_rate);
+                    setSaveFormatSetting(defaults.save_format);
+                    setFolderPathSetting(defaults.folder_path);
+                    setRandomizeOrder(defaults.record_order === 'random');
+                    await customAlert('设置已恢复默认值');
+                  } catch (err) {
+                    await customAlert('恢复默认设置失败：' + err);
+                  }
+                }}
+              >
+                <ResetIcon /> 恢复默认
+              </button>
+              <button
+                className="btn-primary"
+                style={{ padding: '0.4rem 1.5rem', fontSize: '0.85rem' }}
+                onClick={() => setShowSettingsModal(false)}
+              >
+                关闭
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Import Choice Modal */}
+      {showImportModal && (
+        <div className="modal-overlay" style={{ zIndex: 9999 }}>
+          <div className="modal-content" style={{ maxWidth: '380px' }}>
+            <div className="modal-header">
+              <span style={{ fontWeight: 650, fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <ImportIcon /> 导入工程
+              </span>
+            </div>
+            <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', padding: '1.25rem 1rem' }}>
+              <button
+                className="btn-primary"
+                style={{ justifyContent: 'center', padding: '0.6rem 1rem', fontSize: '0.85rem' }}
+                onClick={() => {
+                  setShowImportModal(false);
+                  triggerProjectUpload();
+                }}
+              >
+                导入 .teproj 工程文件
+              </button>
+              <button
+                className="btn-secondary"
+                style={{ justifyContent: 'center', padding: '0.6rem 1rem', fontSize: '0.85rem' }}
+                onClick={() => {
+                  setShowImportModal(false);
+                  handleImportFolder();
+                }}
+              >
+                导入工程文件夹目录
+              </button>
+            </div>
+            <div className="modal-footer" style={{ padding: '0.75rem 1rem' }}>
+              <button
+                className="btn-secondary"
+                style={{ padding: '0.4rem 1.25rem', fontSize: '0.8rem' }}
+                onClick={() => setShowImportModal(false)}
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Custom Confirm/Alert Dialog Modal */}
       {confirmDialog && (
         <div className="modal-overlay" style={{ zIndex: 9999 }}>
@@ -1840,8 +2783,8 @@ export default function App() {
             </div>
             <div className="modal-footer" style={{ borderTop: '1px solid var(--border-color)', padding: '0.75rem 1rem', display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
               {confirmDialog.onCancel && (
-                <button 
-                  className="btn-secondary" 
+                <button
+                  className="btn-secondary"
                   style={{ padding: '0.4rem 1.25rem', fontSize: '0.8rem' }}
                   onClick={() => {
                     confirmDialog.onCancel();
@@ -1851,8 +2794,8 @@ export default function App() {
                   取消
                 </button>
               )}
-              <button 
-                className="btn-primary" 
+              <button
+                className="btn-primary"
                 style={{ padding: '0.4rem 1.25rem', fontSize: '0.8rem' }}
                 onClick={() => {
                   confirmDialog.onConfirm();
