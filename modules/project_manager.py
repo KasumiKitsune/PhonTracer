@@ -11,73 +11,22 @@ import traceback
 import time
 from .version import __version__
 
-MAX_ARCHIVE_MEMBERS = 10000
-MAX_ARCHIVE_MEMBER_BYTES = 2 * 1024 * 1024 * 1024
-MAX_ARCHIVE_TOTAL_BYTES = 20 * 1024 * 1024 * 1024
-MAX_PROJECT_JSON_BYTES = 20 * 1024 * 1024
-SUPPORTED_PROJECT_VERSIONS = {"1.0"}
-
-def validate_project_version(state):
-    version = str(state.get("version", "1.0"))
-    if version not in SUPPORTED_PROJECT_VERSIONS:
-        raise ValueError(f"不支持的工程版本：{version}")
-    return version
-
-def validate_project_archive_members(zip_file):
-    infos = zip_file.infolist()
-    if len(infos) > MAX_ARCHIVE_MEMBERS:
-        raise ValueError(f"工程文件包含过多成员：{len(infos)} 个")
-
-    seen = set()
-    total_size = 0
-    for member in infos:
-        normalized = member.filename.replace("\\", "/")
-        if not normalized:
-            raise ValueError("工程文件包含空路径成员")
-        if normalized in seen:
-            raise ValueError(f"工程文件包含重复成员：{normalized}")
-        seen.add(normalized)
-
-        parts = [part for part in normalized.split("/") if part not in ("", ".")]
-        if normalized.startswith("/") or any(part == ".." for part in parts):
-            raise ValueError("工程文件包含非法路径")
-        if len(normalized) >= 2 and normalized[1] == ":":
-            raise ValueError("工程文件包含非法路径")
-
-        file_type = (member.external_attr >> 16) & 0o170000
-        if file_type == stat.S_IFLNK:
-            raise ValueError("工程文件不能包含符号链接")
-        if member.file_size > MAX_ARCHIVE_MEMBER_BYTES:
-            raise ValueError(f"工程文件成员过大：{normalized}")
-        total_size += member.file_size
-        if total_size > MAX_ARCHIVE_TOTAL_BYTES:
-            raise ValueError("工程文件解压后的总大小超过限制")
-
-    return infos
-
-def read_project_metadata_from_archive(zip_path):
-    if not zipfile.is_zipfile(zip_path):
-        raise ValueError("该文件不是有效的工程压缩包 (ZIP/teproj)")
-
-    with zipfile.ZipFile(zip_path, "r") as zip_file:
-        infos = validate_project_archive_members(zip_file)
-        info_by_name = {info.filename.replace("\\", "/"): info for info in infos}
-        project_info = info_by_name.get("project.json")
-        if project_info is None:
-            raise ValueError("工程文件损坏：未找到 project.json")
-        if project_info.file_size > MAX_PROJECT_JSON_BYTES:
-            raise ValueError("工程文件中的 project.json 过大")
-
-        with zip_file.open(project_info) as project_file:
-            raw = project_file.read(MAX_PROJECT_JSON_BYTES + 1)
-        if len(raw) > MAX_PROJECT_JSON_BYTES:
-            raise ValueError("工程文件中的 project.json 过大")
-
-    state = json.loads(raw.decode("utf-8"))
-    if not isinstance(state, dict):
-        raise ValueError("工程文件损坏：project.json 顶层必须是对象")
-    validate_project_version(state)
-    return state, [info.filename.replace("\\", "/") for info in infos]
+from .project_adaptor import (
+    MAX_ARCHIVE_MEMBERS,
+    MAX_ARCHIVE_MEMBER_BYTES,
+    MAX_ARCHIVE_TOTAL_BYTES,
+    MAX_PROJECT_JSON_BYTES,
+    SUPPORTED_PROJECT_VERSIONS,
+    validate_project_version,
+    validate_project_archive_members,
+    read_project_metadata_from_archive,
+    safe_extract_zip,
+    resolve_workspace_path,
+    adapt_project_state,
+    prune_unreferenced_resources,
+    validate_project_resources,
+    _iter_state_resource_refs
+)
 
 def to_json_serializable(val):
     if isinstance(val, dict):
@@ -232,48 +181,6 @@ class ProjectManager:
             copy_cache[cache_key] = rel_path
         return rel_path
 
-    def _add_managed_ref(self, refs, rel_path):
-        if not rel_path:
-            return
-        norm = str(rel_path).replace("\\", "/")
-        if norm.startswith("audio/") or norm.startswith("data/"):
-            refs.add(norm)
-
-    def _collect_project_file_refs(self, state):
-        refs = set()
-        for spk_data in state.get("speakers", {}).values():
-            self._add_managed_ref(refs, spk_data.get("long_audio_path"))
-            for path in spk_data.get("pending_batch_paths", []):
-                self._add_managed_ref(refs, path)
-            for item in spk_data.get("items", {}).values():
-                self._add_managed_ref(refs, item.get("path"))
-                self._add_managed_ref(refs, item.get("pitch_data_file"))
-                self._add_managed_ref(refs, item.get("formant_data_file"))
-        return refs
-
-    def _prune_unused_workspace_files(self, referenced_files):
-        for subdir in ("audio", "data"):
-            root_dir = os.path.join(self.workspace_dir, subdir)
-            if not os.path.isdir(root_dir):
-                continue
-
-            for root, dirs, files in os.walk(root_dir, topdown=False):
-                for file in files:
-                    file_path = os.path.join(root, file)
-                    rel_path = os.path.relpath(file_path, self.workspace_dir).replace(os.sep, "/")
-                    if rel_path not in referenced_files:
-                        try:
-                            os.remove(file_path)
-                        except OSError as e:
-                            print(f"Failed to remove unused workspace file {file_path}: {e}")
-
-                for dir_name in dirs:
-                    dir_path = os.path.join(root, dir_name)
-                    try:
-                        if not os.listdir(dir_path):
-                            os.rmdir(dir_path)
-                    except OSError:
-                        pass
 
     def _iter_project_archive_files(self):
         project_json = os.path.join(self.workspace_dir, "project.json")
@@ -445,6 +352,10 @@ class ProjectManager:
                 "speakers": {},
                 "custom_script_runs": getattr(self.app, "custom_script_runs", [])
             }
+            if getattr(self, "imported_groups", None) is not None:
+                state["groups"] = self.imported_groups
+            if getattr(self, "imported_phonrec", None) is not None:
+                state["phonrec"] = self.imported_phonrec
 
             data_dir = self._get_data_dir()
             audio_dir = self._get_audio_dir()
@@ -547,7 +458,7 @@ class ProjectManager:
             except Exception as e:
                 print(f"Failed to write autosave meta: {e}")
 
-            self._prune_unused_workspace_files(self._collect_project_file_refs(serializable_state))
+            prune_unreferenced_resources(serializable_state, self.workspace_dir)
             for obj, attr_name, value in runtime_attr_updates:
                 setattr(obj, attr_name, value)
             for item, key, value in runtime_item_path_updates:
@@ -561,6 +472,9 @@ class ProjectManager:
             print(f"Failed to create backup: {e}")
 
     def export_project(self, zip_path):
+        if not self.app.speaker_manager.speakers:
+            self._show_error("导出失败", "未添加发音人，禁止导出兼容的工程归档")
+            return False
         try:
             # Force a save to workspace first
             self.save_to_workspace()
@@ -599,72 +513,16 @@ class ProjectManager:
             return normalized
         raise ValueError(f"工程文件损坏：{field_name} 不是工程内资源路径")
 
-    def _iter_state_resource_refs(self, state):
-        for spk_data in state.get("speakers", {}).values():
-            long_audio_path = spk_data.get("long_audio_path")
-            if long_audio_path:
-                yield spk_data, "long_audio_path", None, self._normalize_managed_ref(long_audio_path, "long_audio_path")
-            for idx, path in enumerate(spk_data.get("pending_batch_paths", [])):
-                yield spk_data, "pending_batch_paths", idx, self._normalize_managed_ref(path, "pending_batch_paths")
-            for item in spk_data.get("items", {}).values():
-                for key in ("path", "pitch_data_file", "formant_data_file"):
-                    path = item.get(key)
-                    if path:
-                        yield item, key, None, self._normalize_managed_ref(path, key)
 
     def _validate_project_resources(self, state, workspace_dir):
-        speakers = state.get("speakers")
-        if not isinstance(speakers, dict) or not speakers:
-            raise ValueError("工程文件损坏：未找到发音人数据")
-
-        speaker_ids = []
-        for old_spk_id, spk_data in speakers.items():
-            if not isinstance(spk_data, dict):
-                raise ValueError(f"工程文件损坏：发音人 {old_spk_id} 数据格式错误")
-            speaker_id = spk_data.get("id", old_spk_id)
-            if not isinstance(speaker_id, str) or not speaker_id:
-                raise ValueError(f"工程文件损坏：发音人 {old_spk_id} 的 ID 格式错误")
-            speaker_ids.append(speaker_id)
-            pending_batch_paths = spk_data.get("pending_batch_paths", [])
-            if not isinstance(pending_batch_paths, list):
-                raise ValueError(f"工程文件损坏：发音人 {old_spk_id} 的批量音频路径格式错误")
-            items = spk_data.get("items", {})
-            if not isinstance(items, dict):
-                raise ValueError(f"工程文件损坏：发音人 {old_spk_id} 的条目格式错误")
-            if any(not isinstance(item, dict) for item in items.values()):
-                raise ValueError(f"工程文件损坏：发音人 {old_spk_id} 的条目内容格式错误")
-        if len(set(speaker_ids)) != len(speaker_ids):
-            raise ValueError("工程文件损坏：存在重复的发音人 ID")
-
-        audio_paths = set()
-        cache_paths = {}
-        for _owner, key, _index, rel_path in self._iter_state_resource_refs(state):
-            file_path = self._resolve_project_path(rel_path, workspace_dir=workspace_dir)
-            if not os.path.isfile(file_path):
-                raise FileNotFoundError(f"工程文件缺少资源：{rel_path}")
-            if rel_path.startswith("audio/"):
-                audio_paths.add(file_path)
-            elif key == "pitch_data_file":
-                cache_paths[file_path] = ("xs", "freqs")
-            elif key == "formant_data_file":
-                cache_paths[file_path] = ("xs", "f1", "f2")
-
-        import parselmouth
-        for audio_path in sorted(audio_paths):
-            parselmouth.Sound(audio_path)
-
-        for cache_path, required_keys in cache_paths.items():
-            with np.load(cache_path) as loaded:
-                missing = [key for key in required_keys if key not in loaded]
-                if missing:
-                    raise ValueError(f"工程缓存损坏：{os.path.basename(cache_path)} 缺少 {', '.join(missing)}")
+        validate_project_resources(state, workspace_dir)
 
     def _copy_overlay_resources(self, state, import_workspace, merged_workspace):
         remapped_state = copy.deepcopy(state)
         ref_mapping = {}
         namespace = f"import_{uuid.uuid4().hex[:12]}"
 
-        for owner, key, index, rel_path in self._iter_state_resource_refs(remapped_state):
+        for owner, key, index, rel_path in _iter_state_resource_refs(remapped_state):
             mapped_path = ref_mapping.get(rel_path)
             if mapped_path is None:
                 subdir, file_name = rel_path.split("/", 1)
@@ -743,13 +601,16 @@ class ProjectManager:
             state, _namelist = read_project_metadata_from_archive(zip_path)
             temp_workspace = self._make_import_workspace()
             with zipfile.ZipFile(zip_path, 'r') as zf:
-                self._safe_extract(zf, temp_workspace)
+                safe_extract_zip(zf, temp_workspace)
+
+            # Adapt project state and resource paths in temp workspace
+            state, warnings, summary = adapt_project_state(state, temp_workspace)
 
             project_json = os.path.join(temp_workspace, "project.json")
-            if not os.path.exists(project_json):
-                raise ValueError("工程文件损坏：未找到 project.json")
+            with open(project_json, "w", encoding="utf-8") as f:
+                json.dump(state, f, ensure_ascii=False, indent=2)
 
-            self._validate_project_resources(state, temp_workspace)
+            validate_project_resources(state, temp_workspace)
 
             with self._save_lock:
                 old_speakers = dict(self.app.speaker_manager.speakers)
@@ -771,7 +632,9 @@ class ProjectManager:
                     self._remap_restored_workspace_paths(restored, old_staged_workspace, self.workspace_dir)
                     self._apply_restored_state(restored, active_id, overlay=False)
                     self._restore_app_state(state)
-                    self._prune_unused_workspace_files(self._collect_project_file_refs(state))
+                    self.imported_groups = state.get("groups")
+                    self.imported_phonrec = state.get("phonrec")
+                    prune_unreferenced_resources(state, self.workspace_dir)
                 else:
                     staged_workspace = self._make_import_workspace(prefix="workspace_overlay")
                     if os.path.exists(self.workspace_dir):
@@ -787,6 +650,8 @@ class ProjectManager:
                     staged_workspace = None
                     self._remap_restored_workspace_paths(restored, old_staged_workspace, self.workspace_dir)
                     self._apply_restored_state(restored, active_id, overlay=True)
+                    self.imported_groups = remapped_state.get("groups")
+                    self.imported_phonrec = remapped_state.get("phonrec")
                     self.save_to_workspace()
 
                 self._discard_workspace_backup(backup_workspace)
@@ -818,8 +683,16 @@ class ProjectManager:
                 raise ValueError("未找到 project.json")
             with open(project_json, "r", encoding="utf-8") as f:
                 state = json.load(f)
+
+            # Run compatibility adaptation on workspace!
+            state, warnings, summary = adapt_project_state(state, self.workspace_dir)
+            with open(project_json, "w", encoding="utf-8") as f:
+                json.dump(state, f, ensure_ascii=False, indent=2)
+
             with self._save_lock:
-                self._validate_project_resources(state, self.workspace_dir)
+                validate_project_resources(state, self.workspace_dir)
+                self.imported_groups = state.get("groups")
+                self.imported_phonrec = state.get("phonrec")
                 self._restore_state(state, overlay=False)
                 self._restore_app_state(state)
                 # Restore the project path if autosave_meta.json exists

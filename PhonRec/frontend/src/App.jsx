@@ -254,6 +254,7 @@ export default function App() {
   const [activeSettingsTab, setActiveSettingsTab] = useState('behavior');
 
   const [showImportModal, setShowImportModal] = useState(false);
+  const [importResult, setImportResult] = useState(null);
 
   const [playbackState, setPlaybackState] = useState({
     isPlaying: false,
@@ -996,24 +997,36 @@ export default function App() {
     }
   };
 
-  const saveProjectState = async (updatedSpeakers, updatedGroups = groupsRef.current) => {
+  const saveProjectState = async (updatedSpeakers, updatedGroups = groupsRef.current, customActiveSpeakerId = null) => {
     const state = {
       version: "1.0",
       software_version: "PhonRec-1.0.0",
       save_time: new Date().toISOString(),
-      active_speaker_id: activeSpeakerIdRef.current,
+      active_speaker_id: customActiveSpeakerId !== null ? customActiveSpeakerId : activeSpeakerIdRef.current,
       speakers: updatedSpeakers,
       groups: updatedGroups
     };
 
     try {
-      await apiFetch('/project/state', {
+      const res = await apiFetch('/project/state', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(state)
       });
+      if (!res.ok) {
+        let errMsg = 'API Error';
+        try {
+          const data = await res.json();
+          if (data && data.detail) errMsg = data.detail;
+        } catch (err) {
+          console.error('Failed to parse error response:', err);
+        }
+        throw new Error(errMsg);
+      }
     } catch (err) {
       console.error('Failed to save project state:', err);
+      await customAlert(`保存项目状态失败：${err.message || err}`);
+      throw err;
     }
   };
 
@@ -1025,7 +1038,7 @@ export default function App() {
   const getCompletedCount = () => {
     if (!activeSpeakerId || !speakers[activeSpeakerId]) return 0;
     const items = speakers[activeSpeakerId].items || {};
-    return Object.keys(items).length;
+    return Object.values(items).filter(item => item && item.path).length;
   };
 
   const getTotalCount = () => {
@@ -1033,7 +1046,7 @@ export default function App() {
   };
 
   // --- Speaker Controls (Inline) ---
-  const handleInlineSpeakerSubmit = () => {
+  const handleInlineSpeakerSubmit = async () => {
     const name = newSpeakerName.trim();
     if (!name) {
       setIsAddingSpeaker(false);
@@ -1054,7 +1067,11 @@ export default function App() {
 
     setSpeakers(updated);
     setActiveSpeakerId(id);
-    saveProjectState(updated);
+    try {
+      await saveProjectState(updated, groupsRef.current, id);
+    } catch (err) {
+      console.error('Failed to save project state:', err);
+    }
     setNewSpeakerName('');
     setIsAddingSpeaker(false);
   };
@@ -1109,11 +1126,17 @@ export default function App() {
     delete updated[id];
 
     setSpeakers(updated);
+    let nextActiveId = activeSpeakerId;
     if (activeSpeakerId === id) {
       const keys = Object.keys(updated);
-      setActiveSpeakerId(keys.length > 0 ? keys[0] : '');
+      nextActiveId = keys.length > 0 ? keys[0] : '';
+      setActiveSpeakerId(nextActiveId);
     }
-    saveProjectState(updated);
+    try {
+      await saveProjectState(updated, groupsRef.current, nextActiveId);
+    } catch (err) {
+      console.error('Failed to delete speaker / save project state:', err);
+    }
   };
 
   // --- Upload Files ---
@@ -1121,6 +1144,9 @@ export default function App() {
   const triggerProjectUpload = () => projectInputRef.current.click();
 
   const uploadWordlistFile = async (file) => {
+    const ok = await customConfirm('确定要更换字表吗？更换字表将替换当前所有字词且清除所有发音人的录音记录！');
+    if (!ok) return;
+
     const formData = new FormData();
     formData.append('file', file);
 
@@ -1153,7 +1179,17 @@ export default function App() {
         }
       }
 
-      saveProjectState(speakers, data.groups);
+      // Clear all speaker items
+      const clearedSpeakers = {};
+      Object.keys(speakersRef.current).forEach(spkId => {
+        clearedSpeakers[spkId] = {
+          ...speakersRef.current[spkId],
+          items: {}
+        };
+      });
+      setSpeakers(clearedSpeakers);
+
+      await saveProjectState(clearedSpeakers, data.groups);
     } catch (err) {
       await customAlert(err.message);
     } finally {
@@ -1214,7 +1250,10 @@ export default function App() {
 
       setActiveGroupIndex('all');
       setActiveItemIndex(0);
-      await customAlert('工程导入成功！');
+      setImportResult({
+        warnings: data.warnings,
+        summary: data.summary
+      });
     } catch (err) {
       await customAlert(err.message);
     } finally {
@@ -1299,7 +1338,10 @@ export default function App() {
 
       setActiveGroupIndex('all');
       setActiveItemIndex(0);
-      await customAlert('工程文件夹导入成功！');
+      setImportResult({
+        warnings: data.warnings,
+        summary: data.summary
+      });
     } catch (err) {
       await customAlert(err.message);
       fetchProjectState();
@@ -1309,6 +1351,21 @@ export default function App() {
   };
 
   const handleProjectExport = async () => {
+    if (Object.keys(speakers).length === 0) {
+      await customAlert('当前工程尚未添加任何发音人，禁止导出工程！');
+      return;
+    }
+
+    try {
+      setIsProcessing(true);
+      await saveProjectState(speakers);
+    } catch (err) {
+      console.error('Failed to save project state before export:', err);
+      return;
+    } finally {
+      setIsProcessing(false);
+    }
+
     if (saveFormatSetting === 'folder') {
       let path = folderPathSetting;
       if (!path) {
@@ -1338,8 +1395,12 @@ export default function App() {
       }
     } else {
       try {
+        setIsProcessing(true);
         const res = await apiFetch('/project/export');
-        if (!res.ok) throw new Error('导出工程失败');
+        if (!res.ok) {
+          const errData = await res.json();
+          throw new Error(errData.detail || '导出工程失败');
+        }
         const destination = await save({
           defaultPath: 'PhonRec_Project.teproj',
           filters: [{ name: 'PhonTracer 工程', extensions: ['teproj'] }],
@@ -1350,6 +1411,8 @@ export default function App() {
       } catch (error) {
         console.error(error);
         await customAlert(`导出工程失败：${error.message || error}`);
+      } finally {
+        setIsProcessing(false);
       }
     }
   };
@@ -1576,7 +1639,38 @@ export default function App() {
       }
 
       if (hasQualityIssue) {
-        delete updatedSpeakers[spkId].items[activeItem.id];
+        if (updatedSpeakers[spkId].items[activeItem.id]) {
+          const item = updatedSpeakers[spkId].items[activeItem.id];
+          updatedSpeakers[spkId].items[activeItem.id] = {
+            ...item,
+            path: null,
+            quality: null,
+            recorded_at: null,
+            duration_ms: null,
+            sample_rate_hz: null,
+            channels: null,
+            format: null,
+            source: null
+          };
+        } else {
+          updatedSpeakers[spkId].items[activeItem.id] = {
+            id: activeItem.id,
+            label: activeItem.label,
+            note: activeItem.note,
+            tags: activeItem.tags,
+            aliases: activeItem.aliases || [],
+            meta: activeItem.meta || {},
+            metadata_source: activeItem.metadata_source || '录音软件',
+            path: null,
+            quality: null,
+            recorded_at: null,
+            duration_ms: null,
+            sample_rate_hz: null,
+            channels: null,
+            format: null,
+            source: null
+          };
+        }
       } else {
         updatedSpeakers[spkId].items[activeItem.id] = buildRecordedItem(activeItem, data);
       }
@@ -1657,7 +1751,7 @@ export default function App() {
     if (!activeItem || !activeSpeakerId) return;
 
     const recordMeta = speakers[activeSpeakerId]?.items?.[activeItem.id];
-    if (!recordMeta) return;
+    if (!recordMeta || !recordMeta.path) return;
 
     const player = audioPlayerRef.current;
     if (!player) return;
@@ -1707,7 +1801,7 @@ export default function App() {
     if (!activeItem || !activeSpeakerId) return;
 
     const recordMeta = speakers[activeSpeakerId]?.items?.[activeItem.id];
-    if (!recordMeta) return;
+    if (!recordMeta || !recordMeta.path) return;
 
     const ok = await customConfirm('确定要丢弃当前词条的录音吗？');
     if (!ok) return;
@@ -1720,7 +1814,20 @@ export default function App() {
         items: { ...speakers[activeSpeakerId].items },
       },
     };
-    delete updatedSpeakers[activeSpeakerId].items[activeItem.id];
+    if (updatedSpeakers[activeSpeakerId].items[activeItem.id]) {
+      const item = updatedSpeakers[activeSpeakerId].items[activeItem.id];
+      updatedSpeakers[activeSpeakerId].items[activeItem.id] = {
+        ...item,
+        path: null,
+        quality: null,
+        recorded_at: null,
+        duration_ms: null,
+        sample_rate_hz: null,
+        channels: null,
+        format: null,
+        source: null
+      };
+    }
     setSpeakers(updatedSpeakers);
     await saveProjectState(updatedSpeakers);
 
@@ -1975,9 +2082,13 @@ export default function App() {
                   <div
                     key={spk.id}
                     className={`speaker-item ${activeSpeakerId === spk.id ? 'active' : ''}`}
-                    onClick={() => {
+                    onClick={async () => {
                       setActiveSpeakerId(spk.id);
-                      saveProjectState(speakers);
+                      try {
+                        await saveProjectState(speakers, groupsRef.current, spk.id);
+                      } catch (err) {
+                        console.error('Failed to switch speaker / save project state:', err);
+                      }
                     }}
                   >
                     <span className="speaker-name">
@@ -2086,7 +2197,7 @@ export default function App() {
           )}
 
           {/* Playback Seek Bar */}
-          {activeItem && speakers[activeSpeakerId]?.items?.[activeItem.id] && (
+          {activeItem && speakers[activeSpeakerId]?.items?.[activeItem.id]?.path && (
             <div className="playback-progress-container">
               <input
                 type="range"
@@ -2135,7 +2246,7 @@ export default function App() {
               <button
                 className="nav-arrow play-btn"
                 onClick={playRecordedAudio}
-                disabled={isRecording || isProcessing || !activeItem || !speakers[activeSpeakerId]?.items?.[activeItem.id]}
+                disabled={isRecording || isProcessing || !activeItem || !speakers[activeSpeakerId]?.items?.[activeItem.id]?.path}
                 title="播放录音 (R键)"
               >
                 {playbackState.isPlaying && playbackState.currentSpeakerId === activeSpeakerId && playbackState.currentWordId === activeItem?.id ? (
@@ -2209,7 +2320,7 @@ export default function App() {
               <button
                 className="nav-arrow discard-btn"
                 onClick={discardRecordedAudio}
-                disabled={isRecording || isProcessing || !activeItem || !speakers[activeSpeakerId]?.items?.[activeItem.id]}
+                disabled={isRecording || isProcessing || !activeItem || !speakers[activeSpeakerId]?.items?.[activeItem.id]?.path}
                 title="丢弃录音"
               >
                 <TrashIcon />
@@ -2220,7 +2331,7 @@ export default function App() {
             <div style={{ display: 'flex', flexWrap: 'wrap', width: '100%', justifyContent: 'center', alignItems: 'center', gap: '1rem', fontSize: '0.75rem', color: 'var(--text-secondary)', borderTop: '1px solid var(--border-color)', paddingTop: '0.75rem', marginTop: '0.5rem' }}>
               <span><KeyboardIcon /> [空格] 录音/停止</span>
               <span>[← / →] 切换字表词条</span>
-              {activeItem && speakers[activeSpeakerId]?.items?.[activeItem.id] && (
+              {activeItem && speakers[activeSpeakerId]?.items?.[activeItem.id]?.path && (
                 <span style={{ color: 'var(--color-accent)', cursor: 'pointer', fontWeight: 'bold' }} onClick={playRecordedAudio}>
                   [R] 播放录音
                 </span>
@@ -2291,7 +2402,7 @@ export default function App() {
               {displayedItems.map((item, idx) => {
                 const isActive = activeItemIndex === idx;
                 const recordMeta = speakers[activeSpeakerId]?.items?.[item.id];
-                const isRecorded = !!recordMeta;
+                const isRecorded = !!(recordMeta && recordMeta.path);
 
                 let itemClass = 'word-item';
                 if (isActive) itemClass += ' active';
@@ -2855,6 +2966,54 @@ export default function App() {
                 onClick={() => setShowImportModal(false)}
               >
                 取消
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Import Result Warnings & Summary Modal */}
+      {importResult && (
+        <div className="modal-overlay" style={{ zIndex: 9998 }}>
+          <div className="modal-content" style={{ maxWidth: '500px', width: '90%' }}>
+            <div className="modal-header" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 600 }}>
+              <InfoIcon style={{ color: 'var(--color-accent)' }} />
+              <span>工程导入详情与警告</span>
+            </div>
+            <div className="modal-body" style={{ fontSize: '0.85rem', color: 'var(--text-primary)', padding: '1.25rem 1rem', display: 'flex', flexDirection: 'column', gap: '1rem', maxHeight: '400px', overflowY: 'auto' }}>
+              <div>
+                <strong style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>处理统计摘要：</strong>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginTop: '0.5rem', background: 'var(--bg-secondary)', padding: '0.75rem', borderRadius: '6px' }}>
+                  <div>合并发音人数量: <strong style={{ color: 'var(--color-accent)' }}>{importResult.summary?.merged_speakers || 0}</strong></div>
+                  <div>长音频切片数量: <strong style={{ color: 'var(--color-accent)' }}>{importResult.summary?.sliced_items || 0}</strong></div>
+                  <div>缺失字表条目数: <strong style={{ color: 'var(--color-warning, #f59e0b)' }}>{importResult.summary?.missing_items || 0}</strong></div>
+                  <div>降级未录制条数: <strong style={{ color: 'var(--color-error, #ef4444)' }}>{importResult.summary?.downgraded_items || 0}</strong></div>
+                </div>
+              </div>
+
+              {importResult.warnings && importResult.warnings.length > 0 && (
+                <div>
+                  <strong style={{ fontSize: '0.9rem', color: 'var(--color-warning, #f59e0b)' }}>转换警告列表 ({importResult.warnings.length}):</strong>
+                  <ul style={{ paddingLeft: '1.25rem', marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.35rem', maxHeight: '180px', overflowY: 'auto', background: '#fef3c7', border: '1px solid #fde68a', color: '#92400e', padding: '0.75rem 1.25rem', borderRadius: '6px', listStyleType: 'disc' }}>
+                    {importResult.warnings.map((warn, idx) => (
+                      <li key={idx} style={{ fontSize: '0.8rem', lineHeight: '1.4' }}>{warn}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {(!importResult.warnings || importResult.warnings.length === 0) && (
+                <div style={{ color: 'var(--color-success, #10b981)', fontWeight: 500 }}>
+                  ✓ 工程完全兼容，无任何警告。
+                </div>
+              )}
+            </div>
+            <div className="modal-footer" style={{ borderTop: '1px solid var(--border-color)', padding: '0.75rem 1rem', display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                className="btn-primary"
+                style={{ padding: '0.4rem 1.5rem', fontSize: '0.8rem' }}
+                onClick={() => setImportResult(null)}
+              >
+                关闭
               </button>
             </div>
           </div>
