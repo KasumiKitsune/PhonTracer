@@ -64,9 +64,8 @@ jobs:
           $installer = Get-ChildItem $bundleDir -Filter *.exe | Select-Object -First 1
           if (-not $installer) { throw "未生成 NSIS 安装包" }
           if ($installer.Length -gt 50MB) { throw "PhonRec 安装包超过 50 MiB：$([math]::Round($installer.Length / 1MB, 2)) MiB" }
-          $lock = Get-Content package-lock.json -Raw | ConvertFrom-Json
-          $lockedPackages = @($lock.packages.PSObject.Properties.Name)
-          if ($lockedPackages -contains 'node_modules/electron' -or $lockedPackages -contains 'node_modules/electron-builder') {
+          $forbiddenPackages = Select-String -Path package-lock.json -Pattern '"node_modules/electron":|"node_modules/electron-builder":'
+          if ($forbiddenPackages) {
             throw "依赖锁文件仍包含 Electron 运行时或打包器"
           }
           $installDir = Join-Path $env:RUNNER_TEMP "PhonRec-size-check"
