@@ -1567,7 +1567,6 @@ input:checked + .slider:before {
     padding-right: 0 !important;
     align-items: center !important;
     height: 100% !important;
-    scrollbar-width: thin !important;
   }
 
   .word-scroll-panel .word-item {

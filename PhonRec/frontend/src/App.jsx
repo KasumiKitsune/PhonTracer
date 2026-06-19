@@ -550,7 +550,7 @@ export default function App() {
     }
   }, [groups, activeGroupIndex, randomizeOrder, isSmallScreen]);
 
-  // Load static waveform / spectrogram on active item change
+  // Load static waveform / spectrogram on active item change or visualizer tab change
   useEffect(() => {
     const activeItem = getActiveItem();
     if (!activeItem || !activeSpeakerId) {
@@ -566,14 +566,16 @@ export default function App() {
       if (recordMeta.quality) {
         setQualityResults(recordMeta.quality);
       }
-      analyzeAudio(activeSpeakerId, activeItem.id);
+      if (visualizerTab === 'spectrogram') {
+        analyzeAudio(activeSpeakerId, activeItem.id);
+      }
       drawStaticWaveformFromUrl();
     } else {
       setSpectrogramUrl('');
       setQualityResults(null);
       clearCanvas();
     }
-  }, [activeItemIndex, activeSpeakerId, displayedItems]);
+  }, [activeItemIndex, activeSpeakerId, displayedItems, visualizerTab]);
 
   // Auto-scroll word list to center active item
   useEffect(() => {
@@ -948,7 +950,7 @@ export default function App() {
     }
   };
 
-  const stopRecording = (shouldAutoAdvance = false) => {
+  const stopRecording = (shouldAutoAdvance = true) => {
     if (!isRecordingRef.current) return;
     
     setIsRecording(false);
@@ -1504,11 +1506,11 @@ export default function App() {
                 <button 
                   className={`btn-record ${isRecording ? 'recording' : ''} ${isProcessing ? 'processing' : ''}`}
                   onMouseDown={recordingMode === 'hold' ? startRecording : null}
-                  onMouseUp={recordingMode === 'hold' ? () => stopRecording(false) : null}
-                  onMouseLeave={recordingMode === 'hold' && isRecording ? () => stopRecording(false) : null}
+                  onMouseUp={recordingMode === 'hold' ? () => stopRecording(true) : null}
+                  onMouseLeave={recordingMode === 'hold' && isRecording ? () => stopRecording(true) : null}
                   onTouchStart={recordingMode === 'hold' ? startRecording : null}
-                  onTouchEnd={recordingMode === 'hold' ? () => stopRecording(false) : null}
-                  onClick={recordingMode !== 'hold' ? (isRecording ? () => stopRecording(false) : startRecording) : null}
+                  onTouchEnd={recordingMode === 'hold' ? () => stopRecording(true) : null}
+                  onClick={recordingMode !== 'hold' ? (isRecording ? () => stopRecording(true) : startRecording) : null}
                   disabled={isProcessing || !activeSpeakerId || !activeItem}
                   title={recordingMode === 'hold' ? '按住录音，松开停止' : '点击录音，再次点击停止 (空格键)'}
                 >

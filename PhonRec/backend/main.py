@@ -218,7 +218,6 @@ def generate_spectrogram(y: np.ndarray, sr: int) -> str:
     
     # Plot spectrogram with gray_r colormap (white background for silence)
     ax.pcolormesh(t, f, Sxx_db, shading='gouraud', cmap='gray_r')
-    ax.set_ylim(0, min(8000, sr / 2))
     
     # Draw F0 and formants using parselmouth
     try:
@@ -230,7 +229,6 @@ def generate_spectrogram(y: np.ndarray, sr: int) -> str:
         pitch_ts = pitch.xs()
         f0_plot = pitch_values.copy()
         f0_plot[f0_plot == 0] = np.nan
-        ax.plot(pitch_ts, f0_plot, color='#3b82f6', linewidth=1.5, solid_capstyle='round')
         
         # 2. Formants (F1, F2) -> Red and Green dashed curves
         formants = sound.to_formant_burg(time_step=0.005, max_number_of_formants=5)
@@ -247,11 +245,42 @@ def generate_spectrogram(y: np.ndarray, sr: int) -> str:
         f2_plot = np.array(f2_vals)
         f2_plot[f2_plot == 0.0] = np.nan
         
+        # Dynamically determine y-limit for the spectrogram based on F2 values
+        visible_f2 = f2_plot[~np.isnan(f2_plot)] if len(f2_plot) else np.array([])
+        if len(visible_f2) > 0:
+            max_f2 = float(np.max(visible_f2))
+            spec_max = max(3000.0, max_f2 + 500.0)
+        else:
+            spec_max = 3500.0
+        spec_max = min(spec_max, sr / 2.0)
+        ax.set_ylim(0, spec_max)
+        
+        # Plot Formants on the main axes
         ax.plot(formant_ts, f1_plot, color='#ef4444', linewidth=1.2, linestyle='--')
         ax.plot(formant_ts, f2_plot, color='#10b981', linewidth=1.2, linestyle='--')
+        
+        # Create a twin y-axis for F0 to show it with custom limits
+        ax2 = ax.twinx()
+        ax2.axis('off')
+        
+        visible_f0 = f0_plot[~np.isnan(f0_plot)] if len(f0_plot) else np.array([])
+        if len(visible_f0) > 0:
+            min_f0 = float(np.min(visible_f0))
+            max_f0 = float(np.max(visible_f0))
+            y_min = max(0.0, min_f0 - 30.0)
+            y_max = max_f0 + 30.0
+            y_max = max(y_max, y_min + 100.0)
+        else:
+            y_min = 50.0
+            y_max = 500.0
+        ax2.set_ylim(y_min, y_max)
+        
+        # Plot F0 on the twin axes
+        ax2.plot(pitch_ts, f0_plot, color='#3b82f6', linewidth=1.5, solid_capstyle='round')
     except Exception as e:
         # Graceful fallback: print error and return base spectrogram
         print(f"[generate_spectrogram] F0/Formant analysis failed: {e}")
+        ax.set_ylim(0, min(4000, sr / 2))
         
     buf = io.BytesIO()
     plt.savefig(buf, format='png', facecolor='#ffffff', bbox_inches='tight', pad_inches=0)
