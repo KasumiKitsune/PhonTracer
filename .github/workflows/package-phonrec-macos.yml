@@ -37,6 +37,7 @@ jobs:
           npm ci
           npm run lint
           npm test
+          npm run build
           cargo test --manifest-path src-tauri/Cargo.toml --target aarch64-apple-darwin
 
       - name: 构建 DMG
