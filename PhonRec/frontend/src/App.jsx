@@ -183,6 +183,7 @@ export default function App() {
   
   // Shuffled items computed state
   const [displayedItems, setDisplayedItems] = useState([]);
+  const [isSmallScreen, setIsSmallScreen] = useState(window.innerWidth <= 768);
   
   const [visualizerTab, setVisualizerTab] = useState('waveform');
   
@@ -492,10 +493,19 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [displayedItems, activeItemIndex, speakers, activeSpeakerId, recordingMode]);
 
+  // Handle window resize for small screen detection
+  useEffect(() => {
+    const handleResize = () => {
+      setIsSmallScreen(window.innerWidth <= 768);
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
   // Compute displayed items whenever groups, active group select, or randomize order changes
   useEffect(() => {
     let baseItems = [];
-    if (activeGroupIndex === 'all') {
+    if (isSmallScreen || activeGroupIndex === 'all') {
       baseItems = groups.flatMap(g => g.items || []);
     } else {
       const idx = parseInt(activeGroupIndex);
@@ -504,6 +514,10 @@ export default function App() {
       }
     }
     
+    // Save previous active item ID
+    const prevActiveId = displayedItemsRef.current[activeItemIndexRef.current]?.id;
+    let finalItems = baseItems;
+    
     if (randomizeOrder && baseItems.length > 0) {
       // Create a stable random shuffle
       const shuffled = [...baseItems];
@@ -511,14 +525,23 @@ export default function App() {
         const j = Math.floor(Math.random() * (i + 1));
         [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
       }
-      setDisplayedItems(shuffled);
-    } else {
-      setDisplayedItems(baseItems);
+      finalItems = shuffled;
     }
     
-    // Reset selection to first item
-    setActiveItemIndex(0);
-  }, [groups, activeGroupIndex, randomizeOrder]);
+    setDisplayedItems(finalItems);
+    
+    // Attempt to restore previous active item index
+    if (prevActiveId) {
+      const idx = finalItems.findIndex(item => item.id === prevActiveId);
+      if (idx !== -1) {
+        setActiveItemIndex(idx);
+      } else {
+        setActiveItemIndex(0);
+      }
+    } else {
+      setActiveItemIndex(0);
+    }
+  }, [groups, activeGroupIndex, randomizeOrder, isSmallScreen]);
 
   // Load static waveform / spectrogram on active item change
   useEffect(() => {
@@ -551,7 +574,7 @@ export default function App() {
     if (activeItem) {
       const el = document.getElementById(`word-item-${activeItem.id}`);
       if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        el.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
       }
     }
   }, [activeItemIndex, displayedItems]);
@@ -1497,7 +1520,7 @@ export default function App() {
           
           <div className="panel-body" style={{ padding: '0.75rem' }}>
             {/* Group selector - with "All" option */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', marginBottom: '0.5rem' }}>
+            <div className="word-group-selector" style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', marginBottom: '0.5rem' }}>
               <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>当前发音组:</span>
               <CustomSelect 
                 style={{ width: '100%' }}
@@ -1544,7 +1567,7 @@ export default function App() {
                       <div className="word-item-status-wrapper">
                         <span className="word-item-status-dot"></span>
                         <span className="word-item-status-text">
-                          {isRecorded ? '已录制' : '未录制'}
+                          {isActive ? '录制中' : (isRecorded ? '已录制' : '未录制')}
                         </span>
                       </div>
                       
@@ -1740,7 +1763,7 @@ export default function App() {
               
               <div className="project-action-row">
                 <button className="btn-secondary" style={{ fontSize: '0.8rem' }} onClick={triggerProjectUpload}>
-                  <ImportIcon /> 导入工程
+                  <ImportIcon /> 导入
                 </button>
                 <input 
                   type="file" 
@@ -1750,7 +1773,7 @@ export default function App() {
                   onChange={handleProjectUpload} 
                 />
                 <button className="btn-primary" style={{ fontSize: '0.8rem' }} onClick={handleProjectExport}>
-                  <ExportIcon /> 导出工程
+                  <ExportIcon /> 保存
                 </button>
               </div>
               <button className="btn-secondary" style={{ fontSize: '0.8rem', color: 'var(--color-danger)', borderColor: 'var(--border-color)', marginTop: '0.2rem' }} onClick={handleProjectClear}>

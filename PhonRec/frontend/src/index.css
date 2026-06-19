@@ -723,6 +723,11 @@ body {
   animation: pulse 1s infinite;
 }
 
+.word-item.active .word-item-status-dot {
+  background: var(--color-accent);
+  box-shadow: 0 0 5px var(--color-accent);
+}
+
 .word-item-label {
   font-size: 1.1rem;
   font-weight: 700;
@@ -743,6 +748,10 @@ body {
 
 .word-item.recorded .word-item-status-text {
   color: var(--color-success);
+}
+
+.word-item.active .word-item-status-text {
+  color: var(--color-accent);
 }
 
 .word-item-quality-tags {
@@ -1477,9 +1486,126 @@ input:checked + .slider:before {
     flex: none !important;
     width: 100% !important;
     min-width: 100% !important;
-    height: 240px !important;
+    height: 110px !important;
     border-left: none !important;
     border-top: 1px solid var(--border-color) !important;
+    flex-direction: row !important;
+    background: var(--bg-card) !important;
+  }
+
+  .word-scroll-panel .panel-header {
+    width: 42px !important;
+    min-width: 42px !important;
+    padding: 0.5rem 0.25rem !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    border-right: 1px solid var(--border-color) !important;
+    border-bottom: none !important;
+    background: var(--bg-secondary) !important;
+    border-top-left-radius: 0 !important;
+    border-bottom-left-radius: 12px !important;
+  }
+
+  .word-scroll-panel .panel-header .panel-title {
+    writing-mode: vertical-lr !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    gap: 0.25rem !important;
+    letter-spacing: 2px !important;
+    font-size: 0.75rem !important;
+    font-weight: bold !important;
+    color: var(--text-secondary) !important;
+    text-transform: none !important;
+  }
+
+  .word-scroll-panel .panel-header .panel-title svg {
+    transform: rotate(0deg) !important;
+    margin-bottom: 2px !important;
+  }
+
+  .word-scroll-panel .panel-body {
+    flex: 1 !important;
+    display: flex !important;
+    flex-direction: row !important;
+    padding: 0.5rem !important;
+    overflow: hidden !important;
+    align-items: center !important;
+  }
+
+  .word-scroll-panel .word-group-selector {
+    display: none !important;
+  }
+
+  .word-scroll-panel .word-list-container {
+    display: flex !important;
+    flex-direction: row !important;
+    gap: 0.5rem !important;
+    flex: 1 !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    padding-right: 0 !important;
+    align-items: center !important;
+    height: 100% !important;
+    scrollbar-width: thin !important;
+  }
+
+  .word-scroll-panel .word-item {
+    width: 72px !important;
+    height: 72px !important;
+    min-width: 72px !important;
+    min-height: 72px !important;
+    padding: 0.35rem 0.25rem !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 0.15rem !important;
+    border-radius: 12px !important;
+    box-shadow: none !important;
+    flex-shrink: 0 !important;
+    background: white;
+  }
+
+  .word-scroll-panel .word-item-header {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 100% !important;
+  }
+
+  .word-scroll-panel .word-item-label {
+    font-size: 1.25rem !important;
+    font-weight: 700 !important;
+    line-height: 1.1 !important;
+  }
+
+  .word-scroll-panel .word-badge {
+    display: none !important;
+  }
+
+  .word-scroll-panel .word-item-info-row {
+    display: flex !important;
+    justify-content: center !important;
+    align-items: center !important;
+    width: 100% !important;
+    margin: 0 !important;
+  }
+
+  .word-scroll-panel .word-item-status-text {
+    font-size: 0.65rem !important;
+    font-weight: 500 !important;
+    text-align: center !important;
+  }
+
+  .word-scroll-panel .word-item-status-dot {
+    display: none !important;
+  }
+
+  .word-scroll-panel .word-item-quality-tags {
+    display: none !important;
   }
 }
 
