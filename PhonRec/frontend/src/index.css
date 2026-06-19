@@ -365,6 +365,12 @@ body {
   padding: 1.5rem;
   gap: 1.5rem;
   background: white;
+  min-width: 0;
+  flex-shrink: 1;
+}
+
+.main-recording-card {
+  min-width: 0;
 }
 
 .character-card {
@@ -649,6 +655,7 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  flex-shrink: 0;
 }
 
 .word-list-container {
@@ -1396,6 +1403,15 @@ input:checked + .slider:before {
 
   .main-recording-card {
     grid-column: 1 !important; /* Place in the first column track */
+    min-width: 0 !important;
+  }
+
+  .center-column {
+    min-width: 0 !important;
+  }
+
+  .recording-buttons {
+    gap: 0.75rem !important; /* Shrink button spacing on small screens to allow card to compress */
   }
 
   .right-column {
