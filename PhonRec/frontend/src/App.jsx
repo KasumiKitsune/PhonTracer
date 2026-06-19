@@ -173,7 +173,7 @@ const MenuIcon = () => (
   </svg>
 );
 
-const CustomSelect = ({ value, onChange, options, style }) => {
+const CustomSelect = ({ value, onChange, options, style, placement = 'bottom' }) => {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef(null);
 
@@ -201,7 +201,7 @@ const CustomSelect = ({ value, onChange, options, style }) => {
         </svg>
       </div>
       {isOpen && (
-        <div className="custom-select-dropdown">
+        <div className={`custom-select-dropdown ${placement === 'top' ? 'placement-top' : ''}`}>
           {options.map(opt => (
             <div
               key={opt.value}
@@ -321,6 +321,10 @@ export default function App() {
 
   const isProcessingRef = useRef(isProcessing);
   isProcessingRef.current = isProcessing;
+
+  const isMouseDownRef = useRef(false);
+  const isStartingRef = useRef(false);
+  const shouldCancelRef = useRef(false);
 
   const qualityChecksEnabledRef = useRef(qualityChecksEnabled);
   qualityChecksEnabledRef.current = qualityChecksEnabled;
@@ -1418,18 +1422,25 @@ export default function App() {
 
   // --- Recording Logic ---
   const startRecording = async () => {
+    if (isProcessingRef.current || isRecordingRef.current || isStartingRef.current) return;
+    isStartingRef.current = true;
+    shouldCancelRef.current = false;
+
     if (!activeSpeakerId) {
       await customAlert('请先添加并选择一个发音人！');
+      isStartingRef.current = false;
       return;
     }
     const activeItem = getActiveItem();
     if (!activeItem) {
       await customAlert('请导入字表以开始录音！');
+      isStartingRef.current = false;
       return;
     }
 
     try {
       setIsRecording(true);
+      isRecordingRef.current = true;
       setSpectrogramUrl('');
       setQualityResults(null);
 
@@ -1442,6 +1453,18 @@ export default function App() {
       // Ensure stream is active
       await ensureMicStream();
 
+      // If user released the button or cancelled during setup, abort
+      if (shouldCancelRef.current || (recordingModeRef.current === 'hold' && !isMouseDownRef.current)) {
+        shouldCancelRef.current = false;
+        setIsRecording(false);
+        isRecordingRef.current = false;
+        if (!qualityChecksEnabledRef.current) {
+          await closeMicStream();
+        }
+        isStartingRef.current = false;
+        return;
+      }
+
       if (selectedDeviceId.startsWith('loopback:')) {
         await invoke('start_loopback_recording');
       }
@@ -1449,15 +1472,24 @@ export default function App() {
     } catch (err) {
       console.error(err);
       setIsRecording(false);
+      isRecordingRef.current = false;
       await customAlert('录音访问失败，请确认权限并重试！');
+    } finally {
+      isStartingRef.current = false;
     }
   };
 
   const stopRecording = async (shouldAutoAdvance = true) => {
+    if (isStartingRef.current) {
+      shouldCancelRef.current = true;
+      return;
+    }
     if (!isRecordingRef.current) return;
 
+    isRecordingRef.current = false;
     setIsRecording(false);
     setIsProcessing(true);
+    isProcessingRef.current = true;
     setVadLevel(0);
     setVadSpeaking(false);
 
@@ -1740,6 +1772,7 @@ export default function App() {
 
   // Compute active item for use in JSX
   const activeItem = getActiveItem();
+  const noteFontSize = Math.max(18, Math.round(charFontSize * 0.24));
 
   return (
     <div
@@ -2008,7 +2041,10 @@ export default function App() {
               <div className="char-display-container">
                 <span className="char-display" style={{ fontSize: `${charFontSize}px`, transition: 'font-size 0.1s ease' }}>{activeItem.label}</span>
                 {primaryMetaKey !== 'none' && (
-                  <span className="char-pinyin">
+                  <span
+                    className="char-pinyin"
+                    style={{ fontSize: `${noteFontSize}px`, transition: 'font-size 0.1s ease' }}
+                  >
                     {primaryMetaKey === 'note' ? activeItem.note : (activeItem.meta?.[primaryMetaKey] || '')}
                   </span>
                 )}
@@ -2095,13 +2131,35 @@ export default function App() {
                 <div className={`record-ring ${isRecording ? 'active' : ''}`}></div>
                 <button
                   className={`btn-record ${isRecording ? 'recording' : ''} ${isProcessing ? 'processing' : ''}`}
-                  onMouseDown={recordingMode === 'hold' ? startRecording : null}
-                  onMouseUp={recordingMode === 'hold' ? () => stopRecording(true) : null}
-                  onMouseLeave={recordingMode === 'hold' && isRecording ? () => stopRecording(true) : null}
-                  onTouchStart={recordingMode === 'hold' ? startRecording : null}
-                  onTouchEnd={recordingMode === 'hold' ? () => stopRecording(true) : null}
-                  onClick={recordingMode !== 'hold' ? (isRecording ? () => stopRecording(true) : startRecording) : null}
-                  disabled={isProcessing || !activeSpeakerId || !activeItem}
+                  onMouseDown={recordingMode === 'hold' ? () => {
+                    isMouseDownRef.current = true;
+                    startRecording();
+                  } : null}
+                  onMouseUp={recordingMode === 'hold' ? () => {
+                    isMouseDownRef.current = false;
+                    stopRecording(true);
+                  } : null}
+                  onMouseLeave={recordingMode === 'hold' && isRecording ? () => {
+                    isMouseDownRef.current = false;
+                    stopRecording(true);
+                  } : null}
+                  onTouchStart={recordingMode === 'hold' ? () => {
+                    isMouseDownRef.current = true;
+                    startRecording();
+                  } : null}
+                  onTouchEnd={recordingMode === 'hold' ? () => {
+                    isMouseDownRef.current = false;
+                    stopRecording(true);
+                  } : null}
+                  onClick={recordingMode !== 'hold' ? () => {
+                    if (isProcessingRef.current) return;
+                    if (isRecordingRef.current) {
+                      stopRecording(true);
+                    } else {
+                      startRecording();
+                    }
+                  } : null}
+                  disabled={isProcessing}
                   title={recordingMode === 'hold' ? '按住录音，松开停止' : '点击录音，再次点击停止 (空格键)'}
                 >
                   <div className="record-core"></div>
@@ -2142,8 +2200,8 @@ export default function App() {
           </div>
           
           {/* Center Column Bottom Bar: Project Management Actions */}
-          <div className="center-bottom-bar" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', borderTop: '1px solid var(--border-color)', paddingTop: '0.75rem', marginTop: '0.5rem', flexWrap: 'wrap', gap: '0.75rem' }}>
-            <div className="switch-container" style={{ margin: 0, gap: '0.35rem', fontSize: '0.8rem' }}>
+          <div className="center-bottom-bar">
+            <div className="switch-container center-bottom-order">
               <span>随机排序录制</span>
               <label className="switch" style={{ margin: 0 }}>
                 <input
@@ -2155,7 +2213,7 @@ export default function App() {
               </label>
             </div>
 
-            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+            <div className="center-bottom-actions">
               <button className="btn-secondary" style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }} onClick={handleImportButtonClick}>
                 <ExportIcon /> 导入
               </button>
@@ -2412,6 +2470,7 @@ export default function App() {
                       { value: 'vad', label: '智能 VAD 跳转' }
                     ]}
                     style={{ width: '100%' }}
+                    placement="top"
                   />
                 </div>
               </div>
