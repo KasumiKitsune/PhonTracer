@@ -1,0 +1,100 @@
+name: PhonRec Windows 打包
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: 构建 PhonRec ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Windows x64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+          - label: Windows ARM64
+            runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
+
+    defaults:
+      run:
+        working-directory: PhonRec/frontend
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v6
+
+      - name: 配置 Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: PhonRec/frontend/package-lock.json
+
+      - name: 配置 Rust 目标
+        shell: pwsh
+        run: rustup target add ${{ matrix.target }}
+
+      - name: 安装前端依赖
+        run: npm ci
+
+      - name: 执行前端与 Rust 测试
+        shell: pwsh
+        run: |
+          npm run lint
+          npm test
+          cargo test --manifest-path src-tauri/Cargo.toml --target ${{ matrix.target }}
+
+      - name: 构建 NSIS 安装包
+        run: npm run tauri:build -- --target ${{ matrix.target }} --bundles nsis
+
+      - name: 检查体积与禁带内容
+        shell: pwsh
+        run: |
+          $bundleDir = "src-tauri/target/${{ matrix.target }}/release/bundle/nsis"
+          $installer = Get-ChildItem $bundleDir -Filter *.exe | Select-Object -First 1
+          if (-not $installer) { throw "未生成 NSIS 安装包" }
+          if ($installer.Length -gt 50MB) { throw "PhonRec 安装包超过 50 MiB：$([math]::Round($installer.Length / 1MB, 2)) MiB" }
+          $lock = Get-Content package-lock.json -Raw | ConvertFrom-Json
+          $lockedPackages = @($lock.packages.PSObject.Properties.Name)
+          if ($lockedPackages -contains 'node_modules/electron' -or $lockedPackages -contains 'node_modules/electron-builder') {
+            throw "依赖锁文件仍包含 Electron 运行时或打包器"
+          }
+          $installDir = Join-Path $env:RUNNER_TEMP "PhonRec-size-check"
+          $process = Start-Process -FilePath $installer.FullName -ArgumentList '/S', "/D=$installDir" -Wait -PassThru
+          if ($process.ExitCode -ne 0 -or -not (Test-Path $installDir)) { throw "NSIS 静默安装失败" }
+          $installedSize = (Get-ChildItem $installDir -Recurse -File | Measure-Object Length -Sum).Sum
+          if ($installedSize -gt 100MB) { throw "PhonRec 安装体积超过 100 MiB：$([math]::Round($installedSize / 1MB, 2)) MiB" }
+          $forbiddenFiles = Get-ChildItem $installDir -Recurse -File | Where-Object {
+            $_.Name -match 'electron|python312\.dll|torch|scipy|matplotlib|parselmouth'
+          }
+          if ($forbiddenFiles) { throw "安装目录包含禁带内容：$($forbiddenFiles.FullName -join ', ')" }
+          Write-Host "安装包大小：$([math]::Round($installer.Length / 1MB, 2)) MiB"
+          Write-Host "安装体积：$([math]::Round($installedSize / 1MB, 2)) MiB"
+
+      - name: 上传开发产物
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        uses: actions/upload-artifact@v4
+        with:
+          name: PhonRec-${{ matrix.target }}
+          path: PhonRec/frontend/src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe
+          if-no-files-found: error
+
+      - name: 发布安装包
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v3
+        with:
+          files: PhonRec/frontend/src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe
+          name: PhonTracer ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          overwrite_files: true
+          fail_on_unmatched_files: true

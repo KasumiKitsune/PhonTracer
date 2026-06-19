@@ -1,16 +1,24 @@
-# React + Vite
+# PhonRec 桌面端
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+PhonRec 使用 React、Vite 与 Tauri v2 构建。安装包不携带 Python 或科学计算库，运行录音分析功能时会调用已安装的 PhonTracer 分析引擎。
 
-Currently, two official plugins are available:
+## 开发
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```powershell
+npm ci
+npm run tauri:dev
+```
 
-## React Compiler
+调试版可通过 `PHONTRACER_ENGINE_PATH` 指定 `PhonTracerAnalysisEngine` 的绝对路径；正式版只从 PhonTracer 安装信息中发现引擎。
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## 验证与打包
 
-## Expanding the ESLint configuration
+```powershell
+npm run lint
+npm test
+npm run tauri:build
+```
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+Windows 使用 NSIS 安装器，支持 x64 与 ARM64。macOS 使用 DMG，仅支持 Apple Silicon，最低系统版本为 macOS 12。
+
+PhonRec 启动时会验证 PhonTracer 的引擎协议版本。未安装主程序、版本不兼容或引擎启动失败时，客户端会显示依赖提示页，不会进入录音界面。

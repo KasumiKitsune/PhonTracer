@@ -1,35 +1,66 @@
-import os
+import argparse
+import base64
+import csv
+import io
 import json
+import os
+import secrets
+import shutil
+import socket
+import stat
+import tempfile
 import uuid
 import zipfile
-import shutil
-import base64
-import io
-import csv
+from pathlib import Path
 from typing import List, Dict, Any, Optional
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 import numpy as np
 from scipy.io import wavfile
 import scipy.signal as signal
 
-app = FastAPI(title="PhonRec Backend API", version="1.0.0")
+ENGINE_VERSION = "1.3.0"
+PROTOCOL_VERSION = 1
+SESSION_TOKEN = os.environ.get("PHONTRACER_SESSION_TOKEN", "")
+
+app = FastAPI(title="PhonTracer Analysis Engine", version=ENGINE_VERSION)
 
 # Enable CORS for frontend integration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=[
+        "tauri://localhost",
+        "http://tauri.localhost",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Active workspace directory setup
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 WORKSPACE_DIR = os.path.join(BASE_DIR, "workspace")
 AUDIO_DIR = os.path.join(WORKSPACE_DIR, "audio")
 DATA_DIR = os.path.join(WORKSPACE_DIR, "data")
+
+
+def configure_workspace(workspace_dir: str) -> str:
+    """配置独立于安装目录的 PhonRec 工作区。"""
+    global WORKSPACE_DIR, AUDIO_DIR, DATA_DIR
+    resolved = os.path.abspath(os.path.expanduser(workspace_dir))
+    WORKSPACE_DIR = resolved
+    AUDIO_DIR = os.path.join(resolved, "audio")
+    DATA_DIR = os.path.join(resolved, "data")
+    init_workspace()
+    return resolved
+
+
+def configure_session_token(token: str) -> None:
+    """设置本次前端会话使用的鉴权令牌。"""
+    global SESSION_TOKEN
+    SESSION_TOKEN = token
 
 def init_workspace():
     os.makedirs(WORKSPACE_DIR, exist_ok=True)
@@ -42,6 +73,39 @@ def clear_workspace():
     if os.path.exists(WORKSPACE_DIR):
         shutil.rmtree(WORKSPACE_DIR)
     init_workspace()
+
+
+@app.middleware("http")
+async def require_session_token(request, call_next):
+    """除健康检查和预检请求外，拒绝未携带会话令牌的访问。"""
+    if request.url.path == "/api/health" or request.method == "OPTIONS":
+        return await call_next(request)
+
+    authorization = request.headers.get("authorization", "")
+    expected = f"Bearer {SESSION_TOKEN}" if SESSION_TOKEN else ""
+    if not expected or not secrets.compare_digest(authorization, expected):
+        return JSONResponse(status_code=401, content={"detail": "无效或缺失的会话令牌"})
+    return await call_next(request)
+
+
+@app.get("/api/health")
+async def api_health():
+    """返回供 PhonRec 启动门禁校验的稳定协议信息。"""
+    return {
+        "status": "ok",
+        "engine_version": ENGINE_VERSION,
+        "protocol_version": PROTOCOL_VERSION,
+        "capabilities": [
+            "project-state",
+            "project-import-export",
+            "wordlist-import",
+            "audio-storage",
+            "audio-quality",
+            "spectrogram",
+            "pitch",
+            "formants",
+        ],
+    }
 
 # --- DSP / Quality Check Helper Functions ---
 
@@ -531,43 +595,46 @@ async def api_import_wordlist(file: UploadFile = File(...)):
 
 @app.post("/api/project/import")
 async def api_import_project(file: UploadFile = File(...)):
-    """Import a .teproj archive by unzipping it into the active workspace."""
-    clear_workspace()
-    
-    # Save the uploaded ZIP file to a temp file
-    temp_zip = os.path.join(BASE_DIR, f"temp_import_{uuid.uuid4().hex}.zip")
+    """安全校验并导入 .teproj，失败时保留当前工作区。"""
+    workspace_parent = os.path.dirname(WORKSPACE_DIR)
+    os.makedirs(workspace_parent, exist_ok=True)
+    temp_zip_handle = tempfile.NamedTemporaryFile(
+        prefix="phonrec_import_", suffix=".zip", dir=workspace_parent, delete=False
+    )
+    temp_zip = temp_zip_handle.name
+    temp_zip_handle.close()
+    staging_dir = tempfile.mkdtemp(prefix="phonrec_staging_", dir=workspace_parent)
     try:
         with open(temp_zip, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
-            
-        # Extract ZIP content
+
         with zipfile.ZipFile(temp_zip, "r") as zip_ref:
-            # Simple security checks
-            for member in zip_ref.infolist():
-                norm_name = member.filename.replace("\\", "/")
-                if norm_name.startswith("/") or ".." in norm_name.split("/"):
-                    raise HTTPException(status_code=400, detail="Invalid path inside archive")
-            zip_ref.extractall(WORKSPACE_DIR)
-            
-        # Verify project.json exists
-        project_json_path = os.path.join(WORKSPACE_DIR, "project.json")
+            _safe_extract_zip(zip_ref, staging_dir)
+
+        project_json_path = os.path.join(staging_dir, "project.json")
         if not os.path.exists(project_json_path):
-            raise HTTPException(status_code=400, detail="Invalid teproj: project.json missing")
-            
-        # Read project.json
+            raise HTTPException(status_code=400, detail="工程无效：缺少 project.json")
+
         with open(project_json_path, "r", encoding="utf-8") as f:
             state = json.load(f)
-            
+
+        clear_workspace()
+        shutil.copytree(staging_dir, WORKSPACE_DIR, dirs_exist_ok=True)
         return {"status": "success", "state": state}
+    except HTTPException:
+        raise
     except Exception as e:
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Failed to import project: {e}")
+        raise HTTPException(status_code=500, detail=f"导入工程失败：{e}")
     finally:
-        if os.path.exists(temp_zip):
+        for path in (temp_zip, staging_dir):
             try:
-                os.remove(temp_zip)
-            except:
+                if os.path.isdir(path):
+                    shutil.rmtree(path)
+                elif os.path.exists(path):
+                    os.remove(path)
+            except OSError:
                 pass
 
 @app.get("/api/project/export")
@@ -577,7 +644,9 @@ async def api_export_project():
     if not os.path.exists(project_json_path):
         raise HTTPException(status_code=400, detail="No active project state to export")
         
-    temp_export = os.path.join(BASE_DIR, f"export_{uuid.uuid4().hex}.teproj")
+    workspace_parent = os.path.dirname(WORKSPACE_DIR)
+    os.makedirs(workspace_parent, exist_ok=True)
+    temp_export = os.path.join(workspace_parent, f"export_{uuid.uuid4().hex}.teproj")
     try:
         # Create ZIP
         with zipfile.ZipFile(temp_export, "w", zipfile.ZIP_DEFLATED) as zip_file:
@@ -612,6 +681,72 @@ async def api_export_project():
                 pass
         raise HTTPException(status_code=500, detail=f"Failed to export project: {e}")
 
-if __name__ == "__main__":
+def _safe_extract_zip(zip_ref: zipfile.ZipFile, destination: str) -> None:
+    """拒绝目录穿越、绝对路径和符号链接后再展开工程。"""
+    root = Path(destination).resolve()
+    for member in zip_ref.infolist():
+        mode = member.external_attr >> 16
+        if stat.S_ISLNK(mode):
+            raise HTTPException(status_code=400, detail="工程压缩包不得包含符号链接")
+
+        normalized = member.filename.replace("\\", "/")
+        target = (root / normalized).resolve()
+        try:
+            target.relative_to(root)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="工程压缩包包含非法路径") from exc
+
+        if member.is_dir():
+            target.mkdir(parents=True, exist_ok=True)
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with zip_ref.open(member, "r") as source, open(target, "wb") as output:
+            shutil.copyfileobj(source, output)
+
+
+def create_server_socket(port: int = 0) -> socket.socket:
+    """在回环地址上创建监听套接字；端口为 0 时由系统分配。"""
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server_socket.bind(("127.0.0.1", port))
+    server_socket.listen(2048)
+    return server_socket
+
+
+def run_engine(argv: Optional[List[str]] = None) -> None:
+    """启动由 PhonRec 管理生命周期的本地分析引擎。"""
+    parser = argparse.ArgumentParser(description="PhonTracer PhonRec 分析引擎")
+    parser.add_argument("--workspace", required=True, help="PhonRec 工作区目录")
+    parser.add_argument("--port", type=int, default=0, help="监听端口，0 表示自动分配")
+    args = parser.parse_args(argv)
+
+    token = os.environ.get("PHONTRACER_SESSION_TOKEN", "")
+    if not token:
+        raise SystemExit("缺少 PHONTRACER_SESSION_TOKEN，拒绝启动分析引擎")
+
+    configure_session_token(token)
+    configure_workspace(args.workspace)
+    server_socket = create_server_socket(args.port)
+    assigned_port = server_socket.getsockname()[1]
+    print(
+        json.dumps(
+            {
+                "event": "ready",
+                "port": assigned_port,
+                "protocol_version": PROTOCOL_VERSION,
+                "engine_version": ENGINE_VERSION,
+            },
+            ensure_ascii=False,
+        ),
+        flush=True,
+    )
+
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8080)
+
+    config = uvicorn.Config(app, log_level="warning", access_log=False)
+    server = uvicorn.Server(config)
+    server.run(sockets=[server_socket])
+
+
+if __name__ == "__main__":
+    run_engine()

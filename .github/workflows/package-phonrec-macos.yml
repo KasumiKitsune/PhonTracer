@@ -1,0 +1,74 @@
+name: PhonRec macOS ARM64 打包
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: 构建 PhonRec macOS ARM64
+    runs-on: macos-latest
+
+    defaults:
+      run:
+        working-directory: PhonRec/frontend
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v6
+
+      - name: 配置 Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: PhonRec/frontend/package-lock.json
+
+      - name: 配置 Rust 目标
+        run: rustup target add aarch64-apple-darwin
+
+      - name: 安装依赖并测试
+        run: |
+          npm ci
+          npm run lint
+          npm test
+          cargo test --manifest-path src-tauri/Cargo.toml --target aarch64-apple-darwin
+
+      - name: 构建 DMG
+        run: npm run tauri:build -- --target aarch64-apple-darwin --bundles dmg
+
+      - name: 检查体积与禁带内容
+        run: |
+          dmg=$(find src-tauri/target/aarch64-apple-darwin/release/bundle/dmg -name '*.dmg' -type f | head -n 1)
+          test -n "$dmg" || { echo "未生成 DMG"; exit 1; }
+          size=$(stat -f%z "$dmg")
+          test "$size" -le $((50 * 1024 * 1024)) || { echo "PhonRec DMG 超过 50 MiB"; exit 1; }
+          app_dir="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/PhonRec.app"
+          installed_kib=$(du -sk "$app_dir" | awk '{print $1}')
+          test "$installed_kib" -le $((100 * 1024)) || { echo "PhonRec 安装体积超过 100 MiB"; exit 1; }
+          ! find "$app_dir" -iname '*python*' -o -iname '*torch*' -o -iname '*scipy*' -o -iname '*matplotlib*' -o -iname '*parselmouth*' | grep -q .
+          echo "DMG 大小：$((size / 1024 / 1024)) MiB"
+
+      - name: 上传开发产物
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        uses: actions/upload-artifact@v4
+        with:
+          name: PhonRec-macOS-ARM64
+          path: PhonRec/frontend/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+
+      - name: 发布 DMG
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v3
+        with:
+          files: PhonRec/frontend/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+          name: PhonTracer ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          overwrite_files: true
+          fail_on_unmatched_files: true

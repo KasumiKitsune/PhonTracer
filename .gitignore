@@ -14,6 +14,7 @@
 !README_REVISION_GUIDE.md
 !PAPER_USAGE_GUIDE.md
 !requirements.txt
+!requirements-phonrec-engine.txt
 !main.py
 !cli.py
 !toolkit.py
@@ -73,6 +74,8 @@ Cli_test/
 !PhonRec/frontend/**
 PhonRec/frontend/node_modules/
 PhonRec/frontend/dist/
+PhonRec/frontend/dist-electron/
+PhonRec/frontend/src-tauri/target/
 PhonRec/frontend/eslint_errors.txt
 PhonRec/backend/workspace/
 PhonRec/backend/__pycache__/

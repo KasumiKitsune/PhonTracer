@@ -1,8 +1,8 @@
 ; Inno Setup Script for PhonTracer Suite
-; 命令行编译命令示例: iscc /DMyAppVersion="v1.2.5" installer.iss
+; 命令行编译命令示例: iscc /DMyAppVersion="v1.3.0" installer.iss
 
 #ifndef MyAppVersion
-  #define MyAppVersion "v1.2.5"
+  #define MyAppVersion "v1.3.0"
 #endif
 
 #define MyAppName "PhonTracer"
@@ -48,6 +48,11 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "dist\PhonTracer_Suite\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs
 
 [Registry]
+; 为 PhonRec 等配套工具登记稳定的主程序发现信息
+Root: HKA; Subkey: "Software\KasumiKitsune\PhonTracer"; ValueType: string; ValueName: "InstallDir"; ValueData: "{app}"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\KasumiKitsune\PhonTracer"; ValueType: string; ValueName: "Version"; ValueData: "{#MyAppVersion}"
+Root: HKA; Subkey: "Software\KasumiKitsune\PhonTracer"; ValueType: dword; ValueName: "EngineProtocol"; ValueData: "1"
+
 ; 注册工程文件关联后缀 .teproj 并在双击时通过 PhonTracer 打开
 Root: HKA; Subkey: "Software\Classes\{#MyAppAssocExt}"; ValueType: string; ValueName: ""; ValueData: "{#MyAppAssocKey}"; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\{#MyAppAssocExt}"; ValueType: string; ValueName: "Content Type"; ValueData: "application/vnd.phontracer.project"; Flags: uninsdeletevalue

@@ -4,7 +4,7 @@
   <p><strong>面向语音学标注与声学分析的桌面工具套件</strong></p>
 
   <p>
-    <a href="https://github.com/KasumiKitsune/PhonTracer/releases"><img src="https://img.shields.io/badge/release-v1.2.5-blue.svg" alt="Release"></a>
+    <a href="https://github.com/KasumiKitsune/PhonTracer/releases"><img src="https://img.shields.io/badge/release-v1.3.0-blue.svg" alt="Release"></a>
     <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white" alt="Python"></a>
     <a href="#安装"><img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-lightgrey.svg" alt="Platform"></a>
     <img src="https://img.shields.io/badge/UI-CustomTkinter-blue" alt="UI">

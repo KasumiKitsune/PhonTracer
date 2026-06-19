@@ -4,14 +4,132 @@ import io
 import json
 import os
 import shutil
+import subprocess
+import sys
 import tempfile
+import threading
+import queue
+import urllib.request
+import zipfile
+import httpx
+from fastapi import HTTPException
 from fastapi.datastructures import UploadFile
 
 # Import backend logic
 import main as backend
 
 class TestPhonRecBackend(unittest.TestCase):
-    
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp(prefix="phonrec_test_")
+        self.workspace_dir = os.path.join(self.temp_dir, "workspace")
+        backend.configure_workspace(self.workspace_dir)
+        backend.configure_session_token("test-token")
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_health_and_authentication(self):
+        import asyncio
+
+        async def run_requests():
+            transport = httpx.ASGITransport(app=backend.app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                health = await client.get("/api/health")
+                unauthorized = await client.get("/api/project/state")
+                authorized = await client.get(
+                    "/api/project/state",
+                    headers={"Authorization": "Bearer test-token"},
+                )
+                return health, unauthorized, authorized
+
+        health, unauthorized, authorized = asyncio.run(run_requests())
+        self.assertEqual(health.status_code, 200)
+        self.assertEqual(health.json()["protocol_version"], 1)
+        self.assertEqual(unauthorized.status_code, 401)
+        self.assertEqual(authorized.status_code, 200)
+
+    def test_workspace_isolation(self):
+        self.assertEqual(backend.WORKSPACE_DIR, os.path.abspath(self.workspace_dir))
+        self.assertTrue(os.path.isdir(backend.AUDIO_DIR))
+        self.assertTrue(os.path.isdir(backend.DATA_DIR))
+        self.assertFalse(backend.WORKSPACE_DIR.startswith(backend.BASE_DIR))
+
+    def test_random_loopback_port(self):
+        server_socket = backend.create_server_socket(0)
+        try:
+            host, port = server_socket.getsockname()
+            self.assertEqual(host, "127.0.0.1")
+            self.assertGreater(port, 0)
+        finally:
+            server_socket.close()
+
+    def test_engine_process_handshake_auth_and_termination(self):
+        process_workspace = os.path.join(self.temp_dir, "process_workspace")
+        environment = os.environ.copy()
+        environment["PHONTRACER_SESSION_TOKEN"] = "process-token"
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                backend.__file__,
+                "--workspace",
+                process_workspace,
+                "--port",
+                "0",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            env=environment,
+        )
+        lines = queue.Queue()
+        reader = threading.Thread(target=lambda: lines.put(process.stdout.readline()), daemon=True)
+        reader.start()
+        try:
+            handshake_line = lines.get(timeout=15)
+            handshake = json.loads(handshake_line)
+            self.assertEqual(handshake["event"], "ready")
+            self.assertEqual(handshake["protocol_version"], 1)
+
+            health_url = f"http://127.0.0.1:{handshake['port']}/api/health"
+            with urllib.request.urlopen(health_url, timeout=5) as response:
+                health = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(health["status"], "ok")
+
+            state_request = urllib.request.Request(
+                f"http://127.0.0.1:{handshake['port']}/api/project/state",
+                headers={"Authorization": "Bearer process-token"},
+            )
+            with urllib.request.urlopen(state_request, timeout=5) as response:
+                self.assertEqual(response.status, 200)
+        finally:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+            if process.stdout:
+                process.stdout.close()
+            if process.stderr:
+                process.stderr.close()
+        self.assertIsNotNone(process.returncode)
+
+    def test_project_import_rejects_path_traversal(self):
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as zip_file:
+            zip_file.writestr("project.json", '{"version":"1.0"}')
+            zip_file.writestr("../outside.txt", "不应写出工作区")
+        archive.seek(0)
+        upload = UploadFile(filename="unsafe.teproj", file=archive)
+
+        import asyncio
+
+        with self.assertRaises(HTTPException) as context:
+            asyncio.run(backend.api_import_project(upload))
+        self.assertEqual(context.exception.status_code, 400)
+        self.assertFalse(os.path.exists(os.path.join(self.temp_dir, "outside.txt")))
+
     def test_clipping_detection(self):
         # Generate normal sine wave
         t = np.linspace(0, 1, 16000)

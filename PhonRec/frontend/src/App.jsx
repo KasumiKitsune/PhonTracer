@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
-
-// API Configuration
-const API_BASE = 'http://127.0.0.1:8080/api';
+import { useState, useEffect, useRef } from 'react';
+import { save } from '@tauri-apps/plugin-dialog';
+import { writeFile } from '@tauri-apps/plugin-fs';
+import { apiFetch } from './engineApi.js';
+import { bufferToWav, resampleAudio } from './audioUtils.js';
 
 // --- Inline SVG Icons ---
 const ImportIcon = () => (
@@ -100,43 +101,6 @@ const MicIcon = ({ active }) => (
   </svg>
 );
 
-// --- Utils ---
-function bufferToWav(float32Array, sampleRate) {
-  const numChannels = 1;
-  const byteRate = sampleRate * numChannels * 2;
-  const blockAlign = numChannels * 2;
-  const buffer = new ArrayBuffer(44 + float32Array.length * 2);
-  const view = new DataView(buffer);
-
-  function writeString(view, offset, string) {
-    for (let i = 0; i < string.length; i++) {
-      view.setUint8(offset + i, string.charCodeAt(i));
-    }
-  }
-
-  writeString(view, 0, 'RIFF');
-  view.setUint32(4, 36 + float32Array.length * 2, true);
-  writeString(view, 8, 'WAVE');
-  writeString(view, 12, 'fmt ');
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, numChannels, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, byteRate, true);
-  view.setUint16(32, blockAlign, true);
-  view.setUint16(34, 16, true);
-  writeString(view, 36, 'data');
-  view.setUint32(40, float32Array.length * 2, true);
-
-  let offset = 44;
-  for (let i = 0; i < float32Array.length; i++, offset += 2) {
-    let s = Math.max(-1, Math.min(1, float32Array[i]));
-    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
-  }
-
-  return new Blob([view], { type: 'audio/wav' });
-}
-
 const PlayIcon = () => (
   <svg style={{ width: '18px', height: '18px', marginLeft: '2px' }} viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <polygon points="5 3 19 12 5 21 5 3" />
@@ -192,7 +156,7 @@ const CustomSelect = ({ value, onChange, options, style }) => {
 
 export default function App() {
   // --- State Variables ---
-  const [connectionStatus, setConnectionStatus] = useState(true);
+  const [, setConnectionStatus] = useState(true);
   const [speakers, setSpeakers] = useState({});
   const [activeSpeakerId, setActiveSpeakerId] = useState('');
   const [groups, setGroups] = useState([]);
@@ -307,7 +271,8 @@ export default function App() {
     
     try {
       const AudioContext = window.AudioContext || window.webkitAudioContext;
-      audioContextRef.current = new AudioContext({ sampleRate: 16000 });
+      // 让 WebView 使用设备的真实采样率，停止录音时再统一重采样到 16 kHz。
+      audioContextRef.current = new AudioContext();
       
       const stream = await navigator.mediaDevices.getUserMedia({ 
         audio: {
@@ -427,7 +392,7 @@ export default function App() {
     
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`${API_BASE}/project/state`);
+        const res = await apiFetch('/project/state');
         if (res.ok) setConnectionStatus(true);
       } catch {
         setConnectionStatus(false);
@@ -532,7 +497,7 @@ export default function App() {
         setQualityResults(recordMeta.quality);
       }
       analyzeAudio(activeSpeakerId, activeItem.id);
-      drawStaticWaveformFromUrl(recordMeta.path);
+      drawStaticWaveformFromUrl();
     } else {
       setSpectrogramUrl('');
       setQualityResults(null);
@@ -554,7 +519,7 @@ export default function App() {
   // --- API Wrappers ---
   const fetchProjectState = async () => {
     try {
-      const res = await fetch(`${API_BASE}/project/state`);
+      const res = await apiFetch('/project/state');
       if (!res.ok) throw new Error('API Error');
       const data = await res.json();
       
@@ -583,7 +548,7 @@ export default function App() {
     };
     
     try {
-      await fetch(`${API_BASE}/project/state`, {
+      await apiFetch('/project/state', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(state)
@@ -702,7 +667,7 @@ export default function App() {
     
     try {
       setIsProcessing(true);
-      const res = await fetch(`${API_BASE}/wordlist/import`, {
+      const res = await apiFetch('/wordlist/import', {
         method: 'POST',
         body: formData
       });
@@ -743,7 +708,7 @@ export default function App() {
     
     try {
       setIsProcessing(true);
-      const res = await fetch(`${API_BASE}/project/import`, {
+      const res = await apiFetch('/project/import', {
         method: 'POST',
         body: formData
       });
@@ -792,15 +757,27 @@ export default function App() {
     if (file) uploadProjectFile(file);
   };
 
-  const handleProjectExport = () => {
-    window.location.href = `${API_BASE}/project/export`;
+  const handleProjectExport = async () => {
+    try {
+      const res = await apiFetch('/project/export');
+      if (!res.ok) throw new Error('导出工程失败');
+      const destination = await save({
+        defaultPath: 'PhonRec_Project.teproj',
+        filters: [{ name: 'PhonTracer 工程', extensions: ['teproj'] }],
+      });
+      if (!destination) return;
+      await writeFile(destination, new Uint8Array(await res.arrayBuffer()));
+    } catch (error) {
+      console.error(error);
+      await customAlert(`导出工程失败：${error.message || error}`);
+    }
   };
 
   const handleProjectClear = async () => {
     const ok = await customConfirm('确定清空当前工作区，开始全新的录制吗？');
     if (!ok) return;
     try {
-      await fetch(`${API_BASE}/project/clear`, { method: 'POST' });
+      await apiFetch('/project/clear', { method: 'POST' });
       setSpeakers({});
       setActiveSpeakerId('');
       setGroups([]);
@@ -897,7 +874,9 @@ export default function App() {
     }
     
     drawStaticWaveform(floatBuffer);
-    const wavBlob = bufferToWav(floatBuffer, 16000);
+    const sourceSampleRate = audioContextRef.current?.sampleRate || 16000;
+    const resampledBuffer = resampleAudio(floatBuffer, sourceSampleRate, 16000);
+    const wavBlob = bufferToWav(resampledBuffer, 16000);
     uploadAudio(wavBlob, shouldAutoAdvance);
   };
 
@@ -912,7 +891,7 @@ export default function App() {
     formData.append('word_id', activeItem.id);
     
     try {
-      const res = await fetch(`${API_BASE}/audio/save`, {
+      const res = await apiFetch('/audio/save', {
         method: 'POST',
         body: formData
       });
@@ -960,7 +939,7 @@ export default function App() {
     formData.append('word_id', wordId);
     
     try {
-      const res = await fetch(`${API_BASE}/audio/analyze`, {
+      const res = await apiFetch('/audio/analyze', {
         method: 'POST',
         body: formData
       });
@@ -985,16 +964,25 @@ export default function App() {
     }
   };
 
-  const playRecordedAudio = () => {
+  const playRecordedAudio = async () => {
     const activeItem = getActiveItem();
     if (!activeItem || !activeSpeakerId) return;
     
     const recordMeta = speakers[activeSpeakerId]?.items?.[activeItem.id];
     if (!recordMeta) return;
     
-    const audioUrl = `${API_BASE}/audio/file?speaker_id=${activeSpeakerId}&word_id=${activeItem.id}&t=${Date.now()}`;
-    const audio = new Audio(audioUrl);
-    audio.play().catch(e => console.error('播放失败:', e));
+    try {
+      const res = await apiFetch(`/audio/file?speaker_id=${encodeURIComponent(activeSpeakerId)}&word_id=${encodeURIComponent(activeItem.id)}&t=${Date.now()}`);
+      if (!res.ok) throw new Error('读取录音失败');
+      const audioUrl = URL.createObjectURL(await res.blob());
+      const audio = new Audio(audioUrl);
+      const releaseUrl = () => URL.revokeObjectURL(audioUrl);
+      audio.addEventListener('ended', releaseUrl, { once: true });
+      audio.addEventListener('error', releaseUrl, { once: true });
+      await audio.play();
+    } catch (error) {
+      console.error('播放失败:', error);
+    }
   };
 
   const discardRecordedAudio = async () => {
@@ -1058,12 +1046,12 @@ export default function App() {
     ctx.stroke();
   };
 
-  const drawStaticWaveformFromUrl = async (relPath) => {
+  const drawStaticWaveformFromUrl = async () => {
     const activeItem = getActiveItem();
     if (!activeItem || !activeSpeakerId) return;
     
     try {
-      const res = await fetch(`${API_BASE}/audio/file?speaker_id=${activeSpeakerId}&word_id=${activeItem.id}`);
+      const res = await apiFetch(`/audio/file?speaker_id=${encodeURIComponent(activeSpeakerId)}&word_id=${encodeURIComponent(activeItem.id)}`);
       if (!res.ok) return;
       const arrayBuffer = await res.arrayBuffer();
       
