@@ -15,6 +15,11 @@ import httpx
 from fastapi import HTTPException
 from fastapi.datastructures import UploadFile
 
+# Make sure PhonRec/backend is in sys.path before importing main
+backend_dir = os.path.dirname(os.path.abspath(__file__))
+if backend_dir not in sys.path:
+    sys.path.insert(0, backend_dir)
+
 # Import backend logic
 import main as backend
 

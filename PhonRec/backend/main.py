@@ -21,11 +21,14 @@ import numpy as np
 from scipy.io import wavfile
 import scipy.signal as signal
 
-# Make sure parent directory of PhonRec/backend is in sys.path
+# Make sure parent directory of PhonRec/backend and workspace root are in sys.path
 backend_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(backend_dir)
+workspace_root = os.path.dirname(parent_dir)
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
+if workspace_root not in sys.path:
+    sys.path.insert(0, workspace_root)
 
 from modules.project_adaptor import (
     safe_extract_zip,
