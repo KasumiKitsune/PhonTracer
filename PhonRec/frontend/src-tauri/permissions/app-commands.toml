@@ -1,0 +1,28 @@
+[[permission]]
+identifier = "allow-app-commands"
+description = "Allows all custom commands defined in the application"
+
+[permission.commands]
+allow = [
+    "get_engine_status",
+    "retry_engine",
+    "quit_app",
+    "standalone_project_load",
+    "standalone_project_save",
+    "standalone_project_clear",
+    "standalone_project_import",
+    "standalone_project_export",
+    "standalone_audio_save",
+    "standalone_audio_read",
+    "standalone_export_wav_folder",
+    "load_settings",
+    "save_settings",
+    "reset_settings",
+    "list_audio_devices",
+    "start_loopback_listener",
+    "stop_loopback_listener",
+    "start_loopback_recording",
+    "stop_loopback_recording",
+    "open_system_permission_settings",
+    "reset_microphone_permission"
+]

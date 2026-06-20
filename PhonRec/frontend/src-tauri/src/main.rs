@@ -117,6 +117,7 @@ fn discover_engine() -> Result<EngineLocation, String> {
         }
     }
 
+    let mut last_error = None;
     for root in [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE] {
         let root_key = RegKey::predef(root);
         let key = root_key.open_subkey_with_flags(
@@ -124,21 +125,23 @@ fn discover_engine() -> Result<EngineLocation, String> {
             KEY_READ | KEY_WOW64_64KEY,
         );
         if let Ok(key) = key {
-            let install_dir: String = key
-                .get_value("InstallDir")
-                .map_err(|_| "PhonTracer 安装信息缺少 InstallDir".to_string())?;
-            let declared_protocol = key.get_value::<u32, _>("EngineProtocol").ok();
-            let executable = PathBuf::from(install_dir).join("PhonTracerAnalysisEngine.exe");
-            if executable.is_file() {
-                return Ok(EngineLocation {
-                    executable,
-                    declared_protocol,
-                });
+            if let Ok(install_dir) = key.get_value::<String, _>("InstallDir") {
+                let declared_protocol = key.get_value::<u32, _>("EngineProtocol").ok();
+                let executable = PathBuf::from(install_dir).join("PhonTracerAnalysisEngine.exe");
+                if executable.is_file() {
+                    return Ok(EngineLocation {
+                        executable,
+                        declared_protocol,
+                    });
+                } else {
+                    last_error = Some("已检测到 PhonTracer，但安装目录中缺少分析引擎；请更新主程序".to_string());
+                }
+            } else {
+                last_error = Some("PhonTracer 安装信息缺少 InstallDir".to_string());
             }
-            return Err("已检测到 PhonTracer，但安装目录中缺少分析引擎；请更新主程序".into());
         }
     }
-    Err("尚未检测到已安装的 PhonTracer".into())
+    Err(last_error.unwrap_or_else(|| "尚未检测到已安装的 PhonTracer".to_string()))
 }
 
 #[cfg(target_os = "macos")]
