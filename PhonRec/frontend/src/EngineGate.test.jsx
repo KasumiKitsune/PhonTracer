@@ -53,12 +53,30 @@ describe('PhonTracer 启动门禁', () => {
       connection: {
         api_base: 'http://127.0.0.1:43123/api',
         token: 'token',
+        capabilities: ['project-state', 'audio-storage'],
       },
       download_url: 'https://example.invalid',
     });
     render(<EngineGate><div>主界面</div></EngineGate>);
     expect(await screen.findByText('主界面')).toBeTruthy();
     expect(document.getElementById('startup-loader')).toBeNull();
+  });
+
+  it('分析引擎缺少必要能力时阻止进入主界面', async () => {
+    invokeMock.mockResolvedValue({
+      state: 'ready',
+      message: '分析引擎已就绪',
+      connection: {
+        api_base: 'http://127.0.0.1:43123/api',
+        token: 'token',
+        capabilities: ['project-state'],
+      },
+      download_url: 'https://example.invalid',
+    });
+    render(<EngineGate><div>主界面</div></EngineGate>);
+    expect(await screen.findByText('需要更新 PhonTracer')).toBeTruthy();
+    expect(screen.getByText(/缺失必要能力/)).toBeTruthy();
+    expect(screen.queryByText('主界面')).toBeNull();
   });
 
   it('独立模式选择只在本次挂载有效', async () => {

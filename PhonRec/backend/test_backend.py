@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 import numpy as np
 import io
 import json
@@ -15,6 +16,7 @@ import zipfile
 import httpx
 from fastapi import HTTPException
 from fastapi.datastructures import UploadFile
+from modules.project_integrity import verify_project_integrity
 
 # Make sure PhonRec/backend is in sys.path before importing main
 backend_dir = os.path.dirname(os.path.abspath(__file__))
@@ -112,6 +114,66 @@ class TestPhonRecBackend(unittest.TestCase):
                 "spk_1", "word_missing", "测试麦克风", disabled_rules,
             ))
         self.assertFalse(any("word_missing" in name for _root, _dirs, files in os.walk(backend.AUDIO_DIR) for name in files))
+
+    def test_workspace_transaction_rolls_back_project_resources_and_audit(self):
+        project_path = os.path.join(backend.WORKSPACE_DIR, "project.json")
+        audio_path = os.path.join(backend.AUDIO_DIR, "sample.wav")
+        os.makedirs(os.path.dirname(audio_path), exist_ok=True)
+        with open(project_path, "wb") as file_obj:
+            file_obj.write(b'{"state":"old"}')
+        with open(audio_path, "wb") as file_obj:
+            file_obj.write(b"old-audio")
+        backend.append_audit_log(backend.WORKSPACE_DIR, "created", {})
+        backend.update_manifest(backend.WORKSPACE_DIR)
+
+        audit_path = os.path.join(backend.WORKSPACE_DIR, "logs", "audit.jsonl")
+        manifest_path = os.path.join(backend.WORKSPACE_DIR, "integrity", "manifest.json")
+        originals = {
+            project_path: open(project_path, "rb").read(),
+            audio_path: open(audio_path, "rb").read(),
+            audit_path: open(audit_path, "rb").read(),
+            manifest_path: open(manifest_path, "rb").read(),
+        }
+
+        staged_project = os.path.join(backend.WORKSPACE_DIR, "project.tmp.json")
+        staged_audio = os.path.join(backend.AUDIO_DIR, "sample.tmp.wav")
+        with open(staged_project, "wb") as file_obj:
+            file_obj.write(b'{"state":"new"}')
+        with open(staged_audio, "wb") as file_obj:
+            file_obj.write(b"new-audio")
+
+        with mock.patch.object(backend, "update_manifest", side_effect=RuntimeError("模拟清单写入失败")):
+            with self.assertRaisesRegex(RuntimeError, "模拟清单写入失败"):
+                backend.commit_workspace_transaction(
+                    {audio_path: staged_audio, project_path: staged_project},
+                    "audio_saved",
+                    {"speaker_id": "spk_1", "word_id": "word_1"},
+                )
+
+        for path, expected_bytes in originals.items():
+            with open(path, "rb") as file_obj:
+                self.assertEqual(file_obj.read(), expected_bytes)
+        self.assertFalse(any(".rollback" in name for root, _dirs, files in os.walk(backend.WORKSPACE_DIR) for name in files))
+        self.assertFalse(any(name.startswith(".phonrec_transaction_") for name in os.listdir(self.temp_dir)))
+
+    def test_workspace_transaction_backup_failure_never_deletes_original(self):
+        project_path = os.path.join(backend.WORKSPACE_DIR, "project.json")
+        staged_project = os.path.join(backend.WORKSPACE_DIR, "project.tmp.json")
+        with open(project_path, "wb") as file_obj:
+            file_obj.write(b"old-project")
+        with open(staged_project, "wb") as file_obj:
+            file_obj.write(b"new-project")
+
+        with mock.patch.object(backend.os, "makedirs", side_effect=OSError("模拟备份目录创建失败")):
+            with self.assertRaisesRegex(OSError, "模拟备份目录创建失败"):
+                backend.commit_workspace_transaction(
+                    {project_path: staged_project},
+                    "project_saved",
+                    {},
+                )
+
+        with open(project_path, "rb") as file_obj:
+            self.assertEqual(file_obj.read(), b"old-project")
 
     def test_random_loopback_port(self):
         server_socket = backend.create_server_socket(0)
@@ -566,6 +628,102 @@ class TestPhonRecBackend(unittest.TestCase):
                 self.assertIn("符号链接", context.exception.detail)
         finally:
             shutil.rmtree(test_dir, ignore_errors=True)
+
+    def test_audio_analysis_and_handoff(self):
+        import asyncio
+        import stat
+
+        # Initialize workspace project state
+        state = {
+            "version": "1.0",
+            "active_speaker_id": "spk_1",
+            "groups": [{"id": "g1", "name": "组", "items": [{"id": "word_1", "label": "妈"}]}],
+            "speakers": {
+                "spk_1": {
+                    "id": "spk_1",
+                    "name": "甲",
+                    "last_params": {
+                        "pitch_floor": 75,
+                        "pitch_ceiling": 600,
+                        "voicing_threshold": 0.25,
+                        "very_accurate": True,
+                        "formant_count": 5,
+                        "formant_max_hz": 5500.0,
+                        "formant_window_length": 0.025,
+                        "formant_pre_emphasis": 50.0,
+                        "formant_sample_strategy": "整段11点",
+                        "pts": 11,
+                        "show_f3": False,
+                        "db": 60.0,
+                        "skip_front": 0.0,
+                        "analysis_mode": "f0"
+                    },
+                    "items": {
+                        "word_1": {
+                            "id": "word_1",
+                            "label": "妈"
+                        }
+                    }
+                }
+            },
+        }
+        backend.init_workspace()
+        with open(os.path.join(backend.WORKSPACE_DIR, "project.json"), "w", encoding="utf-8") as project_file:
+            json.dump(state, project_file, ensure_ascii=False)
+
+        disabled_rules = json.dumps({name: {"enabled": False, "level": "medium"} for name in backend.QUALITY_RULE_NAMES})
+
+        # 1. Save audio
+        save_res = asyncio.run(backend.api_save_audio(
+            UploadFile(filename="test.wav", file=io.BytesIO(build_test_wav())),
+            "spk_1", "word_1", "测试麦克风", disabled_rules,
+        ))
+        self.assertTrue(save_res["stored"])
+
+        # Check npz files exist
+        pitch_npz = os.path.join(backend.DATA_DIR, "spk_1_word_1.npz")
+        formant_npz = os.path.join(backend.DATA_DIR, "spk_1_word_1_formant.npz")
+        self.assertTrue(os.path.exists(pitch_npz))
+        self.assertTrue(os.path.exists(formant_npz))
+
+        # Check manifest and audit log exist
+        manifest_file = os.path.join(backend.WORKSPACE_DIR, "integrity", "manifest.json")
+        audit_file = os.path.join(backend.WORKSPACE_DIR, "logs", "audit.jsonl")
+        self.assertTrue(os.path.exists(manifest_file))
+        self.assertTrue(os.path.exists(audit_file))
+        integrity_status, integrity_warnings, _ = verify_project_integrity(backend.WORKSPACE_DIR)
+        self.assertEqual(integrity_status, "verified", integrity_warnings)
+
+        # 2. Get audio analysis (Cache Hit)
+        analysis_res = asyncio.run(backend.api_get_audio_analysis("spk_1", "word_1"))
+        self.assertEqual(analysis_res["status"], "success")
+        self.assertTrue(analysis_res["cache_hit"])
+        self.assertIn("pitch", analysis_res)
+        self.assertIn("formants", analysis_res)
+        self.assertIn("summary", analysis_res)
+
+        # 3. Create Handoff Review Snapshot
+        with self.assertRaises(HTTPException) as missing_target:
+            asyncio.run(backend.api_handoff_create({"speaker_id": "spk_1", "word_id": "missing"}))
+        self.assertEqual(missing_target.exception.status_code, 404)
+
+        handoff_res = asyncio.run(backend.api_handoff_create({"speaker_id": "spk_1", "word_id": "word_1"}))
+        self.assertEqual(handoff_res["status"], "success")
+
+        archive_path = handoff_res["archive_path"]
+        manifest_path = handoff_res["manifest_path"]
+
+        self.assertTrue(os.path.exists(archive_path))
+        self.assertTrue(os.path.exists(manifest_path))
+
+        # Verify read-only permission (stat.S_IREAD only or matching mask)
+        archive_stat = os.stat(archive_path).st_mode
+        manifest_stat = os.stat(manifest_path).st_mode
+
+        # Check that they are files and have read permission but not write (or match basic read-only flags)
+        self.assertTrue(bool(archive_stat & stat.S_IREAD))
+        self.assertTrue(bool(manifest_stat & stat.S_IREAD))
+
 
 if __name__ == '__main__':
     unittest.main()

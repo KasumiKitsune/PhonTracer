@@ -23,6 +23,8 @@ struct EngineConnection {
     token: String,
     protocol_version: u32,
     engine_version: String,
+    capabilities: Option<Vec<String>>,
+    capability_versions: Option<HashMap<String, String>>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -83,6 +85,8 @@ struct HealthResponse {
     status: String,
     protocol_version: u32,
     engine_version: String,
+    capabilities: Option<Vec<String>>,
+    capability_versions: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug)]
@@ -1747,6 +1751,8 @@ fn start_engine(app: &AppHandle, runtime: &mut EngineRuntime) -> EngineStatus {
             token,
             protocol_version: handshake.protocol_version,
             engine_version: handshake.engine_version,
+            capabilities: health.capabilities,
+            capability_versions: health.capability_versions,
         })
     })();
 
@@ -1776,6 +1782,152 @@ fn retry_engine(app: AppHandle, state: State<'_, EngineState>) -> EngineStatus {
     let status = start_engine(&app, &mut runtime);
     runtime.status = status.clone();
     status
+}
+
+fn validate_handoff_files(
+    handoff_root: &Path,
+    archive: &Path,
+    manifest: &Path,
+) -> Result<(PathBuf, PathBuf), String> {
+    if !archive.is_absolute() || !manifest.is_absolute() {
+        return Err("路径必须为绝对路径".into());
+    }
+
+    let canonical_root = handoff_root
+        .canonicalize()
+        .map_err(|error| format!("交接根目录无效: {error}"))?;
+    let canonical_archive = archive
+        .canonicalize()
+        .map_err(|error| format!("交接快照文件不存在或无法访问: {error}"))?;
+    let canonical_manifest = manifest
+        .canonicalize()
+        .map_err(|error| format!("交接清单文件不存在或无法访问: {error}"))?;
+
+    if !canonical_archive.is_file() || !canonical_manifest.is_file() {
+        return Err("交接快照或清单不是普通文件".into());
+    }
+    if canonical_archive
+        .extension()
+        .and_then(|value| value.to_str())
+        != Some("teproj")
+    {
+        return Err("快照归档格式错误，必须为 .teproj 文件".into());
+    }
+    if canonical_manifest
+        .file_name()
+        .and_then(|value| value.to_str())
+        != Some("handoff.json")
+    {
+        return Err("交接清单文件名必须为 handoff.json".into());
+    }
+
+    let archive_parent = canonical_archive.parent().ok_or("交接快照路径无效")?;
+    let manifest_parent = canonical_manifest.parent().ok_or("交接清单路径无效")?;
+    if archive_parent != manifest_parent {
+        return Err("交接快照与清单必须位于同一目录".into());
+    }
+    if archive_parent.parent() != Some(canonical_root.as_path()) {
+        return Err("交接文件不在受控 handoffs 目录中".into());
+    }
+
+    let manifest_content = fs::read_to_string(&canonical_manifest)
+        .map_err(|error| format!("读取交接清单失败: {error}"))?;
+    let manifest_data: Value = serde_json::from_str(&manifest_content)
+        .map_err(|error| format!("解析交接清单失败: {error}"))?;
+    let expected_handoff_id = archive_parent
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or("交接目录名称无效")?;
+    if manifest_data.get("handoff_id").and_then(Value::as_str) != Some(expected_handoff_id) {
+        return Err("交接清单 handoff_id 与目录不匹配".into());
+    }
+    let expected_archive_name = canonical_archive
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or("交接快照文件名无效")?;
+    if manifest_data.get("project_archive").and_then(Value::as_str) != Some(expected_archive_name) {
+        return Err("交接清单未绑定当前快照归档".into());
+    }
+    for field in ["speaker_id", "word_id"] {
+        if manifest_data
+            .get(field)
+            .and_then(Value::as_str)
+            .map(str::is_empty)
+            != Some(false)
+        {
+            return Err(format!("交接清单缺少有效的 {field}"));
+        }
+    }
+
+    Ok((canonical_archive, canonical_manifest))
+}
+
+#[tauri::command]
+fn open_phontracer_review(
+    app: AppHandle,
+    archive_path: String,
+    manifest_path: String,
+) -> Result<(), String> {
+    let workspace = workspace_dir(&app)?;
+    let handoff_root = workspace
+        .parent()
+        .ok_or("PhonRec 工作区路径无效")?
+        .join("handoffs");
+    let (archive, manifest) = validate_handoff_files(
+        &handoff_root,
+        Path::new(&archive_path),
+        Path::new(&manifest_path),
+    )?;
+
+    #[cfg(windows)]
+    {
+        let engine_loc =
+            discover_engine().map_err(|e| format!("未找到已安装的 PhonTracer: {}", e))?;
+        let install_dir = engine_loc.executable.parent().ok_or("分析引擎路径无效")?;
+        let phontracer_exe = install_dir.join("PhonTracer.exe");
+
+        if !phontracer_exe.is_file() {
+            return Err(format!(
+                "未在安装目录中找到主程序 PhonTracer.exe (尝试路径: {:?})",
+                phontracer_exe
+            ));
+        }
+
+        Command::new(phontracer_exe)
+            .arg(&archive)
+            .arg("--handoff-manifest")
+            .arg(&manifest)
+            .spawn()
+            .map_err(|e| format!("拉起 PhonTracer.exe 失败: {}", e))?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let engine_loc =
+            discover_engine().map_err(|e| format!("未找到已安装的 PhonTracer: {}", e))?;
+        let app_path = engine_loc
+            .executable
+            .ancestors()
+            .find(|p| p.extension().and_then(|s| s.to_str()) == Some("app"))
+            .ok_or("未找到 PhonTracer.app 目录")?;
+
+        Command::new("open")
+            .arg("-a")
+            .arg(app_path)
+            .arg("--args")
+            .arg(&archive)
+            .arg("--handoff-manifest")
+            .arg(&manifest)
+            .spawn()
+            .map_err(|e| format!("拉起 PhonTracer.app 失败: {}", e))?;
+    }
+
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        return Err("当前操作系统不支持拉起 PhonTracer".into());
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -2573,7 +2725,8 @@ fn main() {
             start_loopback_recording,
             stop_loopback_recording,
             open_system_permission_settings,
-            reset_microphone_permission
+            reset_microphone_permission,
+            open_phontracer_review
         ])
         .build(tauri::generate_context!())
         .expect("无法创建 PhonRec Tauri 应用");
@@ -2651,6 +2804,73 @@ mod tests {
     }
 
     #[test]
+    fn 交接文件必须位于受控目录且与清单绑定() {
+        let root = std::env::temp_dir().join(format!("phonrec_handoff_test_{}", Uuid::new_v4()));
+        let handoff_root = root.join("handoffs");
+        let handoff_id = Uuid::new_v4().to_string();
+        let package_dir = handoff_root.join(&handoff_id);
+        fs::create_dir_all(&package_dir).unwrap();
+        let archive = package_dir.join("review_snapshot.teproj");
+        let manifest = package_dir.join("handoff.json");
+        fs::write(&archive, b"snapshot").unwrap();
+        fs::write(
+            &manifest,
+            serde_json::to_vec(&json!({
+                "handoff_id": handoff_id,
+                "speaker_id": "spk_1",
+                "word_id": "word_1",
+                "project_archive": "review_snapshot.teproj"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let validated = validate_handoff_files(&handoff_root, &archive, &manifest).unwrap();
+        assert_eq!(validated.0, archive.canonicalize().unwrap());
+        assert_eq!(validated.1, manifest.canonicalize().unwrap());
+
+        fs::write(
+            &manifest,
+            serde_json::to_vec(&json!({
+                "handoff_id": handoff_id,
+                "speaker_id": "spk_1",
+                "word_id": "word_1",
+                "project_archive": "other.teproj"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(validate_handoff_files(&handoff_root, &archive, &manifest).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn 交接文件不能从受控目录外启动() {
+        let root = std::env::temp_dir().join(format!("phonrec_handoff_escape_{}", Uuid::new_v4()));
+        let handoff_root = root.join("handoffs");
+        let outside = root.join("outside");
+        fs::create_dir_all(&handoff_root).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        let archive = outside.join("review_snapshot.teproj");
+        let manifest = outside.join("handoff.json");
+        fs::write(&archive, b"snapshot").unwrap();
+        fs::write(
+            &manifest,
+            serde_json::to_vec(&json!({
+                "handoff_id": "outside",
+                "speaker_id": "spk_1",
+                "word_id": "word_1",
+                "project_archive": "review_snapshot.teproj"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert!(validate_handoff_files(&handoff_root, &archive, &manifest).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn 引擎崩溃后状态会变为失败() {
         let child = 立即退出的测试进程();
         let connection = EngineConnection {
@@ -2658,6 +2878,8 @@ mod tests {
             token: "test".into(),
             protocol_version: ENGINE_PROTOCOL,
             engine_version: "test".into(),
+            capabilities: None,
+            capability_versions: None,
         };
         let mut runtime = EngineRuntime {
             process: Some(child),

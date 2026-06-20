@@ -438,6 +438,55 @@ class ProjectManager:
                             ))
                         else:
                             item_dict[k] = v
+                    # Calculate analysis_state
+                    from modules.project_integrity import calculate_file_sha256
+                    from modules.acoustic_analysis_service import normalize_analysis_params
+                    import hashlib
+
+                    audio_sha = ""
+                    pitch_sha = ""
+                    formant_sha = ""
+                    params_sha = ""
+
+                    if item_dict.get('path'):
+                        audio_abs = self._resolve_project_path(item_dict['path'])
+                        if os.path.exists(audio_abs):
+                            try:
+                                audio_sha = calculate_file_sha256(audio_abs)
+                            except Exception:
+                                pass
+
+                    if item_dict.get('pitch_data_file'):
+                        pitch_abs = self._resolve_project_path(item_dict['pitch_data_file'])
+                        if os.path.exists(pitch_abs):
+                            try:
+                                pitch_sha = calculate_file_sha256(pitch_abs)
+                            except Exception:
+                                pass
+
+                    if item_dict.get('formant_data_file'):
+                        formant_abs = self._resolve_project_path(item_dict['formant_data_file'])
+                        if os.path.exists(formant_abs):
+                            try:
+                                formant_sha = calculate_file_sha256(formant_abs)
+                            except Exception:
+                                pass
+
+                    try:
+                        norm_params = normalize_analysis_params(spk.last_params)
+                        params_serialized = json.dumps(norm_params, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
+                        params_sha = hashlib.sha256(params_serialized.encode('utf-8')).hexdigest()
+                    except Exception:
+                        pass
+
+                    item_dict['analysis_state'] = {
+                        "algorithm_version": "audio-core-v1",
+                        "audio_sha256": audio_sha,
+                        "params_sha256": params_sha,
+                        "pitch_cache_sha256": pitch_sha,
+                        "formant_cache_sha256": formant_sha
+                    }
+
                     spk_data["items"][item_id] = item_dict
 
                 state["speakers"][spk_id] = spk_data
@@ -448,6 +497,13 @@ class ProjectManager:
             with open(tmp_json, "w", encoding="utf-8") as f:
                 json.dump(serializable_state, f, ensure_ascii=False, indent=2)
             os.replace(tmp_json, project_json)
+
+            try:
+                from modules.project_integrity import append_audit_log, update_manifest
+                append_audit_log(self.workspace_dir, "project_saved", {"software_version": __version__})
+                update_manifest(self.workspace_dir)
+            except Exception as e:
+                print(f"Failed to update manifest or append audit log: {e}")
 
             # Write recovery metadata to autosave_meta.json
             meta_path = os.path.join(self.workspace_dir, "autosave_meta.json")
@@ -489,6 +545,12 @@ class ProjectManager:
 
         try:
             with self._save_lock:
+                try:
+                    from modules.project_integrity import append_audit_log, update_manifest
+                    append_audit_log(self.workspace_dir, "project_exported", {"zip_path": zip_path})
+                    update_manifest(self.workspace_dir)
+                except Exception as e:
+                    print(f"Failed to update manifest/audit on export: {e}")
                 self._write_project_archive(zip_path)
 
             # Delete backup after successful export

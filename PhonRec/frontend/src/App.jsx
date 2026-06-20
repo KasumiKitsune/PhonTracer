@@ -1828,6 +1828,48 @@ export default function App() {
     }
   };
 
+  const handleHandoffReview = async () => {
+    if (isRecordingRef.current || isProcessingRef.current || isStartingRef.current) return;
+    if (!activeSpeakerId || !activeItem?.id) {
+      await customAlert('请先选择一个发音人和录音词条以进行复核交接！');
+      return;
+    }
+
+    try {
+      setIsProcessing(true);
+      await saveProjectState(speakers);
+
+      const res = await apiFetch('/handoff/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          speaker_id: activeSpeakerId,
+          word_id: activeItem.id
+        })
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || '生成交接快照失败');
+      }
+
+      const handoffData = await res.json();
+      const { archive_path, manifest_path } = handoffData;
+
+      await invoke('open_phontracer_review', {
+        archivePath: archive_path,
+        manifestPath: manifest_path
+      });
+
+      await customAlert('一键复核成功，已在后台拉起 PhonTracer 载入快照工程并定位到目标项！');
+    } catch (error) {
+      console.error(error);
+      await customAlert(`一键复核交接失败：${error.message || error}`);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const handleProjectClear = async () => {
     if (isRecordingRef.current || isProcessingRef.current || isStartingRef.current) return;
     const ok = await customConfirm('确定清空当前工作区，开始全新的录制吗？');
@@ -3018,6 +3060,11 @@ export default function App() {
               {capabilities.wavFolderExport && (
                 <button className="btn-secondary" disabled={isRecording || isProcessing} style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }} onClick={handleWavExport}>
                   <ImportIcon /> 导出 WAV
+                </button>
+              )}
+{capabilities.handoffReview && (
+                <button className="btn-secondary" disabled={isRecording || isProcessing || !activeSpeakerId || !activeItem?.id} style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }} onClick={handleHandoffReview}>
+                  交给 PhonTracer 复核
                 </button>
               )}
               <button className="btn-primary" disabled={isRecording || isProcessing} style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }} onClick={handleProjectExport}>

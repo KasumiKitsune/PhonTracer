@@ -1,8 +1,75 @@
 import sys
+import os
+import json
 
-# 打包版通过双击 .teproj 启动时，工程路径只会出现在进程初始参数里。
-# 这里尽早复制一份，避免启动界面、运行时钩子或后续初始化过程意外改动 sys.argv。
-STARTUP_ARGS = sys.argv[1:].copy()
+def parse_handoff_arguments(args):
+    """
+    Parse command-line arguments to extract handoff manifest data and clean arguments.
+    Returns: (cleaned_args, handoff_manifest_data)
+    """
+    manifest_data = None
+    clean_args = []
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == '--handoff-manifest':
+            if i + 1 < len(args):
+                manifest_path = args[i+1]
+                i += 2
+                try:
+                    manifest_path = os.path.abspath(manifest_path)
+                    if os.path.exists(manifest_path):
+                        with open(manifest_path, "r", encoding="utf-8") as f:
+                            manifest_data = json.load(f)
+
+                        # Check if project file is in the rest of args
+                        has_project = False
+                        for a in args:
+                            if a != '--handoff-manifest' and a != manifest_path and not a.startswith('--handoff-manifest='):
+                                if str(a).lower().endswith(('.teproj', '.zip')):
+                                    has_project = True
+                                    break
+                        if not has_project:
+                            archive_name = manifest_data.get("project_archive")
+                            if archive_name:
+                                manifest_dir = os.path.dirname(manifest_path)
+                                archive_path = os.path.join(manifest_dir, archive_name)
+                                if os.path.exists(archive_path):
+                                    clean_args.append(archive_path)
+                except Exception as e:
+                    print(f"Error parsing handoff manifest: {e}")
+            else:
+                i += 1
+        elif arg.startswith('--handoff-manifest='):
+            manifest_path = arg.split('=', 1)[1]
+            i += 1
+            try:
+                manifest_path = os.path.abspath(manifest_path)
+                if os.path.exists(manifest_path):
+                    with open(manifest_path, "r", encoding="utf-8") as f:
+                        manifest_data = json.load(f)
+
+                    has_project = False
+                    for a in args:
+                        if a != arg and not a.startswith('--handoff-manifest='):
+                            if str(a).lower().endswith(('.teproj', '.zip')):
+                                has_project = True
+                                break
+                    if not has_project:
+                        archive_name = manifest_data.get("project_archive")
+                        if archive_name:
+                            manifest_dir = os.path.dirname(manifest_path)
+                            archive_path = os.path.join(manifest_dir, archive_name)
+                            if os.path.exists(archive_path):
+                                clean_args.append(archive_path)
+            except Exception as e:
+                print(f"Error parsing handoff manifest: {e}")
+        else:
+            clean_args.append(arg)
+            i += 1
+    return clean_args, manifest_data
+
+STARTUP_ARGS, HANDOFF_MANIFEST_DATA = parse_handoff_arguments(sys.argv[1:])
 
 import os
 import time
@@ -59,7 +126,7 @@ def show_splash_and_load(startup_files=None):
     splash.attributes('-topmost', True)
 
     # 1. 获取正确缩放并居中
-    splash.update_idletasks() 
+    splash.update_idletasks()
     width = 580  # 【再变宽】以容纳超长波形
     height = 240
     screen_width = splash.winfo_screenwidth()
@@ -70,11 +137,11 @@ def show_splash_and_load(startup_files=None):
 
     # 2. 最外层容器：纯白背景、无圆角扁平风、细深灰描边
     main_frame = ctk.CTkFrame(
-        splash, 
-        fg_color="#FFFFFF",       
-        corner_radius=0,          
-        border_width=1,           
-        border_color="#555555"    
+        splash,
+        fg_color="#FFFFFF",
+        corner_radius=0,
+        border_width=1,
+        border_color="#555555"
     )
     main_frame.pack(fill="both", expand=True)
 
@@ -95,7 +162,7 @@ def show_splash_and_load(startup_files=None):
         logo_path = os.path.join(os.path.dirname(__file__), "assets", "logo.png")
         if not os.path.exists(logo_path):
             logo_path = os.path.join(os.path.dirname(__file__), "assets", "icon.png")
-        
+
         if os.path.exists(logo_path):
             img = Image.open(logo_path)
             img_w, img_h = img.size
@@ -109,7 +176,7 @@ def show_splash_and_load(startup_files=None):
     except Exception:
         logo_fallback = ctk.CTkLabel(
             left_frame, text=APP_NAME.replace("Tracer", "\nTracer"),
-            font=ctk.CTkFont(family="Segoe UI Black", size=36, weight="bold"), 
+            font=ctk.CTkFont(family="Segoe UI Black", size=36, weight="bold"),
             text_color="#FF2A6D", justify="left"
         )
         logo_fallback.pack(expand=True)
@@ -120,17 +187,17 @@ def show_splash_and_load(startup_files=None):
 
     # 中文主标题
     title_lbl = ctk.CTkLabel(
-        right_frame, text="声调提取与分析工具", 
-        font=ctk.CTkFont(family="Microsoft YaHei", size=18, weight="bold"), 
+        right_frame, text="声调提取与分析工具",
+        font=ctk.CTkFont(family="Microsoft YaHei", size=18, weight="bold"),
         text_color="#00C4FF", # 鲜艳的亮青色
         anchor="w"
     )
     title_lbl.pack(fill="x", pady=(5, 0))
-    
+
     # 英文副标题
     en_subtitle = ctk.CTkLabel(
         right_frame, text=f"PITCH EXTRACTION & ANALYSIS TOOL  v{__version__}",
-        font=ctk.CTkFont(family="Arial", size=10, weight="bold"), 
+        font=ctk.CTkFont(family="Arial", size=10, weight="bold"),
         text_color="#A3A3A3",
         anchor="w"
     )
@@ -143,25 +210,25 @@ def show_splash_and_load(startup_files=None):
     # 【超长波形参数】
     bar_width = 4  # 稍微缩减一点宽度以容纳更多根
     spacing = 2
-    
+
     # 扩展后的波形数组，总计 80 根，呈现更宏大的起伏感
     wave_heights = [
-        4, 5, 8, 14, 22, 18, 28, 38, 42, 30, 
-        24, 32, 40, 44, 35, 22, 18, 25, 38, 42, 
-        34, 24, 18, 22, 35, 42, 38, 26, 18, 15, 
-        24, 35, 40, 32, 22, 18, 24, 30, 26, 18, 
+        4, 5, 8, 14, 22, 18, 28, 38, 42, 30,
+        24, 32, 40, 44, 35, 22, 18, 25, 38, 42,
+        34, 24, 18, 22, 35, 42, 38, 26, 18, 15,
+        24, 35, 40, 32, 22, 18, 24, 30, 26, 18,
         14, 20, 24, 18, 12, 10, 8, 6, 5, 8, 14,
         22, 30, 35, 40, 44, 38, 30, 22, 15, 12,
         18, 25, 32, 38, 42, 45, 38, 30, 24, 18,
         14, 10, 8, 6, 5, 4, 4, 4, 4
     ]
-    
+
     num_bars = len(wave_heights)
-    canvas_w = num_bars * (bar_width + spacing) 
+    canvas_w = num_bars * (bar_width + spacing)
     canvas_h = 45
-    
+
     eq_canvas = tk.Canvas(wave_frame, width=canvas_w, height=canvas_h, bg="#FFFFFF", highlightthickness=0, bd=0)
-    eq_canvas.pack(anchor="w") 
+    eq_canvas.pack(anchor="w")
 
     bars = []
 
@@ -176,8 +243,8 @@ def show_splash_and_load(startup_files=None):
 
     # 状态文字
     status_lbl = ctk.CTkLabel(
-        right_frame, text="正在准备启动环境...", 
-        font=ctk.CTkFont(family="Microsoft YaHei", size=11), 
+        right_frame, text="正在准备启动环境...",
+        font=ctk.CTkFont(family="Microsoft YaHei", size=11),
         text_color="#555555",
         anchor="w"
     )
@@ -197,14 +264,14 @@ def show_splash_and_load(startup_files=None):
             progress_state["current"] += 0.06
             if progress_state["current"] > progress_state["target"]:
                 progress_state["current"] = progress_state["target"]
-            
+
             filled_count = int(progress_state["current"] * num_bars)
             for i in range(num_bars):
                 if i < filled_count:
                     eq_canvas.itemconfig(bars[i], fill="#FF0000") # 纯红色填充
                 else:
                     eq_canvas.itemconfig(bars[i], fill="#F3F4F6")
-        
+
         if splash_alive["value"] and splash.winfo_exists():
             splash.after(16, render_wave) # 每 16ms 刷新 (60FPS)
 
@@ -215,7 +282,7 @@ def show_splash_and_load(startup_files=None):
         status_lbl.configure(text=text)
 
     # 启动淡入动效（缩短等待时间）
-    splash.attributes('-alpha', 0.0) 
+    splash.attributes('-alpha', 0.0)
     for i in range(1, 11):
         splash.attributes('-alpha', i / 10.0)
         splash.update()
@@ -227,13 +294,13 @@ def show_splash_and_load(startup_files=None):
 
 def _load_phase_1(root, splash, set_target_progress, startup_files, splash_alive):
     set_target_progress(0.25, "加载核心计算库 (Matplotlib)...")
-    
+
     import matplotlib
     import warnings
     matplotlib.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'PingFang SC', 'Arial Unicode MS', 'sans-serif']
     matplotlib.rcParams['axes.unicode_minus'] = False
     warnings.filterwarnings("ignore", category=RuntimeWarning)
-    
+
     # 缩短阶段转换的人为延迟
     root.after(10, lambda: _load_phase_2(root, splash, set_target_progress, startup_files, splash_alive))
 
@@ -242,20 +309,20 @@ def _load_phase_2(root, splash, set_target_progress, startup_files, splash_alive
     try:
         from modules.app import PhoneticsApp
     except ImportError:
-        PhoneticsApp = None 
-    
+        PhoneticsApp = None
+
     # 缩短阶段转换的人为延迟
     root.after(10, lambda: _load_phase_3(root, splash, set_target_progress, PhoneticsApp, startup_files, splash_alive))
 
 def _load_phase_3(root, splash, set_target_progress, PhoneticsApp, startup_files, splash_alive):
     set_target_progress(1.0, "就绪，准备开启...")
-    
+
     app = None
     if PhoneticsApp:
         _startup_debug(f"创建 PhoneticsApp startup_files={startup_files!r}")
-        app = PhoneticsApp(root, initial_files=startup_files, defer_startup_check=True)
+        app = PhoneticsApp(root, initial_files=startup_files, defer_startup_check=True, handoff_manifest=HANDOFF_MANIFEST_DATA)
         root._phontracer_app = app
-    
+
     def finish():
         splash_alive["value"] = False
         # 退出淡出动效（缩短等待时间）
@@ -266,7 +333,7 @@ def _load_phase_3(root, splash, set_target_progress, PhoneticsApp, startup_files
             time.sleep(0.005)
         if splash.winfo_exists():
             splash.destroy()
-        
+
         root.deiconify() # 显示主窗口
         if app:
             _startup_debug("主窗口显示后调度 run_startup_check")

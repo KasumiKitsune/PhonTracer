@@ -323,11 +323,26 @@ def validate_project_resources(state, workspace_dir):
     if len(set(speaker_ids)) != len(speaker_ids):
         raise ValueError("工程文件损坏：存在重复的发音人 ID")
 
+    # 整合项目完整性校验
+    from modules.project_integrity import verify_project_integrity
+    integrity_status, integrity_warnings, integrity_details = verify_project_integrity(workspace_dir)
+
+    if integrity_status == "corrupt":
+        raise ValueError(f"工程文件完整性校验失败，音频文件已损坏或缺失：{', '.join(integrity_warnings)}")
+
+    if integrity_status == "stale_caches":
+        corrupt_or_missing_caches = set(integrity_details["corrupt_caches"] + integrity_details["missing_caches"])
+        for owner, key, index, rel_path in list(_iter_state_resource_refs(state)):
+            if rel_path in corrupt_or_missing_caches:
+                owner.pop(key, None)
+
     audio_paths = set()
     cache_paths = {}
     workspace_abs = os.path.abspath(workspace_dir)
-    for _owner, key, _index, rel_path in _iter_state_resource_refs(state):
-        normalized = str(rel_path).replace("\\", "/")
+
+    active_refs = list(_iter_state_resource_refs(state))
+    for owner, key, _index, rel_path in active_refs:
+        normalized = str(rel_path).replace(chr(92), "/")
         if not normalized.startswith(("audio/", "data/")):
             raise ValueError(f"工程资源路径必须位于 audio/ 或 data/：{rel_path}")
         file_path = resolve_workspace_path(rel_path, workspace_dir=workspace_dir)
@@ -337,23 +352,36 @@ def validate_project_resources(state, workspace_dir):
                 raise ValueError(f"工程资源路径越界：{rel_path}")
         except ValueError:
             raise ValueError(f"工程资源路径越界：{rel_path}")
+
         if not os.path.isfile(file_path):
-            raise FileNotFoundError(f"工程文件缺少资源：{rel_path}")
+            if normalized.startswith("audio/"):
+                raise FileNotFoundError(f"工程文件缺少音频资源：{rel_path}")
+            else:
+                owner.pop(key, None)
+                continue
+
         if normalized.startswith("audio/"):
             audio_paths.add(file_path)
         elif key == "pitch_data_file":
-            cache_paths[file_path] = ("xs", "freqs")
+            cache_paths[(file_path, key)] = (owner, ("xs", "freqs"))
         elif key == "formant_data_file":
-            cache_paths[file_path] = ("xs", "f1", "f2")
+            cache_paths[(file_path, key)] = (owner, ("xs", "f1", "f2"))
 
     for audio_path in sorted(audio_paths):
-        load_compatible_sound(audio_path)
+        try:
+            load_compatible_sound(audio_path)
+        except Exception as e:
+            raise ValueError(f"音频文件损坏，读取失败: {os.path.basename(audio_path)}: {e}")
 
-    for cache_path, required_keys in cache_paths.items():
-        with np.load(cache_path) as loaded:
-            missing = [key for key in required_keys if key not in loaded]
-            if missing:
-                raise ValueError(f"工程缓存损坏：{os.path.basename(cache_path)} 缺少 {', '.join(missing)}")
+    for (cache_path, key), (owner, required_keys) in list(cache_paths.items()):
+        try:
+            with np.load(cache_path) as loaded:
+                missing = [k for k in required_keys if k not in loaded]
+                if missing:
+                    owner.pop(key, None)
+        except Exception:
+            owner.pop(key, None)
+
 
 def adapt_project_state(state: dict, workspace_dir: str):
     """确保工程状态符合规范，处理字表合并、ID对齐、长音频切片、音频重命名与缓存失效。"""
@@ -377,7 +405,7 @@ def adapt_project_state(state: dict, workspace_dir: str):
         active_spk_id = state.get("active_speaker_id")
         speakers = state.get("speakers", {})
         spk_ids = list(speakers.keys())
-        
+
         ordered_spk_ids = []
         if active_spk_id in speakers:
             ordered_spk_ids.append(active_spk_id)
@@ -538,7 +566,7 @@ def adapt_project_state(state: dict, workspace_dir: str):
             occ_counts[word_label] = occ + 1
             slot = (grp_name, word_label, occ)
             global_slots.append(slot)
-            
+
             canonical_info = {
                 "id": item["id"],
                 "label": word_label,
@@ -638,7 +666,7 @@ def adapt_project_state(state: dict, workspace_dir: str):
                             item_data["end"] = duration_local
                             item_data["macro_start"] = 0.0
                             item_data["macro_end"] = duration_local
-                            
+
                             # 时间轴改变后，所有分析结果均作废；保留来源边界便于追溯。
                             item_data["source_segment"] = {
                                 "path": spk_data.get("long_audio_path"),
@@ -656,7 +684,7 @@ def adapt_project_state(state: dict, workspace_dir: str):
                                 duration_local,
                                 label=canonical_item["label"],
                             )
-                            
+
                             summary["sliced_items"] += 1
                             sliced_successfully = True
                         except Exception as e:
@@ -814,7 +842,7 @@ def adapt_project_state(state: dict, workspace_dir: str):
             item["path"] for item in new_items.values()
             if isinstance(item, dict) and item.get("path")
         ))
-        
+
         # 强制转换为多条独立音频
         spk_data["tab_mode"] = "多条独立音频"
         spk_data.pop("long_audio_path", None)

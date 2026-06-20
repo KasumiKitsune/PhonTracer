@@ -620,12 +620,23 @@ def auto_split_to_chars_bounds(snd: parselmouth.Sound, mic_s: float, mic_e: floa
 def batch_process_worker(path: str, params: Dict[str, float], trim_silence: bool, word_label: str = "") -> Dict[str, Any]:
     try:
         snd = parselmouth.Sound(path)
-        pitch_data = extract_f0(snd, params)
+        from modules.acoustic_analysis_service import normalize_analysis_params, analyze_audio_to_bundle
+        normalized_params = normalize_analysis_params(params)
+
+        import hashlib
+        try:
+            with open(path, 'rb') as f:
+                audio_sha256 = hashlib.sha256(f.read()).hexdigest()
+        except Exception:
+            audio_sha256 = hashlib.sha256(snd.values.tobytes()).hexdigest()
+
+        bundle = analyze_audio_to_bundle(snd, normalized_params, audio_sha256)
+        pitch_data = bundle['pitch']
         mac_s, mac_e = 0.0, snd.get_total_duration()
 
         mic_s, mic_e, raw_s, raw_e = core_microscopic_vowel_nucleus(
             snd, pitch_data, mac_s, mac_e,
-            params['db'], params['skip_front'], trim_silence
+            normalized_params['db'], normalized_params['skip_front'], trim_silence
         )
 
         name = os.path.splitext(os.path.basename(path))[0]
@@ -644,7 +655,7 @@ def batch_process_worker(path: str, params: Dict[str, float], trim_silence: bool
             inner_splits = auto_split_inner_word(snd, raw_s, raw_e, len(syls), pitch_data=pitch_data, output_meta=meta)
             split_warnings = meta.get('split_warnings', [])
             split_confidence = meta.get('split_confidence', 1.0)
-            chars_bounds = auto_split_to_chars_bounds(snd, raw_s, raw_e, inner_splits, len(syls), params)
+            chars_bounds = auto_split_to_chars_bounds(snd, raw_s, raw_e, inner_splits, len(syls), normalized_params)
             if chars_bounds:
                 mic_s = chars_bounds[0][0]
                 mic_e = chars_bounds[-1][1]
@@ -652,8 +663,8 @@ def batch_process_worker(path: str, params: Dict[str, float], trim_silence: bool
             chars_bounds = [[mic_s, mic_e]]
 
         preview_times = np.linspace(mic_s, mic_e, 11)
-        p_xs = pitch_data['xs']
-        p_freqs = pitch_data['freqs']
+        p_xs = np.array(pitch_data['xs'])
+        p_freqs = np.array(pitch_data['freqs'])
         preview_f0 = np.interp(preview_times, p_xs, p_freqs).tolist()
 
         # 修正：跨越静音区（>25ms）时强制归零，避免产生假数据桥接
@@ -670,8 +681,50 @@ def batch_process_worker(path: str, params: Dict[str, float], trim_silence: bool
 
         formant_data = None
         preview_formants = None
-        if params.get('analysis_mode') == 'formant':
-            formant_data, preview_formants = _sample_formants_helper(snd, mic_s, mic_e, params)
+        if normalized_params.get('analysis_mode') == 'formant':
+            formant_data = bundle['formants']
+            pts = int(normalized_params.get('pts', 11))
+            strategy = normalized_params.get('formant_sample_strategy', '整段11点')
+            f_xs = np.array(formant_data['xs'])
+            f1_arr = np.array(formant_data['f1'])
+            f2_arr = np.array(formant_data['f2'])
+
+            if strategy == '中段均值':
+                duration = mic_e - mic_s
+                m_start = mic_s + duration / 3.0
+                m_end = mic_s + 2.0 * duration / 3.0
+                mask = (f_xs >= m_start) & (f_xs <= m_end)
+                f1_slice = f1_arr[mask]
+                f2_slice = f2_arr[mask]
+                f1_vals = f1_slice[~np.isnan(f1_slice)]
+                f2_vals = f2_slice[~np.isnan(f2_slice)]
+                mean_f1 = float(np.nanmean(f1_vals)) if len(f1_vals) > 0 and not np.all(np.isnan(f1_vals)) else float('nan')
+                mean_f2 = float(np.nanmean(f2_vals)) if len(f2_vals) > 0 and not np.all(np.isnan(f2_vals)) else float('nan')
+                preview_f1 = [mean_f1] * pts
+                preview_f2 = [mean_f2] * pts
+            else:
+                preview_f1 = []
+                preview_f2 = []
+                f1_valid_idx = np.where(~np.isnan(f1_arr))[0]
+                f2_valid_idx = np.where(~np.isnan(f2_arr))[0]
+                for t in preview_times:
+                    if len(f1_valid_idx) == 0 or t < f_xs[0] or t > f_xs[-1]:
+                        preview_f1.append(float('nan'))
+                    else:
+                        nearest_idx = np.argmin(np.abs(f_xs[f1_valid_idx] - t))
+                        if np.abs(f_xs[f1_valid_idx][nearest_idx] - t) > 0.04:
+                            preview_f1.append(float('nan'))
+                        else:
+                            preview_f1.append(float(np.interp(t, f_xs[f1_valid_idx], f1_arr[f1_valid_idx])))
+                    if len(f2_valid_idx) == 0 or t < f_xs[0] or t > f_xs[-1]:
+                        preview_f2.append(float('nan'))
+                    else:
+                        nearest_idx = np.argmin(np.abs(f_xs[f2_valid_idx] - t))
+                        if np.abs(f_xs[f2_valid_idx][nearest_idx] - t) > 0.04:
+                            preview_f2.append(float('nan'))
+                        else:
+                            preview_f2.append(float(np.interp(t, f_xs[f2_valid_idx], f2_arr[f2_valid_idx])))
+            preview_formants = {"f1": preview_f1, "f2": preview_f2}
 
         return {
             'label': name,

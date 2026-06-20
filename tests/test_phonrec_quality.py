@@ -72,7 +72,7 @@ def test_audio_file_and_reanalysis_endpoints_use_quality_config(tmp_path, monkey
     audio_dir = workspace / "audio" / "spk"
     audio_dir.mkdir(parents=True)
     wavfile.write(audio_dir / "spk_item.wav", 16000, (_tone() * 32767).astype(np.int16))
-    monkeypatch.setattr(phonrec_backend, "generate_spectrogram", lambda _y, _sr: "")
+    monkeypatch.setattr(phonrec_backend, "generate_spectrogram", lambda _y, _sr, *a, **kw: "")
 
     response = asyncio.run(phonrec_backend.api_get_audio_file("spk", "item"))
     assert response.path.endswith("spk_item.wav")

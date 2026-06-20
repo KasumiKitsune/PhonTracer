@@ -9,6 +9,8 @@ export const ENGINE_CAPABILITIES = Object.freeze({
   fullQuality: true,
   lightQuality: true,
   wavFolderExport: false,
+  handoffReview: true,
+  integrityCheck: true,
 });
 
 export const STANDALONE_CAPABILITIES = Object.freeze({
@@ -18,7 +20,26 @@ export const STANDALONE_CAPABILITIES = Object.freeze({
   fullQuality: false,
   lightQuality: true,
   wavFolderExport: true,
+  handoffReview: false,
+  integrityCheck: false,
 });
+
+export function resolveEngineCapabilities(connection) {
+  if (!connection) {
+    return { ...ENGINE_CAPABILITIES };
+  }
+  const caps = connection.capabilities || [];
+  return {
+    projectArchive: caps.includes('project-import-export'),
+    advancedWordlist: caps.includes('wordlist-import'),
+    spectrogram: caps.includes('spectrogram'),
+    fullQuality: caps.includes('audio-quality'),
+    lightQuality: true,
+    wavFolderExport: false,
+    handoffReview: caps.includes('handoff-review'),
+    integrityCheck: caps.includes('integrity-check'),
+  };
+}
 
 const parseJsonResponse = async (response, fallbackMessage) => {
   if (!response.ok) {

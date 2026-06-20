@@ -5,6 +5,7 @@ import { setEngineConnection } from './engineApi.js';
 import {
   createEngineRuntimeClient,
   createStandaloneRuntimeClient,
+  resolveEngineCapabilities,
 } from './runtimeClient.js';
 import RuntimeProvider from './RuntimeProvider.jsx';
 
@@ -28,10 +29,28 @@ export default function EngineGate({ children }) {
   });
   const [retrying, setRetrying] = useState(false);
   const [standalone, setStandalone] = useState(false);
-  const engineClient = useMemo(() => createEngineRuntimeClient(), []);
+  const engineClient = useMemo(() => ({
+    ...createEngineRuntimeClient(),
+    capabilities: resolveEngineCapabilities(status.connection),
+  }), [status.connection]);
   const standaloneClient = useMemo(() => createStandaloneRuntimeClient(), []);
 
   const applyStatus = useCallback((nextStatus) => {
+    if (nextStatus?.state === 'ready' && nextStatus.connection) {
+      const caps = nextStatus.connection.capabilities || [];
+      const hasRequired = caps.includes('project-state') && caps.includes('audio-storage');
+      if (!hasRequired) {
+        setEngineConnection(null);
+        setStatus({
+          state: 'incompatible',
+          message: '分析引擎版本不兼容，缺失必要能力 (project-state 或 audio-storage)。请更新 PhonTracer 组件。',
+          connection: null,
+          download_url: nextStatus.download_url || 'https://github.com/KasumiKitsune/PhonTracer/releases/latest'
+        });
+        hideStartupLoader();
+        return;
+      }
+    }
     setEngineConnection(nextStatus?.state === 'ready' ? nextStatus.connection : null);
     setStatus(nextStatus);
     if (nextStatus?.state !== 'starting') hideStartupLoader();

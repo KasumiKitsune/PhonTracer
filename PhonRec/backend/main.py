@@ -29,6 +29,9 @@ if parent_dir not in sys.path:
 if workspace_root not in sys.path:
     sys.path.insert(0, workspace_root)
 
+from modules.acoustic_analysis_service import normalize_analysis_params, analyze_audio_to_bundle
+from modules.project_integrity import append_audit_log, update_manifest, calculate_file_sha256
+import datetime
 from modules.project_adaptor import (
     safe_extract_zip,
     safe_resource_token,
@@ -156,6 +159,62 @@ def clear_workspace():
     init_workspace()
 
 
+def commit_workspace_transaction(
+    replacements: Dict[str, str],
+    event_type: str,
+    event_details: Dict[str, Any],
+) -> None:
+    """提交一组已暂存文件，并在任一步失败时恢复工程、审计与清单。"""
+    transaction_id = uuid.uuid4().hex
+    transaction_backup_dir = os.path.join(
+        os.path.dirname(WORKSPACE_DIR),
+        f".phonrec_transaction_{transaction_id}",
+    )
+    audit_path = os.path.join(WORKSPACE_DIR, "logs", "audit.jsonl")
+    manifest_path = os.path.join(WORKSPACE_DIR, "integrity", "manifest.json")
+    tracked_paths = list(dict.fromkeys([*replacements.keys(), audit_path, manifest_path]))
+    backups: Dict[str, Optional[str]] = {}
+
+    try:
+        os.makedirs(transaction_backup_dir, exist_ok=False)
+        for index, target_path in enumerate(tracked_paths):
+            if os.path.exists(target_path):
+                backup_path = os.path.join(transaction_backup_dir, f"{index}.backup")
+                shutil.copy2(target_path, backup_path)
+                backups[target_path] = backup_path
+            else:
+                backups[target_path] = None
+
+        for target_path, staged_path in replacements.items():
+            if not os.path.isfile(staged_path):
+                raise FileNotFoundError(f"事务暂存文件不存在: {staged_path}")
+            os.makedirs(os.path.dirname(target_path), exist_ok=True)
+            os.replace(staged_path, target_path)
+
+        append_audit_log(WORKSPACE_DIR, event_type, event_details)
+        update_manifest(WORKSPACE_DIR)
+    except Exception as exc:
+        rollback_errors = []
+        for target_path in reversed(tracked_paths):
+            if target_path not in backups:
+                continue
+            backup_path = backups.get(target_path)
+            try:
+                if backup_path and os.path.exists(backup_path):
+                    os.replace(backup_path, target_path)
+                elif backup_path is None and os.path.exists(target_path):
+                    os.remove(target_path)
+            except OSError as rollback_exc:
+                rollback_errors.append(f"{target_path}: {rollback_exc}")
+        if rollback_errors:
+            raise RuntimeError(
+                "工作区事务失败且回滚不完整: " + "; ".join(rollback_errors)
+            ) from exc
+        raise
+    finally:
+        shutil.rmtree(transaction_backup_dir, ignore_errors=True)
+
+
 @app.middleware("http")
 async def require_session_token(request, call_next):
     """除健康检查和预检请求外，拒绝未携带会话令牌的访问。"""
@@ -185,7 +244,21 @@ async def api_health():
             "spectrogram",
             "pitch",
             "formants",
+            "handoff-review",
+            "integrity-check"
         ],
+        "capability_versions": {
+            "project-state": "1.0",
+            "project-import-export": "1.0",
+            "wordlist-import": "1.0",
+            "audio-storage": "1.0",
+            "audio-quality": "1.0",
+            "spectrogram": "1.0",
+            "pitch": "1.0",
+            "formants": "1.0",
+            "handoff-review": "1.0",
+            "integrity-check": "1.0"
+        }
     }
 
 # --- DSP / Quality Check Helper Functions ---
@@ -471,7 +544,7 @@ def get_speech_bounds(y: np.ndarray, sr: int) -> tuple[int, int]:
 
     return start_sample, end_sample
 
-def generate_spectrogram(y: np.ndarray, sr: int) -> str:
+def generate_spectrogram(y: np.ndarray, sr: int, bundle: Optional[Dict[str, Any]] = None) -> str:
     """Generate a clean colormapped spectrogram image base64 string with F0/F1/F2 curves."""
     start_sample, end_sample = get_speech_bounds(y, sr)
     y_trimmed = y[start_sample:end_sample]
@@ -492,7 +565,6 @@ def generate_spectrogram(y: np.ndarray, sr: int) -> str:
     Sxx_db = 10 * np.log10(Sxx + 1e-10)
 
     # Size in inches (900x450 pixels at 150 DPI) to achieve 2.0 aspect ratio
-    # Using white background for the spectrogram card to match Kasumi Light Theme
     fig = plt.figure(figsize=(6, 3), dpi=150, facecolor='#ffffff')
     ax = fig.add_axes([0, 0, 1, 1])
     ax.axis('off')
@@ -500,31 +572,46 @@ def generate_spectrogram(y: np.ndarray, sr: int) -> str:
     # Plot spectrogram with gray_r colormap (white background for silence)
     ax.pcolormesh(t, f, Sxx_db, shading='gouraud', cmap='gray_r')
 
-    # Draw F0 and formants using parselmouth
+    # Draw F0 and formants
     try:
-        sound = parselmouth.Sound(y, sampling_frequency=sr)
+        if bundle is not None:
+            # Directly extract from bundle
+            pitch_ts = np.array(bundle["pitch"]["xs"])
+            pitch_values = np.array(bundle["pitch"]["freqs"])
+            speech_start = bundle["speech_bounds"]["start"]
+            pitch_ts = pitch_ts - speech_start
+            f0_plot = pitch_values.copy()
+            f0_plot[f0_plot == 0] = np.nan
 
-        # 1. Pitch (F0) -> Blue curve
-        pitch = sound.to_pitch()
-        pitch_values = pitch.selected_array['frequency']
-        pitch_ts = pitch.xs()
-        f0_plot = pitch_values.copy()
-        f0_plot[f0_plot == 0] = np.nan
+            formant_ts = np.array(bundle["formants"]["xs"]) - speech_start
+            f1_plot = np.array(bundle["formants"]["f1"])
+            f2_plot = np.array(bundle["formants"]["f2"])
+            f1_plot[f1_plot == 0.0] = np.nan
+            f2_plot[f2_plot == 0.0] = np.nan
+        else:
+            sound = parselmouth.Sound(y, sampling_frequency=sr)
 
-        # 2. Formants (F1, F2) -> Red and Green dashed curves
-        formants = sound.to_formant_burg(time_step=0.005, max_number_of_formants=5)
-        formant_ts = formants.xs()
-        f1_vals, f2_vals = [], []
-        for time_pt in formant_ts:
-            f1 = formants.get_value_at_time(1, time_pt)
-            f2 = formants.get_value_at_time(2, time_pt)
-            f1_vals.append(f1 if not np.isnan(f1) else 0.0)
-            f2_vals.append(f2 if not np.isnan(f2) else 0.0)
+            # 1. Pitch (F0) -> Blue curve
+            pitch = sound.to_pitch()
+            pitch_values = pitch.selected_array['frequency']
+            pitch_ts = pitch.xs()
+            f0_plot = pitch_values.copy()
+            f0_plot[f0_plot == 0] = np.nan
 
-        f1_plot = np.array(f1_vals)
-        f1_plot[f1_plot == 0.0] = np.nan
-        f2_plot = np.array(f2_vals)
-        f2_plot[f2_plot == 0.0] = np.nan
+            # 2. Formants (F1, F2) -> Red and Green dashed curves
+            formants = sound.to_formant_burg(time_step=0.005, max_number_of_formants=5)
+            formant_ts = formants.xs()
+            f1_vals, f2_vals = [], []
+            for time_pt in formant_ts:
+                f1 = formants.get_value_at_time(1, time_pt)
+                f2 = formants.get_value_at_time(2, time_pt)
+                f1_vals.append(f1 if not np.isnan(f1) else 0.0)
+                f2_vals.append(f2 if not np.isnan(f2) else 0.0)
+
+            f1_plot = np.array(f1_vals)
+            f1_plot[f1_plot == 0.0] = np.nan
+            f2_plot = np.array(f2_vals)
+            f2_plot[f2_plot == 0.0] = np.nan
 
         # Dynamically determine y-limit for the spectrogram based on F2 values
         visible_f2 = f2_plot[~np.isnan(f2_plot)] if len(f2_plot) else np.array([])
@@ -563,7 +650,6 @@ def generate_spectrogram(y: np.ndarray, sr: int) -> str:
         ax2.set_ylim(y_min, y_max)
         ax2.set_xlim(0, len(y) / sr)
     except Exception as e:
-        # Graceful fallback: print error and return base spectrogram
         print(f"[generate_spectrogram] F0/Formant analysis failed: {e}")
         ax.set_ylim(0, min(4000, sr / 2))
 
@@ -636,126 +722,149 @@ async def api_save_audio(
     resolved_quality_config = parse_quality_config(quality_config)
     safe_speaker_id = sanitize_path_component(speaker_id, "speaker", 64)
     safe_word_id = sanitize_path_component(word_id, "item", 64)
-    # Ensure speaker audio directory exists
+
     speaker_dir = os.path.join(AUDIO_DIR, safe_speaker_id)
     os.makedirs(speaker_dir, exist_ok=True)
+    os.makedirs(DATA_DIR, exist_ok=True)
 
-    # 先写临时文件并完成解析/质检；只有通过后才替换正式录音。
     filename = f"{safe_speaker_id}_{safe_word_id}.wav"
     file_path = os.path.join(speaker_dir, filename)
+
+    # Paths for temp files
     temp_path = f"{file_path}.{uuid.uuid4().hex}.tmp.wav"
-    backup_path = f"{file_path}.{uuid.uuid4().hex}.bak"
+    pitch_npz_path = os.path.join(DATA_DIR, f"{safe_speaker_id}_{safe_word_id}.npz")
+    formant_npz_path = os.path.join(DATA_DIR, f"{safe_speaker_id}_{safe_word_id}_formant.npz")
+
+    temp_pitch_npz = pitch_npz_path + f".{uuid.uuid4().hex}.tmp.npz"
+    temp_formant_npz = formant_npz_path + f".{uuid.uuid4().hex}.tmp.npz"
+
+    project_path = os.path.join(WORKSPACE_DIR, "project.json")
     project_tmp = None
 
     try:
+        # 1. Write uploaded WAV to temp file
         with open(temp_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        # 兼容旧版录音端写错的 WAV 平均字节率，避免错误继续进入工程包。
+        # 2. Repair header
         repair_wav_header(temp_path)
 
-        rel_path = f"audio/{safe_speaker_id}/{filename}"
-
-        # Run analysis immediately to return quality and spectrogram
+        # 3. Read and normalize WAV
         sr, y_int = wavfile.read(temp_path)
         y = normalize_audio_samples(y_int)
 
-        spec_b64 = generate_spectrogram(y, sr)
+        # 4. Load project state and get speaker params
+        if not os.path.exists(project_path):
+            raise ValueError("当前工作区尚未建立工程状态")
+        with open(project_path, "r", encoding="utf-8") as project_file:
+            state = json.load(project_file)
 
+        speaker = state.setdefault("speakers", {}).get(speaker_id)
+        if not isinstance(speaker, dict):
+            raise ValueError("录音目标发音人已不存在")
+        items = speaker.setdefault("items", {})
+        item = items.get(word_id)
+        if not isinstance(item, dict):
+            raise ValueError("录音目标词项已不存在")
+
+        spk_params = speaker.get("last_params", {})
+
+        # 5. Extract bundle (shared kernel)
+        import parselmouth
+
+        norm_params = normalize_analysis_params(spk_params)
+        audio_sha256 = calculate_file_sha256(temp_path)
+        snd = parselmouth.Sound(temp_path)
+
+        bundle = analyze_audio_to_bundle(snd, norm_params, audio_sha256)
+
+        # 6. Generate spectrogram and run quality check
+        spec_b64 = generate_spectrogram(y, sr, bundle)
         quality = analyze_recording_quality(y, sr, resolved_quality_config)
 
-        import datetime
         recorded_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
         duration_ms = int((len(y_int) / sr) * 1000) if sr > 0 else 0
         stored = quality.get("decision") != "retry"
 
         if stored:
-            if os.path.exists(file_path):
-                os.replace(file_path, backup_path)
-            try:
-                os.replace(temp_path, file_path)
+            # 7. Write npz cache files to temp files
+            np.savez(temp_pitch_npz, xs=bundle["pitch"]["xs"], freqs=bundle["pitch"]["freqs"])
+            np.savez(temp_formant_npz, xs=bundle["formants"]["xs"], f1=bundle["formants"]["f1"], f2=bundle["formants"]["f2"], f3=bundle["formants"]["f3"])
 
-                # 音频与条目绑定在同一个后端事务中落盘。这样即使前端在收到
-                # 响应前退出，重启后也不会出现“WAV 已写入但 project.json
-                # 仍指向旧状态”的孤儿录音。
-                project_path = os.path.join(WORKSPACE_DIR, "project.json")
-                if not os.path.exists(project_path):
-                    raise ValueError("当前工作区尚未建立工程状态")
-                with open(project_path, "r", encoding="utf-8") as project_file:
-                    state = json.load(project_file)
-                speaker = state.setdefault("speakers", {}).get(speaker_id)
-                if not isinstance(speaker, dict):
-                    raise ValueError("录音目标发音人已不存在")
-                items = speaker.setdefault("items", {})
-                item = items.get(word_id)
-                if not isinstance(item, dict):
-                    raise ValueError("录音目标词项已不存在")
-                item.update({
-                    "path": rel_path,
-                    "quality": quality,
-                    "recorded_at": recorded_at,
-                    "duration_ms": duration_ms,
-                    "sample_rate_hz": int(sr),
-                    "channels": int(y_int.shape[1]) if y_int.ndim > 1 else 1,
-                    "format": "wav",
-                    "source": source,
-                })
-                project_tmp = project_path + ".audio.tmp"
-                with open(project_tmp, "w", encoding="utf-8") as project_file:
-                    json.dump(state, project_file, ensure_ascii=False, indent=2)
-                os.replace(project_tmp, project_path)
-            except Exception:
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-                if os.path.exists(backup_path):
-                    os.replace(backup_path, file_path)
-                raise
-            finally:
-                if os.path.exists(backup_path):
-                    os.remove(backup_path)
+            pitch_cache_sha256 = calculate_file_sha256(temp_pitch_npz)
+            formant_cache_sha256 = calculate_file_sha256(temp_formant_npz)
+
+            # 8. Update item in project state dict
+            rel_path = f"audio/{safe_speaker_id}/{filename}"
+            item.update({
+                "path": rel_path,
+                "pitch_data_file": f"data/{safe_speaker_id}_{safe_word_id}.npz",
+                "formant_data_file": f"data/{safe_speaker_id}_{safe_word_id}_formant.npz",
+                "analysis_state": {
+                    "algorithm_version": "audio-core-v1",
+                    "audio_sha256": audio_sha256,
+                    "params_sha256": bundle["params_sha256"],
+                    "pitch_cache_sha256": pitch_cache_sha256,
+                    "formant_cache_sha256": formant_cache_sha256
+                },
+                "quality": quality,
+                "recorded_at": recorded_at,
+                "duration_ms": duration_ms,
+                "sample_rate_hz": int(sr),
+                "channels": int(y_int.shape[1]) if y_int.ndim > 1 else 1,
+                "format": "wav",
+                "source": source,
+            })
+
+            # 9. 暂存 project.json，统一事务最后提交
+            project_tmp = project_path + f".{uuid.uuid4().hex}.tmp.json"
+            with open(project_tmp, "w", encoding="utf-8") as project_file:
+                json.dump(state, project_file, ensure_ascii=False, indent=2)
+
+            # 10. 音频、缓存、工程状态、审计和清单作为同一事务提交
+            commit_workspace_transaction(
+                {
+                    file_path: temp_path,
+                    pitch_npz_path: temp_pitch_npz,
+                    formant_npz_path: temp_formant_npz,
+                    project_path: project_tmp,
+                },
+                "audio_saved",
+                {
+                    "speaker_id": speaker_id,
+                    "word_id": word_id,
+                    "audio_sha256": audio_sha256,
+                },
+            )
         else:
-            os.remove(temp_path)
+            # If not stored, remove temp WAV
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
 
         return {
             "status": "success",
             "stored": stored,
-            "path": rel_path,
+            "path": rel_path if stored else "",
             "quality": quality,
             "spectrogram": f"data:image/png;base64,{spec_b64}",
-            "recorded_at": recorded_at,
-            "duration_ms": duration_ms,
-            "sample_rate_hz": int(sr),
-            "channels": int(y_int.shape[1]) if y_int.ndim > 1 else 1,
-            "format": "wav",
-            "source": source
+            "recorded_at": recorded_at if stored else "",
+            "duration_ms": duration_ms if stored else 0,
+            "sample_rate_hz": int(sr) if stored else 0,
+            "channels": (int(y_int.shape[1]) if y_int.ndim > 1 else 1) if stored else 1,
+            "format": "wav" if stored else "",
+            "source": source if stored else ""
         }
     except Exception as e:
         import traceback
         traceback.print_exc()
-        try:
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-            if project_tmp and os.path.exists(project_tmp):
-                os.remove(project_tmp)
-            if os.path.exists(backup_path):
-                if not os.path.exists(file_path):
-                    os.replace(backup_path, file_path)
-                else:
-                    os.remove(backup_path)
-        except OSError:
-            pass
-        raise HTTPException(status_code=500, detail=f"Failed to save and analyze audio file: {e}")
-
-@app.get("/api/audio/file")
-async def api_get_audio_file(speaker_id: str, word_id: str):
-    """Retrieve the WAV file for playback or decoding."""
-    safe_speaker_id = sanitize_path_component(speaker_id, "speaker", 64)
-    safe_word_id = sanitize_path_component(word_id, "item", 64)
-    filename = f"{safe_speaker_id}_{safe_word_id}.wav"
-    file_path = os.path.join(AUDIO_DIR, safe_speaker_id, filename)
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Audio file not found")
-    return FileResponse(file_path, media_type="audio/wav")
+        # Rollback/Clean up temp files
+        for p in (temp_path, temp_pitch_npz, temp_formant_npz, project_tmp):
+            if p and os.path.exists(p):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+        raise HTTPException(status_code=500, detail=f"Failed to save audio: {e}")
 
 @app.post("/api/audio/analyze")
 async def api_analyze_audio(
@@ -773,25 +882,353 @@ async def api_analyze_audio(
         raise HTTPException(status_code=404, detail="Audio file not found")
     resolved_quality_config = parse_quality_config(quality_config)
 
+    pitch_npz_path = os.path.join(DATA_DIR, f"{safe_speaker_id}_{safe_word_id}.npz")
+    formant_npz_path = os.path.join(DATA_DIR, f"{safe_speaker_id}_{safe_word_id}_formant.npz")
+
+    temp_pitch_npz = pitch_npz_path + f".{uuid.uuid4().hex}.tmp.npz"
+    temp_formant_npz = formant_npz_path + f".{uuid.uuid4().hex}.tmp.npz"
+
+    project_path = os.path.join(WORKSPACE_DIR, "project.json")
+    project_tmp = None
+
     try:
         # Read WAV file
         repair_wav_header(file_path)
         sr, y_int = wavfile.read(file_path)
-
         y = normalize_audio_samples(y_int)
 
-        # Spectrogram
-        spec_b64 = generate_spectrogram(y, sr)
+        # Load project state and get speaker params
+        has_project = os.path.exists(project_path)
+        spk_params = {}
+        if has_project:
+            with open(project_path, "r", encoding="utf-8") as project_file:
+                state = json.load(project_file)
+
+            speaker = state.setdefault("speakers", {}).get(speaker_id)
+            if not isinstance(speaker, dict):
+                raise ValueError("分析目标发音人已不存在")
+            items = speaker.setdefault("items", {})
+            item = items.get(word_id)
+            if not isinstance(item, dict):
+                raise ValueError("分析目标词项已不存在")
+
+            spk_params = speaker.get("last_params", {})
+
+        # Extract bundle
+        import parselmouth
+
+        norm_params = normalize_analysis_params(spk_params)
+        audio_sha256 = calculate_file_sha256(file_path)
+        snd = parselmouth.Sound(file_path)
+
+        bundle = analyze_audio_to_bundle(snd, norm_params, audio_sha256)
+
+        # Generate spectrogram and run quality check
+        spec_b64 = generate_spectrogram(y, sr, bundle)
+        quality = analyze_recording_quality(y, sr, resolved_quality_config)
+
+        if has_project:
+            # Write cache files atomically
+            np.savez(temp_pitch_npz, xs=bundle["pitch"]["xs"], freqs=bundle["pitch"]["freqs"])
+            np.savez(temp_formant_npz, xs=bundle["formants"]["xs"], f1=bundle["formants"]["f1"], f2=bundle["formants"]["f2"], f3=bundle["formants"]["f3"])
+
+            pitch_cache_sha256 = calculate_file_sha256(temp_pitch_npz)
+            formant_cache_sha256 = calculate_file_sha256(temp_formant_npz)
+
+            # Update project state
+            item.update({
+                "pitch_data_file": f"data/{safe_speaker_id}_{safe_word_id}.npz",
+                "formant_data_file": f"data/{safe_speaker_id}_{safe_word_id}_formant.npz",
+                "analysis_state": {
+                    "algorithm_version": "audio-core-v1",
+                    "audio_sha256": audio_sha256,
+                    "params_sha256": bundle["params_sha256"],
+                    "pitch_cache_sha256": pitch_cache_sha256,
+                    "formant_cache_sha256": formant_cache_sha256
+                },
+                "quality": quality
+            })
+
+            project_tmp = project_path + f".{uuid.uuid4().hex}.tmp.json"
+            with open(project_tmp, "w", encoding="utf-8") as project_file:
+                json.dump(state, project_file, ensure_ascii=False, indent=2)
+
+            commit_workspace_transaction(
+                {
+                    pitch_npz_path: temp_pitch_npz,
+                    formant_npz_path: temp_formant_npz,
+                    project_path: project_tmp,
+                },
+                "analysis_completed",
+                {
+                    "speaker_id": speaker_id,
+                    "word_id": word_id,
+                    "audio_sha256": audio_sha256,
+                },
+            )
 
         return {
             "status": "success",
-            "quality": analyze_recording_quality(y, sr, resolved_quality_config),
+            "quality": quality,
             "spectrogram": f"data:image/png;base64,{spec_b64}"
         }
     except Exception as e:
         import traceback
         traceback.print_exc()
+        for p in (temp_pitch_npz, temp_formant_npz, project_tmp):
+            if p and os.path.exists(p):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
         raise HTTPException(status_code=500, detail=f"Audio analysis failed: {e}")
+
+@app.get("/api/audio/file")
+async def api_get_audio_file(speaker_id: str, word_id: str):
+    """Serve the WAV audio file for a given speaker and item."""
+    safe_speaker_id = sanitize_path_component(speaker_id, "speaker", 64)
+    safe_word_id = sanitize_path_component(word_id, "item", 64)
+    filename = f"{safe_speaker_id}_{safe_word_id}.wav"
+    file_path = os.path.join(AUDIO_DIR, safe_speaker_id, filename)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Audio file not found")
+    return FileResponse(file_path, media_type="audio/wav")
+
+@app.get("/api/audio/analysis")
+async def api_get_audio_analysis(speaker_id: str, word_id: str):
+    safe_speaker_id = sanitize_path_component(speaker_id, "speaker", 64)
+    safe_word_id = sanitize_path_component(word_id, "item", 64)
+
+    project_path = os.path.join(WORKSPACE_DIR, "project.json")
+    if not os.path.exists(project_path):
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    with open(project_path, "r", encoding="utf-8") as f:
+        state = json.load(f)
+
+    speaker = state.get("speakers", {}).get(speaker_id)
+    if not speaker:
+        raise HTTPException(status_code=404, detail="Speaker not found")
+    item = speaker.get("items", {}).get(word_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    audio_rel = item.get("path")
+    if not audio_rel:
+        return {
+            "status": "not_recorded",
+            "cache_hit": False,
+            "message": "Audio file not recorded yet"
+        }
+
+    audio_path = os.path.join(WORKSPACE_DIR, *audio_rel.split("/"))
+    if not os.path.exists(audio_path):
+        raise HTTPException(status_code=404, detail=f"Audio file missing: {audio_rel}")
+
+    # Check cache hit status
+    cache_hit = False
+    analysis_state = item.get("analysis_state", {})
+    pitch_file = item.get("pitch_data_file")
+    formant_file = item.get("formant_data_file")
+
+    pitch_data = None
+    formant_data = None
+
+    if pitch_file and formant_file and analysis_state:
+        pitch_abs = os.path.join(WORKSPACE_DIR, *pitch_file.split("/"))
+        formant_abs = os.path.join(WORKSPACE_DIR, *formant_file.split("/"))
+        if os.path.exists(pitch_abs) and os.path.exists(formant_abs):
+            try:
+                # Validate hashes
+                curr_audio_sha = calculate_file_sha256(audio_path)
+                curr_pitch_sha = calculate_file_sha256(pitch_abs)
+                curr_formant_sha = calculate_file_sha256(formant_abs)
+
+                if (curr_audio_sha == analysis_state.get("audio_sha256") and
+                    curr_pitch_sha == analysis_state.get("pitch_cache_sha256") and
+                    curr_formant_sha == analysis_state.get("formant_cache_sha256")):
+
+                    # Cache hit!
+                    with np.load(pitch_abs) as loaded:
+                        pitch_data = {
+                            "xs": loaded["xs"].tolist(),
+                            "freqs": loaded["freqs"].tolist(),
+                            "engine": "praat_ac"
+                        }
+                    with np.load(formant_abs) as loaded:
+                        formant_data = {
+                            "xs": loaded["xs"].tolist(),
+                            "f1": loaded["f1"].tolist(),
+                            "f2": loaded["f2"].tolist(),
+                            "f3": loaded["f3"].tolist() if "f3" in loaded else [0.0]*len(loaded["xs"]),
+                            "engine": "praat_burg"
+                        }
+                    cache_hit = True
+            except Exception:
+                pass
+
+    if not cache_hit:
+        # Cache miss, run analysis dynamically to rebuild the cache!
+        spk_params = speaker.get("last_params", {})
+        import parselmouth
+        temporary_paths = []
+
+        try:
+            norm_params = normalize_analysis_params(spk_params)
+            snd = parselmouth.Sound(audio_path)
+            audio_sha256 = calculate_file_sha256(audio_path)
+            bundle = analyze_audio_to_bundle(snd, norm_params, audio_sha256)
+
+            pitch_data = bundle["pitch"]
+            formant_data = bundle["formants"]
+
+            # Write cache files atomically
+            pitch_npz_path = os.path.join(DATA_DIR, f"{safe_speaker_id}_{safe_word_id}.npz")
+            formant_npz_path = os.path.join(DATA_DIR, f"{safe_speaker_id}_{safe_word_id}_formant.npz")
+            os.makedirs(os.path.dirname(pitch_npz_path), exist_ok=True)
+
+            temp_pitch = pitch_npz_path + f".{uuid.uuid4().hex}.tmp.npz"
+            temp_formant = formant_npz_path + f".{uuid.uuid4().hex}.tmp.npz"
+            temporary_paths.extend([temp_pitch, temp_formant])
+
+            np.savez(temp_pitch, xs=pitch_data["xs"], freqs=pitch_data["freqs"])
+            np.savez(temp_formant, xs=formant_data["xs"], f1=formant_data["f1"], f2=formant_data["f2"], f3=formant_data["f3"])
+
+            pitch_cache_sha256 = calculate_file_sha256(temp_pitch)
+            formant_cache_sha256 = calculate_file_sha256(temp_formant)
+
+            # Update project.json
+            item.update({
+                "pitch_data_file": f"data/{safe_speaker_id}_{safe_word_id}.npz",
+                "formant_data_file": f"data/{safe_speaker_id}_{safe_word_id}_formant.npz",
+                "analysis_state": {
+                    "algorithm_version": "audio-core-v1",
+                    "audio_sha256": audio_sha256,
+                    "params_sha256": bundle["params_sha256"],
+                    "pitch_cache_sha256": pitch_cache_sha256,
+                    "formant_cache_sha256": formant_cache_sha256
+                }
+            })
+
+            temp_project = project_path + f".{uuid.uuid4().hex}.tmp.json"
+            temporary_paths.append(temp_project)
+            with open(temp_project, "w", encoding="utf-8") as pf:
+                json.dump(state, pf, ensure_ascii=False, indent=2)
+
+            commit_workspace_transaction(
+                {
+                    pitch_npz_path: temp_pitch,
+                    formant_npz_path: temp_formant,
+                    project_path: temp_project,
+                },
+                "analysis_completed",
+                {
+                    "speaker_id": speaker_id,
+                    "word_id": word_id,
+                    "audio_sha256": audio_sha256,
+                },
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Dynamic analysis failed: {e}")
+        finally:
+            for temporary_path in temporary_paths:
+                if os.path.exists(temporary_path):
+                    try:
+                        os.remove(temporary_path)
+                    except OSError:
+                        pass
+
+    # Calculate summary stats for response
+    voiced_freqs = [f for f in pitch_data["freqs"] if f > 0]
+    voiced_ratio = len(voiced_freqs) / len(pitch_data["freqs"]) if len(pitch_data["freqs"]) > 0 else 0.0
+    f0_median = float(np.median(voiced_freqs)) if len(voiced_freqs) > 0 else 0.0
+
+    return {
+        "status": "success",
+        "cache_hit": cache_hit,
+        "pitch": pitch_data,
+        "formants": formant_data,
+        "summary": {
+            "voiced_ratio": voiced_ratio,
+            "f0_median_hz": f0_median
+        }
+    }
+
+@app.post("/api/handoff/create")
+async def api_handoff_create(payload: Dict[str, Any]):
+    speaker_id = payload.get("speaker_id")
+    word_id = payload.get("word_id")
+    if not isinstance(speaker_id, str) or not speaker_id or not isinstance(word_id, str) or not word_id:
+        raise HTTPException(status_code=400, detail="Missing speaker_id or word_id")
+
+    project_json_path = os.path.join(WORKSPACE_DIR, "project.json")
+    if not os.path.exists(project_json_path):
+        raise HTTPException(status_code=400, detail="No active project state")
+
+    try:
+        with open(project_json_path, "r", encoding="utf-8") as project_file:
+            project_state = json.load(project_file)
+        speaker = project_state.get("speakers", {}).get(speaker_id)
+        if not isinstance(speaker, dict):
+            raise HTTPException(status_code=404, detail="Speaker not found")
+        item = speaker.get("items", {}).get(word_id)
+        if not isinstance(item, dict):
+            raise HTTPException(status_code=404, detail="Item not found")
+
+        handoff_id = str(uuid.uuid4())
+        workspace_parent = os.path.dirname(WORKSPACE_DIR)
+        handoff_dir = os.path.join(workspace_parent, "handoffs", handoff_id)
+        os.makedirs(handoff_dir, exist_ok=True)
+
+        # 1. Update manifest and audit log in current workspace before snapshot
+        append_audit_log(WORKSPACE_DIR, "handoff_snapshot_created", {
+            "handoff_id": handoff_id,
+            "speaker_id": speaker_id,
+            "word_id": word_id
+        })
+        update_manifest(WORKSPACE_DIR)
+
+        # 2. Package current workspace into review_snapshot.teproj
+        teproj_name = "review_snapshot.teproj"
+        teproj_path = os.path.join(handoff_dir, teproj_name)
+        with zipfile.ZipFile(teproj_path, "w", zipfile.ZIP_DEFLATED) as zip_file:
+            for root, dirs, files in os.walk(WORKSPACE_DIR):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    rel_path = os.path.relpath(file_path, WORKSPACE_DIR).replace(os.sep, "/")
+                    if ".tmp." in file or file.endswith((".tmp", ".temp", ".rollback")):
+                        continue
+                    zip_file.write(file_path, rel_path)
+
+        # 3. Create handoff.json
+        handoff_data = {
+            "handoff_id": handoff_id,
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "speaker_id": speaker_id,
+            "word_id": word_id,
+            "project_archive": teproj_name
+        }
+        handoff_json_path = os.path.join(handoff_dir, "handoff.json")
+        with open(handoff_json_path, "w", encoding="utf-8") as f:
+            json.dump(handoff_data, f, ensure_ascii=False, indent=2)
+
+        # 4. Set both files to read-only
+        import stat
+        os.chmod(teproj_path, stat.S_IREAD)
+        os.chmod(handoff_json_path, stat.S_IREAD)
+
+        return {
+            "status": "success",
+            "handoff_id": handoff_id,
+            "archive_path": os.path.abspath(teproj_path),
+            "manifest_path": os.path.abspath(handoff_json_path)
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to create handoff snapshot: {e}")
 
 @app.post("/api/wordlist/import")
 async def api_import_wordlist(file: UploadFile = File(...)):

@@ -63,9 +63,11 @@ ctk.CTkScrollableFrame._mouse_wheel_all = patched_mouse_wheel_all
 
 
 class PhoneticsApp:
-    def __init__(self, root, initial_files=None, defer_startup_check=False):
+    def __init__(self, root, initial_files=None, defer_startup_check=False, handoff_manifest=None):
         self.root = root
-        self.root.title(f"{APP_NAME} v{__version__} - 声调提取与分析工具")
+        self._handoff_manifest_data = handoff_manifest
+        title_suffix = " (复核副本)" if handoff_manifest else ""
+        self.root.title(f"{APP_NAME} v{__version__} - 声调提取与分析工具{title_suffix}")
         self.root.geometry("1200x700")
         self.root.minsize(1100, 650)
         self.root.configure(fg_color="#F3F4F6")
@@ -1298,19 +1300,28 @@ class PhoneticsApp:
             self.spectrogram_panel.discard_eraser_changes()
         snd = item['snd']
 
-        # 重新提取 F0 / Formant，以还原橡皮擦抹去的数据点
-        from .audio_core import extract_f0, extract_formants
+        from modules.acoustic_analysis_service import normalize_analysis_params, analyze_audio_to_bundle
+        import hashlib
         try:
-            item['pitch_data'] = extract_f0(snd, self.last_params)
+            norm_params = normalize_analysis_params(self.last_params)
+            audio_sha256 = ''
+            if item.get('path') and os.path.exists(item['path']):
+                try:
+                    with open(item['path'], 'rb') as f:
+                        audio_sha256 = hashlib.sha256(f.read()).hexdigest()
+                except Exception:
+                    pass
+            if not audio_sha256:
+                audio_sha256 = hashlib.sha256(snd.values.tobytes()).hexdigest()
+
+            bundle = analyze_audio_to_bundle(snd, norm_params, audio_sha256)
+            item['pitch_data'] = bundle['pitch']
             if 'pitch' in item:
                 del item['pitch']
-        except Exception:
-            pass
-        try:
-            item['formant_data'] = extract_formants(snd, self.last_params)
-            self._stamp_formant_params_on_item(item)
-        except Exception:
-            pass
+            item['formant_data'] = bundle['formants']
+            self._stamp_formant_params_on_item(item, norm_params)
+        except Exception as e:
+            print(f"Auto detect extraction error: {e}")
         item.pop('preview_f0', None)
         item.pop('preview_formants', None)
         item.pop('has_empty_data', None)
@@ -2368,23 +2379,11 @@ class PhoneticsApp:
                 if param_overrides:
                     worker_params.update(param_overrides)
 
-                def get_segmented_f0(snd, params):
-                    total_dur = snd.get_total_duration()
-                    macro_bounds = self._get_valid_macro_bounds(item)
-                    if macro_bounds and total_dur > 15.0:
-                        macro_start, macro_end = macro_bounds
-                        padding = 1.0
-                        seg_start = max(0.0, macro_start - padding)
-                        seg_end = min(total_dur, macro_end + padding)
-                        part_snd = snd.extract_part(from_time=seg_start, to_time=seg_end)
-                        part_pitch_data = extract_f0(part_snd, params)
-                        part_pitch_data['xs'] = part_pitch_data['xs'] + seg_start
-                        return part_pitch_data
-                    else:
-                        return extract_f0(snd, params)
+                from modules.acoustic_analysis_service import normalize_analysis_params, analyze_audio_to_bundle
+                import hashlib
+                norm_params = normalize_analysis_params(worker_params)
 
-                def get_segmented_formant(snd, params):
-                    from modules.audio_core import extract_formants
+                def get_segmented_bundle(snd, params):
                     total_dur = snd.get_total_duration()
                     macro_bounds = self._get_valid_macro_bounds(item)
                     if macro_bounds and total_dur > 15.0:
@@ -2393,26 +2392,35 @@ class PhoneticsApp:
                         seg_start = max(0.0, macro_start - padding)
                         seg_end = min(total_dur, macro_end + padding)
                         part_snd = snd.extract_part(from_time=seg_start, to_time=seg_end)
-                        part_formant_data = extract_formants(part_snd, params)
-                        part_formant_data['xs'] = part_formant_data['xs'] + seg_start
-                        return part_formant_data
+                        seg_sha = hashlib.sha256(part_snd.values.tobytes()).hexdigest()
+                        bundle = analyze_audio_to_bundle(part_snd, params, seg_sha)
+                        bundle['pitch']['xs'] = (np.array(bundle['pitch']['xs']) + seg_start).tolist()
+                        bundle['formants']['xs'] = (np.array(bundle['formants']['xs']) + seg_start).tolist()
+                        return bundle
                     else:
-                        return extract_formants(snd, params)
+                        audio_sha = ''
+                        if item.get('path') and os.path.exists(item['path']):
+                            try:
+                                with open(item['path'], 'rb') as f:
+                                    audio_sha = hashlib.sha256(f.read()).hexdigest()
+                            except Exception:
+                                pass
+                        if not audio_sha:
+                            audio_sha = hashlib.sha256(snd.values.tobytes()).hexdigest()
+                        return analyze_audio_to_bundle(snd, params, audio_sha)
 
                 # 如果是独立音频模式且没有加载 Sound 对象
                 if not item.get('snd') and item.get('path'):
                     item['snd'] = parselmouth.Sound(item['path'])
-                    # 总是为单项重新生成 pitch 确保准确性
-                    if not recompute_formant_only:
-                        item['pitch_data'] = get_segmented_f0(item['snd'], worker_params)
-                        if 'pitch' in item:
-                            del item['pitch']
-                        item['pitch_floor'] = worker_params['pitch_floor']
-                        item['pitch_ceiling'] = worker_params['pitch_ceiling']
-                        item['voicing_threshold'] = worker_params.get('voicing_threshold', 0.25)
-
-                    # 总是为单项重新生成 formant
-                    item['formant_data'] = get_segmented_formant(item['snd'], worker_params)
+                    # 总是为单项重新生成 pitch/formant
+                    bundle = get_segmented_bundle(item['snd'], norm_params)
+                    item['pitch_data'] = bundle['pitch']
+                    if 'pitch' in item:
+                        del item['pitch']
+                    item['pitch_floor'] = norm_params['pitch_floor']
+                    item['pitch_ceiling'] = norm_params['pitch_ceiling']
+                    item['voicing_threshold'] = norm_params.get('voicing_threshold', 0.25)
+                    item['formant_data'] = bundle['formants']
 
                     # 独立音频的宏观边界就是全文
                     item['macro_start'] = 0.0
@@ -2420,21 +2428,21 @@ class PhoneticsApp:
 
                 # 如果是仅重新计算共振峰且 Sound 对象已存在
                 if recompute_formant_only and item.get('snd'):
-                    item['formant_data'] = get_segmented_formant(item['snd'], worker_params)
+                    bundle = get_segmented_bundle(item['snd'], norm_params)
+                    item['formant_data'] = bundle['formants']
                 # 如果修改了 Pitch Floor/Ceiling 或 Formant 参数，且非仅重算共振峰，重新计算该项
                 elif recompute_pitch and item.get('snd'):
-                    item['pitch_data'] = get_segmented_f0(item['snd'], worker_params)
+                    bundle = get_segmented_bundle(item['snd'], norm_params)
+                    item['pitch_data'] = bundle['pitch']
                     if 'pitch' in item:
                         del item['pitch']
-                    item['pitch_floor'] = worker_params['pitch_floor']
-                    item['pitch_ceiling'] = worker_params['pitch_ceiling']
-                    item['voicing_threshold'] = worker_params.get('voicing_threshold', 0.25)
-
-                    # 重新生成 formant
-                    item['formant_data'] = get_segmented_formant(item['snd'], worker_params)
+                    item['pitch_floor'] = norm_params['pitch_floor']
+                    item['pitch_ceiling'] = norm_params['pitch_ceiling']
+                    item['voicing_threshold'] = norm_params.get('voicing_threshold', 0.25)
+                    item['formant_data'] = bundle['formants']
 
                 if item.get('formant_data'):
-                    self._stamp_formant_params_on_item(item, worker_params)
+                    self._stamp_formant_params_on_item(item, norm_params)
 
                 # 单条参数应用可以只刷新声学数据，保留已经识别或手动调整过的边界。
                 macro_bounds = self._get_valid_macro_bounds(item)
@@ -3822,7 +3830,9 @@ class PhoneticsApp:
 
             snd = self.pending_long_snd
             # Compute global pitch once
-            global_pitch = snd.to_pitch_ac(time_step=None, pitch_floor=self.last_params['pitch_floor'], pitch_ceiling=self.last_params['pitch_ceiling'], voicing_threshold=self.last_params.get('voicing_threshold', 0.25), very_accurate=True, octave_jump_cost=0.9)
+            from modules.acoustic_analysis_service import normalize_analysis_params
+            norm_params = normalize_analysis_params(self.last_params)
+            global_pitch = snd.to_pitch_ac(time_step=None, pitch_floor=norm_params['pitch_floor'], pitch_ceiling=norm_params['pitch_ceiling'], voicing_threshold=norm_params['voicing_threshold'], very_accurate=norm_params['very_accurate'], octave_jump_cost=0.9)
 
             total = len(tg_intervals)
             results = []
@@ -4130,6 +4140,33 @@ class PhoneticsApp:
             else:
                 self.current_project_path = getattr(self, '_last_imported_path', None)
                 self.has_changes = False
+
+        if getattr(self, "_handoff_manifest_data", None):
+            manifest = self._handoff_manifest_data
+            target_spk_id = manifest.get("speaker_id")
+            target_word_id = manifest.get("word_id")
+
+            # Switch active speaker if the speaker_id is present
+            if target_spk_id and target_spk_id in self.speaker_manager.speakers:
+                self.speaker_manager.set_active_speaker(target_spk_id)
+                self.speaker_option_var.set(self.active_speaker.name)
+                self._refresh_ui_for_speaker()
+
+            # Select target word/item if it is in the active speaker's items
+            spk = self.active_speaker
+            if target_word_id and target_word_id in spk.items:
+                iid_to_select = target_word_id
+                if not self.tree_panel.tree.exists(iid_to_select):
+                    warning_iid = f"warning_{iid_to_select}"
+                    if self.tree_panel.tree.exists(warning_iid):
+                        iid_to_select = warning_iid
+                if self.tree_panel.tree.exists(iid_to_select):
+                    try:
+                        self.tree_panel.tree.selection_set(iid_to_select)
+                        self.tree_panel.tree.see(iid_to_select)
+                        self.tree_panel.on_tree_select(None)
+                    except Exception as e:
+                        print(f"Failed to programmatically select target handoff item: {e}")
 
     def on_export_project(self):
         import datetime
