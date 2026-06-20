@@ -435,8 +435,49 @@ def analyze_recording_quality(y: np.ndarray, sr: int, config: Optional[dict] = N
         },
     }
 
+def get_speech_bounds(y: np.ndarray, sr: int) -> tuple[int, int]:
+    """Find the start and end sample indices of the non-silent portion of the audio."""
+    y = np.asarray(y, dtype=np.float32).reshape(-1)
+    if len(y) == 0:
+        return 0, 0
+    frame_size = max(1, int(sr * 0.02))
+    frame_count = max(1, int(np.ceil(len(y) / frame_size)))
+    rms = np.empty(frame_count, dtype=np.float64)
+    for index in range(frame_count):
+        frame = y[index * frame_size:(index + 1) * frame_size]
+        rms[index] = np.sqrt(np.mean(frame * frame)) if len(frame) else 0.0
+    rms_db = 20.0 * np.log10(rms + 1e-10)
+
+    noise_db = float(np.percentile(rms_db, 20)) if len(rms_db) else -100.0
+    if len(rms_db) and float(np.percentile(rms_db, 80) - np.percentile(rms_db, 20)) < 3.0 and float(np.median(rms_db)) > -45.0:
+        noise_db = min(-55.0, float(np.median(rms_db) - 20.0))
+    speech_threshold_db = float(np.clip(noise_db + 10.0, -45.0, -25.0))
+    speech_mask = rms_db >= speech_threshold_db
+
+    if not np.any(speech_mask):
+        return 0, len(y)
+
+    speech_indices = np.where(speech_mask)[0]
+    first_frame = speech_indices[0]
+    last_frame = speech_indices[-1]
+
+    start_sample = first_frame * frame_size
+    end_sample = min(len(y), (last_frame + 1) * frame_size)
+
+    # 150ms margin
+    margin_samples = int(sr * 0.15)
+    start_sample = max(0, start_sample - margin_samples)
+    end_sample = min(len(y), end_sample + margin_samples)
+
+    return start_sample, end_sample
+
 def generate_spectrogram(y: np.ndarray, sr: int) -> str:
     """Generate a clean colormapped spectrogram image base64 string with F0/F1/F2 curves."""
+    start_sample, end_sample = get_speech_bounds(y, sr)
+    y_trimmed = y[start_sample:end_sample]
+    if len(y_trimmed) > 0:
+        y = y_trimmed
+
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt

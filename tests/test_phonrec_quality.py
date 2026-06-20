@@ -84,3 +84,22 @@ def test_audio_file_and_reanalysis_endpoints_use_quality_config(tmp_path, monkey
     analyzed = asyncio.run(phonrec_backend.api_analyze_audio("spk", "item", json.dumps(disabled)))
     assert analyzed["quality"]["decision"] == "accept"
     assert analyzed["quality"]["volume"]["label"] == "未启用"
+
+
+def test_get_speech_bounds():
+    from PhonRec.backend.main import get_speech_bounds
+    sr = 16000
+    silence_start = np.zeros(int(sr * 0.5), dtype=np.float32)
+    tone = _tone(sr=sr, duration=1.0, amplitude=0.2)
+    silence_end = np.zeros(int(sr * 0.5), dtype=np.float32)
+    y = np.concatenate([silence_start, tone, silence_end])
+    
+    start_sample, end_sample = get_speech_bounds(y, sr)
+    
+    expected_start = int((0.5 - 0.15) * sr)
+    expected_end = int((1.5 + 0.15) * sr)
+    
+    # Assert within 50ms tolerance (frame size is 20ms)
+    assert abs(start_sample - expected_start) <= int(sr * 0.05)
+    assert abs(end_sample - expected_end) <= int(sr * 0.05)
+

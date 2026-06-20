@@ -313,7 +313,7 @@ export default function SettingsModal({
                         ]}
                       />
                     </div>
-                    <div className="form-group settings-grid-full">
+                    <div className="form-group">
                       <label className="form-label" style={{ marginBottom: '0.5rem' }}>颜色主题</label>
                       <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', height: '36px' }}>
                         {THEME_COLORS.map(color => (
@@ -431,13 +431,30 @@ export default function SettingsModal({
                         options={metaKeyOptions}
                       />
                     </div>
-                    <div className="form-group settings-grid-full">
+                    <div className="form-group">
                       <label className="form-label">中心提示显示字段</label>
                       <CustomSelect
                         value={settings.primary_meta_key}
                         onChange={(primary_meta_key) => onUpdate({ primary_meta_key })}
                         options={metaKeyOptions}
                       />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label" style={{ marginBottom: '0.5rem' }}>显示录音质量检测结果</label>
+                      <div style={{ display: 'flex', alignItems: 'center', height: '36px' }}>
+                        <label className="switch">
+                          <input
+                            type="checkbox"
+                            checked={settings.show_quality_results !== false}
+                            disabled={isRecording || isProcessing}
+                            onChange={(e) => onUpdate({ show_quality_results: e.target.checked })}
+                          />
+                          <span className="slider"></span>
+                        </label>
+                        <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginLeft: '0.5rem' }}>
+                          {settings.show_quality_results !== false ? '在录音结束后显示判定与打分面板' : '隐藏录音结果判定面板'}
+                        </span>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -547,7 +564,7 @@ export default function SettingsModal({
                     <KeyboardIcon /> 键盘全局快捷键
                   </div>
                   <div className="settings-grid">
-                    <div className="form-group settings-grid-full">
+                    <div className="form-group">
                       <label className="form-label">按键快捷预设</label>
                       <CustomSelect
                         value={settings.shortcut_preset}
@@ -561,7 +578,7 @@ export default function SettingsModal({
                         ]}
                       />
                     </div>
-                    <div className="form-group settings-grid-full">
+                    <div className="form-group">
                       <label className="form-label">操作提示显示</label>
                       <div style={{ display: 'flex', alignItems: 'center', height: '36px' }}>
                         <label className="switch">

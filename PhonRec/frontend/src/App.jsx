@@ -256,6 +256,7 @@ export default function App() {
   const [liveInputMonitorSetting, setLiveInputMonitorSetting] = useState(true);
   const [defaultProjectNameSetting, setDefaultProjectNameSetting] = useState('PhonRec_Project.teproj');
   const [showShortcutHintsSetting, setShowShortcutHintsSetting] = useState(true);
+  const [showQualityResultsSetting, setShowQualityResultsSetting] = useState(true);
 
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [settingsModalClosing, setSettingsModalClosing] = useState(false);
@@ -405,6 +406,7 @@ export default function App() {
     live_input_monitor: liveInputMonitorSetting,
     default_project_name: defaultProjectNameSetting,
     show_shortcut_hints: showShortcutHintsSetting,
+    show_quality_results: showQualityResultsSetting,
     channels: 1,
     format: 'wav'
   };
@@ -454,6 +456,7 @@ export default function App() {
         setLiveInputMonitorSetting(settings.live_input_monitor !== false);
         setDefaultProjectNameSetting(settings.default_project_name || 'PhonRec_Project.teproj');
         setShowShortcutHintsSetting(settings.show_shortcut_hints !== false);
+        setShowQualityResultsSetting(settings.show_quality_results !== false);
       }
       return settings;
     } catch (err) {
@@ -512,6 +515,7 @@ export default function App() {
     setLiveInputMonitorSetting(snapshot.live_input_monitor);
     setDefaultProjectNameSetting(snapshot.default_project_name);
     setShowShortcutHintsSetting(snapshot.show_shortcut_hints !== false);
+    setShowQualityResultsSetting(snapshot.show_quality_results !== false);
 
     qualityRulesRef.current = snapshot.quality_rules;
     qualityChecksEnabledRef.current = snapshot.realtime_quality;
@@ -1348,6 +1352,53 @@ export default function App() {
     return displayedItems[activeItemIndex] || null;
   };
 
+  const getLatestUnrecordedIndex = (speakerId) => {
+    if (!speakerId || !speakers[speakerId]) return 0;
+    const items = speakers[speakerId].items || {};
+    let maxRecordedIdx = -1;
+    for (let i = 0; i < displayedItemsRef.current.length; i++) {
+      const item = displayedItemsRef.current[i];
+      if (items[item.id]?.path) {
+        maxRecordedIdx = i;
+      }
+    }
+    const targetIdx = maxRecordedIdx + 1;
+    return targetIdx < displayedItemsRef.current.length ? targetIdx : displayedItemsRef.current.length - 1;
+  };
+
+  const abortActiveRecording = async () => {
+    if (isStartingRef.current) {
+      shouldCancelRef.current = true;
+    }
+    if (!isRecordingRef.current || isStoppingRef.current) return;
+    isStoppingRef.current = true;
+
+    setIsRecording(false);
+    isRecordingRef.current = false;
+    setVadLevel(0);
+    setVadSpeaking(false);
+
+    const recordingTarget = recordingTargetRef.current;
+    if (recordingTarget?.deviceId?.startsWith('loopback:')) {
+      try {
+        const sampleRate = Number(sampleRateSetting);
+        await invoke('stop_loopback_recording', { sampleRate });
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    if (!qualityChecksEnabledRef.current || !liveInputMonitorSetting) {
+      await closeMicStream();
+    }
+
+    audioChunksRef.current = [];
+    recordingTargetRef.current = null;
+    isStoppingRef.current = false;
+    setIsProcessing(false);
+    isProcessingRef.current = false;
+  };
+
   const getCompletedCount = () => {
     if (!activeSpeakerId || !speakers[activeSpeakerId]) return 0;
     const items = speakers[activeSpeakerId].items || {};
@@ -1840,12 +1891,13 @@ export default function App() {
     isStartingRef.current = true;
     shouldCancelRef.current = false;
 
-    if (!activeSpeakerId) {
+    const spkId = activeSpeakerIdRef.current;
+    if (!spkId) {
       await customAlert('请先添加并选择一个发音人！');
       isStartingRef.current = false;
       return;
     }
-    const activeItem = getActiveItem();
+    const activeItem = displayedItemsRef.current[activeItemIndexRef.current];
     if (!activeItem) {
       await customAlert('请导入字表以开始录音！');
       isStartingRef.current = false;
@@ -1854,7 +1906,7 @@ export default function App() {
 
     const device = audioDevices.find(d => d.id === selectedDeviceId);
     recordingTargetRef.current = {
-      speakerId: activeSpeakerId,
+      speakerId: spkId,
       item: {
         ...activeItem,
         tags: [...(activeItem.tags || [])],
@@ -2092,10 +2144,16 @@ export default function App() {
         if (shouldAutoAdvance) {
           setTimeout(() => {
             if (activeSpeakerIdRef.current === spkId) {
-              const currentIndex = displayedItemsRef.current.findIndex(item => item.id === activeItem.id);
-              if (currentIndex >= 0 && currentIndex + 1 < displayedItemsRef.current.length) {
-                setActiveItemIndex(currentIndex + 1);
-              }
+              const nextIndex = isAutoVAD
+                ? getLatestUnrecordedIndex(spkId)
+                : (() => {
+                    const currentIndex = displayedItemsRef.current.findIndex(item => item.id === activeItem.id);
+                    return currentIndex >= 0 && currentIndex + 1 < displayedItemsRef.current.length
+                      ? currentIndex + 1
+                      : currentIndex;
+                  })();
+              setActiveItemIndex(nextIndex);
+              activeItemIndexRef.current = nextIndex;
             }
             if (isAutoVAD) {
               setTimeout(() => {
@@ -2272,6 +2330,72 @@ export default function App() {
     ctx.fillRect(0, 0, canvas.width, canvas.height);
   };
 
+  const getSpeechBounds = (floatBuffer, sampleRate) => {
+    const frameSize = Math.max(1, Math.floor(sampleRate * 0.02));
+    const numFrames = Math.ceil(floatBuffer.length / frameSize);
+    const rms = new Float32Array(numFrames);
+
+    for (let idx = 0; idx < numFrames; idx++) {
+      const start = idx * frameSize;
+      const end = Math.min(floatBuffer.length, (idx + 1) * frameSize);
+      let sum = 0.0;
+      for (let i = start; i < end; i++) {
+        sum += floatBuffer[i] * floatBuffer[i];
+      }
+      const count = end - start;
+      rms[idx] = count > 0 ? Math.sqrt(sum / count) : 0.0;
+    }
+
+    const rmsDb = new Float32Array(numFrames);
+    for (let idx = 0; idx < numFrames; idx++) {
+      rmsDb[idx] = 20.0 * Math.log10(rms[idx] + 1e-10);
+    }
+
+    // Percentile 20
+    const sortedDb = [...rmsDb].sort((a, b) => a - b);
+    let noiseDb = -100.0;
+    if (sortedDb.length > 0) {
+      const idx20 = Math.floor(sortedDb.length * 0.2);
+      noiseDb = sortedDb[idx20];
+    }
+
+    // Adjust noise floor if the recording is very compact (p80 - p20 < 3 and median > -45)
+    if (sortedDb.length > 0) {
+      const median = sortedDb[Math.floor(sortedDb.length * 0.5)];
+      const p80 = sortedDb[Math.floor(sortedDb.length * 0.8)];
+      if ((p80 - noiseDb) < 3.0 && median > -45.0) {
+        noiseDb = Math.min(-55.0, median - 20.0);
+      }
+    }
+
+    const speechThresholdDb = Math.min(-25.0, Math.max(-45.0, noiseDb + 10.0));
+
+    let firstSpeechFrame = -1;
+    let lastSpeechFrame = -1;
+    for (let idx = 0; idx < numFrames; idx++) {
+      if (rmsDb[idx] >= speechThresholdDb) {
+        if (firstSpeechFrame === -1) {
+          firstSpeechFrame = idx;
+        }
+        lastSpeechFrame = idx;
+      }
+    }
+
+    if (firstSpeechFrame === -1) {
+      return { startSample: 0, endSample: floatBuffer.length };
+    }
+
+    let startSample = firstSpeechFrame * frameSize;
+    let endSample = Math.min(floatBuffer.length, (lastSpeechFrame + 1) * frameSize);
+
+    // Add margin of 150ms
+    const marginSamples = Math.floor(sampleRate * 0.15);
+    startSample = Math.max(0, startSample - marginSamples);
+    endSample = Math.min(floatBuffer.length, endSample + marginSamples);
+
+    return { startSample, endSample };
+  };
+
   const drawStaticWaveform = (floatBuffer) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -2286,14 +2410,18 @@ export default function App() {
     ctx.strokeStyle = styles.getPropertyValue('--color-success').trim() || '#10b981';
     ctx.beginPath();
 
-    const step = Math.ceil(floatBuffer.length / width);
+    const sr = Number(sampleRateSetting) || 16000;
+    const { startSample, endSample } = getSpeechBounds(floatBuffer, sr);
+    const activeLength = endSample - startSample;
+    const step = Math.ceil(activeLength / width);
     const amp = height / 2;
 
     for (let i = 0; i < width; i++) {
       let min = 1.0;
       let max = -1.0;
       for (let j = 0; j < step; j++) {
-        const dat = floatBuffer[i * step + j];
+        const idx = startSample + i * step + j;
+        const dat = idx < endSample ? floatBuffer[idx] : 0.0;
         if (dat < min) min = dat;
         if (dat > max) max = dat;
       }
@@ -2877,8 +3005,19 @@ export default function App() {
                     id={`word-item-${item.id}`}
                     key={item.id}
                     className={itemClass}
-                    onClick={() => {
-                      if (!isRecordingRef.current && !isProcessingRef.current && !isStartingRef.current) setActiveItemIndex(idx);
+                    onClick={async () => {
+                      if (isProcessingRef.current) return;
+                      if (isRecordingRef.current || isStartingRef.current) {
+                        await abortActiveRecording();
+                        setActiveItemIndex(idx);
+                        activeItemIndexRef.current = idx;
+                        setTimeout(() => {
+                          startRecording();
+                        }, 100);
+                      } else {
+                        setActiveItemIndex(idx);
+                        activeItemIndexRef.current = idx;
+                      }
                     }}
                   >
                     <div className="word-item-header">
@@ -2981,7 +3120,7 @@ export default function App() {
                 </div>
               )}
 
-              {qualityChecksEnabled && qualityResults?.decision && (
+              {qualityChecksEnabled && showQualityResultsSetting && qualityResults?.decision && (
                 <div style={{
                   marginBottom: '0.65rem', padding: '0.5rem 0.6rem', borderRadius: '0.55rem',
                   background: qualityResults.decision === 'accept' ? 'rgba(34,197,94,0.1)' :
@@ -3197,7 +3336,8 @@ export default function App() {
           default_project_name: defaultProjectNameSetting,
           realtime_quality: qualityChecksEnabled,
           quality_rules: qualityRules,
-          show_shortcut_hints: showShortcutHintsSetting
+          show_shortcut_hints: showShortcutHintsSetting,
+          show_quality_results: showQualityResultsSetting
         }}
         onUpdate={updateSettings}
         onReset={async () => {
