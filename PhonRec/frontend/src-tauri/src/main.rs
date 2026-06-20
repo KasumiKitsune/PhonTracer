@@ -134,7 +134,9 @@ fn discover_engine() -> Result<EngineLocation, String> {
                         declared_protocol,
                     });
                 } else {
-                    last_error = Some("已检测到 PhonTracer，但安装目录中缺少分析引擎；请更新主程序".to_string());
+                    last_error = Some(
+                        "已检测到 PhonTracer，但安装目录中缺少分析引擎；请更新主程序".to_string(),
+                    );
                 }
             } else {
                 last_error = Some("PhonTracer 安装信息缺少 InstallDir".to_string());
@@ -2533,9 +2535,10 @@ fn open_system_permission_settings() -> Result<(), String> {
 fn reset_microphone_permission(app: AppHandle) -> Result<(), String> {
     #[cfg(windows)]
     {
-        let exe_path = std::env::current_exe()
-            .map_err(|e| format!("无法获取当前程序路径：{e}"))?;
-        let local_data_dir = app.path().app_local_data_dir()
+        let exe_path = std::env::current_exe().map_err(|e| format!("无法获取当前程序路径：{e}"))?;
+        let local_data_dir = app
+            .path()
+            .app_local_data_dir()
             .map_err(|e| format!("无法获取数据目录：{e}"))?;
         let ebwebview_dir = local_data_dir.join("EBWebView");
 
