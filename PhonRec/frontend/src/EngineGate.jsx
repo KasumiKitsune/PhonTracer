@@ -60,9 +60,19 @@ export default function EngineGate({ children }) {
 
   const retry = async () => {
     setRetrying(true);
+    const startTime = Date.now();
     try {
-      applyStatus(await invoke('retry_engine'));
+      const result = await invoke('retry_engine');
+      const elapsed = Date.now() - startTime;
+      if (elapsed < 800) {
+        await new Promise(resolve => window.setTimeout(resolve, 800 - elapsed));
+      }
+      applyStatus(result);
     } catch (error) {
+      const elapsed = Date.now() - startTime;
+      if (elapsed < 800) {
+        await new Promise(resolve => window.setTimeout(resolve, 800 - elapsed));
+      }
       applyStatus({
         ...status,
         state: 'failed',
@@ -92,38 +102,6 @@ export default function EngineGate({ children }) {
 
   return (
     <main className="engine-gate" role="alert">
-      {/* Custom Window Titlebar Controls */}
-      <div className="engine-gate-titlebar">
-        <button
-          type="button"
-          className="titlebar-btn"
-          onClick={async () => {
-            try {
-              const { getCurrentWindow } = await import('@tauri-apps/api/window');
-              await getCurrentWindow().minimize();
-            } catch (e) {
-              console.error(e);
-            }
-          }}
-          title="最小化"
-        >
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-            <line x1="5" y1="12" x2="19" y2="12" />
-          </svg>
-        </button>
-        <button
-          type="button"
-          className="titlebar-btn titlebar-btn-close"
-          onClick={() => invoke('quit_app')}
-          title="关闭"
-        >
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-            <line x1="18" y1="6" x2="6" y2="18" />
-            <line x1="6" y1="6" x2="18" y2="18" />
-          </svg>
-        </button>
-      </div>
-
       <div className="engine-gate-content">
         {/* Header Block: Title & Warning Badge */}
         <div className="engine-gate-header-block">

@@ -1545,40 +1545,6 @@ textarea.form-input {
   box-sizing: border-box;
 }
 
-/* Custom Titlebar controls at top right */
-.engine-gate-titlebar {
-  position: absolute;
-  top: 16px;
-  right: 16px;
-  display: flex;
-  gap: 8px;
-  z-index: 10;
-}
-
-.titlebar-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  background: transparent;
-  border: none;
-  border-radius: 6px;
-  color: #64748b;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.titlebar-btn:hover {
-  background: rgba(0, 0, 0, 0.04);
-  color: #1e293b;
-}
-
-.titlebar-btn-close:hover {
-  background: #fee2e2;
-  color: #ef4444;
-}
-
 /* Content wrapper */
 .engine-gate-content {
   width: min(480px, 100%);
