@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
 use uuid::Uuid;
 use zip::write::SimpleFileOptions;
 
@@ -2527,10 +2527,57 @@ fn open_system_permission_settings() -> Result<(), String> {
 }
 
 #[tauri::command]
-fn reset_microphone_permission(window: WebviewWindow) -> Result<(), String> {
-    window
-        .clear_all_browsing_data()
-        .map_err(|error| format!("清除 WebView 权限记录失败：{error}"))
+fn reset_microphone_permission(app: AppHandle) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let exe_path = std::env::current_exe()
+            .map_err(|e| format!("无法获取当前程序路径：{e}"))?;
+        let local_data_dir = app.path().app_local_data_dir()
+            .map_err(|e| format!("无法获取数据目录：{e}"))?;
+        let ebwebview_dir = local_data_dir.join("EBWebView");
+
+        let exe_str = exe_path.to_string_lossy().replace('\'', "''");
+        let ebwebview_str = ebwebview_dir.to_string_lossy().replace('\'', "''");
+
+        // 构建独立的 PowerShell 脚本，在后台等待旧进程释放文件锁，清除目录后重新启动
+        let script = format!(
+            "Start-Sleep -s 1; \
+             for ($i=0; $i -lt 10; $i++) {{ \
+                 try {{ \
+                     if (Test-Path -Path '{ebwebview_str}') {{ \
+                         Remove-Item -Recurse -Force -ErrorAction Stop '{ebwebview_str}'; \
+                     }} \
+                     break; \
+                 }} catch {{ \
+                     Start-Sleep -s 1; \
+                 }} \
+             }}; \
+             Start-Process '{exe_str}'",
+            ebwebview_str = ebwebview_str,
+            exe_str = exe_str
+        );
+
+        // 启动隐藏的 PowerShell 进程
+        Command::new("powershell")
+            .arg("-NoProfile")
+            .arg("-WindowStyle")
+            .arg("Hidden")
+            .arg("-Command")
+            .arg(&script)
+            .spawn()
+            .map_err(|e| format!("无法启动重置脚本：{e}"))?;
+
+        // 退出当前应用进程
+        app.exit(0);
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.clear_all_browsing_data();
+        }
+        Ok(())
+    }
 }
 
 fn main() {
@@ -2543,7 +2590,7 @@ fn main() {
         .setup(|app| {
             let handle = app.handle().clone();
             // 引擎发现、进程启动和健康检查都可能耗时。放到后台线程，
-            // 避免阻塞 Tauri 主循环和 WebView 的首次绘制。
+            // 避免阻塞 Tauri 主循环 and WebView 的首次绘制。
             std::thread::spawn(move || {
                 let state = handle.state::<EngineState>();
                 let mut runtime = state.0.lock().expect("分析引擎状态锁已损坏");

@@ -938,6 +938,51 @@ export default function App() {
     setVadSpeaking(false);
   };
 
+  const openMicrophonePrivacySettings = async () => {
+    try {
+      await invoke('open_system_permission_settings');
+    } catch (error) {
+      await customAlert('无法打开系统权限设置：' + error);
+    }
+  };
+
+  const retryMicrophonePermission = async () => {
+    if (selectedDeviceId.startsWith('loopback:')) {
+      setMicBlocked(false);
+      setShowMicGuidance(false);
+      await customAlert('当前使用系统声音回环，不需要麦克风权限。');
+      return;
+    }
+
+    try {
+      await closeMicStream();
+      const permission = navigator.permissions?.query
+        ? await navigator.permissions.query({ name: 'microphone' })
+        : null;
+
+      if (permission?.state === 'denied') {
+        const confirmReset = await customConfirm(
+          '由于系统内核限制，清除麦克风拒绝记录需要重启应用以生效。是否立即自动重启应用并重置权限？'
+        );
+        if (!confirmReset) {
+          return;
+        }
+        await invoke('reset_microphone_permission');
+        return;
+      }
+
+      await ensureMicStream(selectedDeviceId, { force: true });
+      await fetchAudioDevices(selectedDeviceId);
+      setMicBlocked(false);
+      setShowMicGuidance(false);
+      await customAlert('麦克风权限已恢复，可以正常录音。');
+    } catch (error) {
+      console.error('重新请求麦克风权限失败:', error);
+      setMicBlocked(true);
+      setShowMicGuidance(true);
+    }
+  };
+
   // --- Single Instance Audio Player & Tauri Event Listeners ---
   useEffect(() => {
     const player = new Audio();
@@ -1962,7 +2007,9 @@ export default function App() {
       setIsRecording(false);
       isRecordingRef.current = false;
       recordingTargetRef.current = null;
-      await customAlert('录音访问失败，请确认权限并重试！');
+      if (err.name !== 'NotAllowedError' && err.name !== 'PermissionDeniedError') {
+        await customAlert('录音访问失败，请确认设备状态并重试！');
+      }
     } finally {
       isStartingRef.current = false;
     }
@@ -2572,13 +2619,15 @@ export default function App() {
       {/* Microphone Permission Guidance Overlay */}
       {showMicGuidance && (
         <div className="mic-guidance-overlay" style={{ zIndex: 99999 }}>
-          <div className="mic-guidance-arrow">
-            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-              <line x1="20" y1="20" x2="4" y2="4" />
-              <polyline points="4 12 4 4 12 4" />
-            </svg>
-            <div className="arrow-pulse"></div>
-          </div>
+          {!micBlocked && (
+            <div className="mic-guidance-arrow">
+              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <line x1="20" y1="20" x2="4" y2="4" />
+                <polyline points="4 12 4 4 12 4" />
+              </svg>
+              <div className="arrow-pulse"></div>
+            </div>
+          )}
 
           <div className="mic-guidance-card">
             <div className="mic-guidance-icon-wrapper">
@@ -2593,14 +2642,22 @@ export default function App() {
                 <h3 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', justifyContent: 'center' }}>
                   <MicIcon active={false} /> 麦克风访问被拒绝
                 </h3>
-                <p>我们无法使用您的麦克风。请按照以下步骤重新授予权限：</p>
+                <p>可以清除本次拒绝记录并重新弹出麦克风授权请求：</p>
                 <div className="mic-guidance-steps">
-                  <div>1. 点击窗口左上角的 <strong>设置/锁</strong> 按钮</div>
-                  <div>2. 找到 <strong>麦克风权限</strong> 并将其开启</div>
-                  <div>3. 开启后点击下方“重新检测”或刷新软件</div>
+                  <div>1. 点击下方 <strong>重新请求权限</strong></div>
+                  <div>2. 在系统提示中选择 <strong>允许</strong></div>
+                  <div>3. 如果仍被系统阻止，请打开隐私设置后再次请求</div>
                 </div>
-                <button className="btn-primary" style={{ marginTop: '1rem', width: '100%' }} onClick={() => setShowMicGuidance(false)}>
-                  知道了
+                <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem' }}>
+                  <button className="btn-primary" style={{ flex: 1 }} onClick={retryMicrophonePermission}>
+                    重新请求权限
+                  </button>
+                  <button className="btn-secondary" style={{ flex: 1 }} onClick={openMicrophonePrivacySettings}>
+                    打开系统设置
+                  </button>
+                </div>
+                <button className="btn-secondary" style={{ marginTop: '0.75rem', width: 'auto', padding: '0.4rem 1.5rem', fontSize: '0.85rem' }} onClick={() => setShowMicGuidance(false)}>
+                  稍后处理
                 </button>
               </>
             ) : (
@@ -3419,37 +3476,8 @@ export default function App() {
         audioDevices={audioDevices}
         onRefreshDevices={() => fetchAudioDevices(selectedDeviceId)}
         micBlocked={micBlocked}
-        onCheckPermission={async () => {
-          try {
-            if (selectedDeviceId.startsWith('loopback:')) {
-              await customAlert('当前使用系统声音回环，不需要麦克风权限。');
-              return;
-            }
-            await closeMicStream();
-            const permission = navigator.permissions?.query
-              ? await navigator.permissions.query({ name: 'microphone' })
-              : null;
-            if (permission?.state === 'denied') {
-              await invoke('reset_microphone_permission');
-              await customAlert('已清除应用内的权限拒绝记录。界面刷新后将重新请求麦克风权限；如果系统仍然阻止，请在下方打开系统隐私设置。');
-              window.location.reload();
-              return;
-            }
-            await ensureMicStream(selectedDeviceId, { force: true });
-            await fetchAudioDevices(selectedDeviceId);
-            await customAlert('麦克风权限检测成功！');
-          } catch (error) {
-            console.error('重新请求麦克风权限失败:', error);
-            await customAlert('麦克风请求失败，请确保设备存在并允许权限。');
-          }
-        }}
-        onOpenPrivacy={async () => {
-          try {
-            await invoke('open_system_permission_settings');
-          } catch (err) {
-            await customAlert('无法打开系统权限设置：' + err);
-          }
-        }}
+        onCheckPermission={retryMicrophonePermission}
+        onOpenPrivacy={openMicrophonePrivacySettings}
         onSelectFolder={async () => {
           const selected = await open({ directory: true, multiple: false });
           if (selected) {
@@ -3567,7 +3595,7 @@ export default function App() {
 
       {/* Custom Confirm/Alert Dialog Modal */}
       {confirmDialog && (
-        <div className="modal-overlay" style={{ zIndex: 9999 }}>
+        <div className="modal-overlay" style={{ zIndex: 100000 }}>
           <div className="modal-content" style={{ maxWidth: '380px' }}>
             <div className="modal-header" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 600 }}>
               <CheckIcon style={{ color: 'var(--color-accent)' }} />

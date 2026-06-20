@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import EngineGate from './EngineGate.jsx';
 
@@ -58,7 +58,7 @@ describe('PhonTracer 启动门禁', () => {
     });
     render(<EngineGate><div>主界面</div></EngineGate>);
     expect(await screen.findByText('主界面')).toBeTruthy();
-    expect(document.getElementById('startup-loader')).toBeNull();
+    await waitFor(() => expect(document.getElementById('startup-loader')).toBeNull(), { timeout: 1500 });
   });
 
   it('独立模式选择只在本次挂载有效', async () => {

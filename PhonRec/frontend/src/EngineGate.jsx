@@ -15,8 +15,14 @@ const STATE_TITLES = {
   failed: '分析引擎启动失败',
 };
 
+const STARTUP_LOADER_MIN_VISIBLE_MS = 800;
+const startupLoaderShownAt = Date.now();
+
 function hideStartupLoader() {
-  document.getElementById('startup-loader')?.remove();
+  const loader = document.getElementById('startup-loader');
+  if (!loader) return;
+  const remaining = Math.max(0, STARTUP_LOADER_MIN_VISIBLE_MS - (Date.now() - startupLoaderShownAt));
+  window.setTimeout(() => document.getElementById('startup-loader')?.remove(), remaining);
 }
 
 export default function EngineGate({ children }) {
