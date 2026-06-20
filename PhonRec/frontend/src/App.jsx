@@ -18,8 +18,16 @@ import {
   selectAvailableAudioSource,
 } from './appUtils.js';
 import SettingsModal from './SettingsModal.jsx';
+import PlainWordlistModal from './PlainWordlistModal.jsx';
+import { useRuntimeClient } from './runtimeContext.js';
 
 // --- Inline SVG Icons ---
+const CloseIcon = () => (
+  <svg style={{ width: '12px', height: '12px' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="18" y1="6" x2="6" y2="18" />
+    <line x1="6" y1="6" x2="18" y2="18" />
+  </svg>
+);
 const ImportIcon = () => (
   <svg style={{ width: '16px', height: '16px' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
@@ -204,6 +212,12 @@ const generateSpeakerId = () => {
 };
 
 export default function App() {
+  const runtime = useRuntimeClient();
+  const { capabilities } = runtime;
+  const isStandalone = runtime.mode === 'standalone';
+  const hasRuntimeQualityRule = (rules) => isStandalone
+    ? Boolean(rules?.volume?.enabled || rules?.clipping?.enabled)
+    : hasEnabledQualityRule(rules);
   // --- State Variables ---
   const [, setConnectionStatus] = useState(true);
   const [showMicGuidance, setShowMicGuidance] = useState(false);
@@ -246,6 +260,8 @@ export default function App() {
   const [settingsModalClosing, setSettingsModalClosing] = useState(false);
 
   const [showImportModal, setShowImportModal] = useState(false);
+  const [showPlainWordlistModal, setShowPlainWordlistModal] = useState(false);
+  const [plainWordlistDraft, setPlainWordlistDraft] = useState({ key: 0, text: '', title: '粘贴字表' });
   const [importResult, setImportResult] = useState(null);
 
   const [playbackState, setPlaybackState] = useState({
@@ -261,6 +277,7 @@ export default function App() {
   const [isSmallScreen, setIsSmallScreen] = useState(window.innerWidth <= 768);
 
   const [visualizerTab, setVisualizerTab] = useState('waveform');
+  const effectiveVisualizerTab = capabilities.spectrogram ? visualizerTab : 'waveform';
   const [showZoomedSpectrogram, setShowZoomedSpectrogram] = useState(false);
 
   // Recording states
@@ -290,6 +307,14 @@ export default function App() {
 
   // Drag and drop overlay
   const [isDragging, setIsDragging] = useState(false);
+
+  const [showStandaloneBanner, setShowStandaloneBanner] = useState(() => {
+    try {
+      return localStorage.getItem('hideStandaloneBanner') !== 'true';
+    } catch {
+      return true;
+    }
+  });
 
   const [wordlistInfo, setWordlistInfo] = useState({ title: '无字表', count: 0 });
 
@@ -400,7 +425,7 @@ export default function App() {
       if (settings) {
         const loadedQualityRules = normalizeQualityRules(settings.quality_rules, settings.realtime_quality);
         setQualityRules(loadedQualityRules);
-        setQualityChecksEnabled(hasEnabledQualityRule(loadedQualityRules));
+        setQualityChecksEnabled(hasRuntimeQualityRule(loadedQualityRules));
         setVisualizerTab(settings.default_plot || 'waveform');
         setRecordingMode(settings.record_mode || 'click');
         setSelectedDeviceId(settings.record_source || 'default');
@@ -520,12 +545,19 @@ export default function App() {
 
     if (updates.quality_rules !== undefined) {
       nextSnapshot.quality_rules = updates.quality_rules;
-      nextSnapshot.realtime_quality = hasEnabledQualityRule(updates.quality_rules);
+      nextSnapshot.realtime_quality = updates.realtime_quality !== undefined
+        ? updates.realtime_quality
+        : hasRuntimeQualityRule(updates.quality_rules);
     } else if (updates.realtime_quality !== undefined) {
       nextSnapshot.quality_rules = Object.fromEntries(
         Object.entries(previousSnapshot.quality_rules).map(([key, rule]) => [
           key,
-          { ...rule, enabled: updates.realtime_quality }
+          {
+            ...rule,
+            enabled: !isStandalone || key === 'volume' || key === 'clipping'
+              ? updates.realtime_quality
+              : rule.enabled,
+          }
         ])
       );
       nextSnapshot.realtime_quality = updates.realtime_quality;
@@ -606,6 +638,7 @@ export default function App() {
     await updateSettings({ record_mode: val });
   };
   const updateVisualizerTab = async (val) => {
+    if (val === 'spectrogram' && !capabilities.spectrogram) return;
     await updateSettings({ default_plot: val });
   };
   const updateRandomizeOrder = async (val) => {
@@ -622,6 +655,15 @@ export default function App() {
   };
   const updateCharFontSize = async (val) => {
     await updateSettings({ char_font_size: val });
+  };
+
+  const handleCloseStandaloneBanner = () => {
+    setShowStandaloneBanner(false);
+    try {
+      localStorage.setItem('hideStandaloneBanner', 'true');
+    } catch (e) {
+      console.error('Failed to save standalone banner preference', e);
+    }
   };
 
   const openSettingsModal = () => {
@@ -981,7 +1023,7 @@ export default function App() {
       if (!cancelled) setSettingsLoaded(true);
     });
 
-    const interval = setInterval(async () => {
+    const interval = isStandalone ? null : setInterval(async () => {
       try {
         const res = await apiFetch('/project/state');
         if (res.ok) setConnectionStatus(true);
@@ -992,7 +1034,7 @@ export default function App() {
 
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      if (interval) clearInterval(interval);
       closeMicStream();
     };
   }, []);
@@ -1185,7 +1227,7 @@ export default function App() {
       if (recordMeta.quality) {
         setQualityResults(recordMeta.quality);
       }
-      if (visualizerTab === 'spectrogram') {
+      if (effectiveVisualizerTab === 'spectrogram') {
         analyzeAudio(activeSpeakerId, activeItem.id);
       }
       drawStaticWaveformFromUrl();
@@ -1194,7 +1236,7 @@ export default function App() {
       setQualityResults(null);
       clearCanvas();
     }
-  }, [activeItemIndex, activeSpeakerId, displayedItems, visualizerTab, themeSetting, accentColorSetting]);
+  }, [activeItemIndex, activeSpeakerId, displayedItems, effectiveVisualizerTab, themeSetting, accentColorSetting]);
 
   // Auto-scroll word list to center active item
   useEffect(() => {
@@ -1210,9 +1252,7 @@ export default function App() {
   // --- API Wrappers ---
   const fetchProjectState = async () => {
     try {
-      const res = await apiFetch('/project/state');
-      if (!res.ok) throw new Error('API Error');
-      const data = await res.json();
+      const data = await runtime.loadProject();
       projectStateRef.current = data;
 
       if (data.speakers) setSpeakers(data.speakers);
@@ -1241,22 +1281,7 @@ export default function App() {
     };
 
     try {
-      const res = await apiFetch('/project/state', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(state)
-      });
-      if (!res.ok) {
-        let errMsg = 'API Error';
-        try {
-          const data = await res.json();
-          if (data && data.detail) errMsg = data.detail;
-        } catch (err) {
-          console.error('Failed to parse error response:', err);
-        }
-        throw new Error(errMsg);
-      }
-      const saved = await res.json();
+      const saved = await runtime.saveProject(state);
       projectStateRef.current = saved.state || state;
     } catch (err) {
       console.error('Failed to save project state:', err);
@@ -1377,6 +1402,47 @@ export default function App() {
   // --- Upload Files ---
   const triggerWordlistUpload = () => fileInputRef.current.click();
   const triggerProjectUpload = () => projectInputRef.current.click();
+  const openPlainWordlistModal = (text = '', title = '粘贴字表') => {
+    setPlainWordlistDraft(previous => ({ key: previous.key + 1, text, title }));
+    setShowPlainWordlistModal(true);
+  };
+
+  const handleStandaloneWordlistImport = async ({ groups: importedGroups, title, count }) => {
+    const hasRecordings = Object.values(speakersRef.current).some(speaker =>
+      Object.values(speaker.items || {}).some(item => item?.path)
+    );
+    if (groupsRef.current.length > 0 || hasRecordings) {
+      const ok = await customConfirm('导入新字表将替换当前字表，并清除所有发音人的现有录音。确定继续吗？');
+      if (!ok) return;
+    }
+
+    const clearedSpeakers = Object.fromEntries(
+      Object.entries(speakersRef.current).map(([speakerId, speaker]) => [
+        speakerId,
+        { ...speaker, items: {} },
+      ])
+    );
+    try {
+      setIsProcessing(true);
+      setGroups(importedGroups);
+      groupsRef.current = importedGroups;
+      setSpeakers(clearedSpeakers);
+      speakersRef.current = clearedSpeakers;
+      setActiveGroupIndex('all');
+      setActiveItemIndex(0);
+      setWordlistInfo({ title, count });
+      setSpectrogramUrl('');
+      setQualityResults(null);
+      clearCanvas();
+      await saveProjectState(clearedSpeakers, importedGroups);
+      setShowPlainWordlistModal(false);
+    } catch (error) {
+      await customAlert(`导入普通字表失败：${error.message || error}`);
+      await fetchProjectState();
+    } finally {
+      setIsProcessing(false);
+    }
+  };
 
   const uploadWordlistFile = async (file) => {
     const ok = await customConfirm('确定要更换字表吗？更换字表将替换当前所有字词且清除所有发音人的录音记录！');
@@ -1603,6 +1669,26 @@ export default function App() {
       setIsProcessing(false);
     }
 
+    if (capabilities.wavFolderExport) {
+      let destination = folderPathSetting;
+      if (!destination) {
+        destination = await open({ directory: true, multiple: false });
+        if (destination) await updateFolderPathSetting(destination);
+      }
+      if (!destination) return;
+      try {
+        setIsProcessing(true);
+        const result = await runtime.exportWavFolder(destination);
+        await customAlert(`WAV 导出完成：成功 ${result.exported} 条，跳过 ${result.skipped} 条。\n保存位置：${result.output_dir}`);
+      } catch (error) {
+        console.error(error);
+        await customAlert(`导出 WAV 失败：${error.message || error}`);
+      } finally {
+        setIsProcessing(false);
+      }
+      return;
+    }
+
     if (saveFormatSetting === 'folder') {
       let path = folderPathSetting;
       if (!path) {
@@ -1667,11 +1753,7 @@ export default function App() {
     const ok = await customConfirm('确定清空当前工作区，开始全新的录制吗？');
     if (!ok) return;
     try {
-      const response = await apiFetch('/project/clear', { method: 'POST' });
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.detail || '后端未能清空工作区');
-      }
+      await runtime.clearProject();
       resetPlayback();
       await closeMicStream();
       setSpeakers({});
@@ -1685,10 +1767,11 @@ export default function App() {
       setQualityResults(null);
       clearCanvas();
 
-      // Reset settings to defaults
-      await resetAllSettings();
+      // 工作区只保存工程数据；清空后重新应用已保存设置，撤销面板因当前工程产生的临时显示调整。
+      await settingsSaveQueueRef.current.catch(() => {});
+      await loadAndApplySettings();
 
-      await customAlert('工作区已清空，并已重置所有设置');
+      await customAlert('工作区已清空，原有设置保持不变');
     } catch (err) {
       console.error(err);
       await customAlert(`清空工作区失败：${err.message || err}`);
@@ -1712,6 +1795,18 @@ export default function App() {
     if (files && files.length > 0) {
       const file = files[0];
       const filename = file.name.toLowerCase();
+      if (isStandalone) {
+        if (filename.endsWith('.txt')) {
+          try {
+            openPlainWordlistModal(await file.text(), file.name);
+          } catch (error) {
+            await customAlert(`读取 TXT 文件失败：${error.message || error}`);
+          }
+        } else {
+          await customAlert('独立模式只能导入 TXT 普通字表，不支持 CSV、PTWL 或 TEPROJ。');
+        }
+        return;
+      }
       if (filename.endsWith('.teproj')) {
         await uploadProjectFile(file);
       } else if (filename.endsWith('.ptwl') || filename.endsWith('.txt') || filename.endsWith('.csv')) {
@@ -1876,20 +1971,14 @@ export default function App() {
     const device = audioDevices.find(d => d.id === selectedDeviceId);
     const deviceName = device ? device.name : '未知设备';
 
-    const formData = new FormData();
-    formData.append('file', blob, `${spkId}_${activeItem.id}.wav`);
-    formData.append('speaker_id', spkId);
-    formData.append('word_id', activeItem.id);
-    formData.append('source', deviceName);
-    formData.append('quality_config', JSON.stringify(qualityRulesRef.current));
-
     try {
-      const res = await apiFetch('/audio/save', {
-        method: 'POST',
-        body: formData
+      const data = await runtime.saveAudio({
+        blob,
+        speakerId: spkId,
+        wordId: activeItem.id,
+        source: deviceName,
+        qualityRules: qualityRulesRef.current,
       });
-      if (!res.ok) throw new Error('保存音频失败');
-      const data = await res.json();
 
       const needsRetry = qualityChecksEnabledRef.current && data.quality?.decision === 'retry';
 
@@ -1980,18 +2069,15 @@ export default function App() {
   };
 
   const analyzeAudio = async (speakerId, wordId) => {
-    const formData = new FormData();
-    formData.append('speaker_id', speakerId);
-    formData.append('word_id', wordId);
-    formData.append('quality_config', JSON.stringify(qualityRulesRef.current));
+    if (!capabilities.fullQuality) return;
 
     try {
-      const res = await apiFetch('/audio/analyze', {
-        method: 'POST',
-        body: formData
+      const data = await runtime.analyzeAudio({
+        speakerId,
+        wordId,
+        qualityRules: qualityRulesRef.current,
       });
-      if (!res.ok) throw new Error('分析失败');
-      const data = await res.json();
+      if (!data) return;
 
       if (data.spectrogram) setSpectrogramUrl(data.spectrogram);
 
@@ -2043,14 +2129,14 @@ export default function App() {
     } else {
       try {
         player.pause();
-        const res = await apiFetch(`/audio/file?speaker_id=${encodeURIComponent(activeSpeakerId)}&word_id=${encodeURIComponent(activeItem.id)}&t=${Date.now()}`);
-        if (!res.ok) throw new Error('读取录音失败');
-
         if (player.src && player.src.startsWith('blob:')) {
           URL.revokeObjectURL(player.src);
         }
 
-        const audioUrl = URL.createObjectURL(await res.blob());
+        const audioUrl = URL.createObjectURL(await runtime.readAudio({
+          speakerId: activeSpeakerId,
+          wordId: activeItem.id,
+        }));
         player.src = audioUrl;
 
         setPlaybackState({
@@ -2156,9 +2242,11 @@ export default function App() {
     if (!activeItem || !activeSpeakerId) return;
 
     try {
-      const res = await apiFetch(`/audio/file?speaker_id=${encodeURIComponent(activeSpeakerId)}&word_id=${encodeURIComponent(activeItem.id)}`);
-      if (!res.ok) return;
-      const arrayBuffer = await res.arrayBuffer();
+      const audioBlob = await runtime.readAudio({
+        speakerId: activeSpeakerId,
+        wordId: activeItem.id,
+      });
+      const arrayBuffer = await audioBlob.arrayBuffer();
 
       const AudioContext = window.AudioContext || window.webkitAudioContext;
       const tempCtx = new AudioContext();
@@ -2189,6 +2277,22 @@ export default function App() {
       className="app-container"
       onDragOver={handleDragOver}
     >
+      {isStandalone && showStandaloneBanner && (
+        <div className="standalone-mode-banner">
+          <div className="standalone-mode-banner-content">
+            <InfoIcon />
+            <span>独立录音模式：支持本地录音、播放、音量与削波检测及 WAV 导出；工程归档和高级分析需安装 PhonTracer。</span>
+          </div>
+          <button
+            type="button"
+            className="standalone-mode-banner-close"
+            onClick={handleCloseStandaloneBanner}
+            title="关闭提示"
+          >
+            <CloseIcon />
+          </button>
+        </div>
+      )}
       {/* Floating Toggle Button for Drawer Sidebar (Visible on small screens) */}
       <button
         className={`sidebar-toggle-btn ${isLeftSidebarOpen ? 'drawer-open' : ''}`}
@@ -2265,7 +2369,9 @@ export default function App() {
             释放文件以导入
           </span>
           <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-            支持字表文件 (.ptwl / .txt / .csv) 或工程归档 (.teproj)
+            {isStandalone
+              ? '独立模式仅支持 TXT 普通字表'
+              : '支持字表文件 (.ptwl / .txt / .csv) 或工程归档 (.teproj)'}
           </span>
         </div>
       )}
@@ -2283,16 +2389,18 @@ export default function App() {
           <div className="panel-body">
             {/* Wordlist actions */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-              <button className="btn-primary" onClick={triggerWordlistUpload}>
+              <button className="btn-primary" onClick={() => isStandalone ? openPlainWordlistModal() : triggerWordlistUpload()}>
                 <ImportIcon /> 导入字表
               </button>
-              <input
-                type="file"
-                ref={fileInputRef}
-                style={{ display: 'none' }}
-                accept=".ptwl,.txt,.csv"
-                onChange={handleWordlistUpload}
-              />
+              {!isStandalone && (
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  style={{ display: 'none' }}
+                  accept=".ptwl,.txt,.csv"
+                  onChange={handleWordlistUpload}
+                />
+              )}
               <div className="info-card">
                 <div className="info-row">
                   <span>当前字表:</span>
@@ -2308,6 +2416,7 @@ export default function App() {
             </div>
 
             {/* Custom display fields */}
+            {!isStandalone && (
             <div className="info-card">
               <div className="panel-title" style={{ fontSize: '0.8rem', marginBottom: '0.25rem', textTransform: 'none' }}>
                 <BookIcon /> 字段显示设置
@@ -2341,6 +2450,8 @@ export default function App() {
                 </div>
               </div>
             </div>
+
+            )}
 
             {/* Speaker management */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', flex: 1, minHeight: 0 }}>
@@ -2630,18 +2741,22 @@ export default function App() {
             </div>
 
             <div className="center-bottom-actions">
-              <button className="btn-secondary" style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }} onClick={handleImportButtonClick}>
-                <ExportIcon /> 导入
-              </button>
-              <input
-                type="file"
-                ref={projectInputRef}
-                style={{ display: 'none' }}
-                accept=".teproj"
-                onChange={handleProjectUpload}
-              />
+              {!isStandalone && (
+                <>
+                  <button className="btn-secondary" style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }} onClick={handleImportButtonClick}>
+                    <ExportIcon /> 导入
+                  </button>
+                  <input
+                    type="file"
+                    ref={projectInputRef}
+                    style={{ display: 'none' }}
+                    accept=".teproj"
+                    onChange={handleProjectUpload}
+                  />
+                </>
+              )}
               <button className="btn-primary" style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }} onClick={handleProjectExport}>
-                <ImportIcon /> 保存
+                <ImportIcon /> {isStandalone ? '导出 WAV' : '保存'}
               </button>
             </div>
           </div>
@@ -2799,7 +2914,7 @@ export default function App() {
                   fontSize: '0.75rem', color: 'var(--text-secondary)'
                 }}>
                   <strong>{qualityResults.grade}</strong> · {qualityResults.score} 分
-                  {qualityResults.metrics && (
+                  {capabilities.fullQuality && qualityResults.metrics && (
                     <span> · 语音 {Math.round(qualityResults.metrics.speech_ratio * 100)}% · 信噪比 {qualityResults.metrics.snr_db.toFixed(1)} dB</span>
                   )}
                 </div>
@@ -2820,7 +2935,7 @@ export default function App() {
                     </div>
                   </div>
                 )}
-                {qualityRules.creak?.enabled !== false && (
+                {capabilities.fullQuality && qualityRules.creak?.enabled !== false && (
                   <div className="quality-item">
                     <span>嘎裂声</span>
                     <div className="quality-indicator">
@@ -2848,7 +2963,13 @@ export default function App() {
                     </div>
                   </div>
                 )}
-                {qualityRules.speech?.enabled !== false && (
+                {!capabilities.fullQuality && ['有效语音', '背景噪声', '嘎裂声', '直流偏移'].map(label => (
+                  <div className="quality-item" key={label} style={{ opacity: 0.65 }}>
+                    <span>{label}</span>
+                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.72rem' }}>完整模式可用</span>
+                  </div>
+                ))}
+                {capabilities.fullQuality && qualityRules.speech?.enabled !== false && (
                   <div className="quality-item">
                     <span>有效语音</span>
                     <div className="quality-indicator">
@@ -2859,7 +2980,7 @@ export default function App() {
                     </div>
                   </div>
                 )}
-                {qualityRules.noise?.enabled !== false && (
+                {capabilities.fullQuality && qualityRules.noise?.enabled !== false && (
                   <div className="quality-item">
                     <span>背景噪声</span>
                     <div className="quality-indicator">
@@ -2870,7 +2991,7 @@ export default function App() {
                     </div>
                   </div>
                 )}
-                {qualityRules.dc_offset?.enabled !== false && (
+                {capabilities.fullQuality && qualityRules.dc_offset?.enabled !== false && (
                   <div className="quality-item">
                     <span>直流偏移</span>
                     <div className="quality-indicator">
@@ -2886,31 +3007,36 @@ export default function App() {
 
             {/* Visualizer panel */}
             <div className="info-card visualizer-card" style={{ padding: 0 }}>
-              <div className="visualizer-tabs">
+              {!isStandalone && (
+                <div className="visualizer-tabs">
                 <button
-                  className={`tab-btn ${visualizerTab === 'waveform' ? 'active' : ''}`}
+                  className={`tab-btn ${effectiveVisualizerTab === 'waveform' ? 'active' : ''}`}
                   onClick={() => updateVisualizerTab('waveform')}
                 >
                   波形图
                 </button>
                 <button
-                  className={`tab-btn ${visualizerTab === 'spectrogram' ? 'active' : ''}`}
+                  className={`tab-btn ${effectiveVisualizerTab === 'spectrogram' ? 'active' : ''}`}
                   onClick={() => updateVisualizerTab('spectrogram')}
+                  disabled={!capabilities.spectrogram}
+                  title={capabilities.spectrogram ? '查看语谱图' : '语谱图需安装 PhonTracer'}
                 >
-                  语谱图
+                  {capabilities.spectrogram ? '语谱图' : '语谱图（完整模式可用）'}
                 </button>
               </div>
+
+              )}
 
               <div className="visualizer-viewport">
                 <canvas
                   ref={canvasRef}
                   className="visualizer-canvas"
-                  style={{ display: visualizerTab === 'waveform' ? 'block' : 'none' }}
+                  style={{ display: effectiveVisualizerTab === 'waveform' ? 'block' : 'none' }}
                   width={300}
                   height={150}
                 />
 
-                {visualizerTab === 'spectrogram' && (
+                {effectiveVisualizerTab === 'spectrogram' && (
                   spectrogramUrl ? (
                     <img 
                       src={spectrogramUrl} 
@@ -2958,6 +3084,15 @@ export default function App() {
         </section>
 
       </main>
+
+      <PlainWordlistModal
+        key={plainWordlistDraft.key}
+        isOpen={showPlainWordlistModal}
+        initialText={plainWordlistDraft.text}
+        initialTitle={plainWordlistDraft.title}
+        onClose={() => setShowPlainWordlistModal(false)}
+        onImport={handleStandaloneWordlistImport}
+      />
 
       {/* Redesigned Settings Modal */}
       <SettingsModal
@@ -3041,6 +3176,8 @@ export default function App() {
         }}
         isRecording={isRecording}
         isProcessing={isProcessing}
+        runtimeMode={runtime.mode}
+        capabilities={capabilities}
         metaKeyOptions={[
           { value: 'none', label: '无' },
           { value: 'note', label: '提示信息 (note)' },

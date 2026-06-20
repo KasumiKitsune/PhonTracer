@@ -1,13 +1,15 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::collections::HashSet;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WebviewWindow};
 use uuid::Uuid;
 
@@ -296,6 +298,685 @@ fn migrate_legacy_workspace(destination: &Path) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn sanitize_path_component(value: &str, fallback: &str) -> String {
+    let mut sanitized = String::with_capacity(value.len());
+    for character in value.trim().chars() {
+        if character.is_control()
+            || matches!(
+                character,
+                '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'
+            )
+        {
+            sanitized.push('_');
+        } else {
+            sanitized.push(character);
+        }
+    }
+    let mut sanitized = sanitized
+        .trim_matches(|character| character == ' ' || character == '.')
+        .to_string();
+    if sanitized.is_empty() {
+        sanitized = fallback.to_string();
+    }
+    if sanitized.len() > 80 {
+        sanitized = sanitized.chars().take(80).collect();
+    }
+    let stem = sanitized
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    let reserved = matches!(
+        stem.as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    );
+    if reserved {
+        sanitized.insert(0, '_');
+    }
+    sanitized
+}
+
+fn resolve_managed_workspace_path(workspace: &Path, relative: &str) -> Result<PathBuf, String> {
+    let normalized = relative.replace('\\', "/");
+    let mut resolved = workspace.to_path_buf();
+    for component in normalized.split('/') {
+        if component.is_empty() || component == "." {
+            continue;
+        }
+        if component == ".." || component.contains(':') {
+            return Err("工作区资源路径不安全".to_string());
+        }
+        resolved.push(component);
+    }
+    if resolved == workspace {
+        return Err("工作区资源路径为空".to_string());
+    }
+    Ok(resolved)
+}
+
+fn ensure_managed_parent(workspace: &Path, path: &Path) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "目标路径缺少父目录".to_string())?;
+    fs::create_dir_all(parent).map_err(|error| format!("创建工作区目录失败：{error}"))?;
+    let canonical_workspace = workspace
+        .canonicalize()
+        .map_err(|error| format!("验证工作区失败：{error}"))?;
+    let canonical_parent = parent
+        .canonicalize()
+        .map_err(|error| format!("验证工作区子目录失败：{error}"))?;
+    if !canonical_parent.starts_with(&canonical_workspace) {
+        return Err("工作区资源路径越界".to_string());
+    }
+    Ok(())
+}
+
+fn resolve_existing_managed_file(workspace: &Path, relative: &str) -> Result<PathBuf, String> {
+    let path = resolve_managed_workspace_path(workspace, relative)?;
+    let canonical_workspace = workspace
+        .canonicalize()
+        .map_err(|error| format!("验证工作区失败：{error}"))?;
+    let canonical_path = path
+        .canonicalize()
+        .map_err(|error| format!("读取工作区资源失败：{error}"))?;
+    if !canonical_path.starts_with(&canonical_workspace) || !canonical_path.is_file() {
+        return Err("工作区资源路径越界或不是文件".to_string());
+    }
+    Ok(canonical_path)
+}
+
+fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "目标路径缺少父目录".to_string())?;
+    fs::create_dir_all(parent).map_err(|error| format!("创建目录失败：{error}"))?;
+    let temp_path = path.with_extension("tmp");
+    let backup_path = path.with_extension("bak");
+    let mut file =
+        fs::File::create(&temp_path).map_err(|error| format!("创建临时文件失败：{error}"))?;
+    file.write_all(bytes)
+        .map_err(|error| format!("写入临时文件失败：{error}"))?;
+    file.sync_all()
+        .map_err(|error| format!("同步临时文件失败：{error}"))?;
+    if backup_path.exists() {
+        fs::remove_file(&backup_path).map_err(|error| format!("清理旧备份失败：{error}"))?;
+    }
+    if path.exists() {
+        fs::rename(path, &backup_path).map_err(|error| format!("备份旧文件失败：{error}"))?;
+    }
+    if let Err(error) = fs::rename(&temp_path, path) {
+        if backup_path.exists() {
+            let _ = fs::rename(&backup_path, path);
+        }
+        let _ = fs::remove_file(&temp_path);
+        return Err(format!("提交文件失败：{error}"));
+    }
+    if backup_path.exists() {
+        fs::remove_file(&backup_path).map_err(|error| format!("清理文件备份失败：{error}"))?;
+    }
+    Ok(())
+}
+
+fn write_project_state_atomic(workspace: &Path, state: &Value) -> Result<(), String> {
+    if !state.is_object() {
+        return Err("工程状态必须是 JSON 对象".to_string());
+    }
+    let bytes =
+        serde_json::to_vec_pretty(state).map_err(|error| format!("序列化工程状态失败：{error}"))?;
+    write_bytes_atomic(&workspace.join("project.json"), &bytes)
+}
+
+fn referenced_audio_paths(state: &Value, workspace: &Path) -> HashSet<PathBuf> {
+    let mut referenced = HashSet::new();
+    if let Some(speakers) = state.get("speakers").and_then(Value::as_object) {
+        for speaker in speakers.values() {
+            if let Some(items) = speaker.get("items").and_then(Value::as_object) {
+                for item in items.values() {
+                    if let Some(relative) = item.get("path").and_then(Value::as_str) {
+                        if let Ok(path) = resolve_managed_workspace_path(workspace, relative) {
+                            referenced.insert(path);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    referenced
+}
+
+fn prune_unreferenced_audio(state: &Value, workspace: &Path) -> Result<(), String> {
+    let audio_root = workspace.join("audio");
+    if !audio_root.exists() {
+        return Ok(());
+    }
+    let referenced = referenced_audio_paths(state, workspace);
+    for speaker_entry in
+        fs::read_dir(&audio_root).map_err(|error| format!("读取录音目录失败：{error}"))?
+    {
+        let speaker_entry = speaker_entry.map_err(|error| format!("读取录音条目失败：{error}"))?;
+        if speaker_entry
+            .file_type()
+            .map_err(|error| format!("读取录音条目类型失败：{error}"))?
+            .is_symlink()
+        {
+            continue;
+        }
+        let speaker_path = speaker_entry.path();
+        if speaker_path.is_dir() {
+            for audio_entry in fs::read_dir(&speaker_path)
+                .map_err(|error| format!("读取发音人录音目录失败：{error}"))?
+            {
+                let audio_entry =
+                    audio_entry.map_err(|error| format!("读取录音文件失败：{error}"))?;
+                if audio_entry
+                    .file_type()
+                    .map_err(|error| format!("读取录音文件类型失败：{error}"))?
+                    .is_symlink()
+                {
+                    continue;
+                }
+                let audio_path = audio_entry.path();
+                if audio_path.is_file() && !referenced.contains(&audio_path) {
+                    fs::remove_file(&audio_path)
+                        .map_err(|error| format!("清理无引用录音失败：{error}"))?;
+                }
+            }
+            if directory_is_empty(&speaker_path) {
+                fs::remove_dir(&speaker_path)
+                    .map_err(|error| format!("清理空录音目录失败：{error}"))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug)]
+struct ParsedWav {
+    sample_rate: u32,
+    channels: u16,
+    samples: Vec<f32>,
+}
+
+fn read_u16_le(bytes: &[u8], offset: usize) -> Result<u16, String> {
+    let value = bytes
+        .get(offset..offset + 2)
+        .ok_or_else(|| "WAV 数据不完整".to_string())?;
+    Ok(u16::from_le_bytes([value[0], value[1]]))
+}
+
+fn read_u32_le(bytes: &[u8], offset: usize) -> Result<u32, String> {
+    let value = bytes
+        .get(offset..offset + 4)
+        .ok_or_else(|| "WAV 数据不完整".to_string())?;
+    Ok(u32::from_le_bytes([value[0], value[1], value[2], value[3]]))
+}
+
+fn parse_pcm_wav(bytes: &[u8]) -> Result<ParsedWav, String> {
+    if bytes.len() < 44 || bytes.get(0..4) != Some(b"RIFF") || bytes.get(8..12) != Some(b"WAVE") {
+        return Err("仅支持标准 PCM WAV 录音".to_string());
+    }
+    let mut offset = 12usize;
+    let mut format = None;
+    let mut data = None;
+    while offset + 8 <= bytes.len() {
+        let chunk_id = &bytes[offset..offset + 4];
+        let chunk_size = read_u32_le(bytes, offset + 4)? as usize;
+        let chunk_start = offset + 8;
+        let chunk_end = chunk_start
+            .checked_add(chunk_size)
+            .ok_or_else(|| "WAV 分块长度无效".to_string())?;
+        if chunk_end > bytes.len() {
+            return Err("WAV 分块超出文件范围".to_string());
+        }
+        if chunk_id == b"fmt " && chunk_size >= 16 {
+            format = Some((
+                read_u16_le(bytes, chunk_start)?,
+                read_u16_le(bytes, chunk_start + 2)?,
+                read_u32_le(bytes, chunk_start + 4)?,
+                read_u16_le(bytes, chunk_start + 14)?,
+            ));
+        } else if chunk_id == b"data" {
+            data = Some(&bytes[chunk_start..chunk_end]);
+        }
+        offset = chunk_end + (chunk_size % 2);
+    }
+    let (audio_format, channels, sample_rate, bits_per_sample) =
+        format.ok_or_else(|| "WAV 缺少 fmt 分块".to_string())?;
+    let data = data.ok_or_else(|| "WAV 缺少 data 分块".to_string())?;
+    if audio_format != 1 || bits_per_sample != 16 || channels == 0 || sample_rate == 0 {
+        return Err("独立模式仅支持 16 位 PCM WAV".to_string());
+    }
+    let frame_bytes = channels as usize * 2;
+    if data.len() % frame_bytes != 0 {
+        return Err("WAV 采样数据长度无效".to_string());
+    }
+    let frame_count = data.len() / frame_bytes;
+    if frame_count > sample_rate as usize * 60 * 10 {
+        return Err("录音时长超过独立模式限制".to_string());
+    }
+    let mut samples = Vec::with_capacity(frame_count);
+    for frame in data.chunks_exact(frame_bytes) {
+        let mut sum = 0.0f32;
+        for channel in 0..channels as usize {
+            let start = channel * 2;
+            let sample = i16::from_le_bytes([frame[start], frame[start + 1]]);
+            sum += sample as f32 / 32768.0;
+        }
+        samples.push(sum / channels as f32);
+    }
+    Ok(ParsedWav {
+        sample_rate,
+        channels,
+        samples,
+    })
+}
+
+fn quality_rule<'a>(rules: &'a Value, name: &str) -> (bool, &'a str) {
+    let rule = rules.get(name);
+    let enabled = rule
+        .and_then(|value| value.get("enabled"))
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let level = rule
+        .and_then(|value| value.get("level"))
+        .and_then(Value::as_str)
+        .unwrap_or("medium");
+    let level = if matches!(level, "low" | "medium" | "high") {
+        level
+    } else {
+        "medium"
+    };
+    (enabled, level)
+}
+
+fn analyze_lightweight_quality(wav: &ParsedWav, rules: &Value) -> Value {
+    let (volume_enabled, volume_level) = quality_rule(rules, "volume");
+    let (clipping_enabled, clipping_level) = quality_rule(rules, "clipping");
+    let frame_size = ((wav.sample_rate as f64 * 0.02).round() as usize).max(1);
+    let mut active_rms = Vec::new();
+    for frame in wav.samples.chunks(frame_size) {
+        if frame.is_empty() {
+            continue;
+        }
+        let square_sum: f64 = frame
+            .iter()
+            .map(|sample| (*sample as f64) * (*sample as f64))
+            .sum();
+        let rms = (square_sum / frame.len() as f64).sqrt();
+        let db = 20.0 * (rms + 1e-10).log10();
+        if db > -45.0 {
+            active_rms.push(rms);
+        }
+    }
+    let average_rms = if active_rms.is_empty() {
+        0.0
+    } else {
+        active_rms.iter().sum::<f64>() / active_rms.len() as f64
+    };
+    let volume_db = if average_rms > 0.0 {
+        20.0 * (average_rms + 1e-10).log10()
+    } else {
+        -100.0
+    };
+    let peak = wav
+        .samples
+        .iter()
+        .map(|sample| sample.abs() as f64)
+        .fold(0.0, f64::max);
+    let peak_db = 20.0 * (peak + 1e-10).log10();
+    let clipped_count = wav
+        .samples
+        .iter()
+        .filter(|sample| sample.abs() >= 0.99)
+        .count();
+    let clipping_ratio = if wav.samples.is_empty() {
+        0.0
+    } else {
+        clipped_count as f64 / wav.samples.len() as f64
+    };
+
+    let (quiet_threshold, loud_threshold) = match volume_level {
+        "low" => (-40.0, -3.0),
+        "high" => (-30.0, -9.0),
+        _ => (-35.0, -6.0),
+    };
+    let (clip_review, clip_retry) = match clipping_level {
+        "low" => (0.003, 0.01),
+        "high" => (0.0, 0.001),
+        _ => (0.0001, 0.003),
+    };
+    let too_quiet = volume_db < quiet_threshold;
+    let too_loud = volume_db > loud_threshold;
+    let clipped = clipping_ratio > clip_review;
+    let severe_clipping = clipping_ratio >= clip_retry;
+    let mut retry_issues = Vec::new();
+    let mut review_issues = Vec::new();
+    if volume_enabled && too_quiet {
+        retry_issues.push("有效音量过小");
+    }
+    if volume_enabled && too_loud {
+        retry_issues.push("有效音量过大");
+    }
+    if clipping_enabled && severe_clipping {
+        retry_issues.push("严重截断");
+    } else if clipping_enabled && clipped {
+        review_issues.push("轻微截断");
+    }
+    let decision = if !retry_issues.is_empty() {
+        "retry"
+    } else if !review_issues.is_empty() {
+        "review"
+    } else {
+        "accept"
+    };
+    let mut issues = retry_issues.clone();
+    issues.extend(review_issues.iter().copied());
+    let score = if !retry_issues.is_empty() {
+        55
+    } else {
+        100usize.saturating_sub(review_issues.len() * 8)
+    };
+    let volume_status = if too_quiet {
+        "too_quiet"
+    } else if too_loud {
+        "too_loud"
+    } else {
+        "normal"
+    };
+    let unavailable =
+        |label: &str| json!({"enabled": false, "abnormal": false, "score": 0.0, "label": label});
+    json!({
+        "decision": decision,
+        "grade": if decision == "retry" { "需重录" } else if decision == "review" { "建议复核" } else { "良好" },
+        "score": score,
+        "issues": issues,
+        "recommendations": issues,
+        "config": rules,
+        "volume": {
+            "enabled": volume_enabled,
+            "status": if volume_enabled { volume_status } else { "disabled" },
+            "score": volume_db,
+            "label": if !volume_enabled { "未启用" } else if too_quiet { "音量过小" } else if too_loud { "音量过大" } else { "正常" }
+        },
+        "clipping": {
+            "enabled": clipping_enabled,
+            "abnormal": clipping_enabled && clipped,
+            "score": clipping_ratio,
+            "label": if !clipping_enabled { "未启用" } else if clipped { "音频截断" } else { "正常" }
+        },
+        "speech": unavailable("完整模式可用"),
+        "noise": unavailable("完整模式可用"),
+        "creak": unavailable("完整模式可用"),
+        "dc_offset": unavailable("完整模式可用"),
+        "metrics": {
+            "duration_ms": if wav.sample_rate > 0 { wav.samples.len() as u64 * 1000 / wav.sample_rate as u64 } else { 0 },
+            "active_rms_dbfs": volume_db,
+            "peak_dbfs": peak_db,
+            "clipping_ratio": clipping_ratio,
+            "speech_ratio": 0.0,
+            "snr_db": 0.0
+        }
+    })
+}
+
+#[derive(Serialize)]
+struct StandaloneAudioResult {
+    status: String,
+    path: String,
+    quality: Value,
+    spectrogram: Option<String>,
+    recorded_at: String,
+    duration_ms: u64,
+    sample_rate_hz: u32,
+    channels: u16,
+    format: String,
+    source: String,
+}
+
+#[derive(Serialize)]
+struct StandaloneExportResult {
+    output_dir: String,
+    exported: usize,
+    skipped: usize,
+}
+
+#[tauri::command]
+fn standalone_project_load(app: AppHandle) -> Result<Value, String> {
+    let workspace = workspace_dir(&app)?;
+    fs::create_dir_all(workspace.join("audio"))
+        .map_err(|error| format!("创建独立工作区失败：{error}"))?;
+    let path = workspace.join("project.json");
+    if !path.exists() {
+        return Ok(json!({"version": "1.0", "speakers": {}, "groups": []}));
+    }
+    let bytes = fs::read(&path).map_err(|error| format!("读取独立工作区失败：{error}"))?;
+    serde_json::from_slice(&bytes).map_err(|error| format!("解析独立工作区失败：{error}"))
+}
+
+#[tauri::command]
+fn standalone_project_save(app: AppHandle, state: Value) -> Result<Value, String> {
+    let workspace = workspace_dir(&app)?;
+    fs::create_dir_all(workspace.join("audio"))
+        .map_err(|error| format!("创建独立工作区失败：{error}"))?;
+    write_project_state_atomic(&workspace, &state)?;
+    prune_unreferenced_audio(&state, &workspace)?;
+    Ok(state)
+}
+
+#[tauri::command]
+fn standalone_project_clear(app: AppHandle) -> Result<(), String> {
+    let workspace = workspace_dir(&app)?;
+    if workspace.exists() {
+        fs::remove_dir_all(&workspace).map_err(|error| format!("清空独立工作区失败：{error}"))?;
+    }
+    fs::create_dir_all(workspace.join("audio"))
+        .map_err(|error| format!("重建独立工作区失败：{error}"))
+}
+
+#[tauri::command]
+fn standalone_audio_save(
+    app: AppHandle,
+    wav_bytes: Vec<u8>,
+    speaker_id: String,
+    word_id: String,
+    source: String,
+    quality_rules: Value,
+) -> Result<StandaloneAudioResult, String> {
+    let parsed = parse_pcm_wav(&wav_bytes)?;
+    let workspace = workspace_dir(&app)?;
+    let safe_speaker = sanitize_path_component(&speaker_id, "speaker");
+    let safe_word = sanitize_path_component(&word_id, "item");
+    let relative = format!("audio/{safe_speaker}/{safe_speaker}_{safe_word}.wav");
+    let path = resolve_managed_workspace_path(&workspace, &relative)?;
+    ensure_managed_parent(&workspace, &path)?;
+    write_bytes_atomic(&path, &wav_bytes)?;
+    let duration_ms = parsed.samples.len() as u64 * 1000 / parsed.sample_rate as u64;
+    let (year, month, day, hour, minute, second) = utc_date_time_parts();
+    let recorded_at = format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z");
+    Ok(StandaloneAudioResult {
+        status: "success".to_string(),
+        path: relative,
+        quality: analyze_lightweight_quality(&parsed, &quality_rules),
+        spectrogram: None,
+        recorded_at,
+        duration_ms,
+        sample_rate_hz: parsed.sample_rate,
+        channels: parsed.channels,
+        format: "wav".to_string(),
+        source,
+    })
+}
+
+#[tauri::command]
+fn standalone_audio_read(
+    app: AppHandle,
+    speaker_id: String,
+    word_id: String,
+) -> Result<Vec<u8>, String> {
+    let workspace = workspace_dir(&app)?;
+    let safe_speaker = sanitize_path_component(&speaker_id, "speaker");
+    let safe_word = sanitize_path_component(&word_id, "item");
+    let relative = format!("audio/{safe_speaker}/{safe_speaker}_{safe_word}.wav");
+    let path = resolve_existing_managed_file(&workspace, &relative)?;
+    fs::read(path).map_err(|error| format!("读取录音失败：{error}"))
+}
+
+fn utc_date_time_parts() -> (i64, i64, i64, i64, i64, i64) {
+    let total_seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    let days = total_seconds.div_euclid(86_400);
+    let seconds = total_seconds.rem_euclid(86_400);
+    let shifted = days + 719_468;
+    let era = if shifted >= 0 {
+        shifted
+    } else {
+        shifted - 146_096
+    } / 146_097;
+    let day_of_era = shifted - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    year += if month <= 2 { 1 } else { 0 };
+    let hour = seconds / 3_600;
+    let minute = seconds % 3_600 / 60;
+    let second = seconds % 60;
+    (year, month, day, hour, minute, second)
+}
+
+fn timestamp_folder_name() -> String {
+    let (year, month, day, hour, minute, second) = utc_date_time_parts();
+    format!("PhonRec_WAV_{year:04}{month:02}{day:02}_{hour:02}{minute:02}{second:02}")
+}
+
+fn create_unique_export_directory(destination: &Path, base_name: &str) -> Result<PathBuf, String> {
+    fs::create_dir_all(destination).map_err(|error| format!("创建导出目录失败：{error}"))?;
+    let mut output = destination.join(base_name);
+    let mut suffix = 2usize;
+    while output.exists() {
+        output = destination.join(format!("{base_name}_{suffix}"));
+        suffix += 1;
+    }
+    fs::create_dir_all(&output).map_err(|error| format!("创建 WAV 导出目录失败：{error}"))?;
+    Ok(output)
+}
+
+fn export_wav_folder_from_state(
+    workspace: &Path,
+    state: &Value,
+    destination: &Path,
+) -> Result<StandaloneExportResult, String> {
+    let base_name = timestamp_folder_name();
+    let output = create_unique_export_directory(destination, &base_name)?;
+
+    let speakers = state
+        .get("speakers")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let groups = state
+        .get("groups")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut exported = 0usize;
+    let mut skipped = 0usize;
+    for (speaker_index, (speaker_id, speaker)) in speakers.iter().enumerate() {
+        let speaker_name = speaker
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or(speaker_id);
+        let speaker_dir = output.join(format!(
+            "{:02}_{}",
+            speaker_index + 1,
+            sanitize_path_component(speaker_name, "发音人")
+        ));
+        let records = speaker.get("items").and_then(Value::as_object);
+        for (group_index, group) in groups.iter().enumerate() {
+            let group_name = group
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("未分组");
+            let group_dir = speaker_dir.join(format!(
+                "{:02}_{}",
+                group_index + 1,
+                sanitize_path_component(group_name, "未分组")
+            ));
+            if let Some(items) = group.get("items").and_then(Value::as_array) {
+                for (item_index, item) in items.iter().enumerate() {
+                    let item_id = item.get("id").and_then(Value::as_str).unwrap_or_default();
+                    let label = item.get("label").and_then(Value::as_str).unwrap_or("词项");
+                    let relative = records
+                        .and_then(|records| records.get(item_id))
+                        .and_then(|record| record.get("path"))
+                        .and_then(Value::as_str);
+                    let Some(relative) = relative else {
+                        skipped += 1;
+                        continue;
+                    };
+                    let source = match resolve_existing_managed_file(&workspace, relative) {
+                        Ok(source) => source,
+                        Err(_) => {
+                            skipped += 1;
+                            continue;
+                        }
+                    };
+                    fs::create_dir_all(&group_dir)
+                        .map_err(|error| format!("创建导出分组目录失败：{error}"))?;
+                    let target = group_dir.join(format!(
+                        "{:03}_{}.wav",
+                        item_index + 1,
+                        sanitize_path_component(label, "词项")
+                    ));
+                    fs::copy(&source, &target).map_err(|error| format!("导出录音失败：{error}"))?;
+                    exported += 1;
+                }
+            }
+        }
+    }
+    Ok(StandaloneExportResult {
+        output_dir: output.to_string_lossy().to_string(),
+        exported,
+        skipped,
+    })
+}
+
+#[tauri::command]
+fn standalone_export_wav_folder(
+    app: AppHandle,
+    destination: String,
+) -> Result<StandaloneExportResult, String> {
+    let workspace = workspace_dir(&app)?;
+    let state = standalone_project_load(app)?;
+    export_wav_folder_from_state(&workspace, &state, &PathBuf::from(destination))
 }
 
 fn read_handshake(child: &mut Child) -> Result<EngineHandshake, String> {
@@ -1252,6 +1933,12 @@ fn main() {
             get_engine_status,
             retry_engine,
             quit_app,
+            standalone_project_load,
+            standalone_project_save,
+            standalone_project_clear,
+            standalone_audio_save,
+            standalone_audio_read,
+            standalone_export_wav_folder,
             load_settings,
             save_settings,
             reset_settings,
@@ -1505,5 +2192,175 @@ mod tests {
         );
         assert_eq!(recording_buffer.lock().unwrap().len(), 2);
         assert_eq!(*recording_buffer.lock().unwrap(), vec![0.0, 0.0]);
+    }
+
+    fn 构造_pcm_wav(samples: &[i16], sample_rate: u32) -> Vec<u8> {
+        let mut bytes = write_wav_header(sample_rate, samples.len());
+        for sample in samples {
+            bytes.extend_from_slice(&sample.to_le_bytes());
+        }
+        bytes
+    }
+
+    #[test]
+    fn 独立模式路径清洗会阻止穿越和保留字() {
+        assert_eq!(sanitize_path_component("../甲:乙\\丙", "词项"), "_甲_乙_丙");
+        assert_eq!(sanitize_path_component("CON", "词项"), "_CON");
+        assert_eq!(sanitize_path_component("...", "词项"), "词项");
+
+        let workspace = PathBuf::from("C:/受控工作区");
+        assert!(resolve_managed_workspace_path(&workspace, "audio/甲/录音.wav").is_ok());
+        assert!(resolve_managed_workspace_path(&workspace, "../越界.wav").is_err());
+        assert!(resolve_managed_workspace_path(&workspace, "C:/越界.wav").is_err());
+    }
+
+    #[test]
+    fn 独立工程状态可重复原子替换() {
+        let root =
+            std::env::temp_dir().join(format!("phonrec_standalone_atomic_{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        write_project_state_atomic(&root, &json!({"version": "1.0", "groups": [1]})).unwrap();
+        write_project_state_atomic(&root, &json!({"version": "1.0", "groups": [2]})).unwrap();
+
+        let loaded: Value =
+            serde_json::from_slice(&fs::read(root.join("project.json")).unwrap()).unwrap();
+        assert_eq!(loaded["groups"], json!([2]));
+        assert!(!root.join("project.tmp").exists());
+        assert!(!root.join("project.bak").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn 独立模式只接受有效的十六位_pcm_wav() {
+        let bytes = 构造_pcm_wav(&[0, 1200, -1200, 32767], 16_000);
+        let parsed = parse_pcm_wav(&bytes).unwrap();
+        assert_eq!(parsed.sample_rate, 16_000);
+        assert_eq!(parsed.channels, 1);
+        assert_eq!(parsed.samples.len(), 4);
+        assert!(parse_pcm_wav(b"not wav").is_err());
+
+        let mut unsupported = bytes;
+        unsupported[34..36].copy_from_slice(&24u16.to_le_bytes());
+        assert!(parse_pcm_wav(&unsupported).is_err());
+    }
+
+    #[test]
+    fn 轻量质量检测区分音量和轻重削波() {
+        let rules = json!({
+            "volume": {"enabled": true, "level": "medium"},
+            "clipping": {"enabled": true, "level": "medium"}
+        });
+        let quiet = ParsedWav {
+            sample_rate: 16_000,
+            channels: 1,
+            samples: vec![0.001; 16_000],
+        };
+        let quiet_result = analyze_lightweight_quality(&quiet, &rules);
+        assert_eq!(quiet_result["decision"], "retry");
+        assert_eq!(quiet_result["volume"]["status"], "too_quiet");
+
+        let mut mild_samples = vec![0.1; 10_000];
+        mild_samples[..10].fill(1.0);
+        let mild = ParsedWav {
+            sample_rate: 16_000,
+            channels: 1,
+            samples: mild_samples,
+        };
+        let mild_result = analyze_lightweight_quality(&mild, &rules);
+        assert_eq!(mild_result["decision"], "review");
+        assert_eq!(mild_result["clipping"]["abnormal"], true);
+
+        let mut severe_samples = vec![0.1; 10_000];
+        severe_samples[..40].fill(1.0);
+        let severe = ParsedWav {
+            sample_rate: 16_000,
+            channels: 1,
+            samples: severe_samples,
+        };
+        let severe_result = analyze_lightweight_quality(&severe, &rules);
+        assert_eq!(severe_result["decision"], "retry");
+        assert!(severe_result["issues"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("严重截断")));
+        assert_eq!(severe_result["speech"]["label"], "完整模式可用");
+    }
+
+    #[test]
+    fn 保存工程后会清理失去引用的托管录音() {
+        let root =
+            std::env::temp_dir().join(format!("phonrec_standalone_prune_{}", Uuid::new_v4()));
+        let audio = root.join("audio").join("speaker");
+        fs::create_dir_all(&audio).unwrap();
+        let kept = audio.join("kept.wav");
+        let orphan = audio.join("orphan.wav");
+        fs::write(&kept, b"kept").unwrap();
+        fs::write(&orphan, b"orphan").unwrap();
+        let state = json!({
+            "speakers": {
+                "speaker": {"items": {"word": {"path": "audio/speaker/kept.wav"}}}
+            }
+        });
+
+        prune_unreferenced_audio(&state, &root).unwrap();
+        assert!(kept.exists());
+        assert!(!orphan.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn wav_导出目录带时间戳且绝不覆盖() {
+        let root =
+            std::env::temp_dir().join(format!("phonrec_standalone_export_{}", Uuid::new_v4()));
+        let first = create_unique_export_directory(&root, "PhonRec_WAV_20260620_120000").unwrap();
+        fs::write(first.join("existing.wav"), b"original").unwrap();
+        let second = create_unique_export_directory(&root, "PhonRec_WAV_20260620_120000").unwrap();
+
+        assert_eq!(first.file_name().unwrap(), "PhonRec_WAV_20260620_120000");
+        assert_eq!(second.file_name().unwrap(), "PhonRec_WAV_20260620_120000_2");
+        assert_eq!(fs::read(first.join("existing.wav")).unwrap(), b"original");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn wav_批量导出按发音人分组和序号组织并跳过未录制项() {
+        let root =
+            std::env::temp_dir().join(format!("phonrec_standalone_layout_{}", Uuid::new_v4()));
+        let workspace = root.join("workspace");
+        let destination = root.join("exports");
+        let source = workspace.join("audio").join("speaker").join("recorded.wav");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::write(&source, b"wav-content").unwrap();
+        let state = json!({
+            "speakers": {
+                "speaker": {
+                    "name": "张/三",
+                    "items": {"word-1": {"path": "audio/speaker/recorded.wav"}}
+                }
+            },
+            "groups": [{
+                "name": "声:调",
+                "items": [
+                    {"id": "word-1", "label": "妈/1"},
+                    {"id": "word-2", "label": "麻"}
+                ]
+            }]
+        });
+
+        let result = export_wav_folder_from_state(&workspace, &state, &destination).unwrap();
+        let output = PathBuf::from(result.output_dir);
+        let exported = output
+            .join("01_张_三")
+            .join("01_声_调")
+            .join("001_妈_1.wav");
+        assert_eq!(result.exported, 1);
+        assert_eq!(result.skipped, 1);
+        assert_eq!(fs::read(exported).unwrap(), b"wav-content");
+        assert!(!output
+            .join("01_张_三")
+            .join("01_声_调")
+            .join("002_麻.wav")
+            .exists());
+        fs::remove_dir_all(root).unwrap();
     }
 }

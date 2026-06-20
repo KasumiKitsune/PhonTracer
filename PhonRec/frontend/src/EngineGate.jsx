@@ -1,7 +1,12 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { setEngineConnection } from './engineApi.js';
+import {
+  createEngineRuntimeClient,
+  createStandaloneRuntimeClient,
+} from './runtimeClient.js';
+import RuntimeProvider from './RuntimeProvider.jsx';
 
 const STATE_TITLES = {
   starting: '正在连接 PhonTracer',
@@ -18,6 +23,9 @@ export default function EngineGate({ children }) {
     download_url: 'https://github.com/KasumiKitsune/PhonTracer/releases/latest',
   });
   const [retrying, setRetrying] = useState(false);
+  const [standalone, setStandalone] = useState(false);
+  const engineClient = useMemo(() => createEngineRuntimeClient(), []);
+  const standaloneClient = useMemo(() => createStandaloneRuntimeClient(), []);
 
   const applyStatus = useCallback((nextStatus) => {
     setEngineConnection(nextStatus?.state === 'ready' ? nextStatus.connection : null);
@@ -25,6 +33,7 @@ export default function EngineGate({ children }) {
   }, []);
 
   useEffect(() => {
+    if (standalone) return undefined;
     let active = true;
     const refresh = async () => {
       try {
@@ -47,7 +56,7 @@ export default function EngineGate({ children }) {
       active = false;
       window.clearInterval(timer);
     };
-  }, [applyStatus, status.download_url]);
+  }, [applyStatus, standalone, status.download_url]);
 
   const retry = async () => {
     setRetrying(true);
@@ -65,8 +74,20 @@ export default function EngineGate({ children }) {
     }
   };
 
+  if (standalone) {
+    return (
+      <RuntimeProvider client={standaloneClient}>
+        {children}
+      </RuntimeProvider>
+    );
+  }
+
   if (status.state === 'ready') {
-    return children;
+    return (
+      <RuntimeProvider client={engineClient}>
+        {children}
+      </RuntimeProvider>
+    );
   }
 
   return (
@@ -92,6 +113,18 @@ export default function EngineGate({ children }) {
           <button type="button" className="btn-secondary" onClick={() => openUrl(status.download_url)}>
             打开 PhonTracer 下载页
           </button>
+          {['missing', 'incompatible', 'failed'].includes(status.state) && (
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => {
+                setEngineConnection(null);
+                setStandalone(true);
+              }}
+            >
+              进入独立软件模式
+            </button>
+          )}
           <button type="button" className="btn-quiet" onClick={() => invoke('quit_app')}>
             退出
           </button>

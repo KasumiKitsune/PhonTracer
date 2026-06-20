@@ -149,6 +149,8 @@ export default function SettingsModal({
   onSelectFolder,
   isRecording,
   isProcessing,
+  runtimeMode = 'engine',
+  capabilities = { spectrogram: true, fullQuality: true },
   metaKeyOptions = []
 }) {
   const [activeTab, setActiveTab] = useState('appearance');
@@ -212,9 +214,13 @@ export default function SettingsModal({
     { key: 'dc_offset', label: '直流偏移', description: '检测录音设备产生的波形偏移' },
   ];
 
+  const isStandalone = runtimeMode === 'standalone';
+  const isQualityAvailable = (key) => capabilities.fullQuality || key === 'volume' || key === 'clipping';
+  const availableQualityItems = QUALITY_ITEMS.filter(({ key }) => isQualityAvailable(key));
+
   const handleToggleAllQuality = (enabled) => {
     const rules = { ...settings.quality_rules };
-    QUALITY_ITEMS.forEach(({ key }) => {
+    availableQualityItems.forEach(({ key }) => {
       rules[key] = { ...rules[key], enabled };
     });
     onUpdate({ realtime_quality: enabled, quality_rules: rules });
@@ -225,11 +231,12 @@ export default function SettingsModal({
       ...settings.quality_rules,
       [key]: { ...settings.quality_rules[key], ...updates }
     };
-    const anyEnabled = QUALITY_ITEMS.some(({ key: k }) => rules[k]?.enabled);
+    const anyEnabled = availableQualityItems.some(({ key: k }) => rules[k]?.enabled);
     onUpdate({ realtime_quality: anyEnabled, quality_rules: rules });
   };
 
-  const enabledRulesCount = QUALITY_ITEMS.filter(({ key }) => settings.quality_rules?.[key]?.enabled).length;
+  const enabledRulesCount = availableQualityItems.filter(({ key }) => settings.quality_rules?.[key]?.enabled).length;
+  const availableQualityEnabled = enabledRulesCount > 0;
 
   return (
     <div
@@ -273,7 +280,7 @@ export default function SettingsModal({
               className={`settings-tab-btn ${activeTab === 'storage' ? 'active' : ''}`}
               onClick={() => setActiveTab('storage')}
             >
-              工程与保存
+              {isStandalone ? '保存与导出' : '工程与保存'}
             </button>
             <button
               className={`settings-tab-btn ${activeTab === 'device' ? 'active' : ''}`}
@@ -399,14 +406,21 @@ export default function SettingsModal({
                     <div className="form-group">
                       <label className="form-label">默认图形</label>
                       <CustomSelect
-                        value={settings.default_plot}
+                        value={capabilities.spectrogram ? settings.default_plot : 'waveform'}
                         onChange={(default_plot) => onUpdate({ default_plot })}
-                        disabled={isRecording || isProcessing}
-                        options={[
-                          { value: 'waveform', label: '波形图' },
-                          { value: 'spectrogram', label: '语谱图' }
-                        ]}
+                        disabled={isRecording || isProcessing || !capabilities.spectrogram}
+                        options={capabilities.spectrogram
+                          ? [
+                              { value: 'waveform', label: '波形图' },
+                              { value: 'spectrogram', label: '语谱图' }
+                            ]
+                          : [{ value: 'waveform', label: '波形图（独立模式）' }]}
                       />
+                      {!capabilities.spectrogram && (
+                        <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
+                          语谱图仅在完整模式可用；此处不会修改您保存的默认图形。
+                        </div>
+                      )}
                     </div>
                     <div className="form-group">
                       <label className="form-label">字表角标字段</label>
@@ -581,12 +595,12 @@ export default function SettingsModal({
                 <div className="quality-settings-summary">
                   <div>
                     <strong>录音质量判定条件</strong>
-                    <span>已启用 {enabledRulesCount} / {QUALITY_ITEMS.length} 项检测</span>
+                    <span>已启用 {enabledRulesCount} / {availableQualityItems.length} 项可用检测</span>
                   </div>
-                  <label className="switch" title={settings.realtime_quality ? '关闭全部检测' : '启用全部检测'}>
+                  <label className="switch" title={availableQualityEnabled ? '关闭全部检测' : '启用全部检测'}>
                     <input
                       type="checkbox"
-                      checked={settings.realtime_quality}
+                      checked={isStandalone ? availableQualityEnabled : settings.realtime_quality}
                       disabled={isRecording || isProcessing}
                       onChange={(e) => handleToggleAllQuality(e.target.checked)}
                     />
@@ -598,21 +612,22 @@ export default function SettingsModal({
                 <div className="quality-rule-list">
                   {QUALITY_ITEMS.map((item) => {
                     const rule = settings.quality_rules?.[item.key] || { enabled: true, level: 'medium' };
+                    const available = isQualityAvailable(item.key);
                     return (
-                      <div className={`quality-rule-card ${rule.enabled ? 'enabled' : 'disabled'}`} key={item.key}>
+                      <div className={`quality-rule-card ${available && rule.enabled ? 'enabled' : 'disabled'}`} key={item.key}>
                         <label className="quality-rule-toggle">
                           <span className="switch" style={{ flex: '0 0 40px' }}>
                             <input
                               type="checkbox"
-                              checked={rule.enabled}
-                              disabled={isRecording || isProcessing}
+                              checked={available && rule.enabled}
+                              disabled={!available || isRecording || isProcessing}
                               onChange={(e) => handleUpdateRule(item.key, { enabled: e.target.checked })}
                             />
                             <span className="slider"></span>
                           </span>
                           <span>
                             <strong>{item.label}</strong>
-                            <small>{item.description}</small>
+                            <small>{available ? item.description : '完整模式可用'}</small>
                           </span>
                         </label>
                         <div className="quality-level-selector" aria-label={`${item.label}级别选择`}>
@@ -625,7 +640,7 @@ export default function SettingsModal({
                               type="button"
                               key={level.value}
                               className={rule.level === level.value ? 'active' : ''}
-                              disabled={!rule.enabled || isRecording || isProcessing}
+                              disabled={!available || !rule.enabled || isRecording || isProcessing}
                               onClick={() => handleUpdateRule(item.key, { level: level.value })}
                             >
                               {level.label}
@@ -642,11 +657,46 @@ export default function SettingsModal({
             {/* Tab 4: Project & Save */}
             {activeTab === 'storage' && (
               <div className="settings-panel-transition" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                <div className="settings-card">
-                  <div className="settings-card-title">
-                    <SaveIcon /> 存储目录与归档
+                {isStandalone ? (
+                  <div className="settings-card">
+                    <div className="settings-card-title">
+                      <SaveIcon /> 独立模式保存与 WAV 导出
+                    </div>
+                    <div className="settings-grid">
+                      <div className="form-group settings-grid-full">
+                        <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.55 }}>
+                          录音会自动保存到本机受控工作区。独立模式不提供 .teproj 工程导入导出；安装主程序后，完整模式可继续读取这里的录音。
+                        </div>
+                      </div>
+                      <div className="form-group settings-grid-full">
+                        <label className="form-label">默认 WAV 导出目录</label>
+                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                          <input
+                            type="text"
+                            className="form-input form-input-readonly"
+                            value={settings.folder_path || ''}
+                            style={{ flex: 1, textOverflow: 'ellipsis' }}
+                            readOnly
+                            placeholder="导出时选择目录，或在此预先设置..."
+                          />
+                          <button
+                            className="btn-secondary"
+                            style={{ borderRadius: '9999px', padding: '0.4rem 1rem', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
+                            disabled={isRecording || isProcessing}
+                            onClick={onSelectFolder}
+                          >
+                            选择路径
+                          </button>
+                        </div>
+                      </div>
+                    </div>
                   </div>
-                  <div className="settings-grid">
+                ) : (
+                  <div className="settings-card">
+                    <div className="settings-card-title">
+                      <SaveIcon /> 存储目录与归档
+                    </div>
+                    <div className="settings-grid">
                     <div className="form-group settings-grid-full">
                       <label className="form-label">默认工程保存格式</label>
                       <CustomSelect
@@ -696,8 +746,9 @@ export default function SettingsModal({
                         placeholder="请输入工程名，如 PhonRec_Project"
                       />
                     </div>
+                    </div>
                   </div>
-                </div>
+                )}
 
                 <div className="settings-card" style={{ borderLeft: '4px solid var(--color-accent)', background: 'var(--color-accent-glow)' }}>
                   <div style={{ fontSize: '0.8rem', lineHeight: '1.5', display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>

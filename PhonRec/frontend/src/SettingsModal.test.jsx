@@ -1,6 +1,5 @@
 import { cleanup, render, screen, fireEvent } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import React from 'react';
 import SettingsModal from './SettingsModal.jsx';
 
 describe('SettingsModal 设置界面', () => {
@@ -115,5 +114,75 @@ describe('SettingsModal 设置界面', () => {
     fireEvent.click(navyDot);
 
     expect(mockOnUpdate).toHaveBeenCalledWith({ accent_color: 'navy' });
+  });
+
+  it('独立模式仅临时使用波形并隐藏工程格式设置', () => {
+    const settings = {
+      theme: 'light', accent_color: 'blue', ui_scale: '100%', ui_density: 'standard',
+      animations_enabled: true, default_plot: 'spectrogram', record_order: 'wordlist',
+      record_mode: 'click', record_source: 'default', sample_rate: 16000,
+      save_format: 'teproj', folder_path: 'D:\\WAV', primary_meta_key: '拼音', badge_meta_key: '拼音',
+      char_font_size: 120, vad_preset: 'standard', shortcut_preset: 'standard',
+      live_input_monitor: true, default_project_name: 'PhonRec_Project.teproj',
+      realtime_quality: true, quality_rules: {}, show_shortcut_hints: true,
+    };
+    const onUpdate = vi.fn();
+    render(
+      <SettingsModal
+        isOpen
+        settings={settings}
+        onUpdate={onUpdate}
+        audioDevices={[]}
+        runtimeMode="standalone"
+        capabilities={{ spectrogram: false, fullQuality: false }}
+      />
+    );
+
+    expect(screen.getByText('波形图（独立模式）')).toBeTruthy();
+    expect(screen.getByText(/不会修改您保存的默认图形/)).toBeTruthy();
+    expect(onUpdate).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText('保存与导出'));
+    expect(screen.getByText('默认 WAV 导出目录')).toBeTruthy();
+    expect(screen.queryByText('默认工程保存格式')).toBeNull();
+    expect(screen.queryByText('默认工程文件名')).toBeNull();
+  });
+
+  it('独立模式只允许调整音量和削波规则', () => {
+    const rules = Object.fromEntries(
+      ['speech', 'volume', 'clipping', 'noise', 'creak', 'dc_offset'].map(key => [key, { enabled: true, level: 'medium' }])
+    );
+    const settings = {
+      theme: 'light', accent_color: 'blue', ui_scale: '100%', ui_density: 'standard',
+      animations_enabled: true, default_plot: 'waveform', record_order: 'wordlist',
+      record_mode: 'click', record_source: 'default', sample_rate: 16000,
+      save_format: 'teproj', folder_path: '', primary_meta_key: '拼音', badge_meta_key: '拼音',
+      char_font_size: 120, vad_preset: 'standard', shortcut_preset: 'standard',
+      live_input_monitor: true, default_project_name: 'PhonRec_Project.teproj',
+      realtime_quality: true, quality_rules: rules, show_shortcut_hints: true,
+    };
+    const onUpdate = vi.fn();
+    render(
+      <SettingsModal
+        isOpen
+        settings={settings}
+        onUpdate={onUpdate}
+        audioDevices={[]}
+        runtimeMode="standalone"
+        capabilities={{ spectrogram: false, fullQuality: false }}
+      />
+    );
+
+    fireEvent.click(screen.getByText('质量检测'));
+    expect(screen.getByText('已启用 2 / 2 项可用检测')).toBeTruthy();
+    expect(screen.getAllByText('完整模式可用')).toHaveLength(4);
+    const summarySwitch = screen.getByText('录音质量判定条件').closest('.quality-settings-summary').querySelector('input');
+    fireEvent.click(summarySwitch);
+
+    const update = onUpdate.mock.calls[0][0];
+    expect(update.quality_rules.volume.enabled).toBe(false);
+    expect(update.quality_rules.clipping.enabled).toBe(false);
+    expect(update.quality_rules.speech.enabled).toBe(true);
+    expect(update.quality_rules.noise.enabled).toBe(true);
   });
 });
