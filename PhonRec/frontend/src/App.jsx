@@ -2467,6 +2467,72 @@ export default function App() {
   const activeItem = getActiveItem();
   const noteFontSize = Math.max(18, Math.round(charFontSize * 0.24));
 
+  if (!settingsLoaded) {
+    return (
+      <div style={{
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        width: '100vw',
+        height: '100vh',
+        backgroundColor: 'var(--bg-primary, #f8fafc)',
+        transition: 'background-color 0.3s ease'
+      }}>
+        <div style={{ width: '120px', height: '120px' }}>
+          <svg id="loading-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+            <defs>
+              <style>{`
+                .cls-1 { fill: #5157e4; }
+                .cls-2 { fill: #0d1d3e; }
+                .loader-container {
+                    transform-origin: 256px 256px;
+                    animation: spin-jump 2s cubic-bezier(0.68, -0.2, 0.265, 1.2) infinite;
+                }
+                .part-1, .part-2 {
+                    transform-box: fill-box;
+                    transform-origin: center;
+                }
+                .part-1 {
+                    animation: flex-left 2s ease-in-out infinite;
+                }
+                .part-2 {
+                    animation: flex-right 2s ease-in-out infinite;
+                }
+                @keyframes spin-jump {
+                    0%   { transform: rotate(0deg) scale(1); }
+                    12%  { transform: rotate(0deg) scale(0.85); }
+                    35%  { transform: rotate(180deg) scale(1.08); }
+                    50%  { transform: rotate(180deg) scale(1); }
+                    62%  { transform: rotate(180deg) scale(0.85); }
+                    85%  { transform: rotate(360deg) scale(1.08); }
+                    100% { transform: rotate(360deg) scale(1); }
+                }
+                @keyframes flex-left {
+                    0%, 50%, 100% { transform: translateX(0) scale(1) rotate(0deg); }
+                    25%, 75%      { transform: translateX(-6px) scale(0.92) rotate(-4deg); }
+                }
+                @keyframes flex-right {
+                    0%, 50%, 100% { transform: translateX(0) scale(1) rotate(0deg); }
+                    25%, 75%      { transform: translateX(6px) scale(0.92) rotate(4deg); }
+                }
+              `}</style>
+            </defs>
+            <g className="loader-container">
+              <g transform="translate(123.3, 107.6) scale(1.3)">
+                <g className="part-1">
+                  <path className="cls-1" d="M122.83,117.63q0,52,0,103.91c0,7.31-6.14,12-13.07,9.88Q68.07,219,26.4,206.55c-8.11-2.42-10.14-5.07-10.17-13.46Q16,118.48,15.67,43.87c0-10.39,2.34-13.3,12.16-16.09Q68.45,16.26,109,4.48c9.24-2.66,13.74.57,13.75,10.1q0,51.53,0,103.05Zm-11.12,11.59h0c0-14.82,0-29.65,0-44.48,0-6-3-9.73-7.82-9.78-5-.06-8.31,3.72-8.32,9.81q0,44.27,0,88.54c0,5.92,3.1,9.7,7.87,9.83s8.24-3.85,8.25-9.86Q111.74,151.25,111.71,129.22Zm-31.6-.8h0V95.5c0-.72,0-1.43,0-2.14-.15-5.54-3.33-9.06-8.13-9-4.63,0-7.66,3.42-7.67,8.9q-.09,34.84-.06,69.69c0,5.87,3.19,9.54,8.08,9.48,4.71-.06,7.73-3.6,7.75-9.35C80.15,151.5,80.11,140,80.11,128.42ZM36,130.76h0c0,1.85-.07,3.7,0,5.54.21,4.68,3.43,7.87,7.83,7.84a7.75,7.75,0,0,0,8-7.75c.12-3.83.08-7.68-.06-11.51a7.72,7.72,0,0,0-8-7.67A7.86,7.86,0,0,0,36,124.79C35.87,126.77,36,128.77,36,130.76Z" transform="translate(-15.67 -3.58)"/>
+                </g>
+                <g className="part-2">
+                  <path className="cls-2" d="M219.75,144.58c0,24.37-.14,48.74.08,73.11.08,9.46-6.48,13.54-14.7,11-20.74-6.4-41.71-12.09-62.59-18.09-8-2.29-10.28-5.29-10.3-13.41,0-6,.16-12-.08-18-.1-2.64.71-3.45,3.26-3.42,5.18.05,8.37-3,8.38-8.19q.07-38.26,0-76.53c0-6.39-2.12-8.42-8.73-8.47-2.41,0-2.84-.93-2.83-3,.05-9.69-.14-19.38,0-29.07.09-7.29,5.35-11.27,12.37-9.42q33.38,8.74,66.7,17.67c5.65,1.51,8.47,5.69,8.48,12.27q0,36.78,0,73.54ZM175,130.45h0c0-6.84.08-13.68,0-20.53-.08-5.34-3.26-8.68-8-8.69s-7.89,3.26-7.91,8.68q-.1,20.52,0,41.05c0,5.52,2.94,8.76,7.67,8.87,4.88.12,8.18-3.32,8.26-8.85C175.08,144.14,175,137.29,175,130.45Zm28.23.27h0a52.35,52.35,0,0,0-.05-6.39,8,8,0,0,0-8.19-7.15,7.82,7.82,0,0,0-7.62,7.29,96,96,0,0,0,0,12.35,7.74,7.74,0,0,0,8,7.34c4.24,0,7.42-3,7.83-7.48C203.39,134.71,203.24,132.71,203.24,130.72Z" transform="translate(-15.67 -3.58)"/>
+                </g>
+              </g>
+            </g>
+          </svg>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       className="app-container"
