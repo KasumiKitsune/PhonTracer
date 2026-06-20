@@ -9,6 +9,7 @@ vi.mock('@tauri-apps/plugin-opener', () => ({ openUrl: vi.fn() }));
 describe('PhonTracer 启动门禁', () => {
   afterEach(() => {
     cleanup();
+    document.getElementById('startup-loader')?.remove();
     invokeMock.mockReset();
   });
 
@@ -32,13 +33,20 @@ describe('PhonTracer 启动门禁', () => {
   });
 
   it('启动检测期间不允许进入独立模式', () => {
+    const loader = document.createElement('div');
+    loader.id = 'startup-loader';
+    document.body.appendChild(loader);
     invokeMock.mockReturnValue(new Promise(() => {}));
     render(<EngineGate><div>主界面</div></EngineGate>);
     expect(screen.getByText('正在连接 PhonTracer')).toBeTruthy();
     expect(screen.queryByRole('button', { name: '进入独立软件模式' })).toBeNull();
+    expect(document.getElementById('startup-loader')).toBeTruthy();
   });
 
   it('分析引擎就绪后呈现主界面', async () => {
+    const loader = document.createElement('div');
+    loader.id = 'startup-loader';
+    document.body.appendChild(loader);
     invokeMock.mockResolvedValue({
       state: 'ready',
       message: '分析引擎已就绪',
@@ -50,6 +58,7 @@ describe('PhonTracer 启动门禁', () => {
     });
     render(<EngineGate><div>主界面</div></EngineGate>);
     expect(await screen.findByText('主界面')).toBeTruthy();
+    expect(document.getElementById('startup-loader')).toBeNull();
   });
 
   it('独立模式选择只在本次挂载有效', async () => {

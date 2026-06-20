@@ -2542,10 +2542,14 @@ fn main() {
         .manage(AudioState::default())
         .setup(|app| {
             let handle = app.handle().clone();
-            let state = app.state::<EngineState>();
-            let mut runtime = state.0.lock().expect("分析引擎状态锁已损坏");
-            let status = start_engine(&handle, &mut runtime);
-            runtime.status = status;
+            // 引擎发现、进程启动和健康检查都可能耗时。放到后台线程，
+            // 避免阻塞 Tauri 主循环和 WebView 的首次绘制。
+            std::thread::spawn(move || {
+                let state = handle.state::<EngineState>();
+                let mut runtime = state.0.lock().expect("分析引擎状态锁已损坏");
+                let status = start_engine(&handle, &mut runtime);
+                runtime.status = status;
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

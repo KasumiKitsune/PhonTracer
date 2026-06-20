@@ -15,6 +15,10 @@ const STATE_TITLES = {
   failed: '分析引擎启动失败',
 };
 
+function hideStartupLoader() {
+  document.getElementById('startup-loader')?.remove();
+}
+
 export default function EngineGate({ children }) {
   const [status, setStatus] = useState({
     state: 'starting',
@@ -30,6 +34,7 @@ export default function EngineGate({ children }) {
   const applyStatus = useCallback((nextStatus) => {
     setEngineConnection(nextStatus?.state === 'ready' ? nextStatus.connection : null);
     setStatus(nextStatus);
+    if (nextStatus?.state !== 'starting') hideStartupLoader();
   }, []);
 
   useEffect(() => {
@@ -41,6 +46,7 @@ export default function EngineGate({ children }) {
         if (active) applyStatus(nextStatus);
       } catch (error) {
         if (active) {
+          hideStartupLoader();
           applyStatus({
             state: 'failed',
             message: `无法读取分析引擎状态：${error}`,
@@ -51,12 +57,12 @@ export default function EngineGate({ children }) {
       }
     };
     refresh();
-    const timer = window.setInterval(refresh, 5000);
+    const timer = window.setInterval(refresh, status.state === 'starting' ? 250 : 5000);
     return () => {
       active = false;
       window.clearInterval(timer);
     };
-  }, [applyStatus, standalone, status.download_url]);
+  }, [applyStatus, standalone, status.download_url, status.state]);
 
   const retry = async () => {
     setRetrying(true);
