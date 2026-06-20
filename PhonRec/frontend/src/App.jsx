@@ -2963,7 +2963,7 @@ export default function App() {
                     </div>
                   </div>
                 )}
-                {!capabilities.fullQuality && ['有效语音', '背景噪声', '嘎裂声', '直流偏移'].map(label => (
+                {!isStandalone && !capabilities.fullQuality && ['有效语音', '背景噪声', '嘎裂声', '直流偏移'].map(label => (
                   <div className="quality-item" key={label} style={{ opacity: 0.65 }}>
                     <span>{label}</span>
                     <span style={{ color: 'var(--text-secondary)', fontSize: '0.72rem' }}>完整模式可用</span>

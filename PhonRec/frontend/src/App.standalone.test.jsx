@@ -80,7 +80,7 @@ describe('独立软件模式主界面', () => {
     expect(container.querySelector('input[accept=".teproj"]')).toBeNull();
     expect(container.querySelector('input[accept=".ptwl,.txt,.csv"]')).toBeNull();
     expect(screen.queryByRole('button', { name: /语谱图/ })).toBeNull();
-    expect(screen.getAllByText('完整模式可用')).toHaveLength(4);
+    expect(screen.queryAllByText('完整模式可用')).toHaveLength(0);
     expect(screen.queryByText('字段显示设置')).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: /导入字表/ }));
