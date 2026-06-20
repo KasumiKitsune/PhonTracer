@@ -239,7 +239,7 @@ export default function App() {
 
   const [audioDevices, setAudioDevices] = useState([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState('default');
-  const [sampleRateSetting, setSampleRateSetting] = useState(16000);
+  const [sampleRateSetting, setSampleRateSetting] = useState(48000);
   const [saveFormatSetting, setSaveFormatSetting] = useState('teproj');
   const [folderPathSetting, setFolderPathSetting] = useState('');
   const [wavExportPathSetting, setWavExportPathSetting] = useState('');
@@ -436,7 +436,7 @@ export default function App() {
         setVisualizerTab(settings.default_plot || 'waveform');
         setRecordingMode(settings.record_mode || 'click');
         setSelectedDeviceId(settings.record_source || 'default');
-        setSampleRateSetting(settings.sample_rate || 16000);
+        setSampleRateSetting(settings.sample_rate || 48000);
         setSaveFormatSetting(settings.save_format || 'teproj');
         setFolderPathSetting(settings.folder_path || '');
         setWavExportPathSetting(settings.wav_export_path || '');

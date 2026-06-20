@@ -1945,7 +1945,7 @@ impl Default for LocalSettings {
             record_order: "wordlist".to_string(),
             record_mode: "click".to_string(),
             record_source: "default".to_string(),
-            sample_rate: 16000,
+            sample_rate: 48000,
             channels: 1,
             format: "wav".to_string(),
             save_format: "teproj".to_string(),
@@ -2719,7 +2719,7 @@ mod tests {
                     .unwrap_or_else(|_| LocalSettings::default())
             })
             .unwrap_or_else(|_| LocalSettings::default());
-        assert_eq!(fallback.sample_rate, 16_000);
+        assert_eq!(fallback.sample_rate, 48_000);
 
         fs::remove_dir_all(root).unwrap();
     }
