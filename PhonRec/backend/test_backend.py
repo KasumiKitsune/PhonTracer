@@ -10,6 +10,7 @@ import tempfile
 import threading
 import queue
 import urllib.request
+import wave
 import zipfile
 import httpx
 from fastapi import HTTPException
@@ -22,6 +23,17 @@ if backend_dir not in sys.path:
 
 # Import backend logic
 import main as backend
+
+
+def build_test_wav(sample_rate=16000, frame_count=1600):
+    """生成可被真实音频解析器读取的单声道 16 位 PCM WAV。"""
+    output = io.BytesIO()
+    with wave.open(output, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(sample_rate)
+        wav_file.writeframes(b"\x00\x00" * frame_count)
+    return output.getvalue()
 
 class TestPhonRecBackend(unittest.TestCase):
     def setUp(self):
@@ -58,6 +70,48 @@ class TestPhonRecBackend(unittest.TestCase):
         self.assertTrue(os.path.isdir(backend.AUDIO_DIR))
         self.assertTrue(os.path.isdir(backend.DATA_DIR))
         self.assertFalse(backend.WORKSPACE_DIR.startswith(backend.BASE_DIR))
+
+    def test_audio_save_is_transactional_and_retry_preserves_previous_recording(self):
+        import asyncio
+
+        state = {
+            "version": "1.0",
+            "active_speaker_id": "spk_1",
+            "groups": [{"id": "g1", "name": "组", "items": [{"id": "word_1", "label": "妈"}]}],
+            "speakers": {"spk_1": {"id": "spk_1", "name": "甲", "items": {"word_1": {"id": "word_1", "label": "妈"}}}},
+        }
+        os.makedirs(backend.WORKSPACE_DIR, exist_ok=True)
+        with open(os.path.join(backend.WORKSPACE_DIR, "project.json"), "w", encoding="utf-8") as project_file:
+            json.dump(state, project_file, ensure_ascii=False)
+
+        disabled_rules = json.dumps({name: {"enabled": False, "level": "medium"} for name in backend.QUALITY_RULE_NAMES})
+        first = asyncio.run(backend.api_save_audio(
+            UploadFile(filename="first.wav", file=io.BytesIO(build_test_wav())),
+            "spk_1", "word_1", "测试麦克风", disabled_rules,
+        ))
+        self.assertTrue(first["stored"])
+        audio_path = os.path.join(backend.WORKSPACE_DIR, *first["path"].split("/"))
+        accepted_bytes = open(audio_path, "rb").read()
+        with open(os.path.join(backend.WORKSPACE_DIR, "project.json"), "r", encoding="utf-8") as project_file:
+            committed = json.load(project_file)
+        self.assertEqual(committed["speakers"]["spk_1"]["items"]["word_1"]["path"], first["path"])
+
+        rejected = asyncio.run(backend.api_save_audio(
+            UploadFile(filename="retry.wav", file=io.BytesIO(build_test_wav(frame_count=3200))),
+            "spk_1", "word_1", "测试麦克风", "",
+        ))
+        self.assertFalse(rejected["stored"])
+        self.assertEqual(open(audio_path, "rb").read(), accepted_bytes)
+        with open(os.path.join(backend.WORKSPACE_DIR, "project.json"), "r", encoding="utf-8") as project_file:
+            after_retry = json.load(project_file)
+        self.assertEqual(after_retry["speakers"]["spk_1"]["items"]["word_1"]["path"], first["path"])
+
+        with self.assertRaises(backend.HTTPException):
+            asyncio.run(backend.api_save_audio(
+                UploadFile(filename="stale.wav", file=io.BytesIO(build_test_wav())),
+                "spk_1", "word_missing", "测试麦克风", disabled_rules,
+            ))
+        self.assertFalse(any("word_missing" in name for _root, _dirs, files in os.walk(backend.AUDIO_DIR) for name in files))
 
     def test_random_loopback_port(self):
         server_socket = backend.create_server_socket(0)
@@ -186,7 +240,7 @@ class TestPhonRecBackend(unittest.TestCase):
 
     def test_txt_wordlist_parser(self):
         # Mock UploadFile containing plain text wordlist
-        content = "【单字阴平】\n妈 衣 书\n【单字阳平】\n麻 移 熟"
+        content = "【单字阴平】\n妈 麻，马、骂\n【单字阳平】\n麻 移 熟"
         file_obj = UploadFile(filename="test.txt", file=io.BytesIO(content.encode("utf-8")))
 
         # We need to run it asynchronously or call an inner parser
@@ -200,8 +254,9 @@ class TestPhonRecBackend(unittest.TestCase):
         groups = result["groups"]
         self.assertEqual(len(groups), 2)
         self.assertEqual(groups[0]["name"], "单字阴平")
-        self.assertEqual(len(groups[0]["items"]), 3)
+        self.assertEqual(len(groups[0]["items"]), 4)
         self.assertEqual(groups[0]["items"][0]["label"], "妈")
+        self.assertEqual(groups[0]["items"][3]["label"], "骂")
         self.assertEqual(groups[1]["name"], "单字阳平")
         self.assertEqual(len(groups[1]["items"]), 3)
 
@@ -209,7 +264,7 @@ class TestPhonRecBackend(unittest.TestCase):
         # Mock CSV contents
         csv_content = (
             "组名,组备注,组标签,词项,词项备注,标签,别名,复核状态\n"
-            "单字阴平,单字高平,单字,妈,阴平基准,目标词,mā,复核\n"
+            "单字阴平,单字高平,单字,妈,阴平基准,目标词,mā；ma1,复核\n"
             "单字阴平,单字高平,单字,衣,阴平基准,目标词,yī,复核\n"
             "单字阳平,单字中升,单字,麻,阳平基准,目标词,má,复核"
         )
@@ -226,7 +281,8 @@ class TestPhonRecBackend(unittest.TestCase):
         self.assertEqual(groups[0]["name"], "单字阴平")
         self.assertEqual(len(groups[0]["items"]), 2)
         self.assertEqual(groups[0]["items"][0]["label"], "妈")
-        self.assertEqual(groups[0]["items"][0]["meta"]["复核状态"], "复核")
+        self.assertEqual(groups[0]["items"][0]["metadata_source"], "复核")
+        self.assertEqual(groups[0]["items"][0]["aliases"], ["mā", "ma1"])
         self.assertEqual(groups[1]["name"], "单字阳平")
 
     def test_ptwl_wordlist_parser(self):
@@ -238,6 +294,7 @@ class TestPhonRecBackend(unittest.TestCase):
                     "id": "g1",
                     "name": "单字阴平",
                     "note": "阴平组",
+                    "meta": {"实验条件": "A"},
                     "items": [
                         {
                             "id": "i1",
@@ -249,7 +306,7 @@ class TestPhonRecBackend(unittest.TestCase):
                 }
             ]
         }
-        file_obj = UploadFile(filename="test.ptwl", file=io.BytesIO(json.dumps(ptwl_data).encode("utf-8")))
+        file_obj = UploadFile(filename="test.ptwl", file=io.BytesIO(json.dumps(ptwl_data).encode("utf-8-sig")))
 
         import asyncio
         async def run_import():
@@ -260,6 +317,7 @@ class TestPhonRecBackend(unittest.TestCase):
         groups = result["groups"]
         self.assertEqual(len(groups), 1)
         self.assertEqual(groups[0]["name"], "单字阴平")
+        self.assertEqual(groups[0]["meta"], {"实验条件": "A"})
         self.assertEqual(groups[0]["items"][0]["label"], "妈")
 
     def test_project_import_normalization(self):
@@ -285,7 +343,7 @@ class TestPhonRecBackend(unittest.TestCase):
         archive = io.BytesIO()
         with zipfile.ZipFile(archive, "w") as zip_file:
             zip_file.writestr("project.json", json.dumps(te_project_state, ensure_ascii=False))
-            zip_file.writestr("audio/spk_1_word_1.wav", b"dummy wav data")
+            zip_file.writestr("audio/spk_1_word_1.wav", build_test_wav())
         archive.seek(0)
 
         upload = UploadFile(filename="test_te_import.teproj", file=archive)
@@ -311,7 +369,7 @@ class TestPhonRecBackend(unittest.TestCase):
         standard_audio_path = os.path.join(backend.AUDIO_DIR, "spk_1", "spk_1_word_1.wav")
         self.assertTrue(os.path.exists(standard_audio_path))
         with open(standard_audio_path, "rb") as f:
-            self.assertEqual(f.read(), b"dummy wav data")
+            self.assertEqual(f.read(), build_test_wav())
 
         # Verify that the flat layout file was cleaned up/removed
         flat_audio_path = os.path.join(backend.AUDIO_DIR, "spk_1_word_1.wav")
@@ -345,12 +403,15 @@ class TestPhonRecBackend(unittest.TestCase):
             shutil.rmtree(temp_test_dir, ignore_errors=True)
 
     def test_folder_export_sanitizes_windows_path_names(self):
-        self.assertEqual(backend.sanitize_path_component("CON", "fallback"), "_CON")
-        self.assertEqual(
-            backend.sanitize_path_component("甲<乙>:丙?. ", "fallback"),
-            "甲_乙__丙_",
+        self.assertTrue(backend.sanitize_path_component("CON", "fallback").startswith("_CON_"))
+        self.assertTrue(
+            backend.sanitize_path_component("甲<乙>:丙?. ", "fallback").startswith("甲_乙__丙__")
         )
-        self.assertEqual(backend.sanitize_path_component("...", "fallback"), "fallback")
+        self.assertTrue(backend.sanitize_path_component("...", "fallback").startswith("fallback_"))
+        self.assertNotEqual(
+            backend.sanitize_path_component("甲:乙", "fallback"),
+            backend.sanitize_path_component("甲?乙", "fallback"),
+        )
 
     def test_project_export_and_import_folder_roundtrip(self):
         import asyncio
@@ -400,11 +461,12 @@ class TestPhonRecBackend(unittest.TestCase):
         with open(os.path.join(backend.WORKSPACE_DIR, "project.json"), "w", encoding="utf-8") as f:
             json.dump(project_state, f, ensure_ascii=False, indent=2)
 
-        # Create a mock audio file
+        # 创建真实可解析的测试录音
+        wav_content = build_test_wav()
         spk_dir = os.path.join(backend.AUDIO_DIR, "spk_1")
         os.makedirs(spk_dir, exist_ok=True)
-        with open(os.path.join(spk_dir, "spk_1_word_1.wav"), "w") as f:
-            f.write("mock wav data")
+        with open(os.path.join(spk_dir, "spk_1_word_1.wav"), "wb") as f:
+            f.write(wav_content)
 
         # Export destination
         export_dest = tempfile.mkdtemp(prefix="phonrec_export_")
@@ -433,8 +495,8 @@ class TestPhonRecBackend(unittest.TestCase):
             # Verify copied audio exists at specific location: audio/张三__spk_1/1_妈__word_1.wav
             expected_audio = os.path.join(export_dest, "audio", "张三__spk_1", "1_妈__word_1.wav")
             self.assertTrue(os.path.exists(expected_audio))
-            with open(expected_audio, "r") as f:
-                self.assertEqual(f.read(), "mock wav data")
+            with open(expected_audio, "rb") as f:
+                self.assertEqual(f.read(), wav_content)
 
             # 3. Run Import
             # Let's clear our workspace first
@@ -451,8 +513,8 @@ class TestPhonRecBackend(unittest.TestCase):
             self.assertTrue(os.path.exists(os.path.join(backend.WORKSPACE_DIR, "project.json")))
             restored_audio = os.path.join(backend.AUDIO_DIR, "spk_1", "spk_1_word_1.wav")
             self.assertTrue(os.path.exists(restored_audio))
-            with open(restored_audio, "r") as f:
-                self.assertEqual(f.read(), "mock wav data")
+            with open(restored_audio, "rb") as f:
+                self.assertEqual(f.read(), wav_content)
 
         finally:
             shutil.rmtree(export_dest, ignore_errors=True)

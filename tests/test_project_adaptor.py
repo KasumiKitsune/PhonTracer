@@ -14,6 +14,7 @@ from modules.project_adaptor import (
     validate_project_archive_members,
     read_project_metadata_from_archive,
     safe_extract_zip,
+    safe_resource_token,
     adapt_project_state,
     repair_wav_header,
     normalize_independent_item_boundaries,
@@ -144,6 +145,28 @@ def test_validate_project_archive_members(tmp_path):
     with zipfile.ZipFile(zip_file_path, "r") as zf:
         with pytest.raises(ValueError, match="非法路径"):
             validate_project_archive_members(zf)
+
+    # Windows/macOS 默认文件系统会把这两个成员视为同一路径，必须提前拒绝。
+    with zipfile.ZipFile(zip_file_path, "w") as zf:
+        zf.writestr("audio/Speaker/Word.wav", b"first")
+        zf.writestr("audio/speaker/word.WAV", b"second")
+
+    with zipfile.ZipFile(zip_file_path, "r") as zf:
+        with pytest.raises(ValueError, match="重复成员"):
+            validate_project_archive_members(zf)
+
+    with zipfile.ZipFile(zip_file_path, "w") as zf:
+        zf.writestr("audio/CON.wav", b"invalid")
+
+    with zipfile.ZipFile(zip_file_path, "r") as zf:
+        with pytest.raises(ValueError, match="跨平台不兼容路径"):
+            validate_project_archive_members(zf)
+
+
+def test_safe_resource_token_avoids_cross_platform_collisions():
+    assert safe_resource_token("正常ID", "item", 64) == "正常ID"
+    assert safe_resource_token("甲:乙", "item", 64) != safe_resource_token("甲?乙", "item", 64)
+    assert safe_resource_token("CON", "item", 64).startswith("_CON_")
 
 def test_adapt_project_state_basic_merging(tmp_path):
     # Setup test workspace
@@ -393,3 +416,56 @@ def test_project_manager_collect_file_refs():
         "data/spk1/spk1_item1_formant.npz",
     }
     assert refs == expected_refs
+
+
+def test_advanced_wordlist_metadata_survives_phonrec_main_roundtrip(tmp_path):
+    """PhonRec 简洁字段与主程序 item_*/group_* 字段必须始终双向等价。"""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    state = {
+        "version": "1.0",
+        "active_speaker_id": "spk1",
+        "groups": [{
+            "id": "group-a",
+            "name": "实验组",
+            "note": "组备注",
+            "tags": ["对照"],
+            "meta": {"实验条件": "A"},
+            "items": [{
+                "id": "item-a",
+                "label": "妈",
+                "note": "词项备注",
+                "tags": ["目标词"],
+                "aliases": ["ma1"],
+                "meta": {"拼音": "mā", "声调": "阴平"},
+                "metadata_source": "人工复核",
+            }],
+        }],
+        "speakers": {"spk1": {"id": "spk1", "name": "甲", "items": {}}},
+    }
+
+    adapted, warnings, _summary = adapt_project_state(state, str(workspace))
+    assert warnings == []
+    item = adapted["speakers"]["spk1"]["items"]["item-a"]
+    assert item["note"] == item["item_note"] == "词项备注"
+    assert item["tags"] == item["item_tags"] == ["目标词"]
+    assert item["aliases"] == item["item_aliases"] == ["ma1"]
+    assert item["meta"] == item["item_meta"] == {"拼音": "mā", "声调": "阴平"}
+    assert item["group_note"] == "组备注"
+    assert item["group_tags"] == ["对照"]
+    assert item["group_meta"] == {"实验条件": "A"}
+
+    # 模拟主程序保存时不写顶层 groups，PhonRec 仍须从条目完整重建。
+    adapted.pop("groups")
+    rebuilt, warnings, _summary = adapt_project_state(adapted, str(workspace))
+    assert warnings == []
+    group = rebuilt["groups"][0]
+    rebuilt_item = group["items"][0]
+    assert group["name"] == "实验组"
+    assert group["note"] == "组备注"
+    assert group["tags"] == ["对照"]
+    assert group["meta"] == {"实验条件": "A"}
+    assert rebuilt_item["note"] == "词项备注"
+    assert rebuilt_item["tags"] == ["目标词"]
+    assert rebuilt_item["aliases"] == ["ma1"]
+    assert rebuilt_item["meta"] == {"拼音": "mā", "声调": "阴平"}

@@ -2,9 +2,9 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Cursor, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -12,6 +12,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WebviewWindow};
 use uuid::Uuid;
+use zip::write::SimpleFileOptions;
 
 const ENGINE_PROTOCOL: u32 = 1;
 const DOWNLOAD_URL: &str = "https://github.com/KasumiKitsune/PhonTracer/releases/latest";
@@ -300,35 +301,13 @@ fn migrate_legacy_workspace(destination: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn sanitize_path_component(value: &str, fallback: &str) -> String {
-    let mut sanitized = String::with_capacity(value.len());
-    for character in value.trim().chars() {
-        if character.is_control()
-            || matches!(
-                character,
-                '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'
-            )
-        {
-            sanitized.push('_');
-        } else {
-            sanitized.push(character);
-        }
-    }
-    let mut sanitized = sanitized
-        .trim_matches(|character| character == ' ' || character == '.')
-        .to_string();
-    if sanitized.is_empty() {
-        sanitized = fallback.to_string();
-    }
-    if sanitized.len() > 80 {
-        sanitized = sanitized.chars().take(80).collect();
-    }
-    let stem = sanitized
+fn is_windows_reserved_component(value: &str) -> bool {
+    let stem = value
         .split('.')
         .next()
         .unwrap_or_default()
         .to_ascii_uppercase();
-    let reserved = matches!(
+    matches!(
         stem.as_str(),
         "CON"
             | "PRN"
@@ -352,8 +331,84 @@ fn sanitize_path_component(value: &str, fallback: &str) -> String {
             | "LPT7"
             | "LPT8"
             | "LPT9"
-    );
-    if reserved {
+    )
+}
+
+fn stable_path_hash(value: &str) -> String {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in value.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{:010x}", hash & 0xffffffffff)
+}
+
+fn sanitize_path_component(value: &str, fallback: &str) -> String {
+    const MAX_CHARS: usize = 64;
+    let raw = value.trim();
+    let mut sanitized = String::with_capacity(raw.len());
+    for character in raw.chars() {
+        if character.is_control()
+            || matches!(
+                character,
+                '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'
+            )
+        {
+            sanitized.push('_');
+        } else {
+            sanitized.push(character);
+        }
+    }
+    let mut sanitized = sanitized
+        .trim_matches(|character| character == ' ' || character == '.')
+        .to_string();
+    if sanitized.is_empty() {
+        sanitized = fallback.to_string();
+    }
+    if is_windows_reserved_component(&sanitized) {
+        sanitized.insert(0, '_');
+    }
+    if sanitized != raw || sanitized.chars().count() > MAX_CHARS {
+        let digest = stable_path_hash(raw);
+        let prefix: String = sanitized
+            .chars()
+            .take(MAX_CHARS - digest.len() - 1)
+            .collect();
+        sanitized = format!(
+            "{}_{}",
+            prefix.trim_end_matches(|character| character == ' ' || character == '.'),
+            digest
+        );
+    }
+    sanitized
+}
+
+fn sanitize_display_path_component(value: &str, fallback: &str) -> String {
+    let mut sanitized: String = value
+        .trim()
+        .chars()
+        .map(|character| {
+            if character.is_control()
+                || matches!(
+                    character,
+                    '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'
+                )
+            {
+                '_'
+            } else {
+                character
+            }
+        })
+        .collect();
+    sanitized = sanitized
+        .trim_matches(|character| character == ' ' || character == '.')
+        .chars()
+        .take(64)
+        .collect();
+    if sanitized.is_empty() {
+        sanitized = fallback.to_string();
+    }
+    if is_windows_reserved_component(&sanitized) {
         sanitized.insert(0, '_');
     }
     sanitized
@@ -745,6 +800,7 @@ fn analyze_lightweight_quality(wav: &ParsedWav, rules: &Value) -> Value {
 #[derive(Serialize)]
 struct StandaloneAudioResult {
     status: String,
+    stored: bool,
     path: String,
     quality: Value,
     spectrogram: Option<String>,
@@ -796,6 +852,501 @@ fn standalone_project_clear(app: AppHandle) -> Result<(), String> {
         .map_err(|error| format!("重建独立工作区失败：{error}"))
 }
 
+fn compatible_text(primary: Option<&Value>, legacy: Option<&Value>) -> Value {
+    for candidate in [primary, legacy].into_iter().flatten() {
+        if candidate
+            .as_str()
+            .map(|value| !value.is_empty())
+            .unwrap_or(false)
+        {
+            return candidate.clone();
+        }
+    }
+    json!("")
+}
+
+fn merge_compatible_arrays(primary: Option<&Value>, legacy: Option<&Value>) -> Value {
+    let mut merged = Vec::new();
+    for candidate in [primary, legacy].into_iter().flatten() {
+        if let Some(values) = candidate.as_array() {
+            for value in values {
+                if !merged.contains(value) {
+                    merged.push(value.clone());
+                }
+            }
+        }
+    }
+    Value::Array(merged)
+}
+
+fn merge_compatible_objects(primary: Option<&Value>, legacy: Option<&Value>) -> Value {
+    let mut merged = serde_json::Map::new();
+    for candidate in [primary, legacy].into_iter().flatten() {
+        if let Some(values) = candidate.as_object() {
+            for (key, value) in values {
+                merged.insert(key.clone(), value.clone());
+            }
+        }
+    }
+    Value::Object(merged)
+}
+
+fn ensure_project_groups(state: &mut Value) -> Result<(), String> {
+    let has_groups = state
+        .get("groups")
+        .and_then(Value::as_array)
+        .map(|groups| {
+            groups.iter().any(|group| {
+                group
+                    .get("items")
+                    .and_then(Value::as_array)
+                    .map(|items| !items.is_empty())
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false);
+    if has_groups {
+        return Ok(());
+    }
+
+    let speakers = state
+        .get("speakers")
+        .and_then(Value::as_object)
+        .cloned()
+        .ok_or_else(|| "工程缺少发音人数据".to_string())?;
+    let mut speaker_ids: Vec<String> = speakers.keys().cloned().collect();
+    if let Some(active) = state.get("active_speaker_id").and_then(Value::as_str) {
+        if let Some(index) = speaker_ids.iter().position(|id| id == active) {
+            let active_id = speaker_ids.remove(index);
+            speaker_ids.insert(0, active_id);
+        }
+    }
+
+    let mut groups: Vec<Value> = Vec::new();
+    let mut group_indices: HashMap<String, usize> = HashMap::new();
+    let mut used_item_ids = HashSet::new();
+    let mut slot_map: HashMap<(String, String, usize), (usize, usize, String)> = HashMap::new();
+    let mut speaker_remaps: HashMap<String, HashMap<String, String>> = HashMap::new();
+    for speaker_id in &speaker_ids {
+        let Some(items) = speakers
+            .get(speaker_id)
+            .and_then(|speaker| speaker.get("items"))
+            .and_then(Value::as_object)
+        else {
+            continue;
+        };
+        let mut occurrences: HashMap<(String, String), usize> = HashMap::new();
+        let mut remap = HashMap::new();
+        for (item_key, item) in items {
+            let label = item
+                .get("label")
+                .or_else(|| item.get("word"))
+                .and_then(Value::as_str)
+                .unwrap_or("未命名")
+                .to_string();
+            let group_name = item
+                .get("group")
+                .or_else(|| item.get("group_name"))
+                .and_then(Value::as_str)
+                .unwrap_or("默认组")
+                .to_string();
+            let occurrence = occurrences
+                .entry((group_name.clone(), label.clone()))
+                .or_insert(0);
+            let slot = (group_name.clone(), label.clone(), *occurrence);
+            *occurrence += 1;
+            let group_index = *group_indices.entry(group_name.clone()).or_insert_with(|| {
+                groups.push(json!({
+                    "id": format!("grp_{}", Uuid::new_v4().simple()),
+                    "name": group_name,
+                    "note": item.get("group_note").cloned().unwrap_or_else(|| json!("")),
+                    "tags": item.get("group_tags").cloned().unwrap_or_else(|| json!([])),
+                    "meta": item.get("group_meta").cloned().unwrap_or_else(|| json!({})),
+                    "items": []
+                }));
+                groups.len() - 1
+            });
+            if let Some(group) = groups[group_index].as_object_mut() {
+                if group
+                    .get("note")
+                    .and_then(Value::as_str)
+                    .map(|value| value.is_empty())
+                    .unwrap_or(true)
+                {
+                    group.insert(
+                        "note".to_string(),
+                        compatible_text(item.get("group_note"), None),
+                    );
+                }
+                let merged_tags =
+                    merge_compatible_arrays(group.get("tags"), item.get("group_tags"));
+                group.insert("tags".to_string(), merged_tags);
+                let merged_meta =
+                    merge_compatible_objects(group.get("meta"), item.get("group_meta"));
+                group.insert("meta".to_string(), merged_meta);
+            }
+            let canonical_id = if let Some((existing_group, item_index, canonical_id)) =
+                slot_map.get(&slot).cloned()
+            {
+                let canonical = groups[existing_group]
+                    .get_mut("items")
+                    .and_then(Value::as_array_mut)
+                    .and_then(|values| values.get_mut(item_index))
+                    .and_then(Value::as_object_mut)
+                    .expect("规范词项必须是对象");
+                let source_note = compatible_text(item.get("note"), item.get("item_note"));
+                canonical.insert(
+                    "note".to_string(),
+                    compatible_text(canonical.get("note"), Some(&source_note)),
+                );
+                let source_tags = merge_compatible_arrays(item.get("tags"), item.get("item_tags"));
+                let tags = merge_compatible_arrays(canonical.get("tags"), Some(&source_tags));
+                canonical.insert("tags".to_string(), tags);
+                let source_aliases =
+                    merge_compatible_arrays(item.get("aliases"), item.get("item_aliases"));
+                let aliases =
+                    merge_compatible_arrays(canonical.get("aliases"), Some(&source_aliases));
+                canonical.insert("aliases".to_string(), aliases);
+                let source_meta = merge_compatible_objects(item.get("meta"), item.get("item_meta"));
+                let meta = merge_compatible_objects(canonical.get("meta"), Some(&source_meta));
+                canonical.insert("meta".to_string(), meta);
+                canonical_id
+            } else {
+                let requested_id = item.get("id").and_then(Value::as_str).unwrap_or(item_key);
+                let canonical_id = if used_item_ids.insert(requested_id.to_string()) {
+                    requested_id.to_string()
+                } else {
+                    let generated = format!("item_{}", Uuid::new_v4().simple());
+                    used_item_ids.insert(generated.clone());
+                    generated
+                };
+                let canonical = json!({
+                    "id": canonical_id,
+                    "label": label,
+                    "note": compatible_text(item.get("note"), item.get("item_note")),
+                    "tags": merge_compatible_arrays(item.get("tags"), item.get("item_tags")),
+                    "aliases": merge_compatible_arrays(item.get("aliases"), item.get("item_aliases")),
+                    "meta": merge_compatible_objects(item.get("meta"), item.get("item_meta")),
+                    "metadata_source": item.get("metadata_source").cloned().unwrap_or_else(|| json!("导入工程"))
+                });
+                let group_items = groups[group_index]
+                    .get_mut("items")
+                    .and_then(Value::as_array_mut)
+                    .expect("新建分组必须包含 items");
+                let item_index = group_items.len();
+                group_items.push(canonical);
+                slot_map.insert(slot, (group_index, item_index, canonical_id.clone()));
+                canonical_id
+            };
+            remap.insert(item_key.clone(), canonical_id);
+        }
+        speaker_remaps.insert(speaker_id.clone(), remap);
+    }
+
+    let mut canonical_by_id: HashMap<String, (Value, String, Value, Value, Value)> = HashMap::new();
+    for group in &groups {
+        let group_name = group
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("默认组")
+            .to_string();
+        let group_note = group.get("note").cloned().unwrap_or_else(|| json!(""));
+        let group_tags = group.get("tags").cloned().unwrap_or_else(|| json!([]));
+        let group_meta = group.get("meta").cloned().unwrap_or_else(|| json!({}));
+        if let Some(items) = group.get("items").and_then(Value::as_array) {
+            for item in items {
+                if let Some(item_id) = item.get("id").and_then(Value::as_str) {
+                    canonical_by_id.insert(
+                        item_id.to_string(),
+                        (
+                            item.clone(),
+                            group_name.clone(),
+                            group_note.clone(),
+                            group_tags.clone(),
+                            group_meta.clone(),
+                        ),
+                    );
+                }
+            }
+        }
+    }
+
+    let mut updated_speakers = speakers.clone();
+    for (speaker_id, speaker) in &mut updated_speakers {
+        let Some(original_items) = speakers
+            .get(speaker_id)
+            .and_then(|value| value.get("items"))
+            .and_then(Value::as_object)
+        else {
+            continue;
+        };
+        let remap = speaker_remaps.get(speaker_id).cloned().unwrap_or_default();
+        let mut normalized_items = serde_json::Map::new();
+        for (old_id, original_item) in original_items {
+            let Some(canonical_id) = remap.get(old_id) else {
+                continue;
+            };
+            let Some((canonical, group_name, group_note, group_tags, group_meta)) =
+                canonical_by_id.get(canonical_id)
+            else {
+                continue;
+            };
+            let mut normalized = original_item.as_object().cloned().unwrap_or_default();
+            let canonical_object = canonical.as_object().expect("规范词项必须是对象");
+            for key in [
+                "id",
+                "label",
+                "note",
+                "tags",
+                "aliases",
+                "meta",
+                "metadata_source",
+            ] {
+                if let Some(value) = canonical_object.get(key) {
+                    normalized.insert(key.to_string(), value.clone());
+                }
+            }
+            normalized.insert("item_note".to_string(), canonical["note"].clone());
+            normalized.insert("item_tags".to_string(), canonical["tags"].clone());
+            normalized.insert("item_aliases".to_string(), canonical["aliases"].clone());
+            normalized.insert("item_meta".to_string(), canonical["meta"].clone());
+            normalized.insert("group".to_string(), Value::String(group_name.clone()));
+            normalized.insert("group_note".to_string(), group_note.clone());
+            normalized.insert("group_tags".to_string(), group_tags.clone());
+            normalized.insert("group_meta".to_string(), group_meta.clone());
+            normalized_items.insert(canonical_id.clone(), Value::Object(normalized));
+        }
+        if let Some(speaker_object) = speaker.as_object_mut() {
+            speaker_object.insert("items".to_string(), Value::Object(normalized_items));
+        }
+    }
+    state["speakers"] = Value::Object(updated_speakers);
+    state["groups"] = Value::Array(groups);
+    Ok(())
+}
+
+fn archive_relative_path(name: &str) -> Result<PathBuf, String> {
+    let normalized = name.replace('\\', "/");
+    if normalized.is_empty() || normalized.starts_with('/') {
+        return Err("工程归档包含非法路径".to_string());
+    }
+    let mut path = PathBuf::new();
+    for component in normalized.split('/') {
+        if component.is_empty() || component == "." {
+            continue;
+        }
+        if component == ".." {
+            return Err("工程归档包含路径穿越".to_string());
+        }
+        if component.chars().any(|character| {
+            character.is_control() || matches!(character, '<' | '>' | ':' | '"' | '|' | '?' | '*')
+        }) || component.ends_with(' ')
+            || component.ends_with('.')
+            || is_windows_reserved_component(component)
+        {
+            return Err("工程归档包含跨平台不兼容路径".to_string());
+        }
+        path.push(component);
+    }
+    if path.as_os_str().is_empty() {
+        return Err("工程归档包含空路径".to_string());
+    }
+    Ok(path)
+}
+
+fn supports_project_version(state: &Value) -> bool {
+    match state.get("version") {
+        None => true,
+        Some(Value::String(version)) => version == "1.0",
+        Some(Value::Number(version)) => version.as_f64() == Some(1.0),
+        _ => false,
+    }
+}
+
+fn portable_archive_key(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/").to_lowercase()
+}
+
+#[tauri::command]
+fn standalone_project_import(app: AppHandle, archive_bytes: Vec<u8>) -> Result<Value, String> {
+    const MAX_MEMBERS: usize = 10_000;
+    const MAX_MEMBER_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+    const MAX_TOTAL_BYTES: u64 = 20 * 1024 * 1024 * 1024;
+    let workspace = workspace_dir(&app)?;
+    let parent = workspace
+        .parent()
+        .ok_or_else(|| "工作区缺少父目录".to_string())?;
+    fs::create_dir_all(parent).map_err(|error| format!("创建工作区父目录失败：{error}"))?;
+    let staging = parent.join(format!("workspace_import_{}", Uuid::new_v4().simple()));
+    let backup = parent.join(format!("workspace_backup_{}", Uuid::new_v4().simple()));
+    fs::create_dir_all(&staging).map_err(|error| format!("创建工程暂存区失败：{error}"))?;
+
+    let result = (|| -> Result<Value, String> {
+        let cursor = Cursor::new(archive_bytes);
+        let mut archive =
+            zip::ZipArchive::new(cursor).map_err(|error| format!("工程不是有效 ZIP：{error}"))?;
+        if archive.len() > MAX_MEMBERS {
+            return Err("工程归档成员过多".to_string());
+        }
+        let mut total_size = 0u64;
+        let mut seen = HashSet::new();
+        for index in 0..archive.len() {
+            let mut entry = archive
+                .by_index(index)
+                .map_err(|error| format!("读取工程成员失败：{error}"))?;
+            if entry.size() > MAX_MEMBER_BYTES {
+                return Err(format!("工程成员过大：{}", entry.name()));
+            }
+            total_size = total_size.saturating_add(entry.size());
+            if total_size > MAX_TOTAL_BYTES {
+                return Err("工程解压后总大小超过限制".to_string());
+            }
+            if entry
+                .unix_mode()
+                .map(|mode| mode & 0o170000 == 0o120000)
+                .unwrap_or(false)
+            {
+                return Err("工程归档不能包含符号链接".to_string());
+            }
+            let relative = archive_relative_path(entry.name())?;
+            if !seen.insert(portable_archive_key(&relative)) {
+                return Err(format!("工程归档包含重复成员：{}", entry.name()));
+            }
+            let target = staging.join(&relative);
+            if entry.is_dir() {
+                fs::create_dir_all(&target)
+                    .map_err(|error| format!("创建工程目录失败：{error}"))?;
+            } else {
+                if let Some(parent) = target.parent() {
+                    fs::create_dir_all(parent)
+                        .map_err(|error| format!("创建工程目录失败：{error}"))?;
+                }
+                let mut output = fs::File::create(&target)
+                    .map_err(|error| format!("创建工程文件失败：{error}"))?;
+                std::io::copy(&mut entry, &mut output)
+                    .map_err(|error| format!("解压工程文件失败：{error}"))?;
+                output
+                    .sync_all()
+                    .map_err(|error| format!("同步工程文件失败：{error}"))?;
+            }
+        }
+
+        let project_path = staging.join("project.json");
+        let mut state: Value = serde_json::from_slice(
+            &fs::read(&project_path).map_err(|_| "工程缺少 project.json".to_string())?,
+        )
+        .map_err(|error| format!("project.json 无效：{error}"))?;
+        if !state.is_object() || !supports_project_version(&state) {
+            return Err("工程版本不受支持".to_string());
+        }
+        ensure_project_groups(&mut state)?;
+        if let Some(speakers) = state.get("speakers").and_then(Value::as_object) {
+            for speaker in speakers.values() {
+                if let Some(items) = speaker.get("items").and_then(Value::as_object) {
+                    for item in items.values() {
+                        if let Some(relative) = item.get("path").and_then(Value::as_str) {
+                            resolve_existing_managed_file(&staging, relative)?;
+                        }
+                    }
+                }
+            }
+        }
+        write_project_state_atomic(&staging, &state)?;
+
+        if workspace.exists() {
+            fs::rename(&workspace, &backup)
+                .map_err(|error| format!("备份当前工作区失败：{error}"))?;
+        }
+        if let Err(error) = fs::rename(&staging, &workspace) {
+            if backup.exists() {
+                let _ = fs::rename(&backup, &workspace);
+            }
+            return Err(format!("提交导入工程失败：{error}"));
+        }
+        if backup.exists() {
+            fs::remove_dir_all(&backup).map_err(|error| format!("清理旧工作区失败：{error}"))?;
+        }
+        Ok(json!({
+            "status": "success",
+            "state": state,
+            "warnings": [],
+            "summary": {"merged_speakers": 0, "sliced_items": 0, "missing_items": 0, "downgraded_items": 0}
+        }))
+    })();
+
+    if staging.exists() {
+        let _ = fs::remove_dir_all(&staging);
+    }
+    if result.is_err() && backup.exists() && !workspace.exists() {
+        let _ = fs::rename(&backup, &workspace);
+    }
+    result
+}
+
+fn add_archive_directory(
+    writer: &mut zip::ZipWriter<Cursor<Vec<u8>>>,
+    root: &Path,
+    current: &Path,
+) -> Result<(), String> {
+    for entry in fs::read_dir(current).map_err(|error| format!("读取工作区失败：{error}"))?
+    {
+        let entry = entry.map_err(|error| format!("读取工作区条目失败：{error}"))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("读取工作区条目类型失败：{error}"))?;
+        if file_type.is_symlink() {
+            continue;
+        }
+        let path = entry.path();
+        if file_type.is_dir() {
+            add_archive_directory(writer, root, &path)?;
+        } else if file_type.is_file() {
+            let file_name = entry.file_name().to_string_lossy().to_string();
+            if file_name.ends_with(".tmp") || file_name.ends_with(".bak") {
+                continue;
+            }
+            let relative = path
+                .strip_prefix(root)
+                .map_err(|_| "工作区资源路径越界".to_string())?
+                .to_string_lossy()
+                .replace('\\', "/");
+            writer
+                .start_file(
+                    relative,
+                    SimpleFileOptions::default()
+                        .compression_method(zip::CompressionMethod::Deflated),
+                )
+                .map_err(|error| format!("创建工程成员失败：{error}"))?;
+            let mut source =
+                fs::File::open(&path).map_err(|error| format!("读取工作区资源失败：{error}"))?;
+            std::io::copy(&mut source, writer)
+                .map_err(|error| format!("写入工程成员失败：{error}"))?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn standalone_project_export(app: AppHandle) -> Result<Vec<u8>, String> {
+    let workspace = workspace_dir(&app)?;
+    let state = standalone_project_load(app)?;
+    if state
+        .get("speakers")
+        .and_then(Value::as_object)
+        .map(|value| value.is_empty())
+        .unwrap_or(true)
+    {
+        return Err("未添加发音人，无法导出工程".to_string());
+    }
+    let cursor = Cursor::new(Vec::new());
+    let mut writer = zip::ZipWriter::new(cursor);
+    add_archive_directory(&mut writer, &workspace, &workspace)?;
+    writer
+        .finish()
+        .map(|cursor| cursor.into_inner())
+        .map_err(|error| format!("完成工程归档失败：{error}"))
+}
+
 #[tauri::command]
 fn standalone_audio_save(
     app: AppHandle,
@@ -812,14 +1363,60 @@ fn standalone_audio_save(
     let relative = format!("audio/{safe_speaker}/{safe_speaker}_{safe_word}.wav");
     let path = resolve_managed_workspace_path(&workspace, &relative)?;
     ensure_managed_parent(&workspace, &path)?;
-    write_bytes_atomic(&path, &wav_bytes)?;
     let duration_ms = parsed.samples.len() as u64 * 1000 / parsed.sample_rate as u64;
     let (year, month, day, hour, minute, second) = utc_date_time_parts();
     let recorded_at = format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z");
+    let quality = analyze_lightweight_quality(&parsed, &quality_rules);
+    let stored = quality.get("decision").and_then(Value::as_str) != Some("retry");
+
+    if stored {
+        let mut state = standalone_project_load(app.clone())?;
+        let speaker = state
+            .get_mut("speakers")
+            .and_then(Value::as_object_mut)
+            .and_then(|speakers| speakers.get_mut(&speaker_id))
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| "录音目标发音人已不存在".to_string())?;
+        let items = speaker
+            .entry("items")
+            .or_insert_with(|| json!({}))
+            .as_object_mut()
+            .ok_or_else(|| "录音目标条目数据无效".to_string())?;
+        let item = items
+            .get_mut(&word_id)
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| "录音目标词项已不存在或数据无效".to_string())?;
+        item.insert("path".to_string(), Value::String(relative.clone()));
+        item.insert("quality".to_string(), quality.clone());
+        item.insert(
+            "recorded_at".to_string(),
+            Value::String(recorded_at.clone()),
+        );
+        item.insert("duration_ms".to_string(), json!(duration_ms));
+        item.insert("sample_rate_hz".to_string(), json!(parsed.sample_rate));
+        item.insert("channels".to_string(), json!(parsed.channels));
+        item.insert("format".to_string(), Value::String("wav".to_string()));
+        item.insert("source".to_string(), Value::String(source.clone()));
+
+        let previous_audio = fs::read(&path).ok();
+        write_bytes_atomic(&path, &wav_bytes)?;
+        if let Err(error) = write_project_state_atomic(&workspace, &state) {
+            match previous_audio {
+                Some(previous) => {
+                    let _ = write_bytes_atomic(&path, &previous);
+                }
+                None => {
+                    let _ = fs::remove_file(&path);
+                }
+            }
+            return Err(error);
+        }
+    }
     Ok(StandaloneAudioResult {
         status: "success".to_string(),
+        stored,
         path: relative,
-        quality: analyze_lightweight_quality(&parsed, &quality_rules),
+        quality,
         spectrogram: None,
         recorded_at,
         duration_ms,
@@ -837,6 +1434,20 @@ fn standalone_audio_read(
     word_id: String,
 ) -> Result<Vec<u8>, String> {
     let workspace = workspace_dir(&app)?;
+    let state = standalone_project_load(app)?;
+    if let Some(relative) = state
+        .get("speakers")
+        .and_then(Value::as_object)
+        .and_then(|speakers| speakers.get(&speaker_id))
+        .and_then(|speaker| speaker.get("items"))
+        .and_then(Value::as_object)
+        .and_then(|items| items.get(&word_id))
+        .and_then(|item| item.get("path"))
+        .and_then(Value::as_str)
+    {
+        let path = resolve_existing_managed_file(&workspace, relative)?;
+        return fs::read(path).map_err(|error| format!("读取录音失败：{error}"));
+    }
     let safe_speaker = sanitize_path_component(&speaker_id, "speaker");
     let safe_word = sanitize_path_component(&word_id, "item");
     let relative = format!("audio/{safe_speaker}/{safe_speaker}_{safe_word}.wav");
@@ -917,7 +1528,7 @@ fn export_wav_folder_from_state(
         let speaker_dir = output.join(format!(
             "{:02}_{}",
             speaker_index + 1,
-            sanitize_path_component(speaker_name, "发音人")
+            sanitize_display_path_component(speaker_name, "发音人")
         ));
         let records = speaker.get("items").and_then(Value::as_object);
         for (group_index, group) in groups.iter().enumerate() {
@@ -928,7 +1539,7 @@ fn export_wav_folder_from_state(
             let group_dir = speaker_dir.join(format!(
                 "{:02}_{}",
                 group_index + 1,
-                sanitize_path_component(group_name, "未分组")
+                sanitize_display_path_component(group_name, "未分组")
             ));
             if let Some(items) = group.get("items").and_then(Value::as_array) {
                 for (item_index, item) in items.iter().enumerate() {
@@ -954,7 +1565,7 @@ fn export_wav_folder_from_state(
                     let target = group_dir.join(format!(
                         "{:03}_{}.wav",
                         item_index + 1,
-                        sanitize_path_component(label, "词项")
+                        sanitize_display_path_component(label, "词项")
                     ));
                     fs::copy(&source, &target).map_err(|error| format!("导出录音失败：{error}"))?;
                     exported += 1;
@@ -1294,6 +1905,8 @@ struct LocalSettings {
     format: String,        // "wav" (read-only)
     save_format: String,   // "teproj" or "folder"
     folder_path: String,   // folder path
+    #[serde(default)]
+    wav_export_path: String, // 独立模式 WAV 导出目录
     #[serde(default = "default_theme")]
     theme: String,
     #[serde(default = "default_ui_scale")]
@@ -1337,6 +1950,7 @@ impl Default for LocalSettings {
             format: "wav".to_string(),
             save_format: "teproj".to_string(),
             folder_path: "".to_string(),
+            wav_export_path: "".to_string(),
             theme: default_theme(),
             ui_scale: default_ui_scale(),
             ui_density: default_ui_density(),
@@ -1609,10 +2223,12 @@ fn handle_input_data<R: tauri::Runtime>(
         mono.push(sum / channels as f32);
     }
 
-    if *is_recording.lock().unwrap() {
+    let recording = is_recording.lock().unwrap();
+    if *recording {
         let mut buf = buffer.lock().unwrap();
         buf.extend_from_slice(&mono);
     }
+    drop(recording);
 
     let mut temp = temp_samples.lock().unwrap();
     temp.extend_from_slice(&mono);
@@ -1860,11 +2476,12 @@ fn stop_loopback_listener(state: State<'_, AudioState>) -> Result<(), String> {
 #[tauri::command]
 fn start_loopback_recording(state: State<'_, AudioState>) -> Result<(), String> {
     let runtime = state.0.lock().map_err(|e| format!("锁损坏: {e}"))?;
+    let mut recording = runtime.is_recording.lock().unwrap();
     {
         let mut buf = runtime.recording_buffer.lock().unwrap();
         buf.clear();
     }
-    *runtime.is_recording.lock().unwrap() = true;
+    *recording = true;
     Ok(())
 }
 
@@ -1874,12 +2491,14 @@ fn stop_loopback_recording(
     sample_rate: u32,
 ) -> Result<Vec<u8>, String> {
     let runtime = state.0.lock().map_err(|e| format!("锁损坏: {e}"))?;
-    *runtime.is_recording.lock().unwrap() = false;
+    let mut recording = runtime.is_recording.lock().unwrap();
+    *recording = false;
 
     let raw_samples = {
         let buf = runtime.recording_buffer.lock().unwrap();
         buf.clone()
     };
+    drop(recording);
 
     let actual_sr = runtime.source_sample_rate;
 
@@ -1936,6 +2555,8 @@ fn main() {
             standalone_project_load,
             standalone_project_save,
             standalone_project_clear,
+            standalone_project_import,
+            standalone_project_export,
             standalone_audio_save,
             standalone_audio_read,
             standalone_export_wav_folder,
@@ -2106,6 +2727,7 @@ mod tests {
         legacy.as_object_mut().unwrap().remove("quality_rules");
         legacy.as_object_mut().unwrap().remove("theme");
         legacy.as_object_mut().unwrap().remove("ui_scale");
+        legacy.as_object_mut().unwrap().remove("wav_export_path");
         let mut loaded: LocalSettings = serde_json::from_value(legacy).unwrap();
         loaded
             .quality_rules
@@ -2114,6 +2736,7 @@ mod tests {
         assert_eq!(loaded.quality_rules.noise.level, "medium");
         assert_eq!(loaded.theme, "light");
         assert_eq!(loaded.ui_scale, "100%");
+        assert_eq!(loaded.wav_export_path, "");
     }
 
     #[test]
@@ -2204,9 +2827,13 @@ mod tests {
 
     #[test]
     fn 独立模式路径清洗会阻止穿越和保留字() {
-        assert_eq!(sanitize_path_component("../甲:乙\\丙", "词项"), "_甲_乙_丙");
-        assert_eq!(sanitize_path_component("CON", "词项"), "_CON");
-        assert_eq!(sanitize_path_component("...", "词项"), "词项");
+        assert!(sanitize_path_component("../甲:乙\\丙", "词项").starts_with("_甲_乙_丙_"));
+        assert!(sanitize_path_component("CON", "词项").starts_with("_CON_"));
+        assert!(sanitize_path_component("...", "词项").starts_with("词项_"));
+        assert_ne!(
+            sanitize_path_component("甲:乙", "词项"),
+            sanitize_path_component("甲?乙", "词项")
+        );
 
         let workspace = PathBuf::from("C:/受控工作区");
         assert!(resolve_managed_workspace_path(&workspace, "audio/甲/录音.wav").is_ok());
@@ -2362,5 +2989,97 @@ mod tests {
             .join("002_麻.wav")
             .exists());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn 主程序工程缺少顶层字表时可从高级条目无损重建() {
+        let mut state = json!({
+            "version": "1.0",
+            "active_speaker_id": "speaker",
+            "speakers": {
+                "speaker": {
+                    "items": {
+                        "word": {
+                            "id": "word",
+                            "label": "妈",
+                            "group": "实验组",
+                            "group_note": "",
+                            "group_tags": ["对照"],
+                            "group_meta": {"实验条件": "A"},
+                            "tags": [],
+                            "item_note": "词项备注",
+                            "item_tags": ["目标词"],
+                            "item_aliases": ["ma1"],
+                            "item_meta": {"拼音": "mā"},
+                            "metadata_source": "人工复核"
+                        },
+                        "word-2": {
+                            "id": "word-2",
+                            "label": "麻",
+                            "group": "实验组",
+                            "group_note": "组备注",
+                            "group_tags": ["复核"]
+                        }
+                    }
+                },
+                "speaker-2": {
+                    "items": {
+                        "other-id": {
+                            "id": "other-id",
+                            "label": "妈",
+                            "group": "实验组",
+                            "group_note": "组备注",
+                            "group_tags": ["复核"],
+                            "group_meta": {"批次": "二"},
+                            "path": "audio/speaker-2/original.wav"
+                        }
+                    }
+                }
+            }
+        });
+        ensure_project_groups(&mut state).unwrap();
+        assert_eq!(state["groups"][0]["name"], "实验组");
+        assert_eq!(state["groups"][0]["note"], "组备注");
+        assert_eq!(state["groups"][0]["tags"], json!(["对照", "复核"]));
+        assert_eq!(
+            state["groups"][0]["meta"],
+            json!({"实验条件": "A", "批次": "二"})
+        );
+        assert_eq!(state["groups"][0]["items"][0]["note"], "词项备注");
+        assert_eq!(state["groups"][0]["items"][0]["tags"], json!(["目标词"]));
+        assert_eq!(state["groups"][0]["items"][0]["meta"]["拼音"], "mā");
+        assert_eq!(
+            state["speakers"]["speaker-2"]["items"]["word"]["path"],
+            "audio/speaker-2/original.wav"
+        );
+        assert!(state["speakers"]["speaker-2"]["items"]
+            .get("other-id")
+            .is_none());
+    }
+
+    #[test]
+    fn teproj_归档路径拒绝穿越和绝对路径() {
+        assert_eq!(
+            archive_relative_path("audio/甲/录音.wav").unwrap(),
+            PathBuf::from("audio").join("甲").join("录音.wav")
+        );
+        assert!(archive_relative_path("../outside.wav").is_err());
+        assert!(archive_relative_path("/absolute.wav").is_err());
+        assert!(archive_relative_path("C:/absolute.wav").is_err());
+        assert!(archive_relative_path("audio/CON.wav").is_err());
+        assert!(archive_relative_path("audio/尾随点./word.wav").is_err());
+    }
+
+    #[test]
+    fn teproj_版本和跨平台重复路径校验严格() {
+        assert!(supports_project_version(&json!({})));
+        assert!(supports_project_version(&json!({"version": "1.0"})));
+        assert!(supports_project_version(&json!({"version": 1})));
+        assert!(!supports_project_version(&json!({"version": 2})));
+        assert!(!supports_project_version(&json!({"version": true})));
+        assert_eq!(
+            portable_archive_key(Path::new("Audio/Speaker/Word.wav")),
+            portable_archive_key(Path::new("audio/speaker/word.WAV"))
+        );
     }
 }

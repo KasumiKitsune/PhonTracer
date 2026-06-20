@@ -21,13 +21,13 @@ describe('独立模式运行时客户端', () => {
     mocks.apiFetch.mockReset();
   });
 
-  it('公开受限能力并封装工程读写与 WAV 导出', async () => {
+  it('公开完整字表与工程能力并封装工程读写和 WAV 导出', async () => {
     mocks.invoke.mockResolvedValue({ version: '1.0', speakers: {}, groups: [] });
     const client = createStandaloneRuntimeClient();
 
     expect(client.capabilities).toEqual(STANDALONE_CAPABILITIES);
-    expect(client.capabilities.projectArchive).toBe(false);
-    expect(client.capabilities.advancedWordlist).toBe(false);
+    expect(client.capabilities.projectArchive).toBe(true);
+    expect(client.capabilities.advancedWordlist).toBe(true);
     expect(client.capabilities.lightQuality).toBe(true);
     await client.loadProject();
     await client.saveProject({ version: '1.0' });
@@ -38,6 +38,29 @@ describe('独立模式运行时客户端', () => {
     expect(mocks.invoke).toHaveBeenNthCalledWith(2, 'standalone_project_save', { state: { version: '1.0' } });
     expect(mocks.invoke).toHaveBeenNthCalledWith(3, 'standalone_project_clear');
     expect(mocks.invoke).toHaveBeenNthCalledWith(4, 'standalone_export_wav_folder', { destination: 'D:\\录音导出' });
+  });
+
+  it('独立模式可导入高级字表并读写 teproj', async () => {
+    mocks.invoke
+      .mockResolvedValueOnce({ status: 'success', state: { version: '1.0' } })
+      .mockResolvedValueOnce([80, 75, 3, 4]);
+    const client = createStandaloneRuntimeClient();
+    const wordlist = {
+      name: '高级.ptwl',
+      text: vi.fn(async () => JSON.stringify({ groups: [{ name: '实验组', items: [{ id: 'x', label: '妈', meta: { 拼音: 'ma1' } }] }] })),
+    };
+    const project = {
+      arrayBuffer: vi.fn(async () => Uint8Array.from([80, 75, 3, 4]).buffer),
+    };
+
+    const importedWordlist = await client.importWordlist(wordlist);
+    await client.importProject(project);
+    const archive = await client.exportProject();
+
+    expect(importedWordlist.groups[0].items[0].meta.拼音).toBe('ma1');
+    expect(mocks.invoke).toHaveBeenNthCalledWith(1, 'standalone_project_import', { archiveBytes: [80, 75, 3, 4] });
+    expect(mocks.invoke).toHaveBeenNthCalledWith(2, 'standalone_project_export');
+    expect(archive.size).toBe(4);
   });
 
   it('录音保存和读取都转换二进制数据', async () => {

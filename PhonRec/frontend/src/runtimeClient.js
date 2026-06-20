@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { apiFetch } from './engineApi.js';
+import { parseWordlistFile } from './plainWordlist.js';
 
 export const ENGINE_CAPABILITIES = Object.freeze({
   projectArchive: true,
@@ -11,8 +12,8 @@ export const ENGINE_CAPABILITIES = Object.freeze({
 });
 
 export const STANDALONE_CAPABILITIES = Object.freeze({
-  projectArchive: false,
-  advancedWordlist: false,
+  projectArchive: true,
+  advancedWordlist: true,
   spectrogram: false,
   fullQuality: false,
   lightQuality: true,
@@ -43,6 +44,24 @@ export function createEngineRuntimeClient() {
     },
     async clearProject() {
       return parseJsonResponse(await apiFetch('/project/clear', { method: 'POST' }), '清空工作区失败');
+    },
+    async importWordlist(file) {
+      const formData = new FormData();
+      formData.append('file', file);
+      return parseJsonResponse(await apiFetch('/wordlist/import', { method: 'POST', body: formData }), '解析字表失败');
+    },
+    async importProject(file) {
+      const formData = new FormData();
+      formData.append('file', file);
+      return parseJsonResponse(await apiFetch('/project/import', { method: 'POST', body: formData }), '导入工程失败');
+    },
+    async exportProject() {
+      const response = await apiFetch('/project/export');
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.detail || '导出工程失败');
+      }
+      return response.blob();
     },
     async saveAudio({ blob, speakerId, wordId, source, qualityRules }) {
       const formData = new FormData();
@@ -83,6 +102,17 @@ export function createStandaloneRuntimeClient() {
     async clearProject() {
       await invoke('standalone_project_clear');
       return { status: 'success' };
+    },
+    async importWordlist(file) {
+      return { status: 'success', groups: await parseWordlistFile(file) };
+    },
+    async importProject(file) {
+      const archiveBytes = Array.from(new Uint8Array(await file.arrayBuffer()));
+      return invoke('standalone_project_import', { archiveBytes });
+    },
+    async exportProject() {
+      const bytes = await invoke('standalone_project_export');
+      return new Blob([new Uint8Array(bytes)], { type: 'application/zip' });
     },
     async saveAudio({ blob, speakerId, wordId, source, qualityRules }) {
       const wavBytes = Array.from(new Uint8Array(await blob.arrayBuffer()));

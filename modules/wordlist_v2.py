@@ -492,6 +492,11 @@ def build_document_from_csv_text(csv_text: str, title: str = "从表格导入") 
             group_lookup[group_name] = group
             doc["groups"].append(group)
         group = group_lookup[group_name]
+        if not group.get("note"):
+            group["note"] = _as_text(row.get("group_note") or row.get("组备注"))
+        for tag in _split_text_list(row.get("group_tags") or row.get("组tag") or row.get("组标签")):
+            if tag not in group["tags"]:
+                group["tags"].append(tag)
 
         meta: Dict[str, str] = {}
         consumed = {

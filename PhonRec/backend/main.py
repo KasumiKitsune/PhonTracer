@@ -31,9 +31,18 @@ if workspace_root not in sys.path:
 
 from modules.project_adaptor import (
     safe_extract_zip,
+    safe_resource_token,
     adapt_project_state,
     prune_unreferenced_resources,
     repair_wav_header,
+    resolve_workspace_path,
+    validate_project_resources,
+    validate_project_version,
+)
+from modules.wordlist_v2 import (
+    build_document_from_csv_text,
+    build_document_from_v1_text,
+    normalize_wordlist_document,
 )
 
 ENGINE_VERSION = "1.3.0"
@@ -61,26 +70,62 @@ WORKSPACE_DIR = os.path.join(BASE_DIR, "workspace")
 AUDIO_DIR = os.path.join(WORKSPACE_DIR, "audio")
 DATA_DIR = os.path.join(WORKSPACE_DIR, "data")
 
-WINDOWS_RESERVED_NAMES = {
-    "CON", "PRN", "AUX", "NUL",
-    *(f"COM{index}" for index in range(1, 10)),
-    *(f"LPT{index}" for index in range(1, 10)),
-}
-
-
 def sanitize_path_component(value: Any, fallback: str, max_length: int = 96) -> str:
     """生成可在 Windows、macOS 和 Linux 上安全使用的单个路径名称。"""
+    return safe_resource_token(value, fallback, max_length)
+
+
+def sanitize_display_path_component(value: Any, fallback: str, max_length: int = 96) -> str:
+    """清理带编号的导出显示名；编号已负责消除同名碰撞。"""
     text = str(value or "").strip()
     sanitized = "".join(
         "_" if ord(char) < 32 or char in '<>:"/\\|?*' else char
         for char in text
-    ).rstrip(" .")
-    sanitized = sanitized[:max_length].rstrip(" .")
-    if not sanitized:
-        sanitized = fallback
-    if sanitized.split(".", 1)[0].upper() in WINDOWS_RESERVED_NAMES:
+    ).strip(" .")[:max_length].rstrip(" .") or fallback
+    if sanitized.split(".", 1)[0].upper() in {
+        "CON", "PRN", "AUX", "NUL",
+        *(f"COM{index}" for index in range(1, 10)),
+        *(f"LPT{index}" for index in range(1, 10)),
+    }:
         sanitized = f"_{sanitized}"
     return sanitized
+
+
+def normalize_imported_groups(groups: Any) -> List[Dict[str, Any]]:
+    """规范化普通/高级字表并保证分组 ID、词项 ID 在整个字表内唯一。"""
+    normalized = normalize_wordlist_document({"groups": groups}).get("groups", [])
+    used_group_ids = set()
+    used_item_ids = set()
+    result = []
+    for group in normalized:
+        items = []
+        for item in group.get("items", []):
+            label = str(item.get("label") or "").strip()
+            if not label:
+                continue
+            item_id = str(item.get("id") or "").strip()
+            if not item_id or item_id in used_item_ids:
+                item_id = uuid.uuid4().hex[:8]
+                while item_id in used_item_ids:
+                    item_id = uuid.uuid4().hex[:8]
+            used_item_ids.add(item_id)
+            item["id"] = item_id
+            item["label"] = label
+            items.append(item)
+        if not items:
+            continue
+        group_id = str(group.get("id") or "").strip()
+        if not group_id or group_id in used_group_ids:
+            group_id = uuid.uuid4().hex[:8]
+            while group_id in used_group_ids:
+                group_id = uuid.uuid4().hex[:8]
+        used_group_ids.add(group_id)
+        group["id"] = group_id
+        group["items"] = items
+        result.append(group)
+    if not result:
+        raise ValueError("字表中没有可录制词项")
+    return result
 
 
 def configure_workspace(workspace_dir: str) -> str:
@@ -512,6 +557,9 @@ async def api_get_project_state():
             state = json.loads(raw_bytes.decode("utf-8"))
         except UnicodeDecodeError:
             state = json.loads(raw_bytes.decode("gb18030"))
+        if not isinstance(state, dict):
+            raise ValueError("project.json 顶层必须是对象")
+        validate_project_version(state)
         return state
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to read project state: {e}")
@@ -551,21 +599,24 @@ async def api_save_audio(
     speaker_dir = os.path.join(AUDIO_DIR, safe_speaker_id)
     os.makedirs(speaker_dir, exist_ok=True)
 
-    # Save file
+    # 先写临时文件并完成解析/质检；只有通过后才替换正式录音。
     filename = f"{safe_speaker_id}_{safe_word_id}.wav"
     file_path = os.path.join(speaker_dir, filename)
+    temp_path = f"{file_path}.{uuid.uuid4().hex}.tmp.wav"
+    backup_path = f"{file_path}.{uuid.uuid4().hex}.bak"
+    project_tmp = None
 
     try:
-        with open(file_path, "wb") as buffer:
+        with open(temp_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
         # 兼容旧版录音端写错的 WAV 平均字节率，避免错误继续进入工程包。
-        repair_wav_header(file_path)
+        repair_wav_header(temp_path)
 
         rel_path = f"audio/{safe_speaker_id}/{filename}"
 
         # Run analysis immediately to return quality and spectrogram
-        sr, y_int = wavfile.read(file_path)
+        sr, y_int = wavfile.read(temp_path)
         y = normalize_audio_samples(y_int)
 
         spec_b64 = generate_spectrogram(y, sr)
@@ -575,9 +626,58 @@ async def api_save_audio(
         import datetime
         recorded_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
         duration_ms = int((len(y_int) / sr) * 1000) if sr > 0 else 0
+        stored = quality.get("decision") != "retry"
+
+        if stored:
+            if os.path.exists(file_path):
+                os.replace(file_path, backup_path)
+            try:
+                os.replace(temp_path, file_path)
+
+                # 音频与条目绑定在同一个后端事务中落盘。这样即使前端在收到
+                # 响应前退出，重启后也不会出现“WAV 已写入但 project.json
+                # 仍指向旧状态”的孤儿录音。
+                project_path = os.path.join(WORKSPACE_DIR, "project.json")
+                if not os.path.exists(project_path):
+                    raise ValueError("当前工作区尚未建立工程状态")
+                with open(project_path, "r", encoding="utf-8") as project_file:
+                    state = json.load(project_file)
+                speaker = state.setdefault("speakers", {}).get(speaker_id)
+                if not isinstance(speaker, dict):
+                    raise ValueError("录音目标发音人已不存在")
+                items = speaker.setdefault("items", {})
+                item = items.get(word_id)
+                if not isinstance(item, dict):
+                    raise ValueError("录音目标词项已不存在")
+                item.update({
+                    "path": rel_path,
+                    "quality": quality,
+                    "recorded_at": recorded_at,
+                    "duration_ms": duration_ms,
+                    "sample_rate_hz": int(sr),
+                    "channels": int(y_int.shape[1]) if y_int.ndim > 1 else 1,
+                    "format": "wav",
+                    "source": source,
+                })
+                project_tmp = project_path + ".audio.tmp"
+                with open(project_tmp, "w", encoding="utf-8") as project_file:
+                    json.dump(state, project_file, ensure_ascii=False, indent=2)
+                os.replace(project_tmp, project_path)
+            except Exception:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                if os.path.exists(backup_path):
+                    os.replace(backup_path, file_path)
+                raise
+            finally:
+                if os.path.exists(backup_path):
+                    os.remove(backup_path)
+        else:
+            os.remove(temp_path)
 
         return {
             "status": "success",
+            "stored": stored,
             "path": rel_path,
             "quality": quality,
             "spectrogram": f"data:image/png;base64,{spec_b64}",
@@ -592,8 +692,15 @@ async def api_save_audio(
         import traceback
         traceback.print_exc()
         try:
-            if os.path.exists(file_path):
-                os.remove(file_path)
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            if project_tmp and os.path.exists(project_tmp):
+                os.remove(project_tmp)
+            if os.path.exists(backup_path):
+                if not os.path.exists(file_path):
+                    os.replace(backup_path, file_path)
+                else:
+                    os.remove(backup_path)
         except OSError:
             pass
         raise HTTPException(status_code=500, detail=f"Failed to save and analyze audio file: {e}")
@@ -656,7 +763,7 @@ async def api_import_wordlist(file: UploadFile = File(...)):
     try:
         if filename.endswith(".ptwl"):
             # Advanced JSON Wordlist
-            data = json.loads(content_bytes.decode("utf-8"))
+            data = json.loads(content_bytes.decode("utf-8-sig"))
             if data.get("schema") != "phontracer.wordlist.v2":
                 # Fallback to general JSON structure or continue parsing groups
                 pass
@@ -680,125 +787,26 @@ async def api_import_wordlist(file: UploadFile = File(...)):
                         "name": rg.get("name", "未命名组"),
                         "note": rg.get("note", ""),
                         "tags": rg.get("tags", []),
+                        "meta": rg.get("meta", {}),
                         "items": items
                     })
 
         elif filename.endswith(".csv"):
-            # CSV Wordlist
-            content_str = content_bytes.decode("utf-8-sig") # Handles BOM
-            reader = csv.reader(io.StringIO(content_str))
-            headers = next(reader, None)
-
-            # Map columns by name
-            # Columns: 组名, 组备注, 组标签, 词项, 词项备注, 标签, 别名...
-            col_map = {}
-            if headers:
-                for idx, h in enumerate(headers):
-                    col_map[h.strip()] = idx
-
-            # Helper to safely retrieve value by column header
-            def get_val(row, name, default=""):
-                idx = col_map.get(name)
-                if idx is not None and idx < len(row):
-                    return row[idx].strip()
-                return default
-
-            group_dict = {}
-            for row in reader:
-                if not row or len(row) == 0:
-                    continue
-                group_name = get_val(row, "组名", "默认组")
-                group_note = get_val(row, "组备注", "")
-                group_tags = [t for t in get_val(row, "组标签", "").split("；") if t]
-                if not group_tags:
-                    group_tags = [t for t in get_val(row, "组标签", "").split(";") if t]
-
-                item_label = get_val(row, "词项") or row[0] # Fallback to first col
-                if not item_label:
-                    continue
-
-                item_note = get_val(row, "词项备注", "")
-                item_tags = [t for t in get_val(row, "标签", "").split("；") if t]
-                if not item_tags:
-                    item_tags = [t for t in get_val(row, "标签", "").split(";") if t]
-                aliases_str = get_val(row, "别名", "")
-                aliases = [aliases_str] if aliases_str else []
-
-                # Gather extra meta fields
-                meta = {}
-                for h, idx in col_map.items():
-                    if h not in ("组名", "组备注", "组标签", "词项", "词项备注", "标签", "别名"):
-                        meta[h] = row[idx].strip() if idx < len(row) else ""
-
-                item = {
-                    "id": str(uuid.uuid4())[:8],
-                    "label": item_label,
-                    "note": item_note,
-                    "tags": item_tags,
-                    "aliases": aliases,
-                    "meta": meta,
-                    "metadata_source": "导入CSV"
-                }
-
-                if group_name not in group_dict:
-                    group_dict[group_name] = {
-                        "id": str(uuid.uuid4())[:8],
-                        "name": group_name,
-                        "note": group_note,
-                        "tags": group_tags,
-                        "items": []
-                    }
-                group_dict[group_name]["items"].append(item)
-
-            groups = list(group_dict.values())
+            content_str = content_bytes.decode("utf-8-sig")
+            groups = build_document_from_csv_text(content_str).get("groups", [])
 
         else:
-            # Plain Text (.txt) Wordlist
-            content_str = content_bytes.decode("utf-8")
-            lines = content_str.splitlines()
-            current_group = None
+            content_str = content_bytes.decode("utf-8-sig")
+            groups = build_document_from_v1_text(content_str).get("groups", [])
+            for group in groups:
+                for item in group.get("items", []):
+                    item["metadata_source"] = "导入TXT"
 
-            for line in lines:
-                line = line.strip()
-                if not line:
-                    continue
-
-                # Check for group headers like 【组名】 or [组名]
-                if (line.startswith("【") and line.endswith("】")) or (line.startswith("[") and line.endswith("]")):
-                    group_name = line[1:-1].strip()
-                    current_group = {
-                        "id": str(uuid.uuid4())[:8],
-                        "name": group_name,
-                        "note": "",
-                        "tags": [],
-                        "items": []
-                    }
-                    groups.append(current_group)
-                else:
-                    # Split words by space or tab
-                    words = line.split()
-                    if not current_group:
-                        current_group = {
-                            "id": str(uuid.uuid4())[:8],
-                            "name": "默认组",
-                            "note": "",
-                            "tags": [],
-                            "items": []
-                        }
-                        groups.append(current_group)
-
-                    for w in words:
-                        current_group["items"].append({
-                            "id": str(uuid.uuid4())[:8],
-                            "label": w,
-                            "note": "",
-                            "tags": [],
-                            "aliases": [],
-                            "meta": {},
-                            "metadata_source": "导入TXT"
-                        })
-
-        return {"status": "success", "groups": groups}
+        return {"status": "success", "groups": normalize_imported_groups(groups)}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"字表格式无效：{e}")
+    except HTTPException:
+        raise
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -848,6 +856,10 @@ async def api_import_project(file: UploadFile = File(...)):
             state = json.loads(raw_bytes.decode("utf-8"))
         except UnicodeDecodeError:
             state = json.loads(raw_bytes.decode("gb18030"))
+        if not isinstance(state, dict):
+            raise ValueError("project.json 顶层必须是对象")
+        validate_project_version(state)
+        validate_project_resources(state, staging_dir)
 
         # 备份当前工作区以实现安全回滚
         backup_dir = os.path.join(workspace_parent, "workspace_backup")
@@ -880,6 +892,8 @@ async def api_import_project(file: UploadFile = File(...)):
 
     except HTTPException:
         raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"导入工程失败：{e}")
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -1026,22 +1040,28 @@ async def api_export_project_folder(payload: Dict[str, Any]):
 
         for spk_id, spk_data in list(state.get("speakers", {}).items()):
             spk_name = spk_data.get("name", spk_id)
-            safe_spk_name = sanitize_path_component(spk_name, "未命名发音人", 64)
-            safe_spk_id = sanitize_path_component(spk_id, "speaker", 48)
+            safe_spk_name = sanitize_display_path_component(spk_name, "未命名发音人", 64)
+            safe_spk_id = sanitize_display_path_component(spk_id, "speaker", 48)
             safe_spk_dir_name = f"{safe_spk_name}__{safe_spk_id}"
             dest_spk_audio_dir = audio_dir / safe_spk_dir_name
             os.makedirs(dest_spk_audio_dir, exist_ok=True)
 
             for word_id, item_data in list(spk_data.get("items", {}).items()):
-                source_wav_path = os.path.join(WORKSPACE_DIR, "audio", spk_id, f"{spk_id}_{word_id}.wav")
+                stored_path = item_data.get("path")
+                source_wav_path = resolve_workspace_path(stored_path, WORKSPACE_DIR) if stored_path else ""
                 if not os.path.exists(source_wav_path):
-                    source_wav_path = os.path.join(WORKSPACE_DIR, "audio", f"{spk_id}_{word_id}.wav")
+                    safe_spk_token = sanitize_path_component(spk_id, "speaker", 64)
+                    safe_word_token = sanitize_path_component(word_id, "item", 64)
+                    source_wav_path = os.path.join(
+                        WORKSPACE_DIR, "audio", safe_spk_token,
+                        f"{safe_spk_token}_{safe_word_token}.wav",
+                    )
 
                 if os.path.exists(source_wav_path):
                     item_label = item_data.get("label", word_id)
                     item_idx = item_index_map.get(word_id, 0)
-                    safe_item_label = sanitize_path_component(item_label, "未命名词项", 72)
-                    safe_word_id = sanitize_path_component(word_id, "item", 48)
+                    safe_item_label = sanitize_display_path_component(item_label, "未命名词项", 72)
+                    safe_word_id = sanitize_display_path_component(word_id, "item", 48)
                     dest_filename = f"{item_idx}_{safe_item_label}__{safe_word_id}.wav"
                     dest_file_path = dest_spk_audio_dir / dest_filename
                     shutil.copy2(source_wav_path, dest_file_path)

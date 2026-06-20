@@ -121,7 +121,7 @@ describe('SettingsModal 设置界面', () => {
       theme: 'light', accent_color: 'blue', ui_scale: '100%', ui_density: 'standard',
       animations_enabled: true, default_plot: 'spectrogram', record_order: 'wordlist',
       record_mode: 'click', record_source: 'default', sample_rate: 16000,
-      save_format: 'teproj', folder_path: 'D:\\WAV', primary_meta_key: '拼音', badge_meta_key: '拼音',
+      save_format: 'teproj', folder_path: 'D:\\完整工程', wav_export_path: 'D:\\WAV', primary_meta_key: '拼音', badge_meta_key: '拼音',
       char_font_size: 120, vad_preset: 'standard', shortcut_preset: 'standard',
       live_input_monitor: true, default_project_name: 'PhonRec_Project.teproj',
       realtime_quality: true, quality_rules: {}, show_shortcut_hints: true,
@@ -144,6 +144,8 @@ describe('SettingsModal 设置界面', () => {
 
     fireEvent.click(screen.getByText('保存与导出'));
     expect(screen.getByText('默认 WAV 导出目录')).toBeTruthy();
+    expect(screen.getByDisplayValue('D:\\WAV')).toBeTruthy();
+    expect(screen.queryByDisplayValue('D:\\完整工程')).toBeNull();
     expect(screen.queryByText('默认工程保存格式')).toBeNull();
     expect(screen.queryByText('默认工程文件名')).toBeNull();
   });

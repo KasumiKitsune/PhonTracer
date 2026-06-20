@@ -6,6 +6,7 @@ import shutil
 import stat
 import struct
 import math
+import hashlib
 import numpy as np
 
 MAX_ARCHIVE_MEMBERS = 10000
@@ -13,6 +14,29 @@ MAX_ARCHIVE_MEMBER_BYTES = 2 * 1024 * 1024 * 1024
 MAX_ARCHIVE_TOTAL_BYTES = 20 * 1024 * 1024 * 1024
 MAX_PROJECT_JSON_BYTES = 20 * 1024 * 1024
 SUPPORTED_PROJECT_VERSIONS = {"1.0"}
+
+
+def safe_resource_token(value, fallback, max_length=96):
+    """把工程内 ID 转成跨平台安全的资源文件名片段，但不改动逻辑 ID。"""
+    raw = str(value or "").strip()
+    safe = "".join(
+        "_" if ord(char) < 32 or char in '<>:"/\\|?*' else char
+        for char in raw
+    ).rstrip(" .")
+    safe = safe or fallback
+    if safe.split(".", 1)[0].upper() in {
+        "CON", "PRN", "AUX", "NUL",
+        *(f"COM{index}" for index in range(1, 10)),
+        *(f"LPT{index}" for index in range(1, 10)),
+    }:
+        safe = f"_{safe}"
+    if safe != raw or len(safe) > max_length:
+        digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:10]
+        prefix_length = max(1, max_length - len(digest) - 1)
+        safe = f"{safe[:prefix_length].rstrip(' .') or fallback[:prefix_length]}_{digest}"
+    else:
+        safe = safe[:max_length]
+    return safe
 
 def validate_project_version(state):
     version = str(state.get("version", "1.0"))
@@ -31,15 +55,27 @@ def validate_project_archive_members(zip_file):
         normalized = member.filename.replace("\\", "/")
         if not normalized:
             raise ValueError("工程文件包含空路径成员")
-        if normalized in seen:
-            raise ValueError(f"工程文件包含重复成员：{normalized}")
-        seen.add(normalized)
-
         parts = [part for part in normalized.split("/") if part not in ("", ".")]
-        if normalized.startswith("/") or any(part == ".." for part in parts):
+        if not parts or normalized.startswith("/") or any(part == ".." for part in parts):
             raise ValueError("工程文件包含非法路径")
-        if len(normalized) >= 2 and normalized[1] == ":":
-            raise ValueError("工程文件包含非法路径")
+        for part in parts:
+            if (
+                any(ord(char) < 32 or char in '<>:"|?*' for char in part)
+                or part.endswith((" ", "."))
+                or part.split(".", 1)[0].upper() in {
+                    "CON", "PRN", "AUX", "NUL",
+                    *(f"COM{index}" for index in range(1, 10)),
+                    *(f"LPT{index}" for index in range(1, 10)),
+                }
+            ):
+                raise ValueError("工程文件包含跨平台不兼容路径")
+
+        # Windows 与默认配置的 macOS 文件系统通常不区分大小写；按折叠后的
+        # 规范路径去重，避免同一成员在解压时被静默覆盖。
+        portable_key = "/".join(parts).casefold()
+        if portable_key in seen:
+            raise ValueError(f"工程文件包含重复成员：{normalized}")
+        seen.add(portable_key)
 
         file_type = (member.external_attr >> 16) & 0o170000
         if file_type == stat.S_IFLNK:
@@ -289,11 +325,21 @@ def validate_project_resources(state, workspace_dir):
 
     audio_paths = set()
     cache_paths = {}
+    workspace_abs = os.path.abspath(workspace_dir)
     for _owner, key, _index, rel_path in _iter_state_resource_refs(state):
+        normalized = str(rel_path).replace("\\", "/")
+        if not normalized.startswith(("audio/", "data/")):
+            raise ValueError(f"工程资源路径必须位于 audio/ 或 data/：{rel_path}")
         file_path = resolve_workspace_path(rel_path, workspace_dir=workspace_dir)
+        file_path_abs = os.path.abspath(file_path)
+        try:
+            if os.path.commonpath([file_path_abs, workspace_abs]) != workspace_abs:
+                raise ValueError(f"工程资源路径越界：{rel_path}")
+        except ValueError:
+            raise ValueError(f"工程资源路径越界：{rel_path}")
         if not os.path.isfile(file_path):
             raise FileNotFoundError(f"工程文件缺少资源：{rel_path}")
-        if rel_path.startswith("audio/"):
+        if normalized.startswith("audio/"):
             audio_paths.add(file_path)
         elif key == "pitch_data_file":
             cache_paths[file_path] = ("xs", "freqs")
@@ -379,7 +425,8 @@ def adapt_project_state(state: dict, workspace_dir: str):
                         "metadata_source": item_data.get("metadata_source") or "导入工程",
                         "group_name": grp_name,
                         "group_note": item_data.get("group_note") or "",
-                        "group_tags": to_list(item_data.get("group_tags") or [])
+                        "group_tags": to_list(item_data.get("group_tags") or []),
+                        "group_meta": to_dict(item_data.get("group_meta") or {}),
                     }
                 else:
                     # 语义并集
@@ -396,6 +443,10 @@ def adapt_project_state(state: dict, workspace_dir: str):
                     for mk, mv in other_meta.items():
                         if mk not in canon["meta"]:
                             canon["meta"][mk] = mv
+                    other_group_meta = to_dict(item_data.get("group_meta") or {})
+                    for mk, mv in other_group_meta.items():
+                        if mk not in canon["group_meta"]:
+                            canon["group_meta"][mk] = mv
                     # 检查备注冲突
                     other_note = item_data.get("item_note") or item_data.get("note") or ""
                     if other_note and other_note != canon["note"]:
@@ -447,16 +498,24 @@ def adapt_project_state(state: dict, workspace_dir: str):
         for grp_name in group_order:
             grp_note = ""
             grp_tags = []
+            grp_meta = {}
             for slot in global_slots:
                 if slot[0] == grp_name:
-                    grp_note = slot_to_canonical[slot]["group_note"]
-                    grp_tags = slot_to_canonical[slot]["group_tags"]
-                    break
+                    canonical = slot_to_canonical[slot]
+                    if not grp_note and canonical["group_note"]:
+                        grp_note = canonical["group_note"]
+                    for tag in canonical["group_tags"]:
+                        if tag not in grp_tags:
+                            grp_tags.append(tag)
+                    for key, value in canonical["group_meta"].items():
+                        if key not in grp_meta:
+                            grp_meta[key] = value
             groups.append({
                 "id": f"grp_{uuid.uuid4().hex[:8]}",
                 "name": grp_name,
                 "note": grp_note,
                 "tags": grp_tags,
+                "meta": grp_meta,
                 "items": grouped_items[grp_name]
             })
 
@@ -469,6 +528,9 @@ def adapt_project_state(state: dict, workspace_dir: str):
     groups_ids_map = {}
     for group in state["groups"]:
         grp_name = group.get("name", "默认组")
+        grp_note = group.get("note", "")
+        grp_tags = group.get("tags", []) if isinstance(group.get("tags", []), list) else []
+        grp_meta = group.get("meta", {}) if isinstance(group.get("meta", {}), dict) else {}
         occ_counts = {}
         for item in group.get("items", []):
             word_label = item.get("label") or item.get("word") or "未命名"
@@ -485,7 +547,10 @@ def adapt_project_state(state: dict, workspace_dir: str):
                 "aliases": item.get("aliases", []),
                 "meta": item.get("meta", {}),
                 "metadata_source": item.get("metadata_source", "导入字表"),
-                "group_name": grp_name
+                "group_name": grp_name,
+                "group_note": grp_note,
+                "group_tags": grp_tags,
+                "group_meta": grp_meta,
             }
             groups_slots_map[slot] = canonical_info
             groups_ids_map[item["id"]] = canonical_info
@@ -493,6 +558,7 @@ def adapt_project_state(state: dict, workspace_dir: str):
     # 2. 规范化并对齐每个发音人的 items，执行录音转换
     for spk_id, spk_data in list(state.get("speakers", {}).items()):
         spk_name = spk_data.get("name", spk_id)
+        safe_spk_id = safe_resource_token(spk_id, "speaker", 64)
         tab_mode = spk_data.get("tab_mode", "多条独立音频")
         old_items = spk_data.get("items", {})
         has_item_audio = any(
@@ -554,9 +620,10 @@ def adapt_project_state(state: dict, workspace_dir: str):
                             if start < 0 or end > duration or start >= end:
                                 raise ValueError(f"切分边界无效 [{start}, {end}], 音频总长: {duration:.2f}s")
 
-                            dest_dir = os.path.join(workspace_dir, "audio", spk_id)
+                            safe_canonical_id = safe_resource_token(canonical_id, "item", 64)
+                            dest_dir = os.path.join(workspace_dir, "audio", safe_spk_id)
                             os.makedirs(dest_dir, exist_ok=True)
-                            dest_filename = f"{spk_id}_{canonical_id}.wav"
+                            dest_filename = f"{safe_spk_id}_{safe_canonical_id}.wav"
                             dest_path = os.path.join(dest_dir, dest_filename)
                             source_sound.extract_part(
                                 from_time=float(start),
@@ -564,7 +631,7 @@ def adapt_project_state(state: dict, workspace_dir: str):
                                 preserve_times=False,
                             ).save(dest_path, "WAV")
 
-                            item_data["path"] = f"audio/{spk_id}/{dest_filename}"
+                            item_data["path"] = f"audio/{safe_spk_id}/{dest_filename}"
                             # 边界转换到单项音频本地时间轴
                             duration_local = float(end - start)
                             item_data["start"] = 0.0
@@ -615,12 +682,14 @@ def adapt_project_state(state: dict, workspace_dir: str):
                     # 独立音频重命名并映射
                     old_path_rel = item_data.get("path")
                     if old_path_rel:
+                        safe_old_id = safe_resource_token(old_id, "item", 64)
+                        safe_canonical_id = safe_resource_token(canonical_id, "item", 64)
                         # 寻找源 WAV 文件
                         src_wav = None
                         candidates = [
                             resolve_workspace_path(old_path_rel, workspace_dir),
-                            os.path.join(workspace_dir, "audio", spk_id, f"{spk_id}_{old_id}.wav"),
-                            os.path.join(workspace_dir, "audio", f"{spk_id}_{old_id}.wav"),
+                            os.path.join(workspace_dir, "audio", safe_spk_id, f"{safe_spk_id}_{safe_old_id}.wav"),
+                            os.path.join(workspace_dir, "audio", f"{safe_spk_id}_{safe_old_id}.wav"),
                         ]
                         for c in candidates:
                             if os.path.isfile(c):
@@ -628,7 +697,7 @@ def adapt_project_state(state: dict, workspace_dir: str):
                                 break
 
                         if not src_wav:
-                            suffix = f"{spk_id}_{old_id}.wav".lower()
+                            suffix = f"{safe_spk_id}_{safe_old_id}.wav".lower()
                             for r, _, files in os.walk(os.path.join(workspace_dir, "audio")):
                                 for f in files:
                                     if f.lower().endswith(suffix):
@@ -638,7 +707,7 @@ def adapt_project_state(state: dict, workspace_dir: str):
                                     break
 
                         if src_wav:
-                            dest_rel = f"audio/{spk_id}/{spk_id}_{canonical_id}.wav"
+                            dest_rel = f"audio/{safe_spk_id}/{safe_spk_id}_{safe_canonical_id}.wav"
                             dest_abs = os.path.join(workspace_dir, dest_rel)
                             if os.path.normpath(src_wav) != os.path.normpath(dest_abs):
                                 os.makedirs(os.path.dirname(dest_abs), exist_ok=True)
@@ -674,7 +743,7 @@ def adapt_project_state(state: dict, workspace_dir: str):
                                 if c_path:
                                     c_abs = resolve_workspace_path(c_path, workspace_dir)
                                     if os.path.isfile(c_abs):
-                                        dest_cache_rel = f"data/{spk_id}_{canonical_id}{cache_suffix}"
+                                        dest_cache_rel = f"data/{safe_spk_id}_{safe_canonical_id}{cache_suffix}"
                                         dest_cache_abs = os.path.join(workspace_dir, dest_cache_rel)
                                         if os.path.normpath(c_abs) != os.path.normpath(dest_cache_abs):
                                             os.makedirs(os.path.dirname(dest_cache_abs), exist_ok=True)
@@ -701,6 +770,15 @@ def adapt_project_state(state: dict, workspace_dir: str):
                 item_data["meta"] = canonical_item["meta"]
                 item_data["metadata_source"] = canonical_item["metadata_source"]
                 item_data["group"] = grp_name
+                # PhonRec 使用简洁字段，主程序使用 item_*/group_* 字段；双写保证
+                # .teproj 在两端反复打开和保存后仍保留完整高级字表元数据。
+                item_data["item_note"] = canonical_item["note"]
+                item_data["item_tags"] = list(canonical_item["tags"])
+                item_data["item_aliases"] = list(canonical_item["aliases"])
+                item_data["item_meta"] = dict(canonical_item["meta"])
+                item_data["group_note"] = canonical_item.get("group_note", "")
+                item_data["group_tags"] = list(canonical_item.get("group_tags", []))
+                item_data["group_meta"] = dict(canonical_item.get("group_meta", {}))
 
                 new_items[canonical_id] = item_data
             else:
@@ -720,7 +798,14 @@ def adapt_project_state(state: dict, workspace_dir: str):
                     "aliases": canonical_item["aliases"],
                     "meta": canonical_item["meta"],
                     "metadata_source": canonical_item["metadata_source"],
-                    "group": canonical_item["group_name"]
+                    "group": canonical_item["group_name"],
+                    "item_note": canonical_item["note"],
+                    "item_tags": list(canonical_item["tags"]),
+                    "item_aliases": list(canonical_item["aliases"]),
+                    "item_meta": dict(canonical_item["meta"]),
+                    "group_note": canonical_item.get("group_note", ""),
+                    "group_tags": list(canonical_item.get("group_tags", [])),
+                    "group_meta": dict(canonical_item.get("group_meta", {})),
                 }
                 summary["missing_items"] += 1
 

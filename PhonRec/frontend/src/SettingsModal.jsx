@@ -147,6 +147,7 @@ export default function SettingsModal({
   onCheckPermission,
   onOpenPrivacy,
   onSelectFolder,
+  onSelectWavExportFolder,
   isRecording,
   isProcessing,
   runtimeMode = 'engine',
@@ -660,12 +661,12 @@ export default function SettingsModal({
                 {isStandalone ? (
                   <div className="settings-card">
                     <div className="settings-card-title">
-                      <SaveIcon /> 独立模式保存与 WAV 导出
+                      <SaveIcon /> 独立模式保存与导出
                     </div>
                     <div className="settings-grid">
                       <div className="form-group settings-grid-full">
                         <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.55 }}>
-                          录音会自动保存到本机受控工作区。独立模式不提供 .teproj 工程导入导出；安装主程序后，完整模式可继续读取这里的录音。
+                          录音会自动保存到本机受控工作区，并可随时读写 .teproj；安装主程序后可直接继续分析同一工程。
                         </div>
                       </div>
                       <div className="form-group settings-grid-full">
@@ -674,7 +675,7 @@ export default function SettingsModal({
                           <input
                             type="text"
                             className="form-input form-input-readonly"
-                            value={settings.folder_path || ''}
+                            value={settings.wav_export_path || ''}
                             style={{ flex: 1, textOverflow: 'ellipsis' }}
                             readOnly
                             placeholder="导出时选择目录，或在此预先设置..."
@@ -683,7 +684,7 @@ export default function SettingsModal({
                             className="btn-secondary"
                             style={{ borderRadius: '9999px', padding: '0.4rem 1rem', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
                             disabled={isRecording || isProcessing}
-                            onClick={onSelectFolder}
+                            onClick={onSelectWavExportFolder}
                           >
                             选择路径
                           </button>

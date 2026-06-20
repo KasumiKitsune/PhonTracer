@@ -24,7 +24,7 @@ const settings = {
   },
   default_plot: 'spectrogram',
   record_order: 'wordlist', record_mode: 'click', record_source: 'default', sample_rate: 16000,
-  save_format: 'teproj', folder_path: '', theme: 'light', accent_color: 'blue', ui_scale: '100%',
+  save_format: 'teproj', folder_path: 'D:\\完整工程', wav_export_path: 'D:\\WAV', theme: 'light', accent_color: 'blue', ui_scale: '100%',
   ui_density: 'standard', animations_enabled: true, primary_meta_key: '拼音', badge_meta_key: '拼音',
   char_font_size: 120, vad_preset: 'standard', shortcut_preset: 'standard', live_input_monitor: false,
   default_project_name: 'PhonRec_Project.teproj', show_shortcut_hints: true,
@@ -39,6 +39,9 @@ const client = {
   saveAudio: vi.fn(),
   readAudio: vi.fn(),
   analyzeAudio: vi.fn(),
+  importWordlist: vi.fn(),
+  importProject: vi.fn(),
+  exportProject: vi.fn(),
   exportWavFolder: vi.fn(),
 };
 
@@ -67,7 +70,7 @@ describe('独立软件模式主界面', () => {
     Object.values(client).forEach(value => value?.mockClear?.());
   });
 
-  it('隐藏工程能力，强制波形并通过普通字表弹窗导入', async () => {
+  it('完整开放字表和工程互通能力，同时保留独立 WAV 导出', async () => {
     const { container } = render(
       <RuntimeProvider client={client}>
         <App />
@@ -76,14 +79,15 @@ describe('独立软件模式主界面', () => {
 
     expect(await screen.findByText(/独立录音模式/)).toBeTruthy();
     expect(screen.getByRole('button', { name: /导出 WAV/ })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: '导入' })).toBeNull();
-    expect(container.querySelector('input[accept=".teproj"]')).toBeNull();
-    expect(container.querySelector('input[accept=".ptwl,.txt,.csv"]')).toBeNull();
+    expect(screen.getByRole('button', { name: '导入' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /保存工程/ })).toBeTruthy();
+    expect(container.querySelector('input[accept=".teproj"]')).toBeTruthy();
+    expect(container.querySelector('input[accept=".ptwl,.txt,.csv"]')).toBeTruthy();
     expect(screen.queryByRole('button', { name: /语谱图/ })).toBeNull();
     expect(screen.queryAllByText('完整模式可用')).toHaveLength(0);
     expect(screen.queryByText('字段显示设置')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: /导入字表/ }));
+    fireEvent.click(screen.getByRole('button', { name: /粘贴普通字表/ }));
     expect(await screen.findByRole('dialog', { name: '导入普通字表' })).toBeTruthy();
     expect(screen.getByRole('button', { name: '选择 TXT 文件' })).toBeTruthy();
     await waitFor(() => expect(client.loadProject).toHaveBeenCalled());

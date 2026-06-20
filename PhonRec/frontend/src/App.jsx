@@ -242,6 +242,7 @@ export default function App() {
   const [sampleRateSetting, setSampleRateSetting] = useState(16000);
   const [saveFormatSetting, setSaveFormatSetting] = useState('teproj');
   const [folderPathSetting, setFolderPathSetting] = useState('');
+  const [wavExportPathSetting, setWavExportPathSetting] = useState('');
   const [settingsLoaded, setSettingsLoaded] = useState(false);
 
   // Redesigned visual and behavioral settings states
@@ -349,6 +350,9 @@ export default function App() {
   const isMouseDownRef = useRef(false);
   const isStartingRef = useRef(false);
   const shouldCancelRef = useRef(false);
+  const isStoppingRef = useRef(false);
+  const recordingTargetRef = useRef(null);
+  const pendingCaptureStopRef = useRef(null);
 
   const qualityChecksEnabledRef = useRef(qualityChecksEnabled);
   qualityChecksEnabledRef.current = qualityChecksEnabled;
@@ -387,6 +391,7 @@ export default function App() {
     sample_rate: Number(sampleRateSetting),
     save_format: saveFormatSetting,
     folder_path: folderPathSetting,
+    wav_export_path: wavExportPathSetting,
     theme: themeSetting,
     accent_color: accentColorSetting,
     ui_scale: uiScaleSetting,
@@ -432,6 +437,7 @@ export default function App() {
         setSampleRateSetting(settings.sample_rate || 16000);
         setSaveFormatSetting(settings.save_format || 'teproj');
         setFolderPathSetting(settings.folder_path || '');
+        setWavExportPathSetting(settings.wav_export_path || '');
         setRandomizeOrder(settings.record_order === 'random');
 
         // New fields
@@ -492,6 +498,7 @@ export default function App() {
     setSampleRateSetting(Number(snapshot.sample_rate));
     setSaveFormatSetting(snapshot.save_format);
     setFolderPathSetting(snapshot.folder_path);
+    setWavExportPathSetting(snapshot.wav_export_path || '');
     setThemeSetting(snapshot.theme);
     setAccentColorSetting(snapshot.accent_color);
     setUiScaleSetting(snapshot.ui_scale);
@@ -646,6 +653,9 @@ export default function App() {
   };
   const updateFolderPathSetting = async (val) => {
     await updateSettings({ folder_path: val });
+  };
+  const updateWavExportPathSetting = async (val) => {
+    await updateSettings({ wav_export_path: val });
   };
   const updateBadgeMetaKey = async (val) => {
     await updateSettings({ badge_meta_key: val });
@@ -821,6 +831,15 @@ export default function App() {
           const chunkCopy = new Float32Array(inputData.length);
           chunkCopy.set(inputData);
           audioChunksRef.current.push(chunkCopy);
+
+          // 停止操作等待当前音频块真正送达后再封装 WAV，避免丢掉点击
+          // “停止”前尚在 WebAudio 缓冲区中的最后几十毫秒。
+          if (pendingCaptureStopRef.current) {
+            const resolveStop = pendingCaptureStopRef.current;
+            pendingCaptureStopRef.current = null;
+            isRecordingRef.current = false;
+            resolveStop();
+          }
 
           const canvas = canvasRef.current;
           if (canvas) {
@@ -1145,13 +1164,13 @@ export default function App() {
         }
       } else if (isPrevKey) {
         e.preventDefault();
-        if (isRecordingRef.current || isProcessingRef.current) return;
+        if (isRecordingRef.current || isProcessingRef.current || isStartingRef.current) return;
         navigateItem(-1);
       } else if (isNextKey) {
         e.preventDefault();
-        if (isRecordingRef.current || isProcessingRef.current) return;
+        if (isRecordingRef.current || isProcessingRef.current || isStartingRef.current) return;
         navigateItem(1);
-      } else if (isPlayKey && !isRecordingRef.current && !isProcessingRef.current) {
+      } else if (isPlayKey && !isRecordingRef.current && !isProcessingRef.current && !isStartingRef.current) {
         e.preventDefault();
         playRecordedAudio();
       }
@@ -1253,16 +1272,24 @@ export default function App() {
   const fetchProjectState = async () => {
     try {
       const data = await runtime.loadProject();
-      projectStateRef.current = data;
 
-      if (data.speakers) setSpeakers(data.speakers);
-      if (data.active_speaker_id) setActiveSpeakerId(data.active_speaker_id);
-      if (data.groups) {
-        setGroups(data.groups);
+      const loadedSpeakers = data.speakers || {};
+      const loadedSpeakerIds = Object.keys(loadedSpeakers);
+      const loadedActiveSpeakerId = loadedSpeakers[data.active_speaker_id]
+        ? data.active_speaker_id
+        : (loadedSpeakerIds[0] || '');
+      projectStateRef.current = { ...data, active_speaker_id: loadedActiveSpeakerId };
+      setSpeakers(loadedSpeakers);
+      setActiveSpeakerId(loadedActiveSpeakerId);
+      const loadedGroups = data.groups || [];
+      setGroups(loadedGroups);
+      if (loadedGroups.length > 0) {
         setWordlistInfo({
           title: '已载入工程字表',
-          count: data.groups.reduce((acc, g) => acc + g.items.length, 0)
+          count: loadedGroups.reduce((acc, g) => acc + g.items.length, 0)
         });
+      } else {
+        setWordlistInfo({ title: '无字表', count: 0 });
       }
     } catch (err) {
       console.error('Failed to load project state:', err);
@@ -1270,13 +1297,39 @@ export default function App() {
   };
 
   const saveProjectState = async (updatedSpeakers, updatedGroups = groupsRef.current, customActiveSpeakerId = null) => {
+    const compatibleSpeakers = Object.fromEntries(Object.entries(updatedSpeakers).map(([speakerId, speaker]) => {
+      const items = { ...(speaker.items || {}) };
+      for (const group of updatedGroups || []) {
+        for (const canonical of group.items || []) {
+          items[canonical.id] = {
+            ...(items[canonical.id] || {}),
+            id: canonical.id,
+            label: canonical.label,
+            note: canonical.note || '',
+            tags: [...(canonical.tags || [])],
+            aliases: [...(canonical.aliases || [])],
+            meta: { ...(canonical.meta || {}) },
+            metadata_source: canonical.metadata_source || '导入字表',
+            group: group.name || '默认组',
+            item_note: canonical.note || '',
+            item_tags: [...(canonical.tags || [])],
+            item_aliases: [...(canonical.aliases || [])],
+            item_meta: { ...(canonical.meta || {}) },
+            group_note: group.note || '',
+            group_tags: [...(group.tags || [])],
+            group_meta: { ...(group.meta || {}) },
+          };
+        }
+      }
+      return [speakerId, { ...speaker, items }];
+    }));
     const state = {
       ...projectStateRef.current,
       version: "1.0",
       software_version: "PhonRec-1.0.0",
       save_time: new Date().toISOString(),
       active_speaker_id: customActiveSpeakerId !== null ? customActiveSpeakerId : activeSpeakerIdRef.current,
-      speakers: updatedSpeakers,
+      speakers: compatibleSpeakers,
       groups: updatedGroups
     };
 
@@ -1307,6 +1360,7 @@ export default function App() {
 
   // --- Speaker Controls (Inline) ---
   const handleInlineSpeakerSubmit = async () => {
+    if (isRecordingRef.current || isProcessingRef.current || isStartingRef.current) return;
     const name = newSpeakerName.trim();
     if (!name) {
       setIsAddingSpeaker(false);
@@ -1379,6 +1433,7 @@ export default function App() {
 
   const handleDeleteSpeaker = async (id, e) => {
     e.stopPropagation();
+    if (isRecordingRef.current || isProcessingRef.current || isStartingRef.current) return;
     const ok = await customConfirm('确定删除该发音人及其录音记录吗？');
     if (!ok) return;
 
@@ -1445,20 +1500,16 @@ export default function App() {
   };
 
   const uploadWordlistFile = async (file) => {
+    if (isRecordingRef.current || isProcessingRef.current || isStartingRef.current) {
+      await customAlert('录音或保存处理中不能更换字表。');
+      return;
+    }
     const ok = await customConfirm('确定要更换字表吗？更换字表将替换当前所有字词且清除所有发音人的录音记录！');
     if (!ok) return;
 
-    const formData = new FormData();
-    formData.append('file', file);
-
     try {
       setIsProcessing(true);
-      const res = await apiFetch('/wordlist/import', {
-        method: 'POST',
-        body: formData
-      });
-      if (!res.ok) throw new Error('解析字表失败');
-      const data = await res.json();
+      const data = await runtime.importWordlist(file);
 
       setGroups(data.groups);
       setActiveGroupIndex('all'); // Default to show all items
@@ -1499,30 +1550,30 @@ export default function App() {
   };
 
   const uploadProjectFile = async (file) => {
-    const formData = new FormData();
-    formData.append('file', file);
-
+    if (isRecordingRef.current || isProcessingRef.current || isStartingRef.current) {
+      await customAlert('录音或保存处理中不能导入工程。');
+      return;
+    }
     try {
       setIsProcessing(true);
-
-      const res = await apiFetch('/project/import', {
-        method: 'POST',
-        body: formData
-      });
-      if (!res.ok) throw new Error('导入工程失败');
-      const data = await res.json();
+      resetPlayback();
+      await closeMicStream();
+      const data = await runtime.importProject(file);
       resetPlayback();
       setSpectrogramUrl('');
       setQualityResults(null);
       clearCanvas();
       const state = data.state;
-      projectStateRef.current = state;
 
       // Apply imported project state (with fallback defaults to clear old data)
       const importedSpeakers = state.speakers || {};
       setSpeakers(importedSpeakers);
 
-      const importedActiveSpeakerId = state.active_speaker_id || '';
+      const importedSpeakerIds = Object.keys(importedSpeakers);
+      const importedActiveSpeakerId = importedSpeakers[state.active_speaker_id]
+        ? state.active_speaker_id
+        : (importedSpeakerIds[0] || '');
+      projectStateRef.current = { ...state, active_speaker_id: importedActiveSpeakerId };
       setActiveSpeakerId(importedActiveSpeakerId);
 
       const importedGroups = state.groups || [];
@@ -1654,6 +1705,7 @@ export default function App() {
   };
 
   const handleProjectExport = async () => {
+    if (isRecordingRef.current || isProcessingRef.current || isStartingRef.current) return;
     if (Object.keys(speakers).length === 0) {
       await customAlert('当前工程尚未添加任何发音人，禁止导出工程！');
       return;
@@ -1669,27 +1721,7 @@ export default function App() {
       setIsProcessing(false);
     }
 
-    if (capabilities.wavFolderExport) {
-      let destination = folderPathSetting;
-      if (!destination) {
-        destination = await open({ directory: true, multiple: false });
-        if (destination) await updateFolderPathSetting(destination);
-      }
-      if (!destination) return;
-      try {
-        setIsProcessing(true);
-        const result = await runtime.exportWavFolder(destination);
-        await customAlert(`WAV 导出完成：成功 ${result.exported} 条，跳过 ${result.skipped} 条。\n保存位置：${result.output_dir}`);
-      } catch (error) {
-        console.error(error);
-        await customAlert(`导出 WAV 失败：${error.message || error}`);
-      } finally {
-        setIsProcessing(false);
-      }
-      return;
-    }
-
-    if (saveFormatSetting === 'folder') {
+    if (!isStandalone && saveFormatSetting === 'folder') {
       let path = folderPathSetting;
       if (!path) {
         const selected = await open({ directory: true, multiple: false });
@@ -1719,11 +1751,7 @@ export default function App() {
     } else {
       try {
         setIsProcessing(true);
-        const res = await apiFetch('/project/export');
-        if (!res.ok) {
-          const errData = await res.json();
-          throw new Error(errData.detail || '导出工程失败');
-        }
+        const projectBlob = await runtime.exportProject();
         const sanitizeProjectName = (name) => {
           if (!name) return 'PhonRec_Project.teproj';
           let sanitized = name.replace(/[<>:"/\\|?*]/g, '').trim();
@@ -1738,7 +1766,7 @@ export default function App() {
           filters: [{ name: 'PhonTracer 工程', extensions: ['teproj'] }],
         });
         if (!destination) return;
-        await writeFile(destination, new Uint8Array(await res.arrayBuffer()));
+        await writeFile(destination, new Uint8Array(await projectBlob.arrayBuffer()));
         await customAlert('工程已成功保存！');
       } catch (error) {
         console.error(error);
@@ -1750,6 +1778,7 @@ export default function App() {
   };
 
   const handleProjectClear = async () => {
+    if (isRecordingRef.current || isProcessingRef.current || isStartingRef.current) return;
     const ok = await customConfirm('确定清空当前工作区，开始全新的录制吗？');
     if (!ok) return;
     try {
@@ -1795,18 +1824,6 @@ export default function App() {
     if (files && files.length > 0) {
       const file = files[0];
       const filename = file.name.toLowerCase();
-      if (isStandalone) {
-        if (filename.endsWith('.txt')) {
-          try {
-            openPlainWordlistModal(await file.text(), file.name);
-          } catch (error) {
-            await customAlert(`读取 TXT 文件失败：${error.message || error}`);
-          }
-        } else {
-          await customAlert('独立模式只能导入 TXT 普通字表，不支持 CSV、PTWL 或 TEPROJ。');
-        }
-        return;
-      }
       if (filename.endsWith('.teproj')) {
         await uploadProjectFile(file);
       } else if (filename.endsWith('.ptwl') || filename.endsWith('.txt') || filename.endsWith('.csv')) {
@@ -1835,9 +1852,20 @@ export default function App() {
       return;
     }
 
+    const device = audioDevices.find(d => d.id === selectedDeviceId);
+    recordingTargetRef.current = {
+      speakerId: activeSpeakerId,
+      item: {
+        ...activeItem,
+        tags: [...(activeItem.tags || [])],
+        aliases: [...(activeItem.aliases || [])],
+        meta: { ...(activeItem.meta || {}) },
+      },
+      deviceId: selectedDeviceId,
+      deviceName: device ? device.name : '未知设备',
+    };
+
     try {
-      setIsRecording(true);
-      isRecordingRef.current = true;
       setSpectrogramUrl('');
       setQualityResults(null);
 
@@ -1863,6 +1891,7 @@ export default function App() {
         if (!qualityChecksEnabledRef.current || !liveInputMonitorSetting) {
           await closeMicStream();
         }
+        recordingTargetRef.current = null;
         isStartingRef.current = false;
         return;
       }
@@ -1871,10 +1900,16 @@ export default function App() {
         await invoke('start_loopback_recording');
       }
 
+      // 权限、设备和回环流都就绪后才对用户宣告“录音中”。此前发声不会
+      // 被误以为已录入，也不会因 getUserMedia 的启动延迟被静默截掉。
+      isRecordingRef.current = true;
+      setIsRecording(true);
+
     } catch (err) {
       console.error(err);
       setIsRecording(false);
       isRecordingRef.current = false;
+      recordingTargetRef.current = null;
       await customAlert('录音访问失败，请确认权限并重试！');
     } finally {
       isStartingRef.current = false;
@@ -1886,16 +1921,17 @@ export default function App() {
       shouldCancelRef.current = true;
       return;
     }
-    if (!isRecordingRef.current) return;
+    if (!isRecordingRef.current || isStoppingRef.current) return;
+    isStoppingRef.current = true;
+    const recordingTarget = recordingTargetRef.current;
 
-    isRecordingRef.current = false;
     setIsRecording(false);
     setIsProcessing(true);
     isProcessingRef.current = true;
     setVadLevel(0);
     setVadSpeaking(false);
 
-    if (selectedDeviceId.startsWith('loopback:')) {
+    if (recordingTarget?.deviceId?.startsWith('loopback:')) {
       try {
         const sampleRate = Number(sampleRateSetting);
         const wavBytes = await invoke('stop_loopback_recording', { sampleRate });
@@ -1911,46 +1947,77 @@ export default function App() {
         tempCtx.close();
 
         if (discardReason) {
-          await handleVadDiscard(discardReason);
+          await handleVadDiscard(recordingTarget, discardReason);
         } else {
-          await uploadAudio(wavBlob, shouldAutoAdvance, isAutoVAD);
+          await uploadAudio(wavBlob, recordingTarget, shouldAutoAdvance, isAutoVAD);
         }
       } catch (err) {
         console.error(err);
         await customAlert('保存回环录音失败：' + err.message);
         setIsProcessing(false);
+        isProcessingRef.current = false;
+      } finally {
+        isRecordingRef.current = false;
+        isStoppingRef.current = false;
+        recordingTargetRef.current = null;
       }
       return;
     }
 
     // Otherwise browser microphone
-    if (!qualityChecksEnabledRef.current || !liveInputMonitorSetting) {
-      await closeMicStream();
-    }
-
-    const totalLength = audioChunksRef.current.reduce((acc, chunk) => acc + chunk.length, 0);
-    const floatBuffer = new Float32Array(totalLength);
-    let offset = 0;
-    for (const chunk of audioChunksRef.current) {
-      floatBuffer.set(chunk, offset);
-      offset += chunk.length;
-    }
-
-    drawStaticWaveform(floatBuffer);
     const sourceSampleRate = audioContextRef.current?.sampleRate || 16000;
-    const targetSR = Number(sampleRateSetting);
-    const resampledBuffer = resampleAudio(floatBuffer, sourceSampleRate, targetSR);
-    const wavBlob = bufferToWav(resampledBuffer, targetSR);
-    if (discardReason) {
-      await handleVadDiscard(discardReason);
-    } else {
-      await uploadAudio(wavBlob, shouldAutoAdvance, isAutoVAD);
+    const captureDrainTimeoutMs = Math.min(
+      750,
+      Math.max(150, Math.ceil((4096 / sourceSampleRate) * 1000) + 100)
+    );
+    try {
+      await new Promise((resolve) => {
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          if (pendingCaptureStopRef.current === finish) pendingCaptureStopRef.current = null;
+          isRecordingRef.current = false;
+          resolve();
+        };
+        pendingCaptureStopRef.current = finish;
+        window.setTimeout(finish, captureDrainTimeoutMs);
+      });
+      if (!qualityChecksEnabledRef.current || !liveInputMonitorSetting) {
+        await closeMicStream();
+      }
+
+      const totalLength = audioChunksRef.current.reduce((acc, chunk) => acc + chunk.length, 0);
+      const floatBuffer = new Float32Array(totalLength);
+      let offset = 0;
+      for (const chunk of audioChunksRef.current) {
+        floatBuffer.set(chunk, offset);
+        offset += chunk.length;
+      }
+
+      drawStaticWaveform(floatBuffer);
+      const targetSR = Number(sampleRateSetting);
+      const resampledBuffer = resampleAudio(floatBuffer, sourceSampleRate, targetSR);
+      const wavBlob = bufferToWav(resampledBuffer, targetSR);
+      if (discardReason) {
+        await handleVadDiscard(recordingTarget, discardReason);
+      } else {
+        await uploadAudio(wavBlob, recordingTarget, shouldAutoAdvance, isAutoVAD);
+      }
+    } catch (err) {
+      console.error(err);
+      await customAlert('保存麦克风录音失败：' + err.message);
+      setIsProcessing(false);
+      isProcessingRef.current = false;
+    } finally {
+      isRecordingRef.current = false;
+      isStoppingRef.current = false;
+      recordingTargetRef.current = null;
     }
   };
 
-  const handleVadDiscard = async () => {
-    const item = displayedItemsRef.current[activeItemIndexRef.current];
-    const key = `${activeSpeakerIdRef.current}:${item?.id || ''}`;
+  const handleVadDiscard = async (recordingTarget) => {
+    const key = `${recordingTarget?.speakerId || ''}:${recordingTarget?.item?.id || ''}`;
     const retryCount = (vadRetryRef.current.get(key) || 0) + 1;
     vadRetryRef.current.set(key, retryCount);
     setIsProcessing(false);
@@ -1963,13 +2030,12 @@ export default function App() {
     }
   };
 
-  const uploadAudio = async (blob, shouldAutoAdvance, isAutoVAD = false) => {
-    const activeItem = displayedItemsRef.current[activeItemIndexRef.current];
-    const spkId = activeSpeakerIdRef.current;
+  const uploadAudio = async (blob, recordingTarget, shouldAutoAdvance, isAutoVAD = false) => {
+    const activeItem = recordingTarget?.item;
+    const spkId = recordingTarget?.speakerId;
     if (!activeItem || !spkId) return;
 
-    const device = audioDevices.find(d => d.id === selectedDeviceId);
-    const deviceName = device ? device.name : '未知设备';
+    const deviceName = recordingTarget.deviceName;
 
     try {
       const data = await runtime.saveAudio({
@@ -1980,7 +2046,8 @@ export default function App() {
         qualityRules: qualityRulesRef.current,
       });
 
-      const needsRetry = qualityChecksEnabledRef.current && data.quality?.decision === 'retry';
+      const needsRetry = data.stored === false
+        || (qualityChecksEnabledRef.current && data.quality?.decision === 'retry');
 
       const updatedSpeakers = { ...speakersRef.current };
       if (!updatedSpeakers[spkId]) {
@@ -1992,44 +2059,17 @@ export default function App() {
       }
 
       if (needsRetry) {
-        if (updatedSpeakers[spkId].items[activeItem.id]) {
-          const item = updatedSpeakers[spkId].items[activeItem.id];
-          updatedSpeakers[spkId].items[activeItem.id] = {
-            ...item,
-            path: null,
-            quality: null,
-            recorded_at: null,
-            duration_ms: null,
-            sample_rate_hz: null,
-            channels: null,
-            format: null,
-            source: null
-          };
-        } else {
-          updatedSpeakers[spkId].items[activeItem.id] = {
-            id: activeItem.id,
-            label: activeItem.label,
-            note: activeItem.note,
-            tags: activeItem.tags,
-            aliases: activeItem.aliases || [],
-            meta: activeItem.meta || {},
-            metadata_source: activeItem.metadata_source || '录音软件',
-            path: null,
-            quality: null,
-            recorded_at: null,
-            duration_ms: null,
-            sample_rate_hz: null,
-            channels: null,
-            format: null,
-            source: null
-          };
-        }
+        // 不合格重录不得清空或覆盖此前已接受的录音；后端/独立运行时也会
+        // 以 stored=false 明确表示本次数据未提交。
       } else {
         updatedSpeakers[spkId].items[activeItem.id] = buildRecordedItem(activeItem, data);
       }
 
-      setSpeakers(updatedSpeakers);
-      await saveProjectState(updatedSpeakers);
+      if (!needsRetry) {
+        setSpeakers(updatedSpeakers);
+        speakersRef.current = updatedSpeakers;
+        await saveProjectState(updatedSpeakers);
+      }
 
       // Update local view states instantly
       if (data.spectrogram) setSpectrogramUrl(data.spectrogram);
@@ -2051,7 +2091,12 @@ export default function App() {
         vadRetryRef.current.delete(`${spkId}:${activeItem.id}`);
         if (shouldAutoAdvance) {
           setTimeout(() => {
-            navigateItem(1);
+            if (activeSpeakerIdRef.current === spkId) {
+              const currentIndex = displayedItemsRef.current.findIndex(item => item.id === activeItem.id);
+              if (currentIndex >= 0 && currentIndex + 1 < displayedItemsRef.current.length) {
+                setActiveItemIndex(currentIndex + 1);
+              }
+            }
             if (isAutoVAD) {
               setTimeout(() => {
                 startRecording();
@@ -2063,6 +2108,27 @@ export default function App() {
     } catch (err) {
       console.error(err);
       alert('上传音频失败: ' + err.message);
+    } finally {
+      setIsProcessing(false);
+      isProcessingRef.current = false;
+    }
+  };
+
+  const handleWavExport = async () => {
+    if (isRecordingRef.current || isProcessingRef.current || isStartingRef.current) return;
+    let destination = wavExportPathSetting;
+    if (!destination) {
+      destination = await open({ directory: true, multiple: false });
+      if (destination) await updateWavExportPathSetting(destination);
+    }
+    if (!destination) return;
+    try {
+      setIsProcessing(true);
+      const result = await runtime.exportWavFolder(destination);
+      await customAlert(`WAV 导出完成：成功 ${result.exported} 条，跳过 ${result.skipped} 条。\n保存位置：${result.output_dir}`);
+    } catch (error) {
+      console.error(error);
+      await customAlert(`导出 WAV 失败：${error.message || error}`);
     } finally {
       setIsProcessing(false);
     }
@@ -2104,7 +2170,7 @@ export default function App() {
   };
 
   const playRecordedAudio = async () => {
-    if (isRecordingRef.current || isProcessingRef.current) return;
+    if (isRecordingRef.current || isProcessingRef.current || isStartingRef.current) return;
     const activeItem = getActiveItem();
     if (!activeItem || !activeSpeakerId) return;
 
@@ -2260,6 +2326,7 @@ export default function App() {
   };
 
   const navigateItem = (direction) => {
+    if (isRecordingRef.current || isProcessingRef.current || isStartingRef.current) return;
     if (displayedItems.length === 0) return;
 
     let newIndex = activeItemIndex + direction;
@@ -2281,7 +2348,7 @@ export default function App() {
         <div className="standalone-mode-banner">
           <div className="standalone-mode-banner-content">
             <InfoIcon />
-            <span>独立录音模式：支持本地录音、播放、音量与削波检测及 WAV 导出；工程归档和高级分析需安装 PhonTracer。</span>
+            <span>独立录音模式：支持普通/高级字表、.teproj 工程互通、本地录音与 WAV 导出；语谱图和完整质量分析需安装 PhonTracer。</span>
           </div>
           <button
             type="button"
@@ -2369,9 +2436,7 @@ export default function App() {
             释放文件以导入
           </span>
           <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-            {isStandalone
-              ? '独立模式仅支持 TXT 普通字表'
-              : '支持字表文件 (.ptwl / .txt / .csv) 或工程归档 (.teproj)'}
+            支持字表文件 (.ptwl / .txt / .csv) 或工程归档 (.teproj)
           </span>
         </div>
       )}
@@ -2389,17 +2454,20 @@ export default function App() {
           <div className="panel-body">
             {/* Wordlist actions */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-              <button className="btn-primary" onClick={() => isStandalone ? openPlainWordlistModal() : triggerWordlistUpload()}>
+              <button className="btn-primary" disabled={isRecording || isProcessing} onClick={triggerWordlistUpload}>
                 <ImportIcon /> 导入字表
               </button>
-              {!isStandalone && (
-                <input
-                  type="file"
-                  ref={fileInputRef}
-                  style={{ display: 'none' }}
-                  accept=".ptwl,.txt,.csv"
-                  onChange={handleWordlistUpload}
-                />
+              <input
+                type="file"
+                ref={fileInputRef}
+                style={{ display: 'none' }}
+                accept=".ptwl,.txt,.csv"
+                onChange={handleWordlistUpload}
+              />
+              {isStandalone && (
+                <button className="btn-secondary" disabled={isRecording || isProcessing} onClick={() => openPlainWordlistModal()}>
+                  粘贴普通字表
+                </button>
               )}
               <div className="info-card">
                 <div className="info-row">
@@ -2457,7 +2525,7 @@ export default function App() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', flex: 1, minHeight: 0 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)' }}>发音人列表:</span>
-                <button className="btn-secondary" style={{ padding: '0.2rem 0.6rem', fontSize: '0.75rem' }} onClick={() => { setIsAddingSpeaker(true); setNewSpeakerName(''); }}>
+                <button className="btn-secondary" disabled={isRecording || isProcessing} style={{ padding: '0.2rem 0.6rem', fontSize: '0.75rem' }} onClick={() => { setIsAddingSpeaker(true); setNewSpeakerName(''); }}>
                   + 添加
                 </button>
               </div>
@@ -2468,6 +2536,7 @@ export default function App() {
                     key={spk.id}
                     className={`speaker-item ${activeSpeakerId === spk.id ? 'active' : ''}`}
                     onClick={async () => {
+                      if (isRecordingRef.current || isProcessingRef.current || isStartingRef.current) return;
                       setActiveSpeakerId(spk.id);
                       try {
                         await saveProjectState(speakers, groupsRef.current, spk.id);
@@ -2480,7 +2549,7 @@ export default function App() {
                       <UserIcon /> {spk.name}
                     </span>
                     <span className="speaker-actions">
-                      <button className="btn-icon" onClick={(e) => handleDeleteSpeaker(spk.id, e)}>
+                      <button className="btn-icon" disabled={isRecording || isProcessing} onClick={(e) => handleDeleteSpeaker(spk.id, e)}>
                         <TrashIcon />
                       </button>
                     </span>
@@ -2734,6 +2803,7 @@ export default function App() {
                 <input
                   type="checkbox"
                   checked={randomizeOrder}
+                  disabled={isRecording || isProcessing}
                   onChange={(e) => updateRandomizeOrder(e.target.checked)}
                 />
                 <span className="slider"></span>
@@ -2741,22 +2811,23 @@ export default function App() {
             </div>
 
             <div className="center-bottom-actions">
-              {!isStandalone && (
-                <>
-                  <button className="btn-secondary" style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }} onClick={handleImportButtonClick}>
-                    <ExportIcon /> 导入
-                  </button>
-                  <input
-                    type="file"
-                    ref={projectInputRef}
-                    style={{ display: 'none' }}
-                    accept=".teproj"
-                    onChange={handleProjectUpload}
-                  />
-                </>
+              <button className="btn-secondary" disabled={isRecording || isProcessing} style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }} onClick={handleImportButtonClick}>
+                <ExportIcon /> 导入
+              </button>
+              <input
+                type="file"
+                ref={projectInputRef}
+                style={{ display: 'none' }}
+                accept=".teproj"
+                onChange={handleProjectUpload}
+              />
+              {capabilities.wavFolderExport && (
+                <button className="btn-secondary" disabled={isRecording || isProcessing} style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }} onClick={handleWavExport}>
+                  <ImportIcon /> 导出 WAV
+                </button>
               )}
-              <button className="btn-primary" style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }} onClick={handleProjectExport}>
-                <ImportIcon /> {isStandalone ? '导出 WAV' : '保存'}
+              <button className="btn-primary" disabled={isRecording || isProcessing} style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }} onClick={handleProjectExport}>
+                <ImportIcon /> 保存工程
               </button>
             </div>
           </div>
@@ -2777,7 +2848,9 @@ export default function App() {
               <CustomSelect
                 style={{ width: '100%' }}
                 value={activeGroupIndex}
-                onChange={setActiveGroupIndex}
+                onChange={(value) => {
+                  if (!isRecordingRef.current && !isProcessingRef.current && !isStartingRef.current) setActiveGroupIndex(value);
+                }}
                 options={[
                   { value: 'all', label: '【全部发音组】' },
                   ...groups.map((g, idx) => ({
@@ -2804,7 +2877,9 @@ export default function App() {
                     id={`word-item-${item.id}`}
                     key={item.id}
                     className={itemClass}
-                    onClick={() => setActiveItemIndex(idx)}
+                    onClick={() => {
+                      if (!isRecordingRef.current && !isProcessingRef.current && !isStartingRef.current) setActiveItemIndex(idx);
+                    }}
                   >
                     <div className="word-item-header">
                       <span className="word-item-label">{item.label}</span>
@@ -3075,7 +3150,7 @@ export default function App() {
               </div>
             </div>
 
-            <button className="btn-secondary" style={{ fontSize: '0.8rem', color: 'var(--color-danger)', borderColor: 'var(--border-color)', width: '100%', marginTop: '0.2rem' }} onClick={handleProjectClear}>
+            <button className="btn-secondary" disabled={isRecording || isProcessing} style={{ fontSize: '0.8rem', color: 'var(--color-danger)', borderColor: 'var(--border-color)', width: '100%', marginTop: '0.2rem' }} onClick={handleProjectClear}>
               <SweepIcon /> 清空工作区
             </button>
 
@@ -3112,6 +3187,7 @@ export default function App() {
           sample_rate: sampleRateSetting,
           save_format: saveFormatSetting,
           folder_path: folderPathSetting,
+          wav_export_path: wavExportPathSetting,
           primary_meta_key: primaryMetaKey,
           badge_meta_key: badgeMetaKey,
           char_font_size: charFontSize,
@@ -3174,6 +3250,12 @@ export default function App() {
             updateFolderPathSetting(selected);
           }
         }}
+        onSelectWavExportFolder={async () => {
+          const selected = await open({ directory: true, multiple: false });
+          if (selected) {
+            updateWavExportPathSetting(selected);
+          }
+        }}
         isRecording={isRecording}
         isProcessing={isProcessing}
         runtimeMode={runtime.mode}
@@ -3205,7 +3287,7 @@ export default function App() {
               >
                 导入 .teproj 工程文件
               </button>
-              <button
+              {!isStandalone && <button
                 className="btn-secondary"
                 style={{ justifyContent: 'center', padding: '0.6rem 1rem', fontSize: '0.85rem' }}
                 onClick={() => {
@@ -3214,7 +3296,7 @@ export default function App() {
                 }}
               >
                 导入工程文件夹目录
-              </button>
+              </button>}
             </div>
             <div className="modal-footer" style={{ padding: '0.75rem 1rem' }}>
               <button

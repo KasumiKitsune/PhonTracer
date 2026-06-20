@@ -39,6 +39,7 @@ const savedSettings = {
   format: 'wav',
   save_format: 'teproj',
   folder_path: '',
+  wav_export_path: 'D:\\独立WAV',
   theme: 'light',
   accent_color: 'green',
   ui_scale: '100%',
