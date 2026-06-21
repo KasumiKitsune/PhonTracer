@@ -1,0 +1,46 @@
+name: 功能建议
+description: 提议可验证的功能或工作流改进
+title: "[建议] "
+labels: ["enhancement"]
+body:
+  - type: dropdown
+    id: component
+    attributes:
+      label: 目标组件
+      options:
+        - PhonTracer 主程序
+        - Toolkit
+        - PhonTracer CLI
+        - PhonRec
+        - 工程格式或互操作
+        - 文档与发布
+        - 其他
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: 要解决的真实问题
+      description: 请描述当前工作流、使用者和阻塞点，而不只是界面方案。
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 建议方案与验收方式
+      description: 请说明输入、输出、兼容性和怎样判断功能完成。
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 已尝试的替代方式
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: 范围确认
+      options:
+        - label: 我已检查 README 与现有 Issue。
+          required: true
+        - label: 建议没有把实验性能力描述成已稳定支持。
+          required: true

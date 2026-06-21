@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/KasumiKitsune/PhonTracer/blob/main/docs/project.schema.json",
+  "title": "PhonTracer project.json 格式 1.0",
+  "description": "用于文档和基础结构检查；实际归档与资源安全仍由运行时校验器负责。",
+  "type": "object",
+  "required": ["version", "software_version", "speakers"],
+  "properties": {
+    "version": {"const": "1.0", "description": "工程格式版本"},
+    "software_version": {"type": "string", "minLength": 1},
+    "report_format_version": {"type": "string"},
+    "save_time": {"type": "string"},
+    "active_speaker_id": {"type": ["string", "null"]},
+    "export_numbering_rule": {"type": "string"},
+    "trim_silence": {"type": "boolean"},
+    "custom_script_runs": {"type": "array", "items": {"type": "object"}},
+    "speakers": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {"$ref": "#/$defs/speaker"}
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "resourcePath": {
+      "type": "string",
+      "pattern": "^(audio|data)/[^\\\\]+(?:/[^\\\\]+)*$",
+      "description": "归档内部资源相对路径；运行时还会检查越界、文件名与实际成员。"
+    },
+    "speaker": {
+      "type": "object",
+      "required": ["id", "name", "items"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "name": {"type": "string"},
+        "last_params": {"type": "object"},
+        "tab_mode": {"type": "string"},
+        "long_audio_path": {"anyOf": [{"$ref": "#/$defs/resourcePath"}, {"type": "null"}]},
+        "pending_batch_paths": {"type": "array", "items": {"$ref": "#/$defs/resourcePath"}},
+        "current_macro_segments": {"type": "array"},
+        "manual_segments": {"type": "array"},
+        "last_selected_iid": {"type": ["string", "null"]},
+        "items": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/item"}
+        }
+      },
+      "additionalProperties": true
+    },
+    "item": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "string"},
+        "word": {"type": "string"},
+        "group": {"type": "string"},
+        "path": {"$ref": "#/$defs/resourcePath"},
+        "pitch_data_file": {"$ref": "#/$defs/resourcePath"},
+        "formant_data_file": {"$ref": "#/$defs/resourcePath"},
+        "start": {"type": "number", "minimum": 0},
+        "end": {"type": "number", "minimum": 0},
+        "chars_bounds": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "prefixItems": [{"type": "number"}, {"type": "number"}],
+            "minItems": 2,
+            "maxItems": 2
+          }
+        },
+        "inner_splits": {"type": "array", "items": {"type": "number"}},
+        "is_excluded": {"type": "boolean"},
+        "review_status": {"type": "string"},
+        "metadata_source": {"type": "string"},
+        "item_note": {"type": "string"},
+        "item_tags": {"type": "array", "items": {"type": "string"}},
+        "item_aliases": {"type": "array", "items": {"type": "string"}},
+        "item_meta": {"type": "object"},
+        "group_note": {"type": "string"},
+        "group_tags": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": true
+    }
+  }
+}

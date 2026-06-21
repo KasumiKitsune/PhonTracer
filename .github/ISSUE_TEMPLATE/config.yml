@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 安全漏洞私下报告
+    url: https://github.com/KasumiKitsune/PhonTracer/security/advisories/new
+    about: 请勿在公开 Issue 中披露漏洞细节或恶意样本。

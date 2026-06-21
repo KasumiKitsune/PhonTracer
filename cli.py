@@ -5316,6 +5316,9 @@ def main(argv=None):
             if first_arg in ("-h", "--help", "help", "?"):
                 cli.do_help("")
                 return 0
+            if first_arg in ("-v", "--version", "version"):
+                print(f"{APP_NAME} CLI {__version__}")
+                return 0
             # Relaxed startup behavior:
             # If non-option args are provided, treat them as one CLI command and run once.
             # Example: PhonTracerCLI.exe status

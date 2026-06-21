@@ -379,11 +379,7 @@ fn sanitize_path_component(value: &str, fallback: &str) -> String {
             .chars()
             .take(MAX_CHARS - digest.len() - 1)
             .collect();
-        sanitized = format!(
-            "{}_{}",
-            prefix.trim_end_matches(|character| character == ' ' || character == '.'),
-            digest
-        );
+        sanitized = format!("{}_{}", prefix.trim_end_matches([' ', '.']), digest);
     }
     sanitized
 }
@@ -1558,7 +1554,7 @@ fn export_wav_folder_from_state(
                         skipped += 1;
                         continue;
                     };
-                    let source = match resolve_existing_managed_file(&workspace, relative) {
+                    let source = match resolve_existing_managed_file(workspace, relative) {
                         Ok(source) => source,
                         Err(_) => {
                             skipped += 1;
@@ -2435,7 +2431,7 @@ fn start_loopback_listener(
                                 None,
                             )
                         }
-                        _ => return Err(cpal::BuildStreamError::StreamConfigNotSupported),
+                        _ => Err(cpal::BuildStreamError::StreamConfigNotSupported),
                     }
                 };
 
@@ -2747,9 +2743,11 @@ mod tests {
         let first = LocalSettings::default();
         write_settings_file(&path, &first).unwrap();
 
-        let mut second = LocalSettings::default();
-        second.sample_rate = 48_000;
-        second.realtime_quality = false;
+        let second = LocalSettings {
+            sample_rate: 48_000,
+            realtime_quality: false,
+            ..Default::default()
+        };
         write_settings_file(&path, &second).unwrap();
 
         let loaded_content = fs::read_to_string(&path).unwrap();
@@ -2798,7 +2796,7 @@ mod tests {
 
     #[test]
     fn test_channel_downmixing() {
-        let input_stereo = vec![0.5, -0.5, 1.0, 0.0, -0.2, -0.8];
+        let input_stereo = [0.5, -0.5, 1.0, 0.0, -0.2, -0.8];
         let num_frames = input_stereo.len() / 2;
         let mut mono = Vec::with_capacity(num_frames);
         for i in 0..num_frames {
