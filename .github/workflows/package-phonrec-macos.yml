@@ -29,6 +29,8 @@ jobs:
 
       - name: 检查发布版本一致性
         run: python ../../scripts/check_release_version.py
+        env:
+          PYTHONUTF8: "1"
 
       - name: 配置 Node.js
         uses: actions/setup-node@v6
