@@ -33,7 +33,7 @@ jobs:
       - name: 安装依赖
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt -r requirements-phonrec-engine.txt pytest
+          python -m pip install -r requirements.txt -r requirements-phonrec-engine.txt pytest httpx
 
       - name: 检查发布版本一致性
         run: python scripts/check_release_version.py
