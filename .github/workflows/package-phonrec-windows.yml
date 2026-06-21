@@ -32,6 +32,14 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v6
 
+      - name: 配置 Python 版本检查
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: 检查发布版本一致性
+        run: python ../../scripts/check_release_version.py
+
       - name: 配置 Node.js
         uses: actions/setup-node@v6
         with:

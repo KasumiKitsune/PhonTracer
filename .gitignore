@@ -10,9 +10,14 @@
 
 # 3. 白名单：必须保留的核心根目录文件
 !.gitignore
+!AGENTS.md
 !README.md
 !README_REVISION_GUIDE.md
 !PAPER_USAGE_GUIDE.md
+!SOFTWARE_COMPLETION_CHECKLIST.md
+!PRIVACY.md
+!SUPPORT.md
+!SECURITY.md
 !requirements.txt
 !requirements-phonrec-engine.txt
 !main.py
@@ -27,6 +32,8 @@
 !assets/**
 !tests/**
 !.github/**
+!docs/**
+!scripts/**
 !工作流/Toolkit脚本/**
 !PhonAcq V4.9/Canary.py
 !PhonAcq V4.9/requirements.txt

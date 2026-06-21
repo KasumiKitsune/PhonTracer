@@ -1,0 +1,106 @@
+name: 常规质量门禁
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Python、CLI 与共享后端
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v6
+
+      - name: 配置 Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          architecture: x64
+          cache: pip
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-phonrec-engine.txt pytest
+
+      - name: 检查发布版本一致性
+        run: python scripts/check_release_version.py
+
+      - name: 检查补丁空白错误
+        run: git diff --check
+
+      - name: 编译检查
+        run: python -m compileall -q main.py cli.py toolkit.py modules tests PhonRec/backend
+
+      - name: 执行完整 Python 测试范围
+        run: python -m pytest -q tests PhonRec/backend/test_backend.py
+
+      - name: CLI 冒烟与退出码检查
+        shell: pwsh
+        run: |
+          python cli.py --version
+          if ($LASTEXITCODE -ne 0) { throw "CLI --version 失败" }
+          python cli.py -h | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "CLI 帮助失败" }
+          python cli.py status | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "CLI status 失败" }
+          python cli.py --definitely-unknown | Out-Null
+          if ($LASTEXITCODE -ne 2) { throw "未知参数退出码应为 2，实际为 $LASTEXITCODE" }
+
+  phonrec:
+    name: PhonRec 前端与 Rust
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: PhonRec/frontend
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v6
+
+      - name: 配置 Node.js 22
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: PhonRec/frontend/package-lock.json
+
+      - name: 安装前端依赖
+        run: npm ci
+
+      - name: 前端静态检查
+        run: npm run lint
+
+      - name: 前端测试
+        run: npm test -- --run
+
+      - name: 前端生产构建
+        run: npm run build
+
+      - name: Rust 格式检查
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
+      - name: Rust Clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Rust 测试
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Windows ARM64 编译检查
+        shell: pwsh
+        run: |
+          rustup target add aarch64-pc-windows-msvc
+          cargo check --manifest-path src-tauri/Cargo.toml --target aarch64-pc-windows-msvc
