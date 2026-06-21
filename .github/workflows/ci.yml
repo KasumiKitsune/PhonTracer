@@ -58,8 +58,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "CLI 帮助失败" }
           python cli.py status | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "CLI status 失败" }
-          python cli.py --definitely-unknown | Out-Null
-          if ($LASTEXITCODE -ne 2) { throw "未知参数退出码应为 2，实际为 $LASTEXITCODE" }
+          python -c "import subprocess, sys; result = subprocess.run([sys.executable, 'cli.py', '--definitely-unknown'], stdout=subprocess.DEVNULL); raise SystemExit(0 if result.returncode == 2 else 1)"
 
   phonrec:
     name: PhonRec 前端与 Rust
