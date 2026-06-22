@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import OperationGuide from './OperationGuide';
 
 // --- Local inline SVGs ---
 const GearIcon = () => (
@@ -83,6 +84,50 @@ const NetworkIcon = () => (
     <path d="M1.42 9a16 16 0 0 1 21.16 0" />
     <path d="M8.53 16.11a6 6 0 0 1 6.95 0" />
     <line x1="12" y1="20" x2="12.01" y2="20" strokeWidth="3" />
+  </svg>
+);
+
+const EnvironmentIcon = () => (
+  <svg style={{ width: '14px', height: '14px' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="10" />
+    <polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76" />
+  </svg>
+);
+
+const HardwareIcon = () => (
+  <svg style={{ width: '14px', height: '14px' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+    <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+    <line x1="12" y1="19" x2="12" y2="23" />
+  </svg>
+);
+
+const UserIcon = () => (
+  <svg style={{ width: '14px', height: '14px' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+    <circle cx="9" cy="7" r="4" />
+    <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+    <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+  </svg>
+);
+
+const NavigationIcon = () => (
+  <svg style={{ width: '14px', height: '14px' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <polygon points="3 11 22 2 13 21 11 13 3 11" />
+  </svg>
+);
+
+const QualityIcon = () => (
+  <svg style={{ width: '14px', height: '14px' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+  </svg>
+);
+
+const ArchiveIcon = () => (
+  <svg style={{ width: '14px', height: '14px' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="21 8 21 21 3 21 3 8" />
+    <rect x="1" y="3" width="22" height="5" />
+    <line x1="10" y1="12" x2="14" y2="12" />
   </svg>
 );
 
@@ -172,6 +217,14 @@ export default function SettingsModal({
       setLocalProjName(settings.default_project_name);
     }
   }, [settings?.default_project_name]);
+
+  const handleHelpScrollTo = (e, id) => {
+    e.preventDefault();
+    const element = document.getElementById(id);
+    if (element) {
+      element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  };
 
   if (!isOpen) return null;
 
@@ -288,6 +341,12 @@ export default function SettingsModal({
               onClick={() => setActiveTab('device')}
             >
               设备与系统
+            </button>
+            <button
+              className={`settings-tab-btn ${activeTab === 'help' ? 'active' : ''}`}
+              onClick={() => setActiveTab('help')}
+            >
+              帮助与指引
             </button>
           </div>
 
@@ -878,6 +937,13 @@ export default function SettingsModal({
                 </div>
               </div>
             )}
+
+            {/* Tab 6: Help & Guide */}
+            {activeTab === 'help' && (
+              <div className="settings-panel-transition" style={{ display: 'flex', flexDirection: 'column', gap: '1rem', height: '100%' }}>
+                <OperationGuide runtimeMode={runtimeMode} />
+              </div>
+            )}
           </div>
         </div>
 
@@ -899,6 +965,36 @@ export default function SettingsModal({
           </button>
         </div>
       </div>
+
+      {activeTab === 'help' && (
+        <div className="help-floating-nav">
+          <div className="help-floating-nav-title">快速跳转</div>
+          <a href="#part1" className="help-floating-item" onClick={(e) => handleHelpScrollTo(e, 'part1')}>
+            <span className="help-floating-icon"><EnvironmentIcon /></span>
+            <span className="help-floating-label">定位与运行环境</span>
+          </a>
+          <a href="#part2" className="help-floating-item" onClick={(e) => handleHelpScrollTo(e, 'part2')}>
+            <span className="help-floating-icon"><HardwareIcon /></span>
+            <span className="help-floating-label">界面与硬件接入</span>
+          </a>
+          <a href="#part3" className="help-floating-item" onClick={(e) => handleHelpScrollTo(e, 'part3')}>
+            <span className="help-floating-icon"><UserIcon /></span>
+            <span className="help-floating-label">字表与发音人</span>
+          </a>
+          <a href="#part4" className="help-floating-item" onClick={(e) => handleHelpScrollTo(e, 'part4')}>
+            <span className="help-floating-icon"><NavigationIcon /></span>
+            <span className="help-floating-label">录音与导航操控</span>
+          </a>
+          <a href="#part5" className="help-floating-item" onClick={(e) => handleHelpScrollTo(e, 'part5')}>
+            <span className="help-floating-icon"><QualityIcon /></span>
+            <span className="help-floating-label">质检与参数解析</span>
+          </a>
+          <a href="#part6" className="help-floating-item" onClick={(e) => handleHelpScrollTo(e, 'part6')}>
+            <span className="help-floating-icon"><ArchiveIcon /></span>
+            <span className="help-floating-label">归档导出与应急</span>
+          </a>
+        </div>
+      )}
     </div>
   );
 }
