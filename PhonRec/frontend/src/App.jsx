@@ -211,6 +211,190 @@ const generateSpeakerId = () => {
   return 'spk_' + Math.random().toString(36).substring(2, 11);
 };
 
+const SpectrogramViewerModal = ({ isOpen, onClose, imageUrl, activeItem, activeSpeakerName }) => {
+  const [scale, setScale] = useState(1);
+  const [position, setPosition] = useState({ x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  const containerRef = useRef(null);
+
+  // Reset scale and position when URL changes or modal opens
+  useEffect(() => {
+    if (isOpen) {
+      setScale(1);
+      setPosition({ x: 0, y: 0 });
+      setIsDragging(false);
+    }
+  }, [isOpen, imageUrl]);
+
+  // Handle ESC key press to close modal
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    if (isOpen) {
+      window.addEventListener('keydown', handleKeyDown);
+    }
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isOpen, onClose]);
+
+  if (!isOpen) return null;
+
+  const handleZoomIn = () => {
+    setScale(prev => Math.min(prev + 0.5, 5));
+  };
+
+  const handleZoomOut = () => {
+    setScale(prev => {
+      const next = Math.max(prev - 0.5, 1);
+      if (next === 1) {
+        setPosition({ x: 0, y: 0 });
+      }
+      return next;
+    });
+  };
+
+  const handleReset = () => {
+    setScale(1);
+    setPosition({ x: 0, y: 0 });
+  };
+
+  const handleWheel = (e) => {
+    e.preventDefault();
+    const zoomFactor = 0.1;
+    if (e.deltaY < 0) {
+      setScale(prev => Math.min(prev + zoomFactor, 5));
+    } else {
+      setScale(prev => {
+        const next = Math.max(prev - zoomFactor, 1);
+        if (next === 1) {
+          setPosition({ x: 0, y: 0 });
+        }
+        return next;
+      });
+    }
+  };
+
+  const handleMouseDown = (e) => {
+    if (scale <= 1) return;
+    setIsDragging(true);
+    setDragStart({ x: e.clientX - position.x, y: e.clientY - position.y });
+  };
+
+  const handleMouseMove = (e) => {
+    if (!isDragging) return;
+    setPosition({
+      x: e.clientX - dragStart.x,
+      y: e.clientY - dragStart.y
+    });
+  };
+
+  const handleMouseUp = () => {
+    setIsDragging(false);
+  };
+
+  return (
+    <div
+      className="spectrogram-modal-overlay"
+      onClick={onClose}
+    >
+      <div
+        className="spectrogram-modal-window"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="spectrogram-modal-header">
+          <div className="spectrogram-modal-title-group">
+            <h3 className="spectrogram-modal-title">语谱图查看器</h3>
+            <span className="spectrogram-modal-subtitle">
+              {activeSpeakerName ? `发音人: ${activeSpeakerName}` : ''}
+              {activeItem ? ` | 词条: ${activeItem.label}` : ''}
+            </span>
+          </div>
+          <div className="spectrogram-modal-header-actions">
+            <span className="spectrogram-zoom-badge">{(scale * 100).toFixed(0)}%</span>
+            <button className="spectrogram-modal-close-btn" onClick={onClose} title="关闭 (Esc)">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        {/* Content Viewport */}
+        <div
+          ref={containerRef}
+          className="spectrogram-modal-viewport"
+          onWheel={handleWheel}
+          onMouseDown={handleMouseDown}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseUp}
+          style={{
+            cursor: scale > 1 ? (isDragging ? 'grabbing' : 'grab') : 'default'
+          }}
+        >
+          <div
+            className="spectrogram-modal-image-wrapper"
+            style={{
+              transform: `translate(${position.x}px, ${position.y}px) scale(${scale})`,
+              transition: isDragging ? 'none' : 'transform 0.15s ease-out',
+            }}
+          >
+            <img
+              src={imageUrl}
+              alt="语谱图放大"
+              className="spectrogram-modal-image"
+              draggable="false"
+              onDragStart={(e) => e.preventDefault()}
+            />
+          </div>
+        </div>
+
+        {/* Toolbar */}
+        <div className="spectrogram-modal-toolbar">
+          <button
+            className="toolbar-btn"
+            onClick={handleZoomOut}
+            disabled={scale <= 1}
+            title="缩小"
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2">
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+          </button>
+          <div className="toolbar-divider" />
+          <button
+            className="toolbar-btn reset-btn"
+            onClick={handleReset}
+            disabled={scale === 1 && position.x === 0 && position.y === 0}
+            title="重置视图"
+          >
+            适应屏幕
+          </button>
+          <div className="toolbar-divider" />
+          <button
+            className="toolbar-btn"
+            onClick={handleZoomIn}
+            disabled={scale >= 5}
+            title="放大"
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2">
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export default function App() {
   const runtime = useRuntimeClient();
   const { capabilities } = runtime;
@@ -273,6 +457,11 @@ export default function App() {
     currentSpeakerId: '',
     currentWordId: ''
   });
+  const [hoverPercent, setHoverPercent] = useState(0);
+  const playbackStateRef = useRef(playbackState);
+  playbackStateRef.current = playbackState;
+  const [skipSilenceOnPlay, setSkipSilenceOnPlay] = useState(false);
+  const playbackBoundsRef = useRef({ start: 0, end: 0 });
 
   // Shuffled items computed state
   const [displayedItems, setDisplayedItems] = useState([]);
@@ -349,6 +538,8 @@ export default function App() {
   isProcessingRef.current = isProcessing;
 
   const isMouseDownRef = useRef(false);
+  const isSeekingRef = useRef(false);
+  const rollbackAnimationRef = useRef(null);
   const isStartingRef = useRef(false);
   const shouldCancelRef = useRef(false);
   const isStoppingRef = useRef(false);
@@ -407,6 +598,7 @@ export default function App() {
     default_project_name: defaultProjectNameSetting,
     show_shortcut_hints: showShortcutHintsSetting,
     show_quality_results: showQualityResultsSetting,
+    skip_silence_on_play: skipSilenceOnPlay,
     channels: 1,
     format: 'wav'
   };
@@ -457,6 +649,7 @@ export default function App() {
         setDefaultProjectNameSetting(settings.default_project_name || 'PhonRec_Project.teproj');
         setShowShortcutHintsSetting(settings.show_shortcut_hints !== false);
         setShowQualityResultsSetting(settings.show_quality_results !== false);
+        setSkipSilenceOnPlay(settings.skip_silence_on_play === true);
       }
       return settings;
     } catch (err) {
@@ -516,6 +709,7 @@ export default function App() {
     setDefaultProjectNameSetting(snapshot.default_project_name);
     setShowShortcutHintsSetting(snapshot.show_shortcut_hints !== false);
     setShowQualityResultsSetting(snapshot.show_quality_results !== false);
+    setSkipSilenceOnPlay(snapshot.skip_silence_on_play);
 
     qualityRulesRef.current = snapshot.quality_rules;
     qualityChecksEnabledRef.current = snapshot.realtime_quality;
@@ -703,6 +897,10 @@ export default function App() {
   }, [showSettingsModal, settingsModalClosing]);
 
   const handleSeekChange = (e) => {
+    if (rollbackAnimationRef.current) {
+      cancelAnimationFrame(rollbackAnimationRef.current);
+      rollbackAnimationRef.current = null;
+    }
     const player = audioPlayerRef.current;
     if (!player?.src) return;
     const time = Number(e.target.value);
@@ -710,7 +908,41 @@ export default function App() {
     setPlaybackState(prev => ({ ...prev, currentTime: time }));
   };
 
+  const handleSeekStart = () => {
+    if (rollbackAnimationRef.current) {
+      cancelAnimationFrame(rollbackAnimationRef.current);
+      rollbackAnimationRef.current = null;
+    }
+    isSeekingRef.current = true;
+  };
+
+  const handleSeekEnd = (e) => {
+    isSeekingRef.current = false;
+    const player = audioPlayerRef.current;
+    if (player?.src) {
+      const time = Number(e.target.value);
+      player.currentTime = time;
+      setPlaybackState(prev => ({ ...prev, currentTime: time }));
+    }
+  };
+
+  const handleProgressBarMouseMove = (e) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    if (rect.width === 0) return;
+    const x = e.clientX - rect.left;
+    const percentage = Math.max(0, Math.min(100, (x / rect.width) * 100));
+    setHoverPercent(percentage);
+  };
+
+  const handleProgressBarMouseLeave = () => {
+    setHoverPercent(0);
+  };
+
   const resetPlayback = useCallback(() => {
+    if (rollbackAnimationRef.current) {
+      cancelAnimationFrame(rollbackAnimationRef.current);
+      rollbackAnimationRef.current = null;
+    }
     const player = audioPlayerRef.current;
     if (player) {
       player.pause();
@@ -983,22 +1215,79 @@ export default function App() {
     }
   };
 
+  const onPlay = () => {
+    if (rollbackAnimationRef.current) {
+      cancelAnimationFrame(rollbackAnimationRef.current);
+      rollbackAnimationRef.current = null;
+    }
+    setPlaybackState(prev => ({ ...prev, isPlaying: true }));
+  };
+
+  const onPause = () => setPlaybackState(prev => ({ ...prev, isPlaying: false }));
+
+  const onEnded = useCallback(() => {
+    const player = audioPlayerRef.current;
+    if (!player) return;
+
+    if (rollbackAnimationRef.current) {
+      cancelAnimationFrame(rollbackAnimationRef.current);
+    }
+
+    setPlaybackState(prev => ({ ...prev, isPlaying: false }));
+
+    const startVal = playbackStateRef.current.currentTime;
+    const targetVal = settingsSnapshotRef.current?.skip_silence_on_play && playbackBoundsRef.current ? playbackBoundsRef.current.start : 0;
+    const durationMs = 350; // 350ms 平滑回弹
+    const startTime = performance.now();
+
+    const animateBack = (now) => {
+      const elapsed = now - startTime;
+      const progress = Math.min(1, elapsed / durationMs);
+      const easeProgress = 1 - Math.pow(1 - progress, 3); // easeOutCubic
+      const current = startVal - (startVal - targetVal) * easeProgress;
+
+      setPlaybackState(prev => ({ ...prev, currentTime: current }));
+
+      if (progress < 1) {
+        rollbackAnimationRef.current = requestAnimationFrame(animateBack);
+      } else {
+        player.currentTime = targetVal;
+        setPlaybackState(prev => ({ ...prev, currentTime: targetVal }));
+        rollbackAnimationRef.current = null;
+      }
+    };
+
+    rollbackAnimationRef.current = requestAnimationFrame(animateBack);
+  }, []);
+
+  const onTimeUpdate = () => {
+    const player = audioPlayerRef.current;
+    if (!player) return;
+    if (isSeekingRef.current || rollbackAnimationRef.current) return;
+
+    const bounds = playbackBoundsRef.current;
+    if (settingsSnapshotRef.current?.skip_silence_on_play && bounds && bounds.end > 0 && player.currentTime >= bounds.end) {
+      player.pause();
+      onEnded();
+      return;
+    }
+
+    setPlaybackState(prev => ({ ...prev, currentTime: player.currentTime }));
+  };
+
+  const onDurationChange = () => {
+    const player = audioPlayerRef.current;
+    if (!player) return;
+    setPlaybackState(prev => ({
+      ...prev,
+      duration: Number.isFinite(player.duration) ? player.duration : 0,
+    }));
+  };
+
   // --- Single Instance Audio Player & Tauri Event Listeners ---
   useEffect(() => {
     const player = new Audio();
     audioPlayerRef.current = player;
-
-    const onPlay = () => setPlaybackState(prev => ({ ...prev, isPlaying: true }));
-    const onPause = () => setPlaybackState(prev => ({ ...prev, isPlaying: false }));
-    const onEnded = () => {
-      player.currentTime = 0;
-      setPlaybackState(prev => ({ ...prev, isPlaying: false, currentTime: 0 }));
-    };
-    const onTimeUpdate = () => setPlaybackState(prev => ({ ...prev, currentTime: player.currentTime }));
-    const onDurationChange = () => setPlaybackState(prev => ({
-      ...prev,
-      duration: Number.isFinite(player.duration) ? player.duration : 0,
-    }));
 
     player.addEventListener('play', onPlay);
     player.addEventListener('pause', onPause);
@@ -1070,6 +1359,30 @@ export default function App() {
       if (unlistenError) unlistenError();
     };
   }, []);
+
+  // High-frequency playback sync effect (~60fps)
+  useEffect(() => {
+    const player = audioPlayerRef.current;
+    if (!playbackState.isPlaying || !player) return;
+
+    const intervalId = setInterval(() => {
+      if (isSeekingRef.current) return;
+
+      const bounds = playbackBoundsRef.current;
+      if (settingsSnapshotRef.current?.skip_silence_on_play && bounds && bounds.end > 0 && player.currentTime >= bounds.end) {
+        player.pause();
+        onEnded();
+        return;
+      }
+
+      setPlaybackState(prev => {
+        if (!prev.isPlaying) return prev;
+        return { ...prev, currentTime: player.currentTime };
+      });
+    }, 16);
+
+    return () => clearInterval(intervalId);
+  }, [playbackState.isPlaying, onEnded]);
 
   // --- Load State & Settings on Mount ---
   useEffect(() => {
@@ -2274,6 +2587,55 @@ export default function App() {
     }
   };
 
+  const detectNonSilenceBounds = async (audioBlob, threshold = 0.008, padding = 0.05) => {
+    try {
+      const arrayBuffer = await audioBlob.arrayBuffer();
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+
+      if (audioBuffer.numberOfChannels === 0) {
+        return { start: 0, end: 0 };
+      }
+
+      const channelData = audioBuffer.getChannelData(0);
+      const length = channelData.length;
+      const sampleRate = audioBuffer.sampleRate;
+      const duration = audioBuffer.duration;
+
+      let firstIndex = -1;
+      let lastIndex = -1;
+
+      for (let i = 0; i < length; i++) {
+        if (Math.abs(channelData[i]) > threshold) {
+          firstIndex = i;
+          break;
+        }
+      }
+
+      if (firstIndex === -1) {
+        return { start: 0, end: duration };
+      }
+
+      for (let i = length - 1; i >= firstIndex; i--) {
+        if (Math.abs(channelData[i]) > threshold) {
+          lastIndex = i;
+          break;
+        }
+      }
+
+      let start = firstIndex / sampleRate;
+      let end = lastIndex / sampleRate;
+
+      start = Math.max(0, start - padding);
+      end = Math.min(duration, end + padding);
+
+      return { start, end };
+    } catch (error) {
+      console.error('检测非静音边界失败:', error);
+      return null;
+    }
+  };
+
   const playRecordedAudio = async () => {
     if (isRecordingRef.current || isProcessingRef.current || isStartingRef.current) return;
     const activeItem = getActiveItem();
@@ -2292,6 +2654,13 @@ export default function App() {
         player.pause();
       } else {
         try {
+          const bounds = playbackBoundsRef.current;
+          if (settingsSnapshotRef.current?.skip_silence_on_play && bounds && bounds.end > 0) {
+            if (player.currentTime < bounds.start || player.currentTime >= bounds.end) {
+              player.currentTime = bounds.start;
+              setPlaybackState(prev => ({ ...prev, currentTime: bounds.start }));
+            }
+          }
           await player.play();
         } catch (error) {
           console.error('播放失败:', error);
@@ -2304,19 +2673,31 @@ export default function App() {
           URL.revokeObjectURL(player.src);
         }
 
-        const audioUrl = URL.createObjectURL(await runtime.readAudio({
+        const audioBlob = await runtime.readAudio({
           speakerId: activeSpeakerId,
           wordId: activeItem.id,
-        }));
+        });
+
+        let bounds = null;
+        if (settingsSnapshotRef.current?.skip_silence_on_play) {
+          bounds = await detectNonSilenceBounds(audioBlob);
+        }
+        playbackBoundsRef.current = bounds ? bounds : { start: 0, end: 0 };
+
+        const audioUrl = URL.createObjectURL(audioBlob);
         player.src = audioUrl;
 
         setPlaybackState({
           isPlaying: false,
-          currentTime: 0,
+          currentTime: bounds ? bounds.start : 0,
           duration: 0,
           currentSpeakerId: activeSpeakerId,
           currentWordId: activeItem.id
         });
+
+        if (bounds) {
+          player.currentTime = bounds.start;
+        }
 
         await player.play();
       } catch (error) {
@@ -2901,149 +3282,162 @@ export default function App() {
             </div>
           )}
 
-          {/* Playback Seek Bar */}
-          {activeItem && speakers[activeSpeakerId]?.items?.[activeItem.id]?.path && (
-            <div className="playback-progress-container">
-              <input
-                type="range"
-                className="playback-slider"
-                min="0"
-                max={playbackState.duration || 100}
-                step="0.01"
-                value={playbackState.currentTime}
-                onChange={handleSeekChange}
-                disabled={
-                  isRecording
-                  || isProcessing
-                  || playbackState.currentSpeakerId !== activeSpeakerId
-                  || playbackState.currentWordId !== activeItem.id
-                }
-              />
-              <div className="playback-time">
-                {formatPlaybackTime(playbackState.currentTime)} / {formatPlaybackTime(playbackState.duration)}
-              </div>
-            </div>
-          )}
-
-          {/* Controls Panel */}
-          <div className="controls-card">
-            <span className={`recording-status ${isRecording ? 'recording' : (isProcessing ? 'processing' : 'ready')}`}>
-              {isRecording ? '录音中' : (isProcessing ? '处理中' : '准备就绪')}
-            </span>
-
-            {/* VAD progress visualizer */}
-            {recordingMode === 'vad' && (
-              <div style={{ width: '240px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <MicIcon active={vadSpeaking} /> {vadSpeaking ? '说话中 (静音自动跳转)' : '静音中 (请发音)'}
-                </span>
-                <div className="vad-level-bar">
-                  <div
-                    className={`vad-level-fill ${vadSpeaking ? 'speaking' : ''}`}
-                    style={{ width: `${vadLevel}%` }}
-                  ></div>
+          {/* Controls Panel Wrapper */}
+          <div className="recording-controls-wrapper" style={{ position: 'relative', width: '100%' }}>
+            {/* Playback Seek Bar */}
+            {activeItem && speakers[activeSpeakerId]?.items?.[activeItem.id]?.path && (
+              <div className="playback-progress-container">
+                <input
+                  type="range"
+                  className="playback-slider"
+                  min="0"
+                  max={playbackState.duration || 100}
+                  step="0.01"
+                  value={playbackState.currentTime}
+                  onChange={handleSeekChange}
+                  onMouseDown={handleSeekStart}
+                  onMouseUp={handleSeekEnd}
+                  onTouchStart={handleSeekStart}
+                  onTouchEnd={handleSeekEnd}
+                  onMouseMove={handleProgressBarMouseMove}
+                  onMouseLeave={handleProgressBarMouseLeave}
+                  style={{
+                    '--progress-percent': `${playbackState.duration ? (playbackState.currentTime / playbackState.duration) * 100 : 0}%`,
+                    '--hover-percent': `${hoverPercent}%`
+                  }}
+                  disabled={
+                    isRecording
+                    || isProcessing
+                    || playbackState.currentSpeakerId !== activeSpeakerId
+                    || playbackState.currentWordId !== activeItem.id
+                  }
+                />
+                <div className="playback-time">
+                  {formatPlaybackTime(playbackState.currentTime)} / {formatPlaybackTime(playbackState.duration)}
                 </div>
               </div>
             )}
 
-            <div className="recording-buttons">
-              {/* Play button */}
-              <button
-                className="nav-arrow play-btn"
-                onClick={playRecordedAudio}
-                disabled={isRecording || isProcessing || !activeItem || !speakers[activeSpeakerId]?.items?.[activeItem.id]?.path}
-                title="播放录音 (R键)"
-              >
-                {playbackState.isPlaying && playbackState.currentSpeakerId === activeSpeakerId && playbackState.currentWordId === activeItem?.id ? (
-                  <PauseIcon />
-                ) : (
-                  <PlayIcon />
-                )}
-              </button>
+            {/* Controls Panel */}
+            <div className="controls-card">
+              <span className={`recording-status ${isRecording ? 'recording' : (isProcessing ? 'processing' : 'ready')}`}>
+                {isRecording ? '录音中' : (isProcessing ? '处理中' : '准备就绪')}
+              </span>
 
-              {/* Previous arrow */}
-              <button
-                className="nav-arrow prev-btn"
-                onClick={() => navigateItem(-1)}
-                disabled={isRecording || isProcessing || activeItemIndex === 0}
-                title="上一个 (左方向键)"
-              >
-                <ChevronLeft />
-              </button>
+              {/* VAD progress visualizer */}
+              {recordingMode === 'vad' && (
+                <div style={{ width: '240px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                  <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <MicIcon active={vadSpeaking} /> {vadSpeaking ? '说话中 (静音自动跳转)' : '静音中 (请发音)'}
+                  </span>
+                  <div className="vad-level-bar">
+                    <div
+                      className={`vad-level-fill ${vadSpeaking ? 'speaking' : ''}`}
+                      style={{ width: `${vadLevel}%` }}
+                    ></div>
+                  </div>
+                </div>
+              )}
 
-              {/* Record Button */}
-              <div className="record-btn-wrapper">
-                <div className={`record-ring ${isRecording ? 'active' : ''}`}></div>
+              <div className="recording-buttons">
+                {/* Play button */}
                 <button
-                  className={`btn-record ${isRecording ? 'recording' : ''} ${isProcessing ? 'processing' : ''}`}
-                  onMouseDown={recordingMode === 'hold' ? () => {
-                    isMouseDownRef.current = true;
-                    startRecording();
-                  } : null}
-                  onMouseUp={recordingMode === 'hold' ? () => {
-                    isMouseDownRef.current = false;
-                    stopRecording(true);
-                  } : null}
-                  onMouseLeave={recordingMode === 'hold' && isRecording ? () => {
-                    isMouseDownRef.current = false;
-                    stopRecording(true);
-                  } : null}
-                  onTouchStart={recordingMode === 'hold' ? () => {
-                    isMouseDownRef.current = true;
-                    startRecording();
-                  } : null}
-                  onTouchEnd={recordingMode === 'hold' ? () => {
-                    isMouseDownRef.current = false;
-                    stopRecording(true);
-                  } : null}
-                  onClick={recordingMode !== 'hold' ? () => {
-                    if (isProcessingRef.current) return;
-                    if (isRecordingRef.current) {
-                      stopRecording(true);
-                    } else {
-                      startRecording();
-                    }
-                  } : null}
-                  disabled={isProcessing}
-                  title={recordingMode === 'hold' ? '按住录音，松开停止' : '点击录音，再次点击停止 (空格键)'}
+                  className="nav-arrow play-btn"
+                  onClick={playRecordedAudio}
+                  disabled={isRecording || isProcessing || !activeItem || !speakers[activeSpeakerId]?.items?.[activeItem.id]?.path}
+                  title="播放录音 (R键)"
                 >
-                  <div className="record-core"></div>
+                  {playbackState.isPlaying && playbackState.currentSpeakerId === activeSpeakerId && playbackState.currentWordId === activeItem?.id ? (
+                    <PauseIcon />
+                  ) : (
+                    <PlayIcon />
+                  )}
+                </button>
+
+                {/* Previous arrow */}
+                <button
+                  className="nav-arrow prev-btn"
+                  onClick={() => navigateItem(-1)}
+                  disabled={isRecording || isProcessing || activeItemIndex === 0}
+                  title="上一个 (左方向键)"
+                >
+                  <ChevronLeft />
+                </button>
+
+                {/* Record Button */}
+                <div className="record-btn-wrapper">
+                  <div className={`record-ring ${isRecording ? 'active' : ''}`}></div>
+                  <button
+                    className={`btn-record ${isRecording ? 'recording' : ''} ${isProcessing ? 'processing' : ''}`}
+                    onMouseDown={recordingMode === 'hold' ? () => {
+                      isMouseDownRef.current = true;
+                      startRecording();
+                    } : null}
+                    onMouseUp={recordingMode === 'hold' ? () => {
+                      isMouseDownRef.current = false;
+                      stopRecording(true);
+                    } : null}
+                    onMouseLeave={recordingMode === 'hold' && isRecording ? () => {
+                      isMouseDownRef.current = false;
+                      stopRecording(true);
+                    } : null}
+                    onTouchStart={recordingMode === 'hold' ? () => {
+                      isMouseDownRef.current = true;
+                      startRecording();
+                    } : null}
+                    onTouchEnd={recordingMode === 'hold' ? () => {
+                      isMouseDownRef.current = false;
+                      stopRecording(true);
+                    } : null}
+                    onClick={recordingMode !== 'hold' ? () => {
+                      if (isProcessingRef.current) return;
+                      if (isRecordingRef.current) {
+                        stopRecording(true);
+                      } else {
+                        startRecording();
+                      }
+                    } : null}
+                    disabled={isProcessing}
+                    title={recordingMode === 'hold' ? '按住录音，松开停止' : '点击录音，再次点击停止 (空格键)'}
+                  >
+                    <div className="record-core"></div>
+                  </button>
+                </div>
+
+                {/* Next arrow */}
+                <button
+                  className="nav-arrow next-btn"
+                  onClick={() => navigateItem(1)}
+                  disabled={isRecording || isProcessing || activeItemIndex === displayedItems.length - 1}
+                  title="下一个 (右方向键)"
+                >
+                  <ChevronRight />
+                </button>
+
+                {/* Discard button */}
+                <button
+                  className="nav-arrow discard-btn"
+                  onClick={discardRecordedAudio}
+                  disabled={isRecording || isProcessing || !activeItem || !speakers[activeSpeakerId]?.items?.[activeItem.id]?.path}
+                  title="丢弃录音"
+                >
+                  <TrashIcon />
                 </button>
               </div>
 
-              {/* Next arrow */}
-              <button
-                className="nav-arrow next-btn"
-                onClick={() => navigateItem(1)}
-                disabled={isRecording || isProcessing || activeItemIndex === displayedItems.length - 1}
-                title="下一个 (右方向键)"
-              >
-                <ChevronRight />
-              </button>
-
-              {/* Discard button */}
-              <button
-                className="nav-arrow discard-btn"
-                onClick={discardRecordedAudio}
-                disabled={isRecording || isProcessing || !activeItem || !speakers[activeSpeakerId]?.items?.[activeItem.id]?.path}
-                title="丢弃录音"
-              >
-                <TrashIcon />
-              </button>
+              {/* Keyboard hints at the bottom of controls card */}
+              {showShortcutHintsSetting && (
+                <div className="keyboard-hints" style={{ display: 'flex', flexWrap: 'wrap', width: '100%', justifyContent: 'center', alignItems: 'center', gap: '1rem', fontSize: '0.75rem', color: 'var(--text-secondary)', borderTop: '1px solid var(--border-color)', paddingTop: '0.75rem', marginTop: '0.5rem' }}>
+                  <span><KeyboardIcon /> [空格] 录音/停止</span>
+                  <span>[← / →] 切换字表词条</span>
+                  {activeItem && speakers[activeSpeakerId]?.items?.[activeItem.id]?.path && (
+                    <span style={{ color: 'var(--color-accent)', cursor: 'pointer', fontWeight: 'bold' }} onClick={playRecordedAudio}>
+                      [R] 播放录音
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
-
-            {/* Keyboard hints at the bottom of controls card */}
-            {showShortcutHintsSetting && (
-              <div className="keyboard-hints" style={{ display: 'flex', flexWrap: 'wrap', width: '100%', justifyContent: 'center', alignItems: 'center', gap: '1rem', fontSize: '0.75rem', color: 'var(--text-secondary)', borderTop: '1px solid var(--border-color)', paddingTop: '0.75rem', marginTop: '0.5rem' }}>
-                <span><KeyboardIcon /> [空格] 录音/停止</span>
-                <span>[← / →] 切换字表词条</span>
-                {activeItem && speakers[activeSpeakerId]?.items?.[activeItem.id]?.path && (
-                  <span style={{ color: 'var(--color-accent)', cursor: 'pointer', fontWeight: 'bold' }} onClick={playRecordedAudio}>
-                    [R] 播放录音
-                  </span>
-                )}
-              </div>
-            )}
           </div>
           
           {/* Center Column Bottom Bar: Project Management Actions */}
@@ -3375,12 +3769,26 @@ export default function App() {
 
                 {effectiveVisualizerTab === 'spectrogram' && (
                   spectrogramUrl ? (
-                    <img 
-                      src={spectrogramUrl} 
-                      alt="语谱图" 
-                      className="visualizer-image" 
-                      onClick={() => setShowZoomedSpectrogram(true)}
-                    />
+                    <div className="visualizer-image-wrapper" onClick={() => setShowZoomedSpectrogram(true)}>
+                      <img
+                        src={spectrogramUrl}
+                        alt="语谱图"
+                        className="visualizer-image"
+                        draggable="false"
+                        onDragStart={(e) => e.preventDefault()}
+                      />
+                      <div className="visualizer-image-overlay">
+                        <button className="visualizer-zoom-btn" onClick={(e) => { e.stopPropagation(); setShowZoomedSpectrogram(true); }}>
+                          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <circle cx="11" cy="11" r="8" />
+                            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                            <line x1="11" y1="8" x2="11" y2="14" />
+                            <line x1="8" y1="11" x2="14" y2="11" />
+                          </svg>
+                          <span>放大查看</span>
+                        </button>
+                      </div>
+                    </div>
                   ) : (
                     <div className="visualizer-placeholder">
                       语谱图将在录制结束后生成
@@ -3460,7 +3868,8 @@ export default function App() {
           realtime_quality: qualityChecksEnabled,
           quality_rules: qualityRules,
           show_shortcut_hints: showShortcutHintsSetting,
-          show_quality_results: showQualityResultsSetting
+          show_quality_results: showQualityResultsSetting,
+          skip_silence_on_play: skipSilenceOnPlay
         }}
         onUpdate={updateSettings}
         onReset={async () => {
@@ -3633,73 +4042,13 @@ export default function App() {
       )}
 
       {/* Zoomed Spectrogram Modal */}
-      {showZoomedSpectrogram && (
-        <div 
-          className="modal-overlay" 
-          style={{ 
-            zIndex: 10000, 
-            display: 'flex', 
-            alignItems: 'center', 
-            justifyContent: 'center', 
-            backgroundColor: 'rgba(15, 23, 42, 0.75)', 
-            backdropFilter: 'blur(4px)', 
-            cursor: 'zoom-out' 
-          }}
-          onClick={() => setShowZoomedSpectrogram(false)}
-        >
-          <div 
-            style={{ 
-              maxWidth: '90vw', 
-              maxHeight: '90vh', 
-              width: '900px', 
-              padding: '0', 
-              background: 'transparent',
-              display: 'flex',
-              flexDirection: 'column',
-              position: 'relative',
-              overflow: 'hidden',
-              animation: 'scaleIn 0.2s ease'
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <img 
-              src={spectrogramUrl} 
-              alt="语谱图放大" 
-              className="zoomed-spectrogram-image"
-              style={{ 
-                width: '100%', 
-                height: 'auto', 
-                borderRadius: '8px', 
-                display: 'block',
-                boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)'
-              }} 
-            />
-            <button 
-              style={{ 
-                position: 'absolute', 
-                top: '1rem', 
-                right: '1rem', 
-                width: '2rem', 
-                height: '2rem', 
-                borderRadius: '50%', 
-                background: 'rgba(15, 23, 42, 0.6)', 
-                backdropFilter: 'blur(4px)',
-                border: 'none',
-                color: '#ffffff',
-                fontSize: '1.25rem',
-                display: 'flex', 
-                alignItems: 'center', 
-                justifyContent: 'center', 
-                cursor: 'pointer',
-                transition: 'background-color 0.2s'
-              }}
-              onClick={() => setShowZoomedSpectrogram(false)}
-            >
-              ×
-            </button>
-          </div>
-        </div>
-      )}
+      <SpectrogramViewerModal
+        isOpen={showZoomedSpectrogram}
+        onClose={() => setShowZoomedSpectrogram(false)}
+        imageUrl={spectrogramUrl}
+        activeItem={getActiveItem()}
+        activeSpeakerName={speakers[activeSpeakerId]?.name}
+      />
     </div>
   );
 }

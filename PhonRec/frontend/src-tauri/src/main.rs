@@ -1934,6 +1934,8 @@ struct LocalSettings {
     show_shortcut_hints: bool,
     #[serde(default = "default_accent_color")]
     accent_color: String,
+    #[serde(default)]
+    skip_silence_on_play: bool,
 }
 
 impl Default for LocalSettings {
@@ -1965,6 +1967,7 @@ impl Default for LocalSettings {
             default_project_name: default_default_project_name(),
             show_shortcut_hints: default_show_shortcut_hints(),
             accent_color: default_accent_color(),
+            skip_silence_on_play: false,
         }
     }
 }

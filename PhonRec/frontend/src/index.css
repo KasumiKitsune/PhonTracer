@@ -1108,16 +1108,85 @@ body {
   display: block;
 }
 
+.visualizer-image-wrapper {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: var(--bg-primary);
+  cursor: pointer;
+}
+
 .visualizer-image {
   width: 100%;
   height: 100%;
   object-fit: fill;
-  cursor: zoom-in;
-  transition: opacity 0.2s ease;
+  transition: transform 0.3s ease;
 }
 
-.visualizer-image:hover {
-  opacity: 0.95;
+.visualizer-image-wrapper:hover .visualizer-image {
+  transform: scale(1.02);
+}
+
+.visualizer-image-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(15, 23, 42, 0.4);
+  opacity: 0;
+  backdrop-filter: blur(0px);
+  transition: opacity 0.25s ease, backdrop-filter 0.25s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.visualizer-image-wrapper:hover .visualizer-image-overlay {
+  opacity: 1;
+  backdrop-filter: blur(2px);
+  pointer-events: auto;
+}
+
+.visualizer-zoom-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  color: #0f172a;
+  padding: 0.5rem 0.85rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transform: translateY(12px);
+  transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1), background-color 0.2s, box-shadow 0.2s;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.visualizer-image-wrapper:hover .visualizer-zoom-btn {
+  transform: translateY(0);
+}
+
+.visualizer-zoom-btn:hover {
+  background: #ffffff;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.25);
+}
+
+[data-theme="dark"] .visualizer-zoom-btn {
+  background: rgba(30, 41, 59, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #f8fafc;
+}
+
+[data-theme="dark"] .visualizer-zoom-btn:hover {
+  background: rgba(47, 58, 77, 0.95);
 }
 
 .visualizer-placeholder {
@@ -2502,59 +2571,130 @@ textarea.form-input {
 
 /* Playback Progress Container & Slider */
 .playback-progress-container {
+  position: absolute;
+  bottom: calc(100% + 0.5rem);
+  left: 50%;
+  transform: translateX(-50%);
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 0.25rem;
   width: 100%;
   max-width: 240px;
-  margin: 0.5rem auto 0 auto;
 }
 
 .playback-time {
   font-size: 0.75rem;
   color: var(--text-secondary);
-  font-family: monospace;
+  font-family: inherit;
 }
 
 .playback-slider {
   -webkit-appearance: none;
   appearance: none;
   width: 100%;
-  height: 4px;
-  background: #cbd5e1;
-  border-radius: 9999px;
+  height: var(--current-track-height);
+  padding: 12px 0; /* 使用 padding 扩大交互热区，保留默认 slider 布局 */
+  box-sizing: content-box;
+  background: transparent;
   outline: none;
   cursor: pointer;
-  transition: background 0.1s ease;
+
+  /* 变量定义 */
+  --track-bg: #cbd5e1;
+  --track-played: var(--color-accent);
+  --track-height-normal: 6px;
+  --track-height-thick: 12px;
+  --handle-size-normal: 14px;
+  --handle-size-hover: 18px;
+  --handle-size-active: 12px;
+
+  /* 当前动态变量 */
+  --current-track-height: var(--track-height-normal);
+  --current-handle-size: var(--handle-size-normal);
 }
 
+/* 悬停或拖动时滑轨变粗 */
+.playback-slider:hover,
+.playback-slider:active {
+  --current-track-height: var(--track-height-thick);
+}
+
+/* Webkit 浏览器的滑轨 */
+.playback-slider::-webkit-slider-runnable-track {
+  width: 100%;
+  height: var(--current-track-height);
+  background: linear-gradient(to right, var(--track-played) var(--progress-percent, 0%), var(--track-bg) var(--progress-percent, 0%));
+  border-radius: 999px;
+  transition: height 0.15s ease-in-out, background 0.15s ease-in-out;
+}
+
+/* 悬停加深效果 */
+.playback-slider:hover:not(:active)::-webkit-slider-runnable-track {
+  background:
+    linear-gradient(to right, rgba(0, 0, 0, 0.08) var(--hover-percent, 0%), transparent var(--hover-percent, 0%)),
+    linear-gradient(to right, var(--track-played) var(--progress-percent, 0%), var(--track-bg) var(--progress-percent, 0%));
+}
+
+/* Webkit 浏览器手柄 */
 .playback-slider::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
-  width: 10px;
-  height: 10px;
+  width: var(--current-handle-size);
+  height: var(--current-handle-size);
   border-radius: 50%;
-  background: var(--color-accent);
+  background: var(--track-played);
   cursor: pointer;
   border: none;
-  transition: transform 0.1s ease;
-}
-.playback-slider::-webkit-slider-thumb:hover {
-  transform: scale(1.3);
+  margin-top: calc((var(--current-track-height) - var(--current-handle-size)) / 2);
+  transition: width 0.15s ease, height 0.15s ease, margin-top 0.15s ease, box-shadow 0.15s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
 }
 
+/* 鼠标悬停在手柄上放大 */
+.playback-slider::-webkit-slider-thumb:hover {
+  --current-handle-size: var(--handle-size-hover);
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+}
+
+/* 拖动时缩小且去除阴影 */
+.playback-slider:active::-webkit-slider-thumb {
+  --current-handle-size: var(--handle-size-active);
+  box-shadow: none;
+}
+
+/* Firefox 浏览器的滑轨 */
+.playback-slider::-moz-range-track {
+  width: 100%;
+  height: var(--current-track-height);
+  background: linear-gradient(to right, var(--track-played) var(--progress-percent, 0%), var(--track-bg) var(--progress-percent, 0%));
+  border-radius: 999px;
+  transition: height 0.15s ease-in-out, background 0.15s ease-in-out;
+}
+.playback-slider:hover:not(:active)::-moz-range-track {
+  background:
+    linear-gradient(to right, rgba(0, 0, 0, 0.08) var(--hover-percent, 0%), transparent var(--hover-percent, 0%)),
+    linear-gradient(to right, var(--track-played) var(--progress-percent, 0%), var(--track-bg) var(--progress-percent, 0%));
+}
+
+/* Firefox 浏览器手柄 */
 .playback-slider::-moz-range-thumb {
-  width: 10px;
-  height: 10px;
-  border: none;
+  width: var(--current-handle-size);
+  height: var(--current-handle-size);
   border-radius: 50%;
-  background: var(--color-accent);
+  background: var(--track-played);
   cursor: pointer;
-  transition: transform 0.1s ease;
+  border: none;
+  transition: width 0.15s ease, height 0.15s ease, box-shadow 0.15s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
 }
 .playback-slider::-moz-range-thumb:hover {
-  transform: scale(1.3);
+  --current-handle-size: var(--handle-size-hover);
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+}
+.playback-slider:active::-moz-range-thumb {
+  --current-handle-size: var(--handle-size-active);
+  box-shadow: none;
 }
 
 .settings-grid {
@@ -2883,7 +3023,8 @@ textarea.form-input {
 }
 
 [data-theme="dark"] .visualizer-image,
-[data-theme="dark"] .zoomed-spectrogram-image {
+[data-theme="dark"] .zoomed-spectrogram-image,
+[data-theme="dark"] .spectrogram-modal-image {
   filter: invert(1) hue-rotate(180deg);
 }
 
@@ -3775,5 +3916,320 @@ textarea.form-input {
 @media (max-width: 1040px) and (min-width: 961px) {
   .help-floating-nav {
     left: calc(50% + 380px + 6px); /* Narrow down spacer gap slightly to prevent screen spill */
+  }
+}
+
+/* ==========================================================================
+   PhonRec Spectrogram Hover & Advanced Viewer Styles
+   ========================================================================== */
+
+/* Spectrogram Hover Effect */
+.visualizer-image-wrapper {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: var(--bg-primary);
+  cursor: pointer;
+}
+
+.visualizer-image-wrapper .visualizer-image {
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  transition: transform 0.3s ease;
+}
+
+.visualizer-image-wrapper:hover .visualizer-image {
+  transform: scale(1.02);
+}
+
+.visualizer-image-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(15, 23, 42, 0.4);
+  opacity: 0;
+  backdrop-filter: blur(0px);
+  transition: opacity 0.25s ease, backdrop-filter 0.25s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.visualizer-image-wrapper:hover .visualizer-image-overlay {
+  opacity: 1;
+  backdrop-filter: blur(2px);
+  pointer-events: auto;
+}
+
+.visualizer-zoom-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  color: #0f172a;
+  padding: 0.5rem 0.85rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transform: translateY(12px);
+  transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1), background-color 0.2s, box-shadow 0.2s;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.visualizer-image-wrapper:hover .visualizer-zoom-btn {
+  transform: translateY(0);
+}
+
+.visualizer-zoom-btn:hover {
+  background: #ffffff;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.25);
+}
+
+[data-theme="dark"] .visualizer-zoom-btn {
+  background: rgba(30, 41, 59, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #f8fafc;
+}
+
+[data-theme="dark"] .visualizer-zoom-btn:hover {
+  background: rgba(47, 58, 77, 0.95);
+}
+
+/* Spectrogram Advanced Viewer Modal */
+.spectrogram-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(15, 23, 42, 0.75);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+  animation: fadeIn 0.25s ease-out;
+}
+
+.spectrogram-modal-window {
+  width: 90vw;
+  max-width: 1000px;
+  height: 80vh;
+  max-height: 700px;
+  background: var(--bg-card);
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+  animation: modalScaleIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.spectrogram-modal-header {
+  padding: 0.85rem 1.25rem;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.spectrogram-modal-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.spectrogram-modal-title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.spectrogram-modal-subtitle {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.spectrogram-modal-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.spectrogram-zoom-badge {
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.2rem 0.5rem;
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--text-primary);
+  border-radius: 4px;
+  font-family: monospace;
+}
+
+[data-theme="dark"] .spectrogram-zoom-badge {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.spectrogram-modal-close-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border-radius: 4px;
+  transition: background-color 0.2s, color 0.2s;
+}
+
+.spectrogram-modal-close-btn:hover {
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--text-primary);
+}
+
+[data-theme="dark"] .spectrogram-modal-close-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.spectrogram-modal-viewport {
+  flex: 1;
+  overflow: hidden;
+  background: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  transition: background-color 0.2s ease;
+}
+
+[data-theme="dark"] .spectrogram-modal-viewport {
+  background: #0f172a;
+}
+
+.spectrogram-modal-image-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transform-origin: center center;
+  width: 90%;
+  height: 90%;
+}
+
+.spectrogram-modal-image {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  border-radius: 4px;
+}
+
+/* Floating control toolbar */
+.spectrogram-modal-toolbar {
+  position: absolute;
+  bottom: 1.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  padding: 0.35rem 0.5rem;
+  border-radius: 30px;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.25);
+  z-index: 10;
+  gap: 0.25rem;
+  transition: opacity 0.25s, transform 0.25s;
+}
+
+[data-theme="dark"] .spectrogram-modal-toolbar {
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.toolbar-btn {
+  background: transparent;
+  border: none;
+  color: #0f172a;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background-color 0.2s, color 0.2s, transform 0.1s;
+}
+
+[data-theme="dark"] .toolbar-btn {
+  color: #f8fafc;
+}
+
+.toolbar-btn:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="dark"] .toolbar-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.toolbar-btn:active:not(:disabled) {
+  transform: scale(0.95);
+}
+
+.toolbar-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.toolbar-btn.reset-btn {
+  width: auto;
+  border-radius: 20px;
+  padding: 0 0.85rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.toolbar-divider {
+  width: 1px;
+  height: 18px;
+  background: rgba(0, 0, 0, 0.1);
+  margin: 0 2px;
+}
+
+[data-theme="dark"] .toolbar-divider {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes modalScaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
   }
 }

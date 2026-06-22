@@ -28,6 +28,7 @@ const settings = {
   ui_density: 'standard', animations_enabled: true, primary_meta_key: '拼音', badge_meta_key: '拼音',
   char_font_size: 120, vad_preset: 'standard', shortcut_preset: 'standard', live_input_monitor: false,
   default_project_name: 'PhonRec_Project.teproj', show_shortcut_hints: true,
+  skip_silence_on_play: false,
 };
 
 const client = {

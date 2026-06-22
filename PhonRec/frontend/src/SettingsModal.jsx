@@ -600,6 +600,22 @@ export default function SettingsModal({
                         </span>
                       </div>
                     </div>
+                    <div className="form-group settings-grid-full">
+                      <label className="form-label">播放时跳过首尾静音</label>
+                      <div style={{ display: 'flex', alignItems: 'center', height: '36px' }}>
+                        <label className="switch">
+                          <input
+                            type="checkbox"
+                            checked={settings.skip_silence_on_play || false}
+                            onChange={(e) => onUpdate({ skip_silence_on_play: e.target.checked })}
+                          />
+                          <span className="slider"></span>
+                        </label>
+                        <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginLeft: '0.5rem' }}>
+                          {settings.skip_silence_on_play ? '播放音频时将自动裁剪并跳过首尾的静音段，不影响原始录音文件' : '关闭后将完整播放整段音频（包括起止静音）'}
+                        </span>
+                      </div>
+                    </div>
                   </div>
                 </div>
 

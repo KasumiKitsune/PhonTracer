@@ -53,6 +53,7 @@ const savedSettings = {
   live_input_monitor: false,
   default_project_name: 'PhonRec_Project.teproj',
   show_shortcut_hints: true,
+  skip_silence_on_play: false,
 };
 
 describe('清空工作区', () => {

@@ -30,7 +30,8 @@ describe('SettingsModal 设置界面', () => {
       default_project_name: 'PhonRec_Project.teproj',
       realtime_quality: true,
       quality_rules: {},
-      show_shortcut_hints: true
+      show_shortcut_hints: true,
+      skip_silence_on_play: false
     };
 
     render(
@@ -85,7 +86,8 @@ describe('SettingsModal 设置界面', () => {
       default_project_name: 'PhonRec_Project.teproj',
       realtime_quality: true,
       quality_rules: {},
-      show_shortcut_hints: true
+      show_shortcut_hints: true,
+      skip_silence_on_play: false
     };
 
     render(
@@ -125,6 +127,7 @@ describe('SettingsModal 设置界面', () => {
       char_font_size: 120, vad_preset: 'standard', shortcut_preset: 'standard',
       live_input_monitor: true, default_project_name: 'PhonRec_Project.teproj',
       realtime_quality: true, quality_rules: {}, show_shortcut_hints: true,
+      skip_silence_on_play: false,
     };
     const onUpdate = vi.fn();
     render(
@@ -162,6 +165,7 @@ describe('SettingsModal 设置界面', () => {
       char_font_size: 120, vad_preset: 'standard', shortcut_preset: 'standard',
       live_input_monitor: true, default_project_name: 'PhonRec_Project.teproj',
       realtime_quality: true, quality_rules: rules, show_shortcut_hints: true,
+      skip_silence_on_play: false,
     };
     const onUpdate = vi.fn();
     render(
