@@ -1,5 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import OperationGuide from './OperationGuide';
+import packageJson from '../package.json';
+import { openUrl } from '@tauri-apps/plugin-opener';
+import { getEngineConnection } from './engineApi';
 
 // --- Local inline SVGs ---
 const GearIcon = () => (
@@ -78,8 +81,8 @@ const KeyboardIcon = () => (
   </svg>
 );
 
-const NetworkIcon = () => (
-  <svg style={{ width: '15px', height: '15px', color: 'var(--color-accent)' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+const NetworkIcon = ({ active }) => (
+  <svg style={{ width: '15px', height: '15px', color: active === undefined ? 'var(--color-accent)' : (active ? 'var(--color-success, #10b981)' : 'var(--color-warning, #f59e0b)') }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M5 12.55a11 11 0 0 1 14.08 0" />
     <path d="M1.42 9a16 16 0 0 1 21.16 0" />
     <path d="M8.53 16.11a6 6 0 0 1 6.95 0" />
@@ -347,6 +350,12 @@ export default function SettingsModal({
               onClick={() => setActiveTab('help')}
             >
               帮助与指引
+            </button>
+            <button
+              className={`settings-tab-btn ${activeTab === 'about' ? 'active' : ''}`}
+              onClick={() => setActiveTab('about')}
+            >
+              关于
             </button>
           </div>
 
@@ -941,9 +950,162 @@ export default function SettingsModal({
             {/* Tab 6: Help & Guide */}
             {activeTab === 'help' && (
               <div className="settings-panel-transition" style={{ display: 'flex', flexDirection: 'column', gap: '1rem', height: '100%' }}>
-                <OperationGuide runtimeMode={runtimeMode} />
+                <OperationGuide />
               </div>
             )}
+
+            {/* Tab 7: About */}
+            {activeTab === 'about' && (() => {
+              const connection = getEngineConnection();
+              const packageVersion = packageJson.version || '1.3.0';
+              const getPlatformInfo = () => {
+                const ua = navigator.userAgent;
+                let os = "Windows";
+                let arch = "x64";
+                if (ua.includes("Windows")) {
+                  os = "Windows";
+                  if (ua.includes("ARM64") || ua.includes("ARM")) {
+                    arch = "ARM64";
+                  }
+                } else if (ua.includes("Macintosh") || ua.includes("Mac OS X")) {
+                  os = "macOS";
+                  arch = "ARM64 (Apple Silicon)";
+                }
+                return `${os} ${arch}`;
+              };
+              const platformInfo = getPlatformInfo();
+
+              return (
+                <div className="settings-panel-transition" style={{ display: 'flex', flexDirection: 'column', gap: '1.1rem', height: '100%', alignItems: 'stretch' }}>
+                  {/* Product Header */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem', padding: '0.5rem 0' }}>
+                    <img
+                      src="/icon.svg"
+                      alt="PhonRec"
+                      style={{
+                        width: '52px',
+                        height: '52px',
+                        borderRadius: '12px',
+                        background: 'var(--bg-card, #ffffff)',
+                        boxShadow: '0 4px 16px rgba(0, 0, 0, 0.05)',
+                        padding: '2px',
+                        border: '1px solid var(--border-color)',
+                        objectFit: 'contain'
+                      }}
+                    />
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                        <h2 style={{ margin: 0, fontSize: '1.35rem', fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1 }}>PhonRec</h2>
+                        <span className={`table-status-badge ${isStandalone ? 'badge-special' : 'badge-yes'}`} style={{ padding: '0.12rem 0.45rem', fontSize: '0.68rem', borderRadius: '4px', fontWeight: 600 }}>
+                          {isStandalone ? '独立模式' : '完整模式'}
+                        </span>
+                      </div>
+                      <p style={{ margin: 0, fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                        PhonTracer 配套的录音工具 • 版本 {packageVersion}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Status Panel */}
+                  <div className="settings-card" style={{ margin: 0, padding: '1.15rem' }}>
+                    <div className="settings-card-title" style={{ fontSize: '0.82rem', fontWeight: 650, display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.85rem' }}>
+                      <GearIcon /> 系统运行状态
+                    </div>
+                    
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem 1.25rem', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                        <span style={{ color: 'var(--text-muted)' }}>运行平台:</span>
+                        <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{platformInfo}</span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                        <span style={{ color: 'var(--text-muted)' }}>自动保存:</span>
+                        <span style={{ color: 'var(--color-success, #10b981)', fontWeight: 600 }}>● 已启用</span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', gridColumn: 'span 2' }}>
+                        <span style={{ color: 'var(--text-muted)' }}>分析引擎:</span>
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
+                          <span className={`indicator-led ${!isStandalone ? 'green' : 'red'}`} style={{ width: '8px', height: '8px', margin: 0 }}></span>
+                          <span style={{ color: !isStandalone ? 'var(--color-success, #10b981)' : 'var(--color-warning, #f59e0b)', fontWeight: 600 }}>
+                            {!isStandalone ? '已连接' : '未连接 (独立模式)'}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '1rem', borderTop: '1px solid var(--border-color)', paddingTop: '0.75rem', marginTop: '0.75rem', fontSize: '0.78rem', justifyContent: 'space-between', color: 'var(--text-secondary)' }}>
+                      <div>
+                        <span style={{ color: 'var(--text-muted)' }}>引擎版本:</span>{' '}
+                        <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{connection ? connection.engine_version : '--'}</span>
+                      </div>
+                      <div>
+                        <span style={{ color: 'var(--text-muted)' }}>协议版本:</span>{' '}
+                        <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{connection ? connection.protocol_version : '--'}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Actions Grid */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.65rem' }}>
+                    <button
+                      className="btn-secondary"
+                      style={{ justifyContent: 'center', padding: '0.6rem', fontSize: '0.76rem', gap: '0.35rem', borderRadius: '9999px' }}
+                      onClick={() => openUrl("https://github.com/KasumiKitsune/PhonTracer/releases/latest")}
+                    >
+                      检查更新
+                    </button>
+                    <button
+                      className="btn-secondary"
+                      style={{ justifyContent: 'center', padding: '0.6rem', fontSize: '0.76rem', gap: '0.35rem', borderRadius: '9999px' }}
+                      onClick={() => {
+                        const targetPath = isStandalone ? settings.wav_export_path : settings.folder_path;
+                        if (targetPath) {
+                          openUrl(targetPath).catch((err) => {
+                            console.error("打开本地目录失败：", err);
+                          });
+                        }
+                      }}
+                    >
+                      打开本地数据目录
+                    </button>
+                    <button
+                      className="btn-secondary"
+                      style={{ justifyContent: 'center', padding: '0.6rem', fontSize: '0.76rem', gap: '0.35rem', borderRadius: '9999px' }}
+                      onClick={() => setActiveTab('help')}
+                    >
+                      查看使用手册
+                    </button>
+                    <button
+                      className="btn-secondary"
+                      style={{ justifyContent: 'center', padding: '0.6rem', fontSize: '0.76rem', gap: '0.35rem', borderRadius: '9999px' }}
+                      onClick={() => openUrl("https://github.com/KasumiKitsune/PhonTracer/issues")}
+                    >
+                      获取支持 / 报告问题
+                    </button>
+                  </div>
+
+                  {/* Privacy / Security Notice */}
+                  <div style={{
+                    padding: '0.75rem 1rem',
+                    background: 'rgba(59, 130, 246, 0.04)',
+                    border: '1px dashed rgba(59, 130, 246, 0.15)',
+                    borderRadius: '8px',
+                    fontSize: '0.74rem',
+                    color: 'var(--text-secondary)',
+                    lineHeight: '1.4',
+                    textAlign: 'center'
+                  }}>
+                    <span>所有录音及工程数据均完全本地存储，无任何网络数据上传，保护隐私。</span>
+                  </div>
+
+                  {/* Copyright */}
+                  <div style={{ marginTop: 'auto', padding: '0.75rem 0 0 0', textAlign: 'center', borderTop: '1px solid var(--border-color)' }}>
+                    <p style={{ margin: 0, fontSize: '0.72rem', color: 'var(--text-muted)', letterSpacing: '0.02em' }}>
+                      Copyright © 2026 KasumiKitsune. 保留所有权利。
+                    </p>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         </div>
 

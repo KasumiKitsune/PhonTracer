@@ -1,14 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 
 // --- Local Icons ---
-const NetworkIcon = ({ active }) => (
-  <svg style={{ width: '18px', height: '18px', color: active ? 'var(--color-success)' : 'var(--color-warning)' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M5 12.55a11 11 0 0 1 14.08 0" />
-    <path d="M1.42 9a16 16 0 0 1 21.16 0" />
-    <path d="M8.53 16.11a6 6 0 0 1 6.95 0" />
-    <line x1="12" y1="20" x2="12.01" y2="20" strokeWidth="3" />
-  </svg>
-);
 
 const WarningIcon = () => (
   <svg style={{ width: '20px', height: '20px', color: '#f59e0b' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -209,8 +201,7 @@ const ShieldIcon = () => (
   </svg>
 );
 
-export default function OperationGuide({ runtimeMode = 'engine' }) {
-  const isStandalone = runtimeMode === 'standalone';
+export default function OperationGuide() {
   const [activePart, setActivePart] = useState(0);
   const buttonRefs = useRef([]);
 
@@ -264,26 +255,6 @@ export default function OperationGuide({ runtimeMode = 'engine' }) {
 
   return (
     <div className="help-container">
-      {/* 顶部引擎连接状态指示器 */}
-      <div className={`connection-status-card ${isStandalone ? 'standalone' : 'engine-connected'}`}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <div className="pulse-indicator-wrapper">
-            <span className="pulse-dot"></span>
-            <NetworkIcon active={!isStandalone} />
-          </div>
-          <div>
-            <div style={{ fontSize: '0.9rem', fontWeight: 650, color: 'var(--text-primary)' }}>
-              本地分析引擎状态：{isStandalone ? '未连接 (独立模式)' : '已连接 (完整模式)'}
-            </div>
-            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
-              {isStandalone
-                ? '提示：因为当前未检测到 PhonTracer 分析服务，处于独立模式，深度质检与语谱图不可用。'
-                : '完整模式就绪：语谱图分析、基频/共振峰分析及完整声学质检均已可用。'}
-            </div>
-          </div>
-        </div>
-      </div>
-
       {/* 帮助指南 HTML 内容 - 放置于独立滚动容器内 */}
       <div className="help-scroll-content">
         <div className="help-markdown-content">

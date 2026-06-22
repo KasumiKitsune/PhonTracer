@@ -12,7 +12,15 @@
       "identifier": "opener:allow-open-url",
       "allow": [
         {
-          "url": "https://github.com/KasumiKitsune/PhonTracer/releases/*"
+          "url": "https://github.com/KasumiKitsune/PhonTracer/*"
+        }
+      ]
+    },
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [
+        {
+          "path": "*"
         }
       ]
     }
