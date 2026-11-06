@@ -1310,20 +1310,55 @@ class ProjectTreePanel:
 
         target = self.tree.identify_row(event.y)
         if target and target not in self.tree_drag_items:
+            after_target = False
             if 'group' in self.tree.item(target, 'tags'):
                 parent_grp = target
-                target_idx = 'end'
+                is_group_target = True
             elif 'item' in self.tree.item(target, 'tags'):
                 parent_grp = self.tree.parent(target)
-                target_idx = self.tree.index(target)
+                is_group_target = False
+                bbox = self.tree.bbox(target)
+                if bbox and event.y >= bbox[1] + bbox[3] / 2:
+                    after_target = True
             else:
                 parent_grp = None
+                is_group_target = False
 
             if parent_grp and parent_grp != self.warning_group_id:
                 group_name = parent_grp[11:]
-                for drag_item in reversed(self.tree_drag_items):
-                    self.tree.move(drag_item, parent_grp, target_idx)
-                    self.items[drag_item]['group'] = group_name
+                if is_group_target:
+                    for drag_item in self.tree_drag_items:
+                        self.tree.move(drag_item, parent_grp, 'end')
+                        self.items[drag_item]['group'] = group_name
+                elif after_target:
+                    for drag_item in reversed(self.tree_drag_items):
+                        self.tree.move(drag_item, parent_grp, self.tree.index(target) + 1)
+                        self.items[drag_item]['group'] = group_name
+                else:
+                    for drag_item in self.tree_drag_items:
+                        self.tree.move(drag_item, parent_grp, self.tree.index(target))
+                        self.items[drag_item]['group'] = group_name
+
+                # 同步按组与树节点顺序全局重整 import_index，防止 rebuild_tree 抹除拖拽顺序或跨组索引碰撞
+                try:
+                    next_idx = 0
+                    seen_cids = set()
+                    for grp_key in getattr(self, 'project_groups', []):
+                        grp_node = getattr(self, 'group_nodes', {}).get(grp_key)
+                        if grp_node and self.tree.exists(grp_node):
+                            for cid in self.tree.get_children(grp_node):
+                                if cid in self.items:
+                                    self.items[cid]['import_index'] = next_idx
+                                    seen_cids.add(cid)
+                                    next_idx += 1
+                    if self.tree.exists(parent_grp):
+                        for cid in self.tree.get_children(parent_grp):
+                            if cid in self.items and cid not in seen_cids:
+                                self.items[cid]['import_index'] = next_idx
+                                seen_cids.add(cid)
+                                next_idx += 1
+                except Exception:
+                    pass
                 if self.app:
                     self.app.mark_modified()
                 self.rebuild_tree()

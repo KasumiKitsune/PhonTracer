@@ -14,7 +14,7 @@ import queue
 
 # 导入拆分后的模块
 from .ui_widgets import CTkReleaseButton, ToolTip
-from .data_utils import parse_wordlist, fuzzy_match_word_to_path, split_into_syllables, has_cjk, make_safe_excel_sheet_name
+from .data_utils import parse_wordlist, fuzzy_match_word_to_path, split_into_syllables, has_cjk
 from .wordlist_v2 import (
     ADVANCED_WORDLIST_AGENT_PROMPT,
     apply_record_metadata,

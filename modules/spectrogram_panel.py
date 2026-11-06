@@ -1305,8 +1305,6 @@ class SpectrogramPanel:
                     'xs': pitch.xs(),
                     'freqs': pitch.selected_array['frequency'].copy()
                 }
-                if 'pitch' in item:
-                    del item['pitch']
 
             if item.get('pitch_data'):
                 self._remember_erased_pitch_points(item['pitch_data']['xs'], item['pitch_data']['freqs'])
@@ -1463,8 +1461,6 @@ class SpectrogramPanel:
                     'xs': pitch.xs(),
                     'freqs': pitch.selected_array['frequency'].copy()
                 }
-                if 'pitch' in item:
-                    del item['pitch']
 
             if not item.get('pitch_data'): return
 

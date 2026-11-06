@@ -223,3 +223,121 @@ def test_project_patch_non_split_prune_orphans(tmp_path):
         assert "data/spk1/active.npz" in names
         assert "audio/spk1/orphan.wav" not in names
         assert "data/spk1/orphan.npz" not in names
+
+
+def test_workspace_lock_and_cli_isolation(tmp_path):
+    from modules.project_manager import ProjectManager
+    from cli import PhonTracerCLI
+
+    # 验证 _is_pid_alive 在 Windows/POSIX 下只读探测当前进程且不杀进程
+    assert ProjectManager._is_pid_alive(os.getpid()) is True
+    assert ProjectManager._is_pid_alive(99999999) is False
+    assert ProjectManager._is_pid_alive(-1) is False
+
+    ws_dir = str(tmp_path / "shared_ws")
+    pm1 = ProjectManager(None, workspace_dir=ws_dir)
+    assert pm1._lock_acquired is True
+    assert os.path.exists(os.path.join(ws_dir, "workspace.lock"))
+
+    # 第二个进程/实例尝试挂载同一工作区，应检测到锁冲突
+    pm2 = ProjectManager(None, workspace_dir=ws_dir)
+    assert pm2._lock_acquired is False
+
+    # pm1 释放锁后，pm2 可重新获取
+    pm1.release_workspace_lock()
+    assert pm2.acquire_workspace_lock() is True
+    pm2.release_workspace_lock()
+
+    # CLI 默认分配独立临时工作区
+    cli = PhonTracerCLI()
+    try:
+        assert cli._temp_workspace_dir is not None
+        assert os.path.isdir(cli._temp_workspace_dir)
+        default_user_ws = os.path.join(os.path.expanduser("~"), ".phon_tracer", "workspace")
+        assert os.path.abspath(cli.project_manager.workspace_dir) != os.path.abspath(default_user_ws)
+    finally:
+        cli.cleanup_workspace()
+        assert not os.path.exists(cli._temp_workspace_dir or "")
+
+
+def test_toolkit_font_and_thread_gc():
+    import gc
+    import time
+    from toolkit import start_safe_thread, SafeCTkFont, _keep_alive_fonts
+
+    assert gc.isenabled() is True
+    done = []
+
+    def background_worker():
+        done.append(True)
+
+    start_safe_thread(background_worker)
+    time.sleep(0.05)
+    assert len(done) == 1
+    # GC 绝不应被全局关闭
+    assert gc.isenabled() is True
+
+
+def test_cli_do_run_script_project_patch(tmp_path):
+    from cli import PhonTracerCLI
+    from modules.project_adaptor import read_project_metadata_from_archive
+
+    teproj_path = str(tmp_path / "cli_test.teproj")
+    out_teproj = str(tmp_path / "cli_patched.teproj")
+    script_file = str(tmp_path / "patch_script.py")
+
+    # 构建基础测试工程
+    state = {
+        "version": "1.0",
+        "active_speaker_id": "spk1",
+        "speakers": {
+            "spk1": {
+                "name": "CLI测试发音人",
+                "tab_mode": "多条独立音频",
+                "items": {
+                    "item1": {
+                        "id": "item1",
+                        "label": "原始词条",
+                        "start": 0.0,
+                        "end": 0.5
+                    }
+                }
+            }
+        }
+    }
+    with zipfile.ZipFile(teproj_path, "w") as z:
+        z.writestr("project.json", json.dumps(state, ensure_ascii=False))
+
+    # 编写返回 ProjectPatchResult 的脚本
+    script_code = """
+def run(ctx):
+    return ctx.project_patch([
+        {
+            "op": "set_item_fields",
+            "target": {"item_id": "item1"},
+            "fields": {"label": "CLI修改成功"}
+        }
+    ], title="CLI自动化补丁")
+"""
+    with open(script_file, "w", encoding="utf-8") as f:
+        f.write(script_code)
+
+    cli = PhonTracerCLI()
+    try:
+        # 加载工程
+        cli.project_manager.load_project(teproj_path)
+        cli._sync_cli_state_after_project_load()
+        # 运行脚本并启用 reload=true
+        cli.do_run_script(f"{script_file} out_project={out_teproj} reload=true")
+        assert os.path.exists(out_teproj)
+        assert cli.items["item1"]["label"] == "CLI修改成功"
+
+        with zipfile.ZipFile(out_teproj, "r") as z:
+            patched_state = json.loads(z.read("project.json").decode("utf-8"))
+            item1 = patched_state["speakers"]["spk1"]["items"]["item1"]
+            assert item1["label"] == "CLI修改成功"
+            runs = patched_state.get("custom_script_runs", [])
+            assert len(runs) == 1
+            assert runs[0]["script_type"] == "data_process"
+    finally:
+        cli.cleanup_workspace()

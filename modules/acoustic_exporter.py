@@ -13,7 +13,7 @@ import warnings
 warnings.filterwarnings("ignore", category=UserWarning, message=".*Tight layout not applied.*")
 
 from scipy.stats import gaussian_kde
-from .data_utils import split_into_syllables, get_export_text_for_item, get_item_syllable_bounds, sample_formant_points_by_bounds, make_safe_excel_sheet_name
+from .data_utils import split_into_syllables, get_export_text_for_item, get_item_syllable_bounds, sample_formant_points_by_bounds
 
 _GUI_IMPORT_ERROR = None
 

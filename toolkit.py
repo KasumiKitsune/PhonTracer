@@ -67,25 +67,17 @@ def parse_script_metadata_comments(code):
     return metadata
 
 
-# Keep-alive list to prevent temporary CTkFont objects from being garbage collected on background threads
+# CTkFont 别名（不再全局拦截或强行常驻引用，避免内存泄漏）
 _keep_alive_fonts = []
-_original_ctkfont = ctk.CTkFont
-
-class SafeCTkFont(_original_ctkfont):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        _keep_alive_fonts.append(self)
-
-ctk.CTkFont = SafeCTkFont
+SafeCTkFont = ctk.CTkFont
 
 def start_safe_thread(target):
-    gc.collect()
-    gc.disable()
+    # 安全启动后台守护线程，避免破坏全局垃圾回收（GC）机制
     def wrapped():
         try:
             target()
-        finally:
-            gc.enable()
+        except Exception:
+            traceback.print_exc()
     threading.Thread(target=wrapped, daemon=True).start()
 
 import numpy as np
@@ -1168,7 +1160,10 @@ class ToolkitApp(ctk.CTk):
 
     def after(self, ms, func=None, *args):
         if func is not None and getattr(self, "_ui_thread_id", None) is not None and threading.get_ident() != self._ui_thread_id:
-            self.gui_queue.put(lambda: func(*args))
+            if ms > 0:
+                self.gui_queue.put(lambda: super(ToolkitApp, self).after(ms, func, *args))
+            else:
+                self.gui_queue.put(lambda: func(*args))
             return None
         return super().after(ms, func, *args)
 

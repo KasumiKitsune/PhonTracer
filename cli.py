@@ -187,14 +187,37 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
 """
     prompt = "(phontracer) "
 
-    def __init__(self):
+    def __init__(self, workspace_dir=None, shared_workspace=False):
         super().__init__()
         self.speaker_manager = SpeakerManager()
         self.lang = 'en'
         self.executor = concurrent.futures.ProcessPoolExecutor(max_workers=min(os.cpu_count() or 4, 8))
         self.log_file = None
         self.original_stdout = sys.stdout
-        self.project_manager = ProjectManager(self)
+
+        # 隔离工作区处理：默认分配专属临时工作区，避免冲毁 GUI 正在运行的主工作区
+        self._temp_workspace_dir = None
+        if workspace_dir:
+            cli_ws = os.path.abspath(workspace_dir)
+        elif shared_workspace:
+            cli_ws = None
+        else:
+            import tempfile
+            self._temp_workspace_dir = tempfile.mkdtemp(prefix="phontracer_cli_ws_")
+            cli_ws = self._temp_workspace_dir
+
+        self.project_manager = ProjectManager(self, workspace_dir=cli_ws)
+
+    def cleanup_workspace(self):
+        """清理专属临时工作区"""
+        if getattr(self, "_temp_workspace_dir", None) and os.path.exists(self._temp_workspace_dir):
+            try:
+                if hasattr(self, "project_manager"):
+                    self.project_manager.release_workspace_lock()
+                shutil.rmtree(self._temp_workspace_dir, ignore_errors=True)
+            except Exception:
+                pass
+            self._temp_workspace_dir = None
 
     def onecmd(self, line):
         if isinstance(line, str):
@@ -4214,9 +4237,101 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                 return
                 
             # Process success results
-            from modules.script_api import FigureResult, TableResult
+            from modules.script_api import FigureResult, TableResult, ProjectPatchResult
+            from modules.project_patch import apply_project_patch_to_teproj
             
             results = res if isinstance(res, list) else [res]
+            project_patch_results = [r for r in results if isinstance(r, ProjectPatchResult)]
+            if project_patch_results:
+                if len(project_patch_results) != 1 or len(results) != 1:
+                    self._emit(False, error="数据处理脚本只能返回一个 ctx.project_patch(...)，不能同时返回图表、表格或多个工程补丁。", logs=logs)
+                    return
+                if not has_active_project or not temp_path:
+                    self._emit(False, error="当前未加载任何有效工程，无法应用数据处理工程补丁。", logs=logs)
+                    return
+
+                patch_res = project_patch_results[0]
+                if not patch_res.operations:
+                    logs.append("脚本没有返回任何工程修改操作。")
+                    self._emit(True, "脚本没有返回任何工程修改操作", logs=logs, outputs=[])
+                    return
+
+                out_project = kwargs.get("out_project") or kwargs.get("output_project") or kwargs.get("out_teproj")
+                if not out_project:
+                    self._emit(False, error="数据处理脚本返回了工程修改，但未指定输出工程文件。请在参数中指定 out_project=<path.teproj>", logs=logs)
+                    return
+
+                out_project = os.path.abspath(out_project)
+                if not out_project.lower().endswith(".teproj"):
+                    out_project += ".teproj"
+
+                out_dir = os.path.dirname(out_project)
+                if out_dir:
+                    os.makedirs(out_dir, exist_ok=True)
+
+                code_sha256 = hashlib.sha256(code.encode('utf-8')).hexdigest()
+                run_record = {
+                    "script_id": script_id or str(uuid.uuid4()),
+                    "script_name": script_name,
+                    "script_type": "data_process",
+                    "api_version": "1",
+                    "software_version": __version__,
+                    "code_sha256": code_sha256,
+                    "code": code,
+                    "used_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "user_goal": script_desc,
+                    "status": "成功",
+                    "outputs": [{
+                        "type": "project",
+                        "title": patch_res.title or "数据处理后的工程",
+                        "filename": os.path.basename(out_project),
+                        "saved_path": out_project
+                    }]
+                }
+
+                try:
+                    summary = apply_project_patch_to_teproj(
+                        temp_path,
+                        patch_res,
+                        out_project,
+                        run_record=run_record
+                    )
+                    output_records = [{
+                        "type": "project",
+                        "title": patch_res.title or "数据处理后的工程",
+                        "filename": os.path.basename(out_project),
+                        "saved_path": out_project,
+                        "operation_count": summary.get("operation_count", 0),
+                        "applied_operations": summary.get("applied_operations", [])
+                    }]
+                    logs.append(f"数据处理工程补丁已成功应用并保存至：{out_project}")
+                    logs.append(f"包含操作总数: {summary.get('operation_count', 0)}，实际执行: {len(summary.get('applied_operations', []))} 项")
+
+                    should_reload = (
+                        kwargs.get("reload", "false").lower() in ("true", "1", "yes")
+                        or kwargs.get("apply_to_current", "false").lower() in ("true", "1", "yes")
+                    )
+                    if should_reload:
+                        if self.project_manager.load_project(out_project):
+                            self._sync_cli_state_after_project_load()
+                            logs.append("已将修改后的工程重新载入当前 CLI 会话。")
+                        else:
+                            logs.append("警告: 重新载入修改后的工程失败。")
+
+                    self._emit(
+                        True,
+                        "脚本执行完成",
+                        logs=logs,
+                        output_dir=out_dir,
+                        outputs=output_records,
+                        patch_summary=summary
+                    )
+                    return
+                except Exception as e:
+                    logs.append(f"应用工程补丁失败: {e}")
+                    self._emit(False, error=f"应用工程补丁失败: {e}", logs=logs)
+                    return
+
             figure_results = [r for r in results if isinstance(r, FigureResult)]
             table_results = [r for r in results if isinstance(r, TableResult)]
             
@@ -5309,7 +5424,28 @@ def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     # Handle multiprocessing bootstrap correctly in frozen Windows builds.
     multiprocessing.freeze_support()
-    cli = PhonTracerCLI()
+
+    shared_workspace = False
+    custom_ws = None
+    cleaned_argv = []
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "--shared-workspace":
+            shared_workspace = True
+            i += 1
+        elif arg == "--workspace" and i + 1 < len(argv):
+            custom_ws = argv[i + 1]
+            i += 2
+        elif arg.startswith("--workspace="):
+            custom_ws = arg.split("=", 1)[1]
+            i += 1
+        else:
+            cleaned_argv.append(arg)
+            i += 1
+    argv = cleaned_argv
+
+    cli = PhonTracerCLI(workspace_dir=custom_ws, shared_workspace=shared_workspace)
     try:
         if argv:
             first_arg = argv[0].strip().lower()
@@ -5342,6 +5478,7 @@ def main(argv=None):
         cli.cmdloop()
         return 0
     finally:
+        cli.cleanup_workspace()
         cli.executor.shutdown(wait=False)
 
 

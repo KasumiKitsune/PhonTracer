@@ -1328,10 +1328,14 @@ def write_excel_archive(teproj_path: str, state: Dict[str, Any], output_xlsx_pat
                 value_col = xlsxwriter.utility.xl_col_to_name(index[header])
                 add_formula_highlight(ws, last_row, index[header], index[header], f'=${value_col}4=""', red_fmt)
 
+    from .data_utils import make_safe_excel_sheet_name
+    used_sheet_names = {"论文方法摘要"}
+
     # Helper to write sheets
     def write_sheet(name, headers, rows, category=None, empty_message="当前无记录"):
         category = category or name
-        ws = wb.add_worksheet(name)
+        safe_sheet_name = make_safe_excel_sheet_name(name, used_names=used_sheet_names)
+        ws = wb.add_worksheet(safe_sheet_name)
         last_col = len(headers) - 1
         last_row = len(rows) + 2
         ws.hide_gridlines(2)

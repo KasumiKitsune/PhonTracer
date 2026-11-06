@@ -194,9 +194,14 @@ def make_context_menu(parent, font_size=10):
 
 def post_context_menu(menu, event):
     """
-    统一弹出右键菜单，并在之后正确释放鼠标抓取。
+    统一弹出右键菜单。
+    注意：在 Windows 下 tk_popup 是非阻塞的，严禁在 finally 中同步调用 grab_release，
+    否则会导致右键菜单弹出瞬间失去鼠标捕获而闪退或失焦。
     """
     try:
         menu.tk_popup(event.x_root, event.y_root)
-    finally:
-        menu.grab_release()
+    except Exception:
+        try:
+            menu.grab_release()
+        except Exception:
+            pass

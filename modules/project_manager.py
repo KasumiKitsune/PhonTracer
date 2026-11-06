@@ -62,10 +62,118 @@ def migrate_removed_f0_engine(state):
     return state
 
 class ProjectManager:
-    def __init__(self, app):
+    @staticmethod
+    def _is_pid_alive(pid):
+        """只读探测目标 PID 是否存活。
+        注意：在 Windows 下绝对禁止调用 os.kill(pid, 0)，因为 0 即 CTRL_C_EVENT，
+        Windows CPython 的 os.kill 会向控制台广播信号或调用 TerminateProcess 强杀进程！
+        """
+        try:
+            pid = int(pid)
+        except (TypeError, ValueError):
+            return False
+        if pid <= 0:
+            return False
+        if os.name == "nt":
+            try:
+                import ctypes
+                PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+                ERROR_ACCESS_DENIED = 5
+                STILL_ACTIVE = 259
+                kernel32 = ctypes.windll.kernel32
+                handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+                if not handle:
+                    return kernel32.GetLastError() == ERROR_ACCESS_DENIED
+                try:
+                    exit_code = ctypes.c_ulong()
+                    if kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                        return exit_code.value == STILL_ACTIVE
+                    return False
+                finally:
+                    kernel32.CloseHandle(handle)
+            except Exception:
+                return False
+        else:
+            try:
+                os.kill(pid, 0)
+                return True
+            except PermissionError:
+                return True
+            except (OSError, ProcessLookupError):
+                return False
+
+    def acquire_workspace_lock(self):
+        """尝试获取工作区锁文件。若被其他存活进程或实例占用则返回 False，否则写入当前 PID 与实例 ID 并返回 True。"""
+        if not os.path.exists(self.workspace_dir):
+            try:
+                os.makedirs(self.workspace_dir, exist_ok=True)
+            except Exception:
+                pass
+        lock_path = os.path.join(self.workspace_dir, "workspace.lock")
+        if os.path.exists(lock_path):
+            try:
+                with open(lock_path, "r", encoding="utf-8") as f:
+                    info = json.load(f)
+                existing_pid = info.get("pid")
+                existing_inst = info.get("instance_id")
+                current_inst = getattr(self, "_instance_id", None)
+                if existing_pid:
+                    if existing_pid != os.getpid():
+                        if self._is_pid_alive(existing_pid):
+                            return False
+                    else:
+                        if existing_inst and current_inst and existing_inst != current_inst:
+                            return False
+            except Exception:
+                pass
+        try:
+            with open(lock_path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "pid": os.getpid(),
+                    "instance_id": getattr(self, "_instance_id", None),
+                    "timestamp": time.time(),
+                    "time_str": time.strftime("%Y-%m-%d %H:%M:%S")
+                }, f)
+            self._lock_acquired = True
+            return True
+        except Exception:
+            return False
+
+    def release_workspace_lock(self):
+        """释放当前进程与实例的工作区锁，并清理回退隔离工作区（若有）。"""
+        lock_path = os.path.join(self.workspace_dir, "workspace.lock")
+        if os.path.exists(lock_path):
+            try:
+                with open(lock_path, "r", encoding="utf-8") as f:
+                    info = json.load(f)
+                current_inst = getattr(self, "_instance_id", None)
+                if info.get("pid") == os.getpid() and (not current_inst or not info.get("instance_id") or info.get("instance_id") == current_inst):
+                    os.remove(lock_path)
+            except Exception:
+                pass
+        fallback_dir = getattr(self, "_fallback_workspace_dir", None)
+        if fallback_dir and os.path.exists(fallback_dir):
+            try:
+                shutil.rmtree(fallback_dir, ignore_errors=True)
+            except Exception:
+                pass
+            self._fallback_workspace_dir = None
+
+    def __init__(self, app, workspace_dir=None):
+        import atexit
+        import tempfile
         self.app = app
-        self.workspace_dir = os.path.join(os.path.expanduser("~"), ".phon_tracer", "workspace")
-        self.backup_path = os.path.join(os.path.expanduser("~"), ".phon_tracer", "auto_save_backup.teproj")
+        self._instance_id = uuid.uuid4().hex
+        self._fallback_workspace_dir = None
+        if workspace_dir:
+            self.workspace_dir = os.path.abspath(workspace_dir)
+            self.backup_path = os.path.join(self.workspace_dir, "auto_save_backup.teproj")
+            self.is_custom_workspace = True
+        else:
+            self.workspace_dir = os.path.join(os.path.expanduser("~"), ".phon_tracer", "workspace")
+            self.backup_path = os.path.join(os.path.expanduser("~"), ".phon_tracer", "auto_save_backup.teproj")
+            self.is_custom_workspace = False
+
         self.config_path = os.path.join(os.path.expanduser("~"), ".phon_tracer", "config.json")
         self.auto_save_enabled = False
         self._auto_save_timer = None
@@ -76,9 +184,28 @@ class ProjectManager:
         self.auto_save_interval = 30.0
 
         if not os.path.exists(self.workspace_dir):
-            os.makedirs(self.workspace_dir)
+            try:
+                os.makedirs(self.workspace_dir, exist_ok=True)
+            except Exception:
+                pass
 
+        self._lock_acquired = self.acquire_workspace_lock()
+        self._default_workspace_contended = False
+        if not self._lock_acquired and not self.is_custom_workspace:
+            self._default_workspace_contended = True
+            self._fallback_workspace_dir = tempfile.mkdtemp(prefix="phontracer_ws_fallback_")
+            print(
+                f"Warning: Default workspace {self.workspace_dir} is locked by another running process. "
+                f"Switched to isolated workspace {self._fallback_workspace_dir} and disabled auto-save."
+            )
+            self.workspace_dir = self._fallback_workspace_dir
+            self.backup_path = os.path.join(self.workspace_dir, "auto_save_backup.teproj")
+            self._lock_acquired = self.acquire_workspace_lock()
+
+        atexit.register(self.release_workspace_lock)
         self.load_config()
+        if not self._lock_acquired or self._default_workspace_contended:
+            self.auto_save_enabled = False
 
     def _get_data_dir(self):
         d = os.path.join(self.workspace_dir, "data")
@@ -552,6 +679,7 @@ class ProjectManager:
             os.replace(self.workspace_dir, backup_workspace)
         try:
             os.replace(staged_workspace, self.workspace_dir)
+            self.acquire_workspace_lock()
         except Exception:
             if backup_workspace and os.path.exists(backup_workspace):
                 os.replace(backup_workspace, self.workspace_dir)
@@ -563,6 +691,7 @@ class ProjectManager:
             shutil.rmtree(self.workspace_dir, ignore_errors=True)
         if backup_workspace and os.path.exists(backup_workspace):
             os.replace(backup_workspace, self.workspace_dir)
+            self.acquire_workspace_lock()
         else:
             os.makedirs(self.workspace_dir, exist_ok=True)
 
@@ -866,3 +995,5 @@ class ProjectManager:
             else:
                 self.app.switch_trim_silence.deselect()
         self.app.custom_script_runs = state.get("custom_script_runs", [])
+
+ProjectManager.import_project = ProjectManager.load_project
