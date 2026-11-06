@@ -2669,7 +2669,7 @@ dependencies = [
 
 [[package]]
 name = "phonrec"
-version = "1.3.0"
+version = "1.0.0"
 dependencies = [
  "cpal",
  "serde",

@@ -545,6 +545,14 @@ export default function App() {
   const isStoppingRef = useRef(false);
   const recordingTargetRef = useRef(null);
   const pendingCaptureStopRef = useRef(null);
+  const autoAdvanceTimerRef = useRef(null);
+
+  const clearAutoAdvanceTimer = () => {
+    if (autoAdvanceTimerRef.current) {
+      clearTimeout(autoAdvanceTimerRef.current);
+      autoAdvanceTimerRef.current = null;
+    }
+  };
 
   const qualityChecksEnabledRef = useRef(qualityChecksEnabled);
   qualityChecksEnabledRef.current = qualityChecksEnabled;
@@ -1337,6 +1345,12 @@ export default function App() {
       });
 
       unlistenError = await listen('loopback-error', (event) => {
+        isStoppingRef.current = false;
+        isRecordingRef.current = false;
+        isProcessingRef.current = false;
+        setIsRecording(false);
+        setIsProcessing(false);
+        clearAutoAdvanceTimer();
         customAlert('音频捕获流错误：' + event.payload);
       });
     };
@@ -1725,10 +1739,18 @@ export default function App() {
   };
 
   const abortActiveRecording = async () => {
+    clearAutoAdvanceTimer();
     if (isStartingRef.current) {
       shouldCancelRef.current = true;
     }
-    if (!isRecordingRef.current || isStoppingRef.current) return;
+    if (!isRecordingRef.current && !isStoppingRef.current) {
+      setIsRecording(false);
+      setIsProcessing(false);
+      isRecordingRef.current = false;
+      isProcessingRef.current = false;
+      isStoppingRef.current = false;
+      return;
+    }
     isStoppingRef.current = true;
 
     setIsRecording(false);
@@ -2186,6 +2208,25 @@ export default function App() {
     }
   };
 
+  const handleOpenInPhonTracer = async () => {
+    if (isRecording || isProcessing) return;
+    try {
+      setIsProcessing(true);
+      await saveProjectState(speakersRef.current);
+      const activeItem = getActiveItem();
+      await runtime.openInPhonTracer({
+        speakerId: activeSpeakerId || null,
+        wordId: activeItem?.id || null,
+      });
+      await customAlert('已在 PhonTracer 中打开当前工程！');
+    } catch (err) {
+      console.error(err);
+      await customAlert('启动 PhonTracer 失败：' + (err?.message || err));
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const handleProjectClear = async () => {
     if (isRecordingRef.current || isProcessingRef.current || isStartingRef.current) return;
     const ok = await customConfirm('确定清空当前工作区，开始全新的录制吗？');
@@ -2245,6 +2286,7 @@ export default function App() {
 
   // --- Recording Logic ---
   const startRecording = async () => {
+    clearAutoAdvanceTimer();
     if (isProcessingRef.current || isRecordingRef.current || isStartingRef.current) return;
     isStartingRef.current = true;
     shouldCancelRef.current = false;
@@ -2493,7 +2535,8 @@ export default function App() {
           const retryCount = (vadRetryRef.current.get(key) || 0) + 1;
           vadRetryRef.current.set(key, retryCount);
           if (retryCount <= 2) {
-            setTimeout(() => startRecording(), 1000);
+            clearAutoAdvanceTimer();
+            autoAdvanceTimerRef.current = setTimeout(() => startRecording(), 1000);
           } else {
             vadRetryRef.current.delete(key);
             await customAlert(`连续三次质量检测未通过：${data.quality.issues?.join('、') || '请检查录音环境'}。智能跳转已暂停。`);
@@ -2502,7 +2545,8 @@ export default function App() {
       } else {
         vadRetryRef.current.delete(`${spkId}:${activeItem.id}`);
         if (shouldAutoAdvance) {
-          setTimeout(() => {
+          clearAutoAdvanceTimer();
+          autoAdvanceTimerRef.current = setTimeout(() => {
             if (activeSpeakerIdRef.current === spkId) {
               const nextIndex = isAutoVAD
                 ? getLatestUnrecordedIndex(spkId)
@@ -2516,7 +2560,8 @@ export default function App() {
               activeItemIndexRef.current = nextIndex;
             }
             if (isAutoVAD) {
-              setTimeout(() => {
+              clearAutoAdvanceTimer();
+              autoAdvanceTimerRef.current = setTimeout(() => {
                 startRecording();
               }, 100);
             }
@@ -2887,6 +2932,7 @@ export default function App() {
 
     let newIndex = activeItemIndex + direction;
     if (newIndex >= 0 && newIndex < displayedItems.length) {
+      clearAutoAdvanceTimer();
       setActiveItemIndex(newIndex);
     }
   };
@@ -3169,6 +3215,7 @@ export default function App() {
                     className={`speaker-item ${activeSpeakerId === spk.id ? 'active' : ''}`}
                     onClick={async () => {
                       if (isRecordingRef.current || isProcessingRef.current || isStartingRef.current) return;
+                      clearAutoAdvanceTimer();
                       setActiveSpeakerId(spk.id);
                       try {
                         await saveProjectState(speakers, groupsRef.current, spk.id);
@@ -3471,6 +3518,15 @@ export default function App() {
                   <ImportIcon /> 导出 WAV
                 </button>
               )}
+              <button
+                className="btn-secondary"
+                disabled={isRecording || isProcessing}
+                style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }}
+                onClick={handleOpenInPhonTracer}
+                title="在 PhonTracer 中打开工程进行标注精修"
+              >
+                在 PhonTracer 中打开精修
+              </button>
               <button className="btn-primary" disabled={isRecording || isProcessing} style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }} onClick={handleProjectExport}>
                 <ImportIcon /> 保存工程
               </button>
@@ -3524,6 +3580,7 @@ export default function App() {
                     className={itemClass}
                     onClick={async () => {
                       if (isProcessingRef.current) return;
+                      clearAutoAdvanceTimer();
                       if (isRecordingRef.current || isStartingRef.current) {
                         await abortActiveRecording();
                         setActiveItemIndex(idx);

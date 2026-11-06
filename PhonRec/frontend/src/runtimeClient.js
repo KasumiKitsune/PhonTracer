@@ -1,99 +1,23 @@
 import { invoke } from '@tauri-apps/api/core';
-import { apiFetch } from './engineApi.js';
 import { parseWordlistFile } from './plainWordlist.js';
+import { renderSpectrogramDataUrl } from './spectrogramRenderer.js';
 
-export const ENGINE_CAPABILITIES = Object.freeze({
+export const FULL_CAPABILITIES = Object.freeze({
   projectArchive: true,
   advancedWordlist: true,
   spectrogram: true,
   fullQuality: true,
   lightQuality: true,
-  wavFolderExport: false,
-});
-
-export const STANDALONE_CAPABILITIES = Object.freeze({
-  projectArchive: true,
-  advancedWordlist: true,
-  spectrogram: false,
-  fullQuality: false,
-  lightQuality: true,
   wavFolderExport: true,
 });
 
-const parseJsonResponse = async (response, fallbackMessage) => {
-  if (!response.ok) {
-    const data = await response.json().catch(() => ({}));
-    throw new Error(data.detail || fallbackMessage);
-  }
-  return response.json();
-};
+export const ENGINE_CAPABILITIES = FULL_CAPABILITIES;
+export const STANDALONE_CAPABILITIES = FULL_CAPABILITIES;
 
-export function createEngineRuntimeClient() {
+function createNativeRuntimeClient(mode = 'standalone') {
   return {
-    mode: 'engine',
-    capabilities: ENGINE_CAPABILITIES,
-    async loadProject() {
-      return parseJsonResponse(await apiFetch('/project/state'), '读取工程状态失败');
-    },
-    async saveProject(state) {
-      return parseJsonResponse(await apiFetch('/project/state', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(state),
-      }), '保存工程状态失败');
-    },
-    async clearProject() {
-      return parseJsonResponse(await apiFetch('/project/clear', { method: 'POST' }), '清空工作区失败');
-    },
-    async importWordlist(file) {
-      const formData = new FormData();
-      formData.append('file', file);
-      return parseJsonResponse(await apiFetch('/wordlist/import', { method: 'POST', body: formData }), '解析字表失败');
-    },
-    async importProject(file) {
-      const formData = new FormData();
-      formData.append('file', file);
-      return parseJsonResponse(await apiFetch('/project/import', { method: 'POST', body: formData }), '导入工程失败');
-    },
-    async exportProject() {
-      const response = await apiFetch('/project/export');
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        throw new Error(data.detail || '导出工程失败');
-      }
-      return response.blob();
-    },
-    async saveAudio({ blob, speakerId, wordId, source, qualityRules }) {
-      const formData = new FormData();
-      formData.append('file', blob, `${speakerId}_${wordId}.wav`);
-      formData.append('speaker_id', speakerId);
-      formData.append('word_id', wordId);
-      formData.append('source', source);
-      formData.append('quality_config', JSON.stringify(qualityRules));
-      return parseJsonResponse(await apiFetch('/audio/save', { method: 'POST', body: formData }), '保存音频失败');
-    },
-    async readAudio({ speakerId, wordId }) {
-      const response = await apiFetch(`/audio/file?speaker_id=${encodeURIComponent(speakerId)}&word_id=${encodeURIComponent(wordId)}&t=${Date.now()}`);
-      if (!response.ok) throw new Error('读取录音失败');
-      return response.blob();
-    },
-    async analyzeAudio({ speakerId, wordId, qualityRules }) {
-      const formData = new FormData();
-      formData.append('speaker_id', speakerId);
-      formData.append('word_id', wordId);
-      formData.append('quality_config', JSON.stringify(qualityRules));
-      return parseJsonResponse(await apiFetch('/audio/analyze', { method: 'POST', body: formData }), '分析录音失败');
-    },
-    async exportWavFolder() {
-      throw new Error('完整模式请使用工程导出');
-    },
-  };
-}
-
-export function createStandaloneRuntimeClient() {
-  return {
-    mode: 'standalone',
-    capabilities: STANDALONE_CAPABILITIES,
+    mode,
+    capabilities: FULL_CAPABILITIES,
     loadProject: () => invoke('standalone_project_load'),
     async saveProject(state) {
       const savedState = await invoke('standalone_project_save', { state });
@@ -116,21 +40,59 @@ export function createStandaloneRuntimeClient() {
     },
     async saveAudio({ blob, speakerId, wordId, source, qualityRules }) {
       const wavBytes = Array.from(new Uint8Array(await blob.arrayBuffer()));
-      return invoke('standalone_audio_save', {
+      const res = await invoke('standalone_audio_save', {
         wavBytes,
         speakerId,
         wordId,
         source,
         qualityRules,
       });
+      const spectrogramUrl = await renderSpectrogramDataUrl(blob);
+      return {
+        ...res,
+        spectrogram: spectrogramUrl,
+        spectrogram_url: spectrogramUrl,
+      };
     },
     async readAudio({ speakerId, wordId }) {
       const bytes = await invoke('standalone_audio_read', { speakerId, wordId });
       return new Blob([new Uint8Array(bytes)], { type: 'audio/wav' });
     },
-    async analyzeAudio() {
-      return null;
+    async analyzeAudio({ speakerId, wordId, qualityRules }) {
+      const res = await invoke('standalone_audio_analyze', {
+        speakerId,
+        wordId,
+        qualityRules,
+      });
+      let spectrogramUrl = '';
+      try {
+        const bytes = await invoke('standalone_audio_read', { speakerId, wordId });
+        const blob = new Blob([new Uint8Array(bytes)], { type: 'audio/wav' });
+        spectrogramUrl = await renderSpectrogramDataUrl(blob);
+      } catch (err) {
+        console.warn('语谱图生成跳过:', err);
+      }
+      return {
+        status: 'success',
+        quality: res?.quality,
+        spectrogram: spectrogramUrl,
+        spectrogram_url: spectrogramUrl,
+      };
+    },
+    async openInPhonTracer({ speakerId, wordId } = {}) {
+      return invoke('open_in_phontracer', {
+        speakerId: speakerId || null,
+        wordId: wordId || null,
+      });
     },
     exportWavFolder: (destination) => invoke('standalone_export_wav_folder', { destination }),
   };
+}
+
+export function createEngineRuntimeClient() {
+  return createNativeRuntimeClient('engine');
+}
+
+export function createStandaloneRuntimeClient() {
+  return createNativeRuntimeClient('standalone');
 }

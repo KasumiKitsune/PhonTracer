@@ -188,6 +188,8 @@ class PhoneticsApp:
         except Exception:
             pass
 
+        self._startup_target_speaker = None
+        self._startup_target_item = None
         self._initial_files_list = self._normalize_startup_files(initial_files)
         _startup_debug(
             f"PhoneticsApp 初始化 initial_files={initial_files!r} "
@@ -202,15 +204,67 @@ class PhoneticsApp:
         # 启动时后台静默检查更新 (已取消自动获取最新版本机制，改为手动检测更新)
         # self.root.after(3000, lambda: self.check_update(is_manual=False))
 
-    @staticmethod
-    def _normalize_startup_files(files):
-        cleaned = []
-        if not files:
+    def _normalize_startup_files(self_or_files, files=None):
+        target_self = None
+        if not isinstance(self_or_files, type) and hasattr(self_or_files, '_sync_ui_after_project_load'):
+            target_self = self_or_files
+            raw_files = files
+        elif isinstance(self_or_files, type):
+            target_self = None
+            raw_files = files if files is not None else []
+        else:
+            target_self = None
+            raw_files = self_or_files
+
+        if not raw_files:
             return None
-        for f in files:
-            if not f:
+
+        if isinstance(raw_files, (str, bytes)):
+            raw_list = [raw_files]
+        else:
+            raw_list = list(raw_files)
+
+        cleaned = []
+        target_speaker = None
+        target_item = None
+
+        i = 0
+        while i < len(raw_list):
+            item = raw_list[i]
+            if item is None:
+                i += 1
                 continue
-            s = str(f).strip().strip('"\'')
+            s = str(item).strip().strip('"\'')
+            if not s:
+                i += 1
+                continue
+
+            if s == "--speaker":
+                if i + 1 < len(raw_list):
+                    target_speaker = str(raw_list[i + 1]).strip().strip('"\'')
+                    i += 2
+                    continue
+                else:
+                    i += 1
+                    continue
+            elif s.startswith("--speaker="):
+                target_speaker = s.split("=", 1)[1].strip().strip('"\'')
+                i += 1
+                continue
+
+            if s == "--item":
+                if i + 1 < len(raw_list):
+                    target_item = str(raw_list[i + 1]).strip().strip('"\'')
+                    i += 2
+                    continue
+                else:
+                    i += 1
+                    continue
+            elif s.startswith("--item="):
+                target_item = s.split("=", 1)[1].strip().strip('"\'')
+                i += 1
+                continue
+
             if s.lower().startswith("file://"):
                 try:
                     from urllib.parse import unquote, urlparse
@@ -223,6 +277,14 @@ class PhoneticsApp:
                     pass
             if s:
                 cleaned.append(os.path.normpath(s))
+            i += 1
+
+        if target_self is not None:
+            if target_speaker:
+                target_self._startup_target_speaker = target_speaker
+            if target_item:
+                target_self._startup_target_item = target_item
+
         return cleaned or None
 
     @classmethod
@@ -4098,6 +4160,16 @@ class PhoneticsApp:
         threading.Thread(target=run, daemon=True).start()
 
     def _sync_ui_after_project_load(self, is_recovery=False):
+        target_spk = getattr(self, '_startup_target_speaker', None)
+        if target_spk:
+            target_str = str(target_spk).strip()
+            all_speakers = self.speaker_manager.get_all_speakers()
+            for s in all_speakers:
+                if s.id == target_str or s.name == target_str:
+                    self.speaker_manager.set_active_speaker(s.id)
+                    break
+            self._startup_target_speaker = None
+
         self._update_speaker_dropdown()
         spk = self.active_speaker
         self.speaker_option_var.set(spk.name)
@@ -4119,6 +4191,36 @@ class PhoneticsApp:
         self.spectrogram_panel.clear_canvas()
         self._refresh_ui_for_speaker()
         self._maybe_refresh_formants_after_import()
+
+        target_item = getattr(self, '_startup_target_item', None)
+        if target_item:
+            target_str = str(target_item).strip().lower()
+            matched_iid = None
+            for iid, item in getattr(self, 'items', {}).items():
+                candidates = [
+                    str(iid).lower(),
+                    str(item.get('id', '')).lower(),
+                    str(item.get('word_id', '')).lower(),
+                    str(item.get('label', '')).lower(),
+                    str(item.get('word', '')).lower(),
+                    os.path.splitext(str(item.get('label', '')))[0].lower(),
+                    os.path.splitext(str(item.get('word', '')))[0].lower(),
+                ]
+                if target_str in candidates:
+                    matched_iid = iid
+                    break
+            if matched_iid and hasattr(self, 'tree_panel') and self.tree_panel and hasattr(self.tree_panel, 'tree'):
+                tree = self.tree_panel.tree
+                sel_iid = matched_iid if tree.exists(matched_iid) else f"warning_{matched_iid}"
+                if tree.exists(sel_iid):
+                    try:
+                        tree.selection_set(sel_iid)
+                        tree.focus(sel_iid)
+                        tree.see(sel_iid)
+                        self.tree_panel.on_tree_select(None)
+                    except Exception:
+                        pass
+            self._startup_target_item = None
 
         if is_recovery:
             self.has_changes = True

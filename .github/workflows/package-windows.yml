@@ -30,7 +30,6 @@ jobs:
         python -m pip install --upgrade pip
         pip install --upgrade pyinstaller
         pip install -r requirements.txt
-        pip install -r requirements-phonrec-engine.txt
 
     - name: 检查发布版本一致性
       run: python scripts/check_release_version.py

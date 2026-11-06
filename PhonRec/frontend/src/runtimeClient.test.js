@@ -88,26 +88,35 @@ describe('独立模式运行时客户端', () => {
 });
 
 describe('完整模式运行时客户端', () => {
-  beforeEach(() => mocks.apiFetch.mockReset());
+  beforeEach(() => {
+    mocks.invoke.mockReset();
+    mocks.apiFetch.mockReset();
+  });
 
-  it('保留工程归档、高级字表和完整分析能力及原有接口', async () => {
-    mocks.apiFetch.mockResolvedValue({
-      ok: true,
-      json: async () => ({ version: '1.0', speakers: {}, groups: [] }),
-    });
+  it('统一使用原生 Tauri 客户端并拥有全部能力', async () => {
+    mocks.invoke.mockResolvedValue({ version: '1.0', speakers: {}, groups: [] });
     const client = createEngineRuntimeClient();
 
     expect(client.capabilities).toEqual(ENGINE_CAPABILITIES);
     expect(client.capabilities.projectArchive).toBe(true);
     expect(client.capabilities.advancedWordlist).toBe(true);
     expect(client.capabilities.fullQuality).toBe(true);
+    expect(client.capabilities.spectrogram).toBe(true);
+    expect(client.capabilities.wavFolderExport).toBe(true);
     await client.loadProject();
     await client.saveProject({ version: '1.0' });
     await client.clearProject();
 
-    expect(mocks.apiFetch).toHaveBeenNthCalledWith(1, '/project/state');
-    expect(mocks.apiFetch.mock.calls[1][0]).toBe('/project/state');
-    expect(mocks.apiFetch.mock.calls[1][1].method).toBe('POST');
-    expect(mocks.apiFetch).toHaveBeenNthCalledWith(3, '/project/clear', { method: 'POST' });
+    expect(mocks.invoke).toHaveBeenNthCalledWith(1, 'standalone_project_load');
+    expect(mocks.invoke).toHaveBeenNthCalledWith(2, 'standalone_project_save', { state: { version: '1.0' } });
+    expect(mocks.invoke).toHaveBeenNthCalledWith(3, 'standalone_project_clear');
+  });
+
+  it('支持在 PhonTracer 中打开精修', async () => {
+    mocks.invoke.mockResolvedValue({ status: 'success', archivePath: 'test.teproj' });
+    const client = createEngineRuntimeClient();
+    const res = await client.openInPhonTracer({ speakerId: 'spk1', wordId: 'item1' });
+    expect(mocks.invoke).toHaveBeenCalledWith('open_in_phontracer', { speakerId: 'spk1', wordId: 'item1' });
+    expect(res.status).toBe('success');
   });
 });

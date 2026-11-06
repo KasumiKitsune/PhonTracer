@@ -50,9 +50,6 @@ def collect_versions() -> dict[str, str]:
             "PhonRec/frontend/src-tauri/Cargo.toml", r'^version\s*=\s*"([^"]+)"'
         ),
         "PhonRec Tauri 配置": str(tauri_json["version"]),
-        "PhonRec 分析引擎": _match_version(
-            "PhonRec/backend/main.py", r'^ENGINE_VERSION\s*=\s*"([^"]+)"'
-        ),
         "Windows 安装脚本默认值": _match_version(
             "installer.iss", r'^\s*#define\s+MyAppVersion\s+"([^"]+)"'
         ),
@@ -64,10 +61,17 @@ def collect_versions() -> dict[str, str]:
 
 
 def collect_protocol_version() -> int:
-    value = _match_version(
-        "PhonRec/backend/main.py", r"^PROTOCOL_VERSION\s*=\s*(\d+)"
-    )
-    return int(value)
+    rust_protocol = int(_match_version(
+        "PhonRec/frontend/src-tauri/src/main.rs", r"^const\s+ENGINE_PROTOCOL:\s*u32\s*=\s*(\d+);"
+    ))
+    installer_protocol = int(_match_version(
+        "installer.iss", r'ValueName:\s*"EngineProtocol";\s*ValueData:\s*"(\d+)"'
+    ))
+    if rust_protocol != installer_protocol:
+        raise ValueError(
+            f"引擎协议版本不一致：Rust={rust_protocol}, Installer={installer_protocol}"
+        )
+    return rust_protocol
 
 
 def main(argv: list[str] | None = None) -> int:

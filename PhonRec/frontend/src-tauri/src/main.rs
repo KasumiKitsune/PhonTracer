@@ -1,4 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -34,7 +35,21 @@ struct EngineStatus {
 }
 
 impl EngineStatus {
-    fn ready(connection: EngineConnection) -> Self {
+    fn ready(api_base: String, token: Option<String>) -> Self {
+        Self {
+            state: "ready".into(),
+            message: "分析引擎已就绪".into(),
+            connection: Some(EngineConnection {
+                api_base,
+                token: token.unwrap_or_default(),
+                protocol_version: ENGINE_PROTOCOL,
+                engine_version: "1.0.0".into(),
+            }),
+            download_url: DOWNLOAD_URL.into(),
+        }
+    }
+
+    fn ready_with_connection(connection: EngineConnection) -> Self {
         Self {
             state: "ready".into(),
             message: "分析引擎已就绪".into(),
@@ -651,110 +666,327 @@ fn parse_pcm_wav(bytes: &[u8]) -> Result<ParsedWav, String> {
 }
 
 fn quality_rule<'a>(rules: &'a Value, name: &str) -> (bool, &'a str) {
-    let rule = rules.get(name);
-    let enabled = rule
-        .and_then(|value| value.get("enabled"))
-        .and_then(Value::as_bool)
-        .unwrap_or(true);
-    let level = rule
-        .and_then(|value| value.get("level"))
-        .and_then(Value::as_str)
-        .unwrap_or("medium");
-    let level = if matches!(level, "low" | "medium" | "high") {
-        level
+    if let Some(rule) = rules.get(name) {
+        let enabled = rule
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        let level = rule
+            .get("level")
+            .and_then(Value::as_str)
+            .unwrap_or("medium");
+        let level = if matches!(level, "low" | "medium" | "high") {
+            level
+        } else {
+            "medium"
+        };
+        (enabled, level)
+    } else if rules.is_null() || (rules.is_object() && rules.as_object().unwrap().is_empty()) {
+        (true, "medium")
     } else {
-        "medium"
-    };
-    (enabled, level)
+        (false, "medium")
+    }
 }
 
-fn analyze_lightweight_quality(wav: &ParsedWav, rules: &Value) -> Value {
-    let (volume_enabled, volume_level) = quality_rule(rules, "volume");
-    let (clipping_enabled, clipping_level) = quality_rule(rules, "clipping");
-    let frame_size = ((wav.sample_rate as f64 * 0.02).round() as usize).max(1);
-    let mut active_rms = Vec::new();
-    for frame in wav.samples.chunks(frame_size) {
-        if frame.is_empty() {
+fn percentile(sorted: &[f64], p: f64) -> f64 {
+    if sorted.is_empty() {
+        return 0.0;
+    }
+    let rank = (p / 100.0 * (sorted.len() - 1) as f64).round() as usize;
+    sorted[rank.min(sorted.len() - 1)]
+}
+
+fn detect_creak_rust(samples: &[f32], sample_rate: u32) -> (bool, f64) {
+    if sample_rate == 0 || samples.is_empty() {
+        return (false, 0.0);
+    }
+    let mean = samples.iter().map(|s| *s as f64).sum::<f64>() / samples.len() as f64;
+    let window_size = ((sample_rate as f64 * 0.03).round() as usize).max(1);
+    let step_size = ((sample_rate as f64 * 0.01).round() as usize).max(1);
+    if samples.len() < window_size {
+        return (false, 0.0);
+    }
+
+    let min_lag = (sample_rate / 400) as usize;
+    let max_lag = (sample_rate / 50) as usize;
+    if min_lag >= max_lag || max_lag >= window_size {
+        return (false, 0.0);
+    }
+
+    let mut voiced_count = 0usize;
+    let mut creak_frames = 0usize;
+    let mut prev_peak_lag = None;
+
+    let mut offset = 0;
+    while offset + window_size <= samples.len() {
+        let chunk = &samples[offset..offset + window_size];
+        let rms = (chunk
+            .iter()
+            .map(|s| {
+                let d = *s as f64 - mean;
+                d * d
+            })
+            .sum::<f64>()
+            / window_size as f64)
+            .sqrt();
+
+        if rms >= 0.01 {
+            voiced_count += 1;
+            let r0 = chunk
+                .iter()
+                .map(|s| {
+                    let d = *s as f64 - mean;
+                    d * d
+                })
+                .sum::<f64>();
+
+            if r0 > 1e-12 {
+                let mut best_lag = min_lag;
+                let mut best_r = -1.0f64;
+                for lag in min_lag..=max_lag {
+                    let mut r = 0.0f64;
+                    for j in 0..(window_size - lag) {
+                        let s1 = chunk[j] as f64 - mean;
+                        let s2 = chunk[j + lag] as f64 - mean;
+                        r += s1 * s2;
+                    }
+                    if r > best_r {
+                        best_r = r;
+                        best_lag = lag;
+                    }
+                }
+
+                let strength = best_r / r0;
+                if strength > 0.35 {
+                    let pitch = sample_rate as f64 / best_lag as f64;
+                    let is_low_pitch = (45.0..=85.0).contains(&pitch);
+                    let high_jitter = if let Some(prev) = prev_peak_lag {
+                        let diff = (best_lag as f64 - prev as f64).abs();
+                        diff / prev as f64 > 0.25
+                    } else {
+                        false
+                    };
+                    if is_low_pitch || high_jitter {
+                        creak_frames += 1;
+                    }
+                    prev_peak_lag = Some(best_lag);
+                } else {
+                    prev_peak_lag = None;
+                }
+            }
+        }
+        offset += step_size;
+    }
+
+    if voiced_count == 0 {
+        return (false, 0.0);
+    }
+    let ratio = creak_frames as f64 / voiced_count as f64;
+    (ratio > 0.15, ratio)
+}
+
+fn analyze_lightweight_quality(samples: &[f32], sample_rate: u32, rules: &Value) -> Value {
+    let duration_ms = if sample_rate > 0 {
+        (samples.len() as f64 * 1000.0 / sample_rate as f64).round() as u64
+    } else {
+        0
+    };
+
+    let frame_size = ((sample_rate as f64 * 0.02).round() as usize).max(1);
+    let frame_count = if samples.is_empty() {
+        0
+    } else {
+        (samples.len() + frame_size - 1) / frame_size
+    };
+
+    let mut frame_rms = Vec::with_capacity(frame_count);
+    let mut frame_dbs = Vec::with_capacity(frame_count);
+    let mut frame_zcrs = Vec::with_capacity(frame_count);
+
+    for chunk in samples.chunks(frame_size) {
+        if chunk.is_empty() {
             continue;
         }
-        let square_sum: f64 = frame
+        let sq_sum: f64 = chunk
             .iter()
-            .map(|sample| (*sample as f64) * (*sample as f64))
+            .map(|s| (*s as f64) * (*s as f64))
             .sum();
-        let rms = (square_sum / frame.len() as f64).sqrt();
+        let rms = (sq_sum / chunk.len() as f64).sqrt();
         let db = 20.0 * (rms + 1e-10).log10();
-        if db > -45.0 {
-            active_rms.push(rms);
+        frame_rms.push(rms);
+        frame_dbs.push(db);
+
+        let zcr = if chunk.len() > 1 {
+            let mut crossings = 0usize;
+            for i in 0..(chunk.len() - 1) {
+                if (chunk[i] >= 0.0 && chunk[i + 1] < 0.0) || (chunk[i] < 0.0 && chunk[i + 1] >= 0.0) {
+                    crossings += 1;
+                }
+            }
+            crossings as f64 / (chunk.len() - 1) as f64
+        } else {
+            0.0
+        };
+        frame_zcrs.push(zcr);
+    }
+
+    let mut sorted_dbs = frame_dbs.clone();
+    sorted_dbs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    let p90_db = percentile(&sorted_dbs, 90.0);
+    let speech_thresh_db = (p90_db - 22.0).max(-52.0);
+
+    let mut is_candidate = vec![false; frame_dbs.len()];
+    for i in 0..frame_dbs.len() {
+        if frame_dbs[i] >= speech_thresh_db && frame_zcrs[i] < 0.38 {
+            is_candidate[i] = true;
         }
     }
-    let average_rms = if active_rms.is_empty() {
-        0.0
+
+    let mut is_speech = vec![false; frame_dbs.len()];
+    let mut run_start: Option<usize> = None;
+    for i in 0..is_candidate.len() {
+        if is_candidate[i] {
+            if run_start.is_none() {
+                run_start = Some(i);
+            }
+        } else if let Some(start) = run_start {
+            if i - start >= 2 {
+                for j in start..i {
+                    is_speech[j] = true;
+                }
+            }
+            run_start = None;
+        }
+    }
+    if let Some(start) = run_start {
+        if is_candidate.len() - start >= 2 {
+            for j in start..is_candidate.len() {
+                is_speech[j] = true;
+            }
+        }
+    }
+
+    let speech_frames_count = is_speech.iter().filter(|&&s| s).count();
+    let speech_ms = (speech_frames_count * 20) as u64;
+    let speech_ratio = if !frame_dbs.is_empty() {
+        speech_frames_count as f64 / frame_dbs.len() as f64
     } else {
-        active_rms.iter().sum::<f64>() / active_rms.len() as f64
+        0.0
     };
-    let volume_db = if average_rms > 0.0 {
-        20.0 * (average_rms + 1e-10).log10()
+
+    let active_rms_dbfs = if speech_frames_count > 0 {
+        let speech_rms_sum: f64 = (0..frame_dbs.len())
+            .filter(|&i| is_speech[i])
+            .map(|i| frame_rms[i])
+            .sum();
+        let mean_active_rms = speech_rms_sum / speech_frames_count as f64;
+        20.0 * (mean_active_rms + 1e-10).log10()
+    } else if !samples.is_empty() {
+        let global_sq: f64 = samples.iter().map(|s| (*s as f64) * (*s as f64)).sum();
+        let global_rms = (global_sq / samples.len() as f64).sqrt();
+        20.0 * (global_rms + 1e-10).log10()
     } else {
         -100.0
     };
-    let peak = wav
-        .samples
-        .iter()
-        .map(|sample| sample.abs() as f64)
-        .fold(0.0, f64::max);
-    let peak_db = 20.0 * (peak + 1e-10).log10();
-    let clipped_count = wav
-        .samples
-        .iter()
-        .filter(|sample| sample.abs() >= 0.99)
-        .count();
-    let clipping_ratio = if wav.samples.is_empty() {
-        0.0
+
+    let peak = samples.iter().map(|s| s.abs() as f64).fold(0.0f64, f64::max);
+    let peak_dbfs = 20.0 * (peak + 1e-10).log10();
+
+    let clipped_count = samples.iter().filter(|s| s.abs() >= 0.99).count();
+    let clipping_ratio = if !samples.is_empty() {
+        clipped_count as f64 / samples.len() as f64
     } else {
-        clipped_count as f64 / wav.samples.len() as f64
+        0.0
+    };
+
+    let mut active_dbs = Vec::new();
+    let mut noise_dbs = Vec::new();
+    for i in 0..frame_dbs.len() {
+        if is_speech[i] {
+            active_dbs.push(frame_dbs[i]);
+        } else {
+            noise_dbs.push(frame_dbs[i]);
+        }
+    }
+    active_dbs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    noise_dbs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    let active_p75 = if !active_dbs.is_empty() {
+        percentile(&active_dbs, 75.0)
+    } else {
+        -100.0
+    };
+    let noise_p25 = if !noise_dbs.is_empty() {
+        percentile(&noise_dbs, 25.0)
+    } else if !sorted_dbs.is_empty() {
+        percentile(&sorted_dbs, 25.0)
+    } else {
+        -100.0
+    };
+    let snr_db = if speech_frames_count > 0 {
+        (active_p75 - noise_p25).clamp(0.0, 60.0)
+    } else {
+        0.0
+    };
+
+    let dc_offset = if !samples.is_empty() {
+        (samples.iter().map(|s| *s as f64).sum::<f64>() / samples.len() as f64).abs()
+    } else {
+        0.0
+    };
+
+    let (_, creak_ratio) = detect_creak_rust(samples, sample_rate);
+
+    let (speech_enabled, speech_level) = quality_rule(rules, "speech");
+    let (volume_enabled, volume_level) = quality_rule(rules, "volume");
+    let (clipping_enabled, clipping_level) = quality_rule(rules, "clipping");
+    let (noise_enabled, noise_level) = quality_rule(rules, "noise");
+    let (creak_enabled, creak_level) = quality_rule(rules, "creak");
+    let (dc_enabled, dc_level) = quality_rule(rules, "dc_offset");
+
+    let (min_speech_ms, min_speech_ratio) = match speech_level {
+        "low" => (100.0, 0.04),
+        "high" => (300.0, 0.15),
+        _ => (140.0, 0.08),
     };
 
     let (quiet_threshold, loud_threshold) = match volume_level {
         "low" => (-40.0, -3.0),
         "high" => (-30.0, -9.0),
-        _ => (-35.0, -6.0),
+        _ => (-34.0, -6.0),
     };
+
     let (clip_review, clip_retry) = match clipping_level {
         "low" => (0.003, 0.01),
         "high" => (0.0, 0.001),
-        _ => (0.0001, 0.003),
+        _ => (0.0001, 0.002),
     };
-    let too_quiet = volume_db < quiet_threshold;
-    let too_loud = volume_db > loud_threshold;
-    let clipped = clipping_ratio > clip_review;
-    let severe_clipping = clipping_ratio >= clip_retry;
-    let mut retry_issues = Vec::new();
-    let mut review_issues = Vec::new();
-    if volume_enabled && too_quiet {
-        retry_issues.push("有效音量过小");
-    }
-    if volume_enabled && too_loud {
-        retry_issues.push("有效音量过大");
-    }
-    if clipping_enabled && severe_clipping {
-        retry_issues.push("严重截断");
-    } else if clipping_enabled && clipped {
-        review_issues.push("轻微截断");
-    }
-    let decision = if !retry_issues.is_empty() {
-        "retry"
-    } else if !review_issues.is_empty() {
-        "review"
-    } else {
-        "accept"
+
+    let (noise_retry, noise_review) = match noise_level {
+        "low" => (3.0, 8.0),
+        "high" => (10.0, 18.0),
+        _ => (6.0, 14.0),
     };
-    let mut issues = retry_issues.clone();
-    issues.extend(review_issues.iter().copied());
-    let score = if !retry_issues.is_empty() {
-        55
-    } else {
-        100usize.saturating_sub(review_issues.len() * 8)
+
+    let creak_threshold = match creak_level {
+        "low" => 0.25,
+        "high" => 0.08,
+        _ => 0.15,
     };
+
+    let dc_threshold = match dc_level {
+        "low" => 0.05,
+        "high" => 0.015,
+        _ => 0.03,
+    };
+
+    let too_short = duration_ms < 300;
+    let no_speech = (speech_ms as f64) < min_speech_ms || speech_ratio < min_speech_ratio;
+    let speech_abnormal = too_short || no_speech;
+
+    let too_quiet = active_rms_dbfs < quiet_threshold;
+    let too_loud = active_rms_dbfs > loud_threshold;
     let volume_status = if too_quiet {
         "too_quiet"
     } else if too_loud {
@@ -762,38 +994,129 @@ fn analyze_lightweight_quality(wav: &ParsedWav, rules: &Value) -> Value {
     } else {
         "normal"
     };
-    let unavailable =
-        |label: &str| json!({"enabled": false, "abnormal": false, "score": 0.0, "label": label});
+
+    let clipped = clipping_ratio > clip_review;
+    let severe_clipping = clipping_ratio >= clip_retry;
+
+    let very_noisy = snr_db < noise_retry && !no_speech;
+    let moderate_noise = snr_db < noise_review && !very_noisy && !no_speech;
+    let noise_abnormal = very_noisy || moderate_noise;
+
+    let creaky = creak_ratio > creak_threshold;
+    let dc_abnormal = dc_offset > dc_threshold;
+
+    let mut retry_issues = Vec::new();
+    let mut review_issues = Vec::new();
+
+    if speech_enabled && too_short {
+        retry_issues.push("录音过短");
+    }
+    if speech_enabled && no_speech {
+        retry_issues.push("未检测到足够语音");
+    }
+    if clipping_enabled && severe_clipping {
+        retry_issues.push("严重截断");
+    } else if clipping_enabled && clipped {
+        review_issues.push("轻微截断");
+    }
+    if volume_enabled && too_quiet {
+        retry_issues.push("有效音量过小");
+    }
+    if volume_enabled && too_loud {
+        retry_issues.push("有效音量过大");
+    }
+    if noise_enabled && very_noisy {
+        retry_issues.push("信噪比过低");
+    } else if noise_enabled && moderate_noise {
+        review_issues.push("背景噪声偏高");
+    }
+    if dc_enabled && dc_abnormal {
+        review_issues.push("直流偏移偏高");
+    }
+    if creak_enabled && creaky {
+        review_issues.push("可能存在嘎裂声");
+    }
+
+    let decision = if !retry_issues.is_empty() {
+        "retry"
+    } else if !review_issues.is_empty() {
+        "review"
+    } else {
+        "accept"
+    };
+
+    let grade = if decision == "retry" {
+        "需重录"
+    } else if decision == "review" {
+        "建议复核"
+    } else {
+        "良好"
+    };
+
+    let mut issues = retry_issues.clone();
+    issues.extend(review_issues.iter().copied());
+
+    let mut score = 100usize;
+    if !retry_issues.is_empty() {
+        score = score.saturating_sub(45);
+    }
+    score = score.saturating_sub((review_issues.len() * 8).min(30));
+
     json!({
         "decision": decision,
-        "grade": if decision == "retry" { "需重录" } else if decision == "review" { "建议复核" } else { "良好" },
+        "grade": grade,
         "score": score,
         "issues": issues,
         "recommendations": issues,
         "config": rules,
+        "speech": {
+            "enabled": speech_enabled,
+            "abnormal": speech_enabled && speech_abnormal,
+            "score": speech_ratio,
+            "label": if !speech_enabled { "未启用" } else if no_speech { "语音不足" } else if too_short { "录音过短" } else { "正常" }
+        },
         "volume": {
             "enabled": volume_enabled,
             "status": if volume_enabled { volume_status } else { "disabled" },
-            "score": volume_db,
+            "score": active_rms_dbfs,
             "label": if !volume_enabled { "未启用" } else if too_quiet { "音量过小" } else if too_loud { "音量过大" } else { "正常" }
         },
         "clipping": {
             "enabled": clipping_enabled,
             "abnormal": clipping_enabled && clipped,
             "score": clipping_ratio,
-            "label": if !clipping_enabled { "未启用" } else if clipped { "音频截断" } else { "正常" }
+            "label": if !clipping_enabled { "未启用" } else if severe_clipping { "严重截断" } else if clipped { "轻微截断" } else { "正常" }
         },
-        "speech": unavailable("完整模式可用"),
-        "noise": unavailable("完整模式可用"),
-        "creak": unavailable("完整模式可用"),
-        "dc_offset": unavailable("完整模式可用"),
+        "noise": {
+            "enabled": noise_enabled,
+            "abnormal": noise_enabled && noise_abnormal,
+            "score": snr_db,
+            "label": if !noise_enabled { "未启用" } else if very_noisy { "噪声过高" } else if moderate_noise { "背景噪声偏高" } else { "正常" }
+        },
+        "creak": {
+            "enabled": creak_enabled,
+            "abnormal": creak_enabled && creaky,
+            "status": if creak_enabled && creaky { "warn" } else { "pass" },
+            "score": creak_ratio,
+            "label": if !creak_enabled { "未启用" } else if creaky { "可能有嘎裂声" } else { "正常" },
+            "detail": if !creak_enabled { "未启用".to_string() } else if creaky { format!("检测到低频不规则脉冲/气泡音 (占比 {:.1}%)", creak_ratio * 100.0) } else { "未检测到明显嘎裂声".to_string() },
+            "hint": if !creak_enabled { "".to_string() } else if creaky { "发音低音区或词尾可能存在嘎裂声/炸音，建议试听复核".to_string() } else { "声带振动周期均匀".to_string() }
+        },
+        "dc_offset": {
+            "enabled": dc_enabled,
+            "abnormal": dc_enabled && dc_abnormal,
+            "score": dc_offset,
+            "label": if !dc_enabled { "未启用" } else if dc_abnormal { "偏移过高" } else { "正常" }
+        },
         "metrics": {
-            "duration_ms": if wav.sample_rate > 0 { wav.samples.len() as u64 * 1000 / wav.sample_rate as u64 } else { 0 },
-            "active_rms_dbfs": volume_db,
-            "peak_dbfs": peak_db,
+            "duration_ms": duration_ms,
+            "speech_ms": speech_ms,
+            "speech_ratio": speech_ratio,
+            "active_rms_dbfs": active_rms_dbfs,
+            "peak_dbfs": peak_dbfs,
             "clipping_ratio": clipping_ratio,
-            "speech_ratio": 0.0,
-            "snr_db": 0.0
+            "snr_db": snr_db,
+            "dc_offset": dc_offset
         }
     })
 }
@@ -1284,8 +1607,8 @@ fn standalone_project_import(app: AppHandle, archive_bytes: Vec<u8>) -> Result<V
     result
 }
 
-fn add_archive_directory(
-    writer: &mut zip::ZipWriter<Cursor<Vec<u8>>>,
+fn add_archive_directory<W: Write + std::io::Seek>(
+    writer: &mut zip::ZipWriter<W>,
     root: &Path,
     current: &Path,
 ) -> Result<(), String> {
@@ -1367,7 +1690,7 @@ fn standalone_audio_save(
     let duration_ms = parsed.samples.len() as u64 * 1000 / parsed.sample_rate as u64;
     let (year, month, day, hour, minute, second) = utc_date_time_parts();
     let recorded_at = format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z");
-    let quality = analyze_lightweight_quality(&parsed, &quality_rules);
+    let quality = analyze_lightweight_quality(&parsed.samples, parsed.sample_rate, &quality_rules);
     let stored = quality.get("decision").and_then(Value::as_str) != Some("retry");
 
     if stored {
@@ -1454,6 +1777,181 @@ fn standalone_audio_read(
     let relative = format!("audio/{safe_speaker}/{safe_speaker}_{safe_word}.wav");
     let path = resolve_existing_managed_file(&workspace, &relative)?;
     fs::read(path).map_err(|error| format!("读取录音失败：{error}"))
+}
+
+#[tauri::command]
+fn standalone_audio_analyze(
+    app: AppHandle,
+    speaker_id: String,
+    word_id: String,
+    quality_rules: Value,
+) -> Result<Value, String> {
+    let wav_bytes = standalone_audio_read(app.clone(), speaker_id.clone(), word_id.clone())?;
+    let parsed = parse_pcm_wav(&wav_bytes)?;
+    let quality = analyze_lightweight_quality(&parsed.samples, parsed.sample_rate, &quality_rules);
+    let workspace = workspace_dir(&app)?;
+    if let Ok(mut state) = standalone_project_load(app.clone()) {
+        if let Some(item) = state
+            .get_mut("speakers")
+            .and_then(Value::as_object_mut)
+            .and_then(|speakers| speakers.get_mut(&speaker_id))
+            .and_then(Value::as_object_mut)
+            .and_then(|speaker| speaker.get_mut("items"))
+            .and_then(Value::as_object_mut)
+            .and_then(|items| items.get_mut(&word_id))
+            .and_then(Value::as_object_mut)
+        {
+            item.insert("quality".to_string(), quality.clone());
+            let _ = write_project_state_atomic(&workspace, &state);
+        }
+    }
+    Ok(json!({
+        "status": "success",
+        "quality": quality
+    }))
+}
+
+fn write_standalone_project_archive(workspace: &Path, destination: &Path) -> Result<(), String> {
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent).map_err(|error| format!("创建归档目录失败：{error}"))?;
+    }
+    let file = fs::File::create(destination).map_err(|error| format!("创建工程归档文件失败：{error}"))?;
+    let mut writer = zip::ZipWriter::new(file);
+    add_archive_directory(&mut writer, workspace, workspace)?;
+    writer.finish().map_err(|error| format!("完成工程归档失败：{error}"))?;
+    Ok(())
+}
+
+fn discover_phontracer(_app: &AppHandle) -> Result<(PathBuf, Vec<String>), String> {
+    if let Some(path) = std::env::var_os("PHONTRACER_EXE_PATH") {
+        let exe = PathBuf::from(path);
+        if exe.is_file() {
+            return Ok((exe, Vec::new()));
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_64KEY};
+        use winreg::RegKey;
+        for root in [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE] {
+            let root_key = RegKey::predef(root);
+            if let Ok(key) = root_key.open_subkey_with_flags(
+                r"Software\KasumiKitsune\PhonTracer",
+                KEY_READ | KEY_WOW64_64KEY,
+            ) {
+                if let Ok(install_dir) = key.get_value::<String, _>("InstallDir") {
+                    let exe = PathBuf::from(install_dir).join("PhonTracer.exe");
+                    if exe.is_file() {
+                        return Ok((exe, Vec::new()));
+                    }
+                }
+            }
+        }
+    }
+
+    if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(current_dir) = current_exe.parent() {
+            let candidates = [
+                current_dir.join("PhonTracer.exe"),
+                current_dir.join("../PhonTracer/PhonTracer.exe"),
+                current_dir.join("../../PhonTracer.exe"),
+                current_dir.join("../../../PhonTracer.exe"),
+                #[cfg(target_os = "macos")]
+                PathBuf::from("/Applications/PhonTracer.app/Contents/MacOS/PhonTracer"),
+            ];
+            for candidate in candidates {
+                if candidate.is_file() {
+                    return Ok((candidate, Vec::new()));
+                }
+            }
+
+            let mut check_dir = Some(current_dir);
+            for _ in 0..6 {
+                if let Some(dir) = check_dir {
+                    let main_py = dir.join("main.py");
+                    if main_py.is_file() {
+                        let python_candidates = [
+                            dir.join(".venv").join("Scripts").join("python.exe"),
+                            dir.join(".venv").join("bin").join("python"),
+                            dir.join("venv").join("Scripts").join("python.exe"),
+                            dir.join("venv").join("bin").join("python"),
+                            PathBuf::from("python"),
+                            PathBuf::from("python3"),
+                        ];
+                        for py in python_candidates {
+                            if py.is_file() || py == Path::new("python") || py == Path::new("python3") {
+                                return Ok((py, vec![main_py.to_string_lossy().to_string()]));
+                            }
+                        }
+                    }
+                    check_dir = dir.parent();
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+
+    Err("未检测到 PhonTracer 主程序，请确认已安装或配置环境变量 PHONTRACER_EXE_PATH".to_string())
+}
+
+#[tauri::command]
+fn open_in_phontracer(
+    app: AppHandle,
+    speaker_id: Option<String>,
+    word_id: Option<String>,
+) -> Result<Value, String> {
+    let workspace = workspace_dir(&app)?;
+    let state = standalone_project_load(app.clone())?;
+    if state
+        .get("speakers")
+        .and_then(Value::as_object)
+        .map(|value| value.is_empty())
+        .unwrap_or(true)
+    {
+        return Err("当前工程尚无发音人数据，无法在 PhonTracer 中打开".to_string());
+    }
+    if !workspace.join("project.json").exists() {
+        write_project_state_atomic(&workspace, &state)?;
+    }
+    let parent = workspace
+        .parent()
+        .ok_or_else(|| "工作区缺少父目录".to_string())?;
+    let handoff_dir = parent.join("handoff");
+    let handoff_path = handoff_dir.join("PhonRec_Handoff.teproj");
+    write_standalone_project_archive(&workspace, &handoff_path)?;
+
+    let (exe, base_args) = discover_phontracer(&app)?;
+    let mut cmd = Command::new(&exe);
+    for arg in &base_args {
+        cmd.arg(arg);
+    }
+    cmd.arg(&handoff_path);
+    if let Some(ref spk) = speaker_id {
+        if !spk.is_empty() {
+            cmd.arg("--speaker").arg(spk);
+        }
+    }
+    if let Some(ref item) = word_id {
+        if !item.is_empty() {
+            cmd.arg("--item").arg(item);
+        }
+    }
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::null());
+    cmd.stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000);
+    }
+    cmd.spawn().map_err(|e| format!("启动 PhonTracer 失败：{e}"))?;
+
+    Ok(json!({
+        "status": "success",
+        "archivePath": handoff_path.to_string_lossy().to_string()
+    }))
 }
 
 fn utc_date_time_parts() -> (i64, i64, i64, i64, i64, i64) {
@@ -1754,7 +2252,7 @@ fn start_engine(app: &AppHandle, runtime: &mut EngineRuntime) -> EngineStatus {
     match result {
         Ok(connection) => {
             runtime.process = Some(child);
-            EngineStatus::ready(connection)
+            EngineStatus::ready_with_connection(connection)
         }
         Err(message) => {
             let _ = child.kill();
@@ -1765,18 +2263,13 @@ fn start_engine(app: &AppHandle, runtime: &mut EngineRuntime) -> EngineStatus {
 }
 
 #[tauri::command]
-fn get_engine_status(state: State<'_, EngineState>) -> EngineStatus {
-    let mut runtime = state.0.lock().expect("分析引擎状态锁已损坏");
-    refresh_process_status(&mut runtime);
-    runtime.status.clone()
+fn get_engine_status() -> EngineStatus {
+    EngineStatus::ready("native://tauri".to_string(), None)
 }
 
 #[tauri::command]
-fn retry_engine(app: AppHandle, state: State<'_, EngineState>) -> EngineStatus {
-    let mut runtime = state.0.lock().expect("分析引擎状态锁已损坏");
-    let status = start_engine(&app, &mut runtime);
-    runtime.status = status.clone();
-    status
+fn retry_engine() -> EngineStatus {
+    EngineStatus::ready("native://tauri".to_string(), None)
 }
 
 #[tauri::command]
@@ -2593,15 +3086,9 @@ fn main() {
         .manage(EngineState::default())
         .manage(AudioState::default())
         .setup(|app| {
-            let handle = app.handle().clone();
-            // 引擎发现、进程启动和健康检查都可能耗时。放到后台线程，
-            // 避免阻塞 Tauri 主循环 and WebView 的首次绘制。
-            std::thread::spawn(move || {
-                let state = handle.state::<EngineState>();
-                let mut runtime = state.0.lock().expect("分析引擎状态锁已损坏");
-                let status = start_engine(&handle, &mut runtime);
-                runtime.status = status;
-            });
+            let state = app.state::<EngineState>();
+            let mut runtime = state.0.lock().expect("分析引擎状态锁已损坏");
+            runtime.status = EngineStatus::ready("native://tauri".to_string(), None);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -2615,6 +3102,8 @@ fn main() {
             standalone_project_export,
             standalone_audio_save,
             standalone_audio_read,
+            standalone_audio_analyze,
+            open_in_phontracer,
             standalone_export_wav_folder,
             load_settings,
             save_settings,
@@ -2713,7 +3202,7 @@ mod tests {
         };
         let mut runtime = EngineRuntime {
             process: Some(child),
-            status: EngineStatus::ready(connection),
+            status: EngineStatus::ready_with_connection(connection),
         };
         for _ in 0..50 {
             refresh_process_status(&mut runtime);
@@ -2940,7 +3429,7 @@ mod tests {
             channels: 1,
             samples: vec![0.001; 16_000],
         };
-        let quiet_result = analyze_lightweight_quality(&quiet, &rules);
+        let quiet_result = analyze_lightweight_quality(&quiet.samples, quiet.sample_rate, &rules);
         assert_eq!(quiet_result["decision"], "retry");
         assert_eq!(quiet_result["volume"]["status"], "too_quiet");
 
@@ -2951,7 +3440,7 @@ mod tests {
             channels: 1,
             samples: mild_samples,
         };
-        let mild_result = analyze_lightweight_quality(&mild, &rules);
+        let mild_result = analyze_lightweight_quality(&mild.samples, mild.sample_rate, &rules);
         assert_eq!(mild_result["decision"], "review");
         assert_eq!(mild_result["clipping"]["abnormal"], true);
 
@@ -2962,13 +3451,27 @@ mod tests {
             channels: 1,
             samples: severe_samples,
         };
-        let severe_result = analyze_lightweight_quality(&severe, &rules);
+        let severe_result = analyze_lightweight_quality(&severe.samples, severe.sample_rate, &rules);
         assert_eq!(severe_result["decision"], "retry");
         assert!(severe_result["issues"]
             .as_array()
             .unwrap()
             .contains(&json!("严重截断")));
-        assert_eq!(severe_result["speech"]["label"], "完整模式可用");
+        assert_eq!(severe_result["speech"]["label"], "未启用");
+
+        // Verify full 6-rule detection
+        let all_rules = json!({
+            "speech": {"enabled": true, "level": "medium"},
+            "volume": {"enabled": true, "level": "medium"},
+            "clipping": {"enabled": true, "level": "medium"},
+            "noise": {"enabled": true, "level": "medium"},
+            "creak": {"enabled": true, "level": "medium"},
+            "dc_offset": {"enabled": true, "level": "medium"}
+        });
+        let full_result = analyze_lightweight_quality(&quiet.samples, quiet.sample_rate, &all_rules);
+        assert_eq!(full_result["creak"]["status"], "pass");
+        assert_ne!(full_result["speech"]["label"], "完整模式可用");
+        assert_ne!(full_result["creak"]["label"], "完整模式可用");
     }
 
     #[test]
