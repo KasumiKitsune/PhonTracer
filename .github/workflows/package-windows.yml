@@ -39,7 +39,7 @@ jobs:
 
     - name: 使用 PyInstaller 构建
       run: |
-        pyinstaller --noconfirm --clean ToneExtractor_Suite.spec
+        pyinstaller --noconfirm --clean PhonTracer_Suite.spec
 
     - name: 创建 Windows x64 压缩包
       shell: pwsh

@@ -13,7 +13,7 @@ import warnings
 warnings.filterwarnings("ignore", category=UserWarning, message=".*Tight layout not applied.*")
 
 from scipy.stats import gaussian_kde
-from .data_utils import split_into_syllables, get_export_text_for_item, get_item_syllable_bounds, sample_formant_points_by_bounds
+from .data_utils import split_into_syllables, get_export_text_for_item, get_item_syllable_bounds, sample_formant_points_by_bounds, make_safe_excel_sheet_name
 
 _GUI_IMPORT_ERROR = None
 
@@ -1022,12 +1022,12 @@ class AcousticChartExporter:
                 if is_paginated_heatmap:
                     current_page_rows = pagination_state['pages'][P] if P < len(pagination_state['pages']) else []
                     tg_name = current_page_rows[0]['group'] if current_page_rows else ""
-                    fig.text(0.5, 0.96, f"[预览提示] 附录图册模式已自动分页。当前第 {P+1}/{total_pages} 页 (组别: {tg_name}，包含 {len(current_page_rows)} 个词语)。",
-                             ha='center', va='center', fontsize=10, color='#991B1B', weight='bold',
+                    fig.text(0.56, 0.96, f"[预览提示] 附录图册模式已自动分页。当前第 {P+1}/{total_pages} 页 (组别: {tg_name}，包含 {len(current_page_rows)} 个词语)。",
+                         ha='center', va='center', fontsize=9, color='#991B1B', weight='bold',
                              bbox=dict(facecolor='#FEF2F2', edgecolor='#FCA5A5', boxstyle='round,pad=0.4'))
                 else:
-                    fig.text(0.5, 0.96, f"[预览提示] 当前共 {total_groups} 组，分 {total_pages} 页显示。当前预览第 {P+1} 页（显示第 {start_idx+1}~{end_idx} 组）。导出时将自动分页/完整输出。",
-                             ha='center', va='center', fontsize=10, color='#991B1B', weight='bold',
+                    fig.text(0.56, 0.96, f"[预览提示] 当前共 {total_groups} 组，分 {total_pages} 页显示。当前预览第 {P+1} 页（显示第 {start_idx+1}~{end_idx} 组）。导出时将自动分页/完整输出。",
+                         ha='center', va='center', fontsize=9, color='#991B1B', weight='bold',
                              bbox=dict(facecolor='#FEF2F2', edgecolor='#FCA5A5', boxstyle='round,pad=0.4'))
 
         return fig
@@ -3689,7 +3689,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         self.initial_mode = mode
         self.all_speakers = all_speakers or []
 
-        self.title("声学图表导出 - 声视化工具箱")
+        self.title("PhonTracer语音学标注与声学分析系统 V1.0 - 声学图表导出")
         self.geometry("980x640")
         self.resizable(True, True)
         # self.transient(parent)
@@ -4492,7 +4492,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         label_to_mode = {label: mode for mode, label in mode_to_label.items()}
 
         dialog = ctk.CTkToplevel(self)
-        dialog.title("图表分组规则")
+        dialog.title("PhonTracer语音学标注与声学分析系统 V1.0 - 图表分组规则")
         dialog.geometry("680x620")
         dialog.resizable(False, False)
         dialog.transient(self)
@@ -5783,7 +5783,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         self._export_progress_queue = queue.Queue()
 
         prog = ctk.CTkToplevel(self)
-        prog.title("导出进行中")
+        prog.title("PhonTracer语音学标注与声学分析系统 V1.0 - 导出进行中")
         prog.geometry("380x150")
         prog.resizable(False, False)
         prog.transient(self)

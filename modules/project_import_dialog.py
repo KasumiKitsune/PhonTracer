@@ -3,6 +3,7 @@ import queue
 import threading
 import tkinter as tk
 import customtkinter as ctk
+from .version import APP_NAME, __version__
 from .project_manager import read_project_metadata_from_archive
 
 class ProjectImportPreviewDialog(ctk.CTkToplevel):
@@ -12,7 +13,7 @@ class ProjectImportPreviewDialog(ctk.CTkToplevel):
         self.app = app
         self.zip_path = zip_path
         
-        self.title("导入工程")
+        self.title(f"{APP_NAME}语音学标注与声学分析系统 V{__version__} - 导入工程")
         self.resizable(True, True)
         
         self.configure(fg_color=("#FFFFFF", "#1A1D24"))

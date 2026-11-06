@@ -12,7 +12,7 @@ class AboutDialog(ctk.CTkToplevel):
         self.parent = parent
         self.check_update_callback = check_update_callback
         
-        self.title(f"关于 {APP_NAME}")
+        self.title(f"{APP_NAME}语音学标注与声学分析系统 V{__version__} - 关于")
         self.resizable(False, False)
         
         # 居中显示
@@ -83,7 +83,7 @@ class AboutDialog(ctk.CTkToplevel):
         
         lbl_desc = ctk.CTkLabel(
             card, 
-            text="声调提取与分析工具 | Pitch Extraction & Analysis Tool", 
+            text="语音学标注与声学分析系统 | Phonetic Annotation & Acoustic Analysis System",
             font=ctk.CTkFont(family="Microsoft YaHei", size=12),
             text_color=("#6B7280", "#9CA3AF")
         )
@@ -94,7 +94,7 @@ class AboutDialog(ctk.CTkToplevel):
         ver_frame.pack(pady=(0, 10))
         lbl_ver = ctk.CTkLabel(
             ver_frame, 
-            text=f"Version {__version__}", 
+            text=f"Version V{__version__}",
             font=ctk.CTkFont(family="Consolas", size=11, weight="bold"),
             text_color=("#2563EB", "#60A5FA"),
             padx=10,
@@ -105,7 +105,7 @@ class AboutDialog(ctk.CTkToplevel):
         # 简介文本
         lbl_intro = ctk.CTkLabel(
             card,
-            text="PhonTracer 是一款专为语言学研究和方言调查设计的声调分析软件。\n支持多音轨提取、基频参数等分点运算及声谱图交互式调整。",
+            text="PhonTracer 是一款专为语言学研究和方言调查设计的语音学标注与声学分析系统。\n支持多音轨提取、基频参数等分点运算及声谱图交互式调整。",
             font=ctk.CTkFont(family="Microsoft YaHei", size=12),
             text_color=("#4B5563", "#D1D5DB"),
             justify="center"

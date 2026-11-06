@@ -1,6 +1,6 @@
 [package]
 name = "phonrec"
-version = "1.3.0"
+version = "1.0.0"
 description = "PhonTracer 配套多发音人录音工具"
 authors = ["KasumiKitsune"]
 edition = "2021"

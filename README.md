@@ -4,7 +4,7 @@
   <p><strong>面向语音学标注与声学分析的桌面工具套件</strong></p>
 
   <p>
-    <a href="https://github.com/KasumiKitsune/PhonTracer/releases"><img src="https://img.shields.io/badge/release-v1.3.0-blue.svg" alt="Release"></a>
+    <a href="https://github.com/KasumiKitsune/PhonTracer/releases"><img src="https://img.shields.io/badge/release-v1.0.0-blue.svg" alt="Release"></a>
     <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white" alt="Python"></a>
     <a href="#安装"><img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-lightgrey.svg" alt="Platform"></a>
     <img src="https://img.shields.io/badge/UI-CustomTkinter-blue" alt="UI">
@@ -274,9 +274,9 @@ PhonRec 是基于 React、Vite 与 Tauri v2 构建的轻量化录音辅助工具
 | 主套件安装 | Windows ARM64 | `PhonTracer_Setup_Windows_ARM64.exe` | 原生 ARM64 主套件 |
 | 主套件便携 | Windows ARM64 | `PhonTracer_Suite-Windows-ARM64.zip` | 原生 ARM64；**不含独立 PhonRec** |
 | 主套件 | macOS Apple Silicon | `PhonTracer_Suite-macOS.dmg` | PhonTracer 与 Toolkit；当前工作流目标为 ARM64 |
-| 独立录音工具 | Windows x64 | `PhonRec_1.3.0_x64-setup.exe` | PhonRec；可独立运行，也可连接已安装的兼容分析引擎 |
-| 独立录音工具 | Windows ARM64 | `PhonRec_1.3.0_arm64-setup.exe` | 原生 ARM64 PhonRec |
-| 独立录音工具 | macOS Apple Silicon | `PhonRec_1.3.0_aarch64.dmg` | 最低 macOS 12 |
+| 独立录音工具 | Windows x64 | `PhonRec_1.0.0_x64-setup.exe` | PhonRec；可独立运行，也可连接已安装的兼容分析引擎 |
+| 独立录音工具 | Windows ARM64 | `PhonRec_1.0.0_arm64-setup.exe` | 原生 ARM64 PhonRec |
+| 独立录音工具 | macOS Apple Silicon | `PhonRec_1.0.0_aarch64.dmg` | 最低 macOS 12 |
 
 Windows 便携版解压后可运行 `PhonTracer.exe`、`Toolkit.exe` 或 `PhonTracerCLI.exe`。PhonRec 需要单独下载。macOS 用户将 DMG 中的 `.app` 拖入“应用程序”目录；主套件当前没有在配置中声明精确最低 macOS 版本，PhonRec 明确要求 macOS 12 或更高版本。
 
@@ -329,7 +329,7 @@ README 只提供快速概览。完整操作步骤、参数说明和进阶工作�
 ```bash
 python -m pytest -q tests PhonRec/backend/test_backend.py
 python -m compileall -q main.py cli.py toolkit.py modules tests PhonRec/backend
-python scripts/check_release_version.py --expected v1.3.0
+python scripts/check_release_version.py --expected v1.0.0
 ```
 
 PhonRec 前端与 Rust 原生层：
@@ -346,16 +346,14 @@ cargo test --manifest-path src-tauri/Cargo.toml
 
 #### 更新与发布
 - 可在软件的“关于”窗口中手动检查 GitHub Releases 更新。
-- GitHub Actions 会在推送版本标签时基于 `ToneExtractor_Suite.spec` 自动构建跨平台发布套件。
-- 发布准备、资产核对和人工验收见 [发布检查清单](docs/RELEASE_CHECKLIST.md)。
+- GitHub Actions 会在推送版本标签时基于 `PhonTracer_Suite.spec` 自动构建跨平台发布套件。
 
-#### 数据、支持与工程格式
+#### 核心文档与工程格式
 
-- [隐私与本地数据说明](PRIVACY.md)
-- [支持指南](SUPPORT.md)
-- [安全策略](SECURITY.md)
 - [架构与共享事实源](docs/ARCHITECTURE.md)
 - [`.teproj` 工程格式 1.0](docs/PROJECT_FORMAT_V1.md)
+- [论文使用与写作指南](docs/PAPER_USAGE_GUIDE.md)
+- [PhonRec 操作指南](docs/PHONREC_OPERATION_GUIDE.md)
 
 ---
 
@@ -365,7 +363,7 @@ cargo test --manifest-path src-tauri/Cargo.toml
 - F0 范围估计和共振峰参数建议用于辅助配置，不是最终分析结论。
 - 主程序与 `Toolkit` 的拖拽行为不同：主程序支持窗口级拖拽，`Toolkit` 为规避 GIL 锁冲突限制了外部文件拖入，请使用界面按钮导入。
 - 自动保存用于内部恢复；需要归档、迁移或分享时，请显式导出 `.teproj` 工程。
-- Toolkit 自定义脚本采用进程内受控执行，不是操作系统级安全隔离；只运行可信脚本，详见[威胁模型](docs/THREAT_MODEL.md)。
+- 本软件纯单机离线运行，零遥测、不上传任何录音与工程数据（主程序本地工作区与设置默认位于 `~/.phon_tracer/`）；Toolkit 自定义脚本为进程内执行，请仅运行可信脚本。
 
 ---
 

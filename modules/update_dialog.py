@@ -2,6 +2,7 @@ import tkinter as tk
 import customtkinter as ctk
 import webbrowser
 from modules.updater import save_ignored_version
+from modules.version import APP_NAME, __version__
 
 class UpdateDialog(ctk.CTkToplevel):
     def __init__(self, parent, info, is_manual=False):
@@ -14,7 +15,7 @@ class UpdateDialog(ctk.CTkToplevel):
         self.publish_date = info.get("publish_date", "")
         self.is_manual = is_manual
 
-        self.title("检查更新")
+        self.title(f"{APP_NAME}语音学标注与声学分析系统 V{__version__} - 检查更新")
         self.resizable(False, False)
         
         # 居中显示
@@ -53,8 +54,7 @@ class UpdateDialog(ctk.CTkToplevel):
         lbl_title.pack(fill="x")
         
         # 版本比对信息
-        from modules.version import __version__
-        version_text = f"当前版本：v{__version__}   ➔   最新版本：{self.latest_version}"
+        version_text = f"当前版本：V{__version__}   ➔   最新版本：{self.latest_version}"
         if self.publish_date:
             version_text += f" ({self.publish_date})"
             

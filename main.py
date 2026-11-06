@@ -120,7 +120,7 @@ def show_splash_and_load(startup_files=None):
 
     # 中文主标题
     title_lbl = ctk.CTkLabel(
-        right_frame, text="声调提取与分析工具", 
+        right_frame, text="语音学标注与声学分析系统",
         font=ctk.CTkFont(family="Microsoft YaHei", size=18, weight="bold"), 
         text_color="#00C4FF", # 鲜艳的亮青色
         anchor="w"
@@ -129,7 +129,7 @@ def show_splash_and_load(startup_files=None):
     
     # 英文副标题
     en_subtitle = ctk.CTkLabel(
-        right_frame, text=f"PITCH EXTRACTION & ANALYSIS TOOL  v{__version__}",
+        right_frame, text=f"PHONETIC ANNOTATION & ACOUSTIC ANALYSIS SYSTEM V{__version__}",
         font=ctk.CTkFont(family="Arial", size=10, weight="bold"), 
         text_color="#A3A3A3",
         anchor="w"

@@ -11,7 +11,7 @@ from .data_utils import split_into_syllables
 class VisualSplitter(ctk.CTkToplevel):
     def __init__(self, master, snd, icons, callback, existing_items=None, vad_segments=None, word_items=None):
         super().__init__(master)
-        self.title("段落编辑器")
+        self.title("PhonTracer语音学标注与声学分析系统 V1.0 - 段落编辑器")
         
         w, h = 950, 550
         # 居中计算

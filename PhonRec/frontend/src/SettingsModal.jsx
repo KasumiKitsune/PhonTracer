@@ -306,7 +306,7 @@ export default function SettingsModal({
       <div className="modal-content settings-modal" role="dialog" aria-modal="true" aria-label="设置中心">
         <div className="modal-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span style={{ fontWeight: 650, fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <GearIcon /> 设置中心
+            <GearIcon /> PhonTracer语音学标注与声学分析系统 V1.0 - 设置中心
           </span>
           <button className="btn-icon" onClick={onClose} style={{ fontSize: '1.2rem' }}>
             &times;
@@ -973,7 +973,7 @@ export default function SettingsModal({
             {/* Tab 7: About */}
             {activeTab === 'about' && (() => {
               const connection = getEngineConnection();
-              const packageVersion = packageJson.version || '1.3.0';
+              const packageVersion = packageJson.version || '1.0';
               const getPlatformInfo = () => {
                 const ua = navigator.userAgent;
                 let os = "Windows";
@@ -1011,13 +1011,13 @@ export default function SettingsModal({
                     />
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                        <h2 style={{ margin: 0, fontSize: '1.35rem', fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1 }}>PhonRec</h2>
+                        <h2 style={{ margin: 0, fontSize: '1.35rem', fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1 }}>PhonTracer语音学标注与声学分析系统 V1.0</h2>
                         <span className={`table-status-badge ${isStandalone ? 'badge-special' : 'badge-yes'}`} style={{ padding: '0.12rem 0.45rem', fontSize: '0.68rem', borderRadius: '4px', fontWeight: 600 }}>
                           {isStandalone ? '独立模式' : '完整模式'}
                         </span>
                       </div>
                       <p style={{ margin: 0, fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
-                        PhonTracer 配套的录音工具 • 版本 {packageVersion}
+                        PhonTracer 配套的录音工具 • 版本 V{packageVersion}
                       </p>
                     </div>
                   </div>

@@ -1121,3 +1121,52 @@ def extract_wordlist_from_textgrid(path):
         lines.append(" ".join(words))
     return "\n".join(lines)
 
+
+def make_safe_excel_sheet_name(base_name: str, suffix: str = "", used_names: set = None) -> str:
+    """
+    清洗并生成合法的 Excel 工作表（Sheet）名称，确保唯一且不超过 31 个字符。
+
+    规则：
+    1. 替换 Excel 禁用的 7 个字符 (: \\ / ? * [ ]) 以及 ASCII 控制字符（< 32）为下划线 '_'。
+    2. 移除首尾的单引号 '\''。
+    3. 为空时兜底为 'Sheet'。
+    4. 结合 suffix 严格限制总长度不超过 31 个字符。
+    5. 若提供 used_names 集合，进行大小写不敏感判重；冲突时通过截断前缀追加 '_2', '_3' 等后缀保证唯一，
+       并自动将生成的新名称的小写形式添加到 used_names 中。
+    """
+    raw_base = "" if base_name is None else str(base_name).strip()
+    raw_suffix = "" if suffix is None else str(suffix).strip()
+
+    clean_base = re.sub(r'[:\\/?*\[\]\x00-\x1f\x7f]', '_', raw_base)
+    clean_suffix = re.sub(r'[:\\/?*\[\]\x00-\x1f\x7f]', '_', raw_suffix)
+
+    clean_base = clean_base.strip("'")
+    clean_suffix = clean_suffix.strip("'")
+
+    if not clean_base:
+        clean_base = "Sheet"
+
+    max_len = 31
+
+    def combine(base_part: str, num_suffix: str = "") -> str:
+        fixed_tail = f"{num_suffix}{clean_suffix}"
+        avail = max(1, max_len - len(fixed_tail))
+        truncated_base = base_part[:avail].strip("'")
+        if not truncated_base:
+            truncated_base = "_"
+        cand = f"{truncated_base}{fixed_tail}".strip("'")
+        if not cand:
+            cand = "Sheet"
+        return cand[:max_len]
+
+    candidate = combine(clean_base, "")
+
+    if used_names is not None:
+        used_lowers = {str(n).lower() for n in used_names}
+        counter = 2
+        while candidate.lower() in used_lowers:
+            candidate = combine(clean_base, f"_{counter}")
+            counter += 1
+        used_names.add(candidate.lower())
+
+    return candidate

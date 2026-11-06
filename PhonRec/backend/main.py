@@ -45,7 +45,7 @@ from modules.wordlist_v2 import (
     normalize_wordlist_document,
 )
 
-ENGINE_VERSION = "1.3.0"
+ENGINE_VERSION = "1.0.0"
 PROTOCOL_VERSION = 1
 SESSION_TOKEN = os.environ.get("PHONTRACER_SESSION_TOKEN", "")
 

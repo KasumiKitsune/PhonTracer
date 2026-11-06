@@ -1,8 +1,8 @@
 ; Inno Setup Script for PhonTracer Suite
-; 命令行编译命令示例: iscc /DMyAppVersion="v1.3.0" installer.iss
+; 命令行编译命令示例: iscc /DMyAppVersion="v1.0.0" installer.iss
 
 #ifndef MyAppVersion
-  #define MyAppVersion "v1.3.0"
+  #define MyAppVersion "v1.0.0"
 #endif
 
 #define MyAppName "PhonTracer"

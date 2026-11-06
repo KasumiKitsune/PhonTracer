@@ -67,7 +67,7 @@ PhonRec 前端必须通过运行时能力而不是界面猜测决定可用功能
 
 ## 自定义脚本边界
 
-脚本以 `def run(ctx):` 为入口，获取只读数据快照，并通过 `FigureResult`、`TableResult` 或 `ProjectPatchResult` 返回结果。工程修改由受控操作清单统一验证和写回。当前执行器依靠 AST 检查、内置函数白名单、导入白名单和输出 API 限制，但仍与宿主同进程；详细模型见 [THREAT_MODEL.md](THREAT_MODEL.md)。
+脚本以 `def run(ctx):` 为入口，获取只读数据快照，并通过 `FigureResult`、`TableResult` 或 `ProjectPatchResult` 返回结果。工程修改由受控操作清单统一验证和写回。当前执行器依靠 AST 检查、内置函数白名单、导入白名单和输出 API 限制，但仍与宿主同进程。
 
 ## 修改时的最低核对
 
@@ -75,4 +75,4 @@ PhonRec 前端必须通过运行时能力而不是界面猜测决定可用功能
 2. 改共享算法：检查全部消费者，不在入口层复制实现。
 3. 改 PhonRec 能力：分别验证完整模式、独立模式和启动降级。
 4. 改版本：运行 `python scripts/check_release_version.py --expected vX.Y.Z`。
-5. 发布前：执行 [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) 中的全量门禁。
+5. 发布前：执行全量门禁。

@@ -391,7 +391,7 @@ def parse_wordlist(raw_text: str):
 class VisualSplitter(ctk.CTkToplevel):
     def __init__(self, master, snd, icons, callback, existing_items=None, vad_segments=None, **kwargs):
         super().__init__(master)
-        self.title("段落编辑器")
+        self.title("PhonTracer语音学标注与声学分析系统 V1.0 - 段落编辑器")
 
         w, h = 950, 550
         sw = self.winfo_screenwidth()
@@ -888,7 +888,7 @@ class ExportReportDialog(ctk.CTkToplevel):
         self.parent = parent
         self.callback = callback
 
-        self.title("导出研究方法报告与数据档案")
+        self.title("PhonTracer语音学标注与声学分析系统 V1.0 - 导出研究方法报告与数据档案")
         self.resizable(False, False)
 
         # Center the dialog
@@ -1043,7 +1043,7 @@ class ToolkitApp(ctk.CTk):
         except Exception:
             pass
 
-        self.title("PhonTracer Toolkit")
+        self.title("PhonTracer语音学标注与声学分析系统 V1.0")
         self.geometry("1180x780")
         self.minsize(1080, 720)
 
@@ -3780,12 +3780,12 @@ class ToolkitApp(ctk.CTk):
                     cancel_event=self.run_cancel_event,
                     teproj_path=getattr(self, "loaded_teproj_path", None),
                 )
-                self.after(0, lambda: self.on_script_finished(res, logs, err))
+                self.after(0, lambda res=res, logs=logs, err=err: self.on_script_finished(res, logs, err))
             except Exception as e:
                 import traceback
                 tb = traceback.format_exc()
                 err_msg = f"发生意外错误：\n{e}\n\n堆栈信息：\n{tb}"
-                self.after(0, lambda: self.on_script_finished(None, [], err_msg))
+                self.after(0, lambda err_msg=err_msg: self.on_script_finished(None, [], err_msg))
 
         start_safe_thread(execute)
 
@@ -4029,7 +4029,7 @@ class ToolkitApp(ctk.CTk):
                 initialdir=orig_dir,
                 initialfile=default_output_name,
                 defaultextension=".teproj",
-                filetypes=[("ToneExtractor Project", "*.teproj")]
+                filetypes=[("PhonTracer Project", "*.teproj")]
             )
             if not output_path:
                 self.append_script_log("用户取消了保存，操作未应用。\n")
@@ -4691,9 +4691,12 @@ class ToolkitApp(ctk.CTk):
 
                 for idx, (item_id, item) in enumerate(items.items(), 1):
                     label = item.get("label", "无")
-                    start = item.get("start", 0.0)
-                    end = item.get("end", 0.0)
-                    time_str = f"{start:.3f}s ~ {end:.3f}s"
+                    start = item.get("start")
+                    end = item.get("end")
+                    if start is None or end is None:
+                        time_str = "未切分"
+                    else:
+                        time_str = f"{float(start):.3f}s ~ {float(end):.3f}s"
 
                     pitch_file = item.get("pitch_data_file", "")
                     has_pitch = "无"
@@ -4818,8 +4821,8 @@ class ToolkitApp(ctk.CTk):
 
                 for idx, (item_id, item) in enumerate(items.items(), 1):
                     label = item.get("label", "无")
-                    start = item.get("start", 0.0)
-                    end = item.get("end", 0.0)
+                    start = item.get("start")
+                    end = item.get("end")
 
                     pitch_file = item.get("pitch_data_file", "")
                     has_pitch = "无"
@@ -4830,7 +4833,10 @@ class ToolkitApp(ctk.CTk):
 
                     idx_str = f"{idx:<4}"
                     label_col = pad_chinese(label, 12)
-                    time_col = f"{start:7.3f}s ~ {end:7.3f}s"
+                    if start is None or end is None:
+                        time_col = pad_chinese("未切分", 22)
+                    else:
+                        time_col = f"{float(start):7.3f}s ~ {float(end):7.3f}s"
                     has_pitch_col = pad_chinese(has_pitch, 10)
 
                     lines.append(f"      {idx_str} | {label_col} | {time_col} | {has_pitch_col}")
@@ -5437,7 +5443,7 @@ class AIPromptDialog(ctk.CTkToplevel):
         self.colors = parent.colors
         self.font_family = getattr(parent, "font_family", "Microsoft YaHei")
 
-        self.title("生成 AI 数据处理脚本提示词" if self.script_type == "data_process" else "生成 AI 脚本提示词")
+        self.title("PhonTracer语音学标注与声学分析系统 V1.0 - 生成 AI 数据处理脚本提示词" if self.script_type == "data_process" else "PhonTracer语音学标注与声学分析系统 V1.0 - 生成 AI 脚本提示词")
         self.geometry("620x620")
         self.resizable(True, True)
 

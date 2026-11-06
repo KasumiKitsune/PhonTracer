@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-PhonTracer / Tone Extractor 工程数据处理脚本写回器。
+PhonTracer语音学标注与声学分析系统 V1.0 工程数据处理脚本写回器。
 
 该模块只执行脚本返回的受控操作清单，不执行脚本源码，也不允许脚本直接修改 .teproj。
 """
@@ -603,6 +603,7 @@ def apply_project_patch_to_teproj(teproj_path, patch_result, output_path, run_re
             if run_record:
                 state["custom_script_runs"].append(copy.deepcopy(run_record))
             _save_project_state(temp_dir, state)
+            _prune_workspace_resources_for_state(temp_dir, state)
             _validate_project_workspace_for_import(temp_dir)
             _write_project_archive(temp_dir, output_path)
             return {

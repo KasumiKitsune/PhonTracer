@@ -65,7 +65,7 @@ def fetch_latest_release(url=DEFAULT_UPDATE_URL, timeout=5):
         # GitHub API 必须包含 User-Agent 头，否则返回 403
         req = urllib.request.Request(
             url,
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ToneExtractorUpdater/1.0"}
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) PhonTracerUpdater/1.0"}
         )
         with urllib.request.urlopen(req, timeout=timeout) as response:
             data = json.loads(response.read().decode("utf-8"))
@@ -103,17 +103,24 @@ def check_for_updates_async(root, on_update_found=None, on_no_update=None, on_er
     :param on_error: 检测失败时的回调，参数为 (error_message)
     :param is_manual: 是否为手动触发。若为自动触发，会判断用户是否忽略了此版本。
     """
+    def _safe_after(target_root, func):
+        try:
+            if target_root and target_root.winfo_exists():
+                target_root.after(0, func)
+        except Exception:
+            pass
+
     def worker():
         info = fetch_latest_release()
         if not info:
             if on_error:
-                root.after(0, lambda: on_error("无法连接到更新服务器，请稍后重试。"))
+                _safe_after(root, lambda err="无法连接到更新服务器，请稍后重试。": on_error(err))
             return
             
         latest_ver = info.get("latest_version", "")
         if not latest_ver:
             if on_error:
-                root.after(0, lambda: on_error("解析更新数据失败。"))
+                _safe_after(root, lambda err="解析更新数据失败。": on_error(err))
             return
             
         # 比对版本
@@ -121,13 +128,13 @@ def check_for_updates_async(root, on_update_found=None, on_no_update=None, on_er
             # 如果是自动检测，判断是否被用户忽略
             if not is_manual and latest_ver == get_ignored_version():
                 if on_no_update:
-                    root.after(0, on_no_update)
+                    _safe_after(root, on_no_update)
                 return
                 
             if on_update_found:
-                root.after(0, lambda: on_update_found(info))
+                _safe_after(root, lambda info=info: on_update_found(info))
         else:
             if on_no_update:
-                root.after(0, on_no_update)
+                _safe_after(root, on_no_update)
                 
     threading.Thread(target=worker, daemon=True).start()

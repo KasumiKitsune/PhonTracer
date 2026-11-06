@@ -13,7 +13,7 @@ class FormantDetectionDialog(ctk.CTkToplevel):
         self.fine_params = fine_params
         self.apply_scope = apply_scope
 
-        self.title("估计共振峰最佳参数与建议范围")
+        self.title("PhonTracer语音学标注与声学分析系统 V1.0 - 估计共振峰最佳参数与建议范围")
         self.resizable(False, False)
 
         # 居中显示

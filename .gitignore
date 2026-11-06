@@ -10,21 +10,13 @@
 
 # 3. 白名单：必须保留的核心根目录文件
 !.gitignore
-!AGENTS.md
 !README.md
-!README_REVISION_GUIDE.md
-!PAPER_USAGE_GUIDE.md
-!SOFTWARE_COMPLETION_CHECKLIST.md
-!PRIVACY.md
-!SUPPORT.md
-!SECURITY.md
 !requirements.txt
 !requirements-phonrec-engine.txt
 !main.py
 !cli.py
 !toolkit.py
-!ToneExtractor.spec
-!ToneExtractor_Suite.spec
+!PhonTracer_Suite.spec
 !installer.iss
 
 # 4. 白名单：核心代码与资源目录
@@ -34,12 +26,10 @@
 !.github/**
 !docs/**
 !scripts/**
-!工作流/Toolkit脚本/**
-!PhonAcq V4.9/Canary.py
-!PhonAcq V4.9/requirements.txt
-!PhonAcq V4.9/phonacq_lite/**
 
-# 5. [已移除 example/ 白名单]
+# 5. 本地归档目录（集中存放无需上传 GitHub 的资料、测试样本、构建产物）
+_archive/
+_archive/**
 
 # 6. 强制排除：即使在白名单目录内也绝对不跟踪的东西
 **/__pycache__/
@@ -50,14 +40,13 @@
 **/*.bak
 .DS_Store
 desktop.ini
-assets/manual/manual_2026-05-25_to_2026-05-30_supplement.md
-assets/manual/manual_2026-06-01_to_2026-06-13_supplement.md
 
 # 7. 排除本地环境与构建产物
 .venv/
 env/
 venv/
 .pytest_cache/
+.ruff_cache/
 .vscode/
 .idea/
 build/
@@ -68,14 +57,7 @@ upx.exe
 upx.zip
 upx-*/
 
-# 8. 绝对排除实验文件夹
-Test/
-
-# 9. 本地打包与测试输出文件夹
-Cli_test/
-!modules/formant_optimizer.py
-
-# 10. PhonRec Recording Suite Whitelist
+# 8. PhonRec Recording Suite Whitelist
 !PhonRec/backend/main.py
 !PhonRec/backend/test_backend.py
 !PhonRec/frontend/**

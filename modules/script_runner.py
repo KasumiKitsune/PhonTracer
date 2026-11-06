@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-PhonTracer / Tone Extractor 自定义脚本运行器
+PhonTracer语音学标注与声学分析系统 V1.0 自定义脚本运行器
 """
 
 import ast

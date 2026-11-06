@@ -1,6 +1,6 @@
 # PhonTracer 论文使用与写作指南
 
-本文档旨在帮助研究者在学术论文中规范地表述 PhonTracer（当前版本 **v1.2.2**）的使用方法与参数设置，确保声学分析过程透明、可复现。
+本文档旨在帮助研究者在学术论文中规范地表述 PhonTracer（当前版本 **v1.0.0**）的使用方法与参数设置，确保声学分析过程透明、可复现。
 
 ## 1. 核心声明：工具辅助，人工决策
 
@@ -13,7 +13,7 @@
 
 以下提供了一段稳妥且完整的“研究方法”段落模板，涵盖了审稿人最关心的细节。请根据你的实际研究设计替换方括号内的内容：
 
-> 本研究使用 PhonTracer (v1.2.2) 辅助完成录音材料的声学分析。该软件底层通过 Parselmouth 调用 Praat 功能提取 `[F0 / F1 / F2]`，并提供可视化界面供边界复核与异常检查。本文将 `[录音与字表 / TextGrid 标注]` 导入软件后，对目标条目的边界和声学轨迹进行了人工复核。
+> 本研究使用 PhonTracer (v1.0.0) 辅助完成录音材料的声学分析。该软件底层通过 Parselmouth 调用 Praat 功能提取 `[F0 / F1 / F2]`，并提供可视化界面供边界复核与异常检查。本文将 `[录音与字表 / TextGrid 标注]` 导入软件后，对目标条目的边界和声学轨迹进行了人工复核。
 > 
 > F0 分析参数设置为：pitch floor `[数值]` Hz、pitch ceiling `[数值]` Hz、voicing threshold `[数值]`；共振峰分析参数设置为：formant ceiling `[数值]` Hz、追踪数量 `[数值]`、window length `[数值]`。
 > 
@@ -30,17 +30,17 @@
 
 **脚注简写：**
 
-> 本文使用 PhonTracer (v1.2.2) 辅助完成声学参数提取与数据导出。项目地址：https://github.com/KasumiKitsune/PhonTracer
+> 本文使用 PhonTracer (v1.0.0) 辅助完成声学参数提取与数据导出。项目地址：https://github.com/KasumiKitsune/PhonTracer
 
 **参考文献（APA / 国标 / BibTeX）：**
 
-> KasumiKitsune. (2026). *PhonTracer* (Version 1.2.2) [Computer software]. GitHub. https://github.com/KasumiKitsune/PhonTracer
+> KasumiKitsune. (2026). *PhonTracer* (Version 1.0.0) [Computer software]. GitHub. https://github.com/KasumiKitsune/PhonTracer
 
 ```bibtex
 @software{phontracer_2026,
   author = {KasumiKitsune},
   title = {PhonTracer},
-  version = {1.2.2},
+  version = {1.0.0},
   year = {2026},
   url = {https://github.com/KasumiKitsune/PhonTracer},
   note = {Computer software}
@@ -55,7 +55,7 @@
 
 ### ✅ 必须在正文中明确交代的内容
 
-- [ ] **软件版本**（如 v1.2.2）以及说明其依赖了 Praat/Parselmouth 算法。
+- [ ] **软件版本**（如 v1.0.0）以及说明其依赖了 Praat/Parselmouth 算法。
 - [ ] **核心参数记录**：包括基频的上下限（pitch floor/ceiling）、共振峰的搜索上限（formant ceiling）和采样点选取方式。不同性别或组别如果参数不同，需分别说明。
 - [ ] **人工复核标准**：明确边界是否经过人工调整，以及剔除异常点/异常条目的原则是什么。
 - [ ] **数据处理边界**：明确区分哪些是 PhonTracer 导出的图表与数据，哪些是外部软件完成的统计学推断。

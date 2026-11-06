@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-PhonTracer / Tone Extractor 自定义脚本 AI 提示词生成器
+PhonTracer语音学标注与声学分析系统 V1.0 自定义脚本 AI 提示词生成器
 """
 
 from collections import Counter
@@ -615,7 +615,7 @@ def _build_agent_prompt(project_data, selections):
         detail_instruction += " 当前附带详细工程摘要，优先利用其中的字表标签、备注和自定义字段，不要要求用户重复粘贴字表。"
     detail_appendix = f"\n\n{_build_agent_detail_appendix()}" if is_detailed else ""
 
-    return f"""你现在是 PhonTracer / Tone Extractor Toolkit 的自定义图表脚本 Agent。
+    return f"""你现在是 PhonTracer语音学标注与声学分析系统 V1.0 的自定义图表脚本 Agent。
 
 你的任务不是立刻写代码，而是先和用户澄清研究目的，再推荐合适图表，最后在用户确认后生成可直接放进 Toolkit 的 Python 自定义脚本。
 
@@ -747,7 +747,7 @@ def _build_data_process_agent_prompt(project_data, selections):
         else "使用精简说明：先帮助用户确认处理目的，再给出少量可执行方案。"
     )
 
-    return f"""你现在是 PhonTracer / Tone Extractor Toolkit 的数据处理脚本 Agent。
+    return f"""你现在是 PhonTracer语音学标注与声学分析系统 V1.0 的数据处理脚本 Agent。
 
 你的任务不是立刻写代码，而是先和用户澄清工程再加工目的，再推荐合适的数据处理方案，最后在用户确认后生成可直接放进 Toolkit 的 Python 数据处理脚本。
 
@@ -933,7 +933,7 @@ def generate_ai_prompt(project_data, selections):
     requirements_text = "\n".join(requirements)
 
     # 4. 生成完整提示词
-    prompt = f"""你正在为 PhonTracer / Tone Extractor 编写一个自定义图表脚本。
+    prompt = f"""你正在为 PhonTracer语音学标注与声学分析系统 V1.0 编写一个自定义图表脚本。
 
 请只输出可以直接运行的 Python 代码，不要输出任何解释性的文字或 Markdown 标记（不要包裹在 ```python 中）。
 

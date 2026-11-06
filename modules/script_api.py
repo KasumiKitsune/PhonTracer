@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-PhonTracer / Tone Extractor 自定义脚本 API 上下文定义
+PhonTracer语音学标注与声学分析系统 V1.0 自定义脚本 API 上下文定义
 """
 
 import os
@@ -626,11 +626,11 @@ def build_dataset_snapshot(teproj_path):
                         if real_pitch_file:
                             try:
                                 with zf.open(real_pitch_file) as pf:
-                                    data = np.load(pf)
-                                    xs = data["xs"].tolist()
-                                    freqs = data["freqs"].tolist()
-                                    loaded_pitches[item_id] = (xs, freqs)
-                                    f0_pool.extend([f for f in freqs if f > 0])
+                                    with np.load(pf) as data:
+                                        xs = data["xs"].tolist()
+                                        freqs = data["freqs"].tolist()
+                                        loaded_pitches[item_id] = (xs, freqs)
+                                        f0_pool.extend([f for f in freqs if f > 0])
                             except Exception:
                                 pass
 
@@ -641,12 +641,12 @@ def build_dataset_snapshot(teproj_path):
                         if real_formant_file:
                             try:
                                 with zf.open(real_formant_file) as ff:
-                                    data = np.load(ff)
-                                    xs = data["xs"].tolist()
-                                    f1 = data["f1"].tolist()
-                                    f2 = data["f2"].tolist()
-                                    f3 = data["f3"].tolist() if "f3" in data else []
-                                    loaded_formants[item_id] = (xs, f1, f2, f3)
+                                    with np.load(ff) as data:
+                                        xs = data["xs"].tolist()
+                                        f1 = data["f1"].tolist()
+                                        f2 = data["f2"].tolist()
+                                        f3 = data["f3"].tolist() if "f3" in data else []
+                                        loaded_formants[item_id] = (xs, f1, f2, f3)
                             except Exception:
                                 pass
 

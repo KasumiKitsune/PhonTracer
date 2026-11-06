@@ -1688,7 +1688,7 @@ export default function App() {
     const state = {
       ...projectStateRef.current,
       version: "1.0",
-      software_version: "PhonRec-1.0.0",
+      software_version: "1.0",
       save_time: new Date().toISOString(),
       active_speaker_id: customActiveSpeakerId !== null ? customActiveSpeakerId : activeSpeakerIdRef.current,
       speakers: compatibleSpeakers,

@@ -181,10 +181,9 @@ class AcousticChartCLIAdapter:
         return y_dense
 
 class PhonTracerCLI(cmd.Cmd):
-    intro = f"""{APP_NAME} CLI v{__version__} - AI Agent Mode
-你好，我是 PhonTracer 的命令行工作台。请 AI 优先只通过这里的 CLI 命令完成任务。
-除非用户明确要求，不要直接改源码、搬文件、删文件或绕过 CLI 操作工程数据。
-Type 'help' or '?' to list commands. Use 'agent_guide' for AI operating rules.
+    intro = f"""{APP_NAME}语音学标注与声学分析系统 V{__version__} - 命令行批处理工作台
+你好，我是 PhonTracer 命令行控制台，支持自动化批处理与工程脚本交互。
+Type 'help' or '?' to list commands. Type 'status' for workspace overview.
 """
     prompt = "(phontracer) "
 
@@ -452,7 +451,7 @@ Type 'help' or '?' to list commands. Use 'agent_guide' for AI operating rules.
             if getattr(self, 'lang', 'en') == 'zh':
                 print("""
 ================================================================================
-                            PhonTracer 命令行手册 (AI Agent 与开发者指南)
+                            PhonTracer语音学标注与声学分析系统 V1.0 命令行手册 (批处理与开发者指南)
 ================================================================================
 AI 操作守则：优先只使用本 CLI。除非用户明确要求，不要直接编辑源码、移动/删除文件、
 不要绕过 CLI 去操作工程数据。需要说明时，请先用 `status`、`list_items`、`agent_guide` 确认。
@@ -4587,8 +4586,8 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
 
                     for idx, (item_id, item) in enumerate(items.items(), 1):
                         label = item.get("label", "无")
-                        start = item.get("start", 0.0)
-                        end = item.get("end", 0.0)
+                        start = item.get("start")
+                        end = item.get("end")
 
                         pitch_file = item.get("pitch_data_file", "")
                         has_pitch = "无"
@@ -4599,7 +4598,10 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
 
                         idx_str = f"{idx:<4}"
                         label_col = pad_chinese(label, 12)
-                        time_col = f"{start:7.3f}s ~ {end:7.3f}s"
+                        if start is None or end is None:
+                            time_col = pad_chinese("未切分", 22)
+                        else:
+                            time_col = f"{float(start):7.3f}s ~ {float(end):7.3f}s"
                         has_pitch_col = pad_chinese(has_pitch, 10)
 
                         lines.append(f"      {idx_str} | {label_col} | {time_col} | {has_pitch_col}")

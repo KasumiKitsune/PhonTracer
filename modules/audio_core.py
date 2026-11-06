@@ -1,7 +1,61 @@
 import numpy as np
 import os
+import tempfile
+import shutil
 from typing import Tuple, List, Union, Dict, Any
 import parselmouth
+
+def load_compatible_sound(path: str) -> parselmouth.Sound:
+    """
+    鲁棒加载音频为 parselmouth.Sound 对象。
+    1. 优先尝试原生加载。
+    2. 若原生加载失败，尝试用 scipy.io.wavfile 在内存中解码并转换为 Sound 对象（零临时文件）。
+    3. 若仍然失败，尝试拷贝至临时文件执行 WAV 头修复，并在加载后立即清理临时文件。
+    """
+    try:
+        return parselmouth.Sound(path)
+    except Exception:
+        pass
+
+    try:
+        import scipy.io.wavfile
+        sr, data = scipy.io.wavfile.read(path)
+        if np.issubdtype(data.dtype, np.floating):
+            values = data.astype(np.float64)
+        elif data.dtype == np.uint8:
+            values = (data.astype(np.float64) - 128.0) / 128.0
+        elif np.issubdtype(data.dtype, np.integer):
+            info = np.iinfo(data.dtype)
+            scale = float(-info.min if info.min < 0 else info.max)
+            values = data.astype(np.float64) / scale
+        else:
+            values = data.astype(np.float64)
+
+        if values.ndim > 1:
+            values = values.T
+        return parselmouth.Sound(values, sampling_frequency=float(sr))
+    except Exception:
+        pass
+
+    tmp_path = None
+    try:
+        tmp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        tmp_path = tmp_file.name
+        tmp_file.close()
+        shutil.copyfile(path, tmp_path)
+
+        try:
+            from modules.project_adaptor import repair_wav_header
+            repair_wav_header(tmp_path)
+        except Exception:
+            pass
+        return parselmouth.Sound(tmp_path)
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
 
 # 静音阈值：振幅 ≈ -50dB (10^(-50/20) ≈ 0.00316)
 SILENCE_AMPLITUDE_THRESHOLD = 10 ** (-50 / 20)
@@ -285,7 +339,7 @@ def recalculate_bounds_fast(snd: parselmouth.Sound, global_pitch_or_arrays: Unio
 
 def check_audio_segments(path: str) -> int:
     """在子进程中检查音频区段数量，避免主线程 GIL 冲突"""
-    snd = parselmouth.Sound(path)
+    snd = load_compatible_sound(path)
     return len(macroscopic_vad(snd))
 
 
@@ -619,7 +673,7 @@ def auto_split_to_chars_bounds(snd: parselmouth.Sound, mic_s: float, mic_e: floa
 
 def batch_process_worker(path: str, params: Dict[str, float], trim_silence: bool, word_label: str = "") -> Dict[str, Any]:
     try:
-        snd = parselmouth.Sound(path)
+        snd = load_compatible_sound(path)
         pitch_data = extract_f0(snd, params)
         mac_s, mac_e = 0.0, snd.get_total_duration()
 
@@ -891,7 +945,7 @@ def batch_process_worker_with_textgrid(path: str, tg_path: str, params: Dict[str
                     interval = iv
                     break
 
-        snd = parselmouth.Sound(path)
+        snd = load_compatible_sound(path)
         total_dur = snd.get_total_duration()
 
         if not interval:

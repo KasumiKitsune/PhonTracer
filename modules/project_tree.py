@@ -375,7 +375,7 @@ class AnomalyWarningDialog(ctk.CTkToplevel):
 class ExclusionReasonDialog(ctk.CTkToplevel):
     def __init__(self, parent, current_reason, font_title=None, font_main=None):
         super().__init__(parent)
-        self.title("填写忽略原因")
+        self.title("PhonTracer语音学标注与声学分析系统 V1.0 - 填写忽略原因")
         self.geometry("520x300")
         self.resizable(False, False)
         self.configure(fg_color=("#F9FAFB", "#1A1D24"))
@@ -2507,7 +2507,7 @@ class ProjectTreePanel:
 
     def _show_multi_speaker_export_dialog(self, sm):
         dlg = ctk.CTkToplevel(self.parent)
-        dlg.title("导出范围选择")
+        dlg.title("PhonTracer语音学标注与声学分析系统 V1.0 - 导出范围选择")
         dlg.configure(fg_color=("#FFFFFF", "#1A1D24"))
         dlg.geometry("420x430")
         dlg.resizable(False, False)
@@ -2669,7 +2669,7 @@ class ProjectTreePanel:
 
     def _show_export_menu(self, tree_structure=None, mode='single', all_speakers=None):
         dlg = ctk.CTkToplevel(self.parent)
-        dlg.title("选择导出格式")
+        dlg.title("PhonTracer语音学标注与声学分析系统 V1.0 - 选择导出格式")
         dlg.configure(fg_color=("#FFFFFF", "#1A1D24"))
         dlg.geometry("320x315")
         dlg.resizable(False, False)
@@ -3615,7 +3615,7 @@ class ProjectTreePanel:
 
     def _show_kde_params_dialog(self, mode='single', tree_structure=None, all_speakers=None):
         param_dlg = ctk.CTkToplevel(self.parent)
-        param_dlg.title("时序密度图参数设置")
+        param_dlg.title("PhonTracer语音学标注与声学分析系统 V1.0 - 时序密度图参数设置")
         param_dlg.geometry("450x380")
         param_dlg.resizable(False, False)
         param_dlg.transient(self.parent)
@@ -4386,7 +4386,7 @@ class ProjectTreePanel:
 
     def _show_formant_export_menu(self, mode='single', all_speakers=None):
         dlg = ctk.CTkToplevel(self.parent)
-        dlg.title("选择共振峰导出内容")
+        dlg.title("PhonTracer语音学标注与声学分析系统 V1.0 - 选择共振峰导出内容")
         dlg.configure(fg_color=("#FFFFFF", "#1A1D24"))
         dlg.geometry("320x300")
         dlg.resizable(False, False)

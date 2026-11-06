@@ -14,7 +14,7 @@ import queue
 
 # 导入拆分后的模块
 from .ui_widgets import CTkReleaseButton, ToolTip
-from .data_utils import parse_wordlist, fuzzy_match_word_to_path, split_into_syllables, has_cjk
+from .data_utils import parse_wordlist, fuzzy_match_word_to_path, split_into_syllables, has_cjk, make_safe_excel_sheet_name
 from .wordlist_v2 import (
     ADVANCED_WORDLIST_AGENT_PROMPT,
     apply_record_metadata,
@@ -65,7 +65,7 @@ ctk.CTkScrollableFrame._mouse_wheel_all = patched_mouse_wheel_all
 class PhoneticsApp:
     def __init__(self, root, initial_files=None, defer_startup_check=False):
         self.root = root
-        self.root.title(f"{APP_NAME} v{__version__} - 声调提取与分析工具")
+        self.root.title(f"{APP_NAME}语音学标注与声学分析系统 V{__version__}")
         self.root.geometry("1200x700")
         self.root.minsize(1100, 650)
         self.root.configure(fg_color="#F3F4F6")
@@ -3277,7 +3277,7 @@ class PhoneticsApp:
             return messagebox.showwarning("提示", "请先选择独立音频。")
 
         dlg = ctk.CTkToplevel(self.root)
-        dlg.title("导入字表")
+        dlg.title(f"{APP_NAME}语音学标注与声学分析系统 V{__version__} - 导入字表")
         w, h = 480, (700 if mode == 'batch' else 620)
         # 居中计算
         sw = dlg.winfo_screenwidth()
@@ -5162,7 +5162,7 @@ class RenameSpeakerDialog(ctk.CTkToplevel):
         self.result = None
         self.current_name = current_name or ""
 
-        self.title("重命名发音人")
+        self.title(f"{APP_NAME}语音学标注与声学分析系统 V{__version__} - 重命名发音人")
         self.resizable(False, False)
         self.configure(fg_color=("#FFFFFF", "#1A1D24"))
 

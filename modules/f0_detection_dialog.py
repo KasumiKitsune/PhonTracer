@@ -18,7 +18,7 @@ class F0DetectionDialog(ctk.CTkToplevel):
         self.fine_range = fine_range
         self.apply_scope = apply_scope
 
-        self.title("估计 F0 分布与建议范围")
+        self.title("PhonTracer语音学标注与声学分析系统 V1.0 - 估计 F0 分布与建议范围")
         self.resizable(False, False)
 
         # 居中显示
