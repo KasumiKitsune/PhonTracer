@@ -18,6 +18,11 @@ META_TONE = "声调"
 META_RHYME = "韵母"
 CORE_META_FIELDS = (META_PINYIN, META_TONE, META_RHYME)
 
+TITLE_DIRECTIVE_RE = re.compile(
+    r"^(?:(?:#|@)\s*(?:title|标题)\s*[:：]?|(?:title|标题)\s*[:：])\s*(.+)$",
+    flags=re.IGNORECASE
+)
+
 ADVANCED_WORDLIST_AGENT_PROMPT = """你现在是 PhonTracer 高级字表整理 Agent。
 
 你的任务不是立刻输出表格，而是先像研究助理一样和用户确认实验设计，再把材料整理成可导入 PhonTracer Toolkit 的高级字表内容。
@@ -38,7 +43,7 @@ ADVANCED_WORDLIST_AGENT_PROMPT = """你现在是 PhonTracer 高级字表整理 A
 - 默认推荐并输出结构化字表文本；只有用户明确选择 CSV 时才输出 CSV。
 
 结构化字表文本模式：
-- 第一行可以用 `# title: 字表标题` 设置标题。
+- 第一行可以用 title: 字表标题（或 # title: 字表标题）设置标题。
 - 用 `@group 组名 | tags=组标签 | note=组备注` 开始一个组。
 - 用 `@defaults | source=AI推断，需人工复核 | tags=目标词` 设置后续词项默认字段。
 - 普通词项行格式为：`词项 | tags=标签 | aliases=别名 | note=词项备注 | pinyin=拼音 | tone=声调 | rhyme=韵母 | 自定义字段=值`
@@ -128,7 +133,7 @@ def _normalize_meta(value: Any) -> Dict[str, str]:
     return meta
 
 
-def _normalize_item(item: Any, fallback_label: str = "") -> Dict[str, Any]:
+def _normalize_item(item: Any, fallback_label: str = "", fallback_id: str = "") -> Dict[str, Any]:
     if isinstance(item, str):
         item = {"label": item}
     elif not isinstance(item, dict):
@@ -146,8 +151,12 @@ def _normalize_item(item: Any, fallback_label: str = "") -> Dict[str, Any]:
         if source_key in item and _as_text(item.get(source_key)):
             meta[meta_key] = _as_text(item.get(source_key))
 
+    item_id = _as_text(item.get("id", ""))
+    if not item_id and fallback_id:
+        item_id = fallback_id
+
     return {
-        "id": _as_text(item.get("id", "")),
+        "id": item_id,
         "label": _as_text(item.get("label") or item.get("word") or fallback_label),
         "note": _as_text(item.get("note") or item.get("item_note")),
         "tags": _split_text_list(item.get("tags", [])),
@@ -163,10 +172,14 @@ def _normalize_group(group: Any, index: int = 0) -> Dict[str, Any]:
     elif not isinstance(group, dict):
         group = {}
 
+    grp_id = _as_text(group.get("id", "")) or f"grp_{index + 1}"
     name = _as_text(group.get("name") or group.get("group") or f"组{index + 1}")
-    items = [_normalize_item(item) for item in group.get("items", [])]
+    items = [
+        _normalize_item(item, fallback_id=f"slot_{index + 1}_{item_idx + 1}")
+        for item_idx, item in enumerate(group.get("items", []))
+    ]
     return {
-        "id": _as_text(group.get("id", "")),
+        "id": grp_id,
         "name": name or "未分组",
         "note": _as_text(group.get("note") or group.get("group_note")),
         "tags": _split_text_list(group.get("tags", [])),
@@ -234,7 +247,7 @@ def looks_like_structured_wordlist_text(text: str) -> bool:
         if not line:
             continue
         lowered = line.lower()
-        if lowered.startswith("@group") or lowered.startswith("@defaults") or re.match(r"^#\s*title\s*[:：]", line, flags=re.IGNORECASE):
+        if lowered.startswith("@group") or lowered.startswith("@defaults") or TITLE_DIRECTIVE_RE.match(line):
             return True
     return False
 
@@ -251,7 +264,7 @@ def looks_like_csv_wordlist_text(text: str) -> bool:
         known_headers = {
             "group", "组名", "组别", "group_name",
             "label", "词项", "字词", "word", "item",
-            "tags", "tag", "标签", "aliases", "别名",
+            "tags", "tag", "标签", "词项标签", "组标签", "aliases", "别名",
             "pinyin", "拼音", "tone", "声调", "rhyme", "韵母",
         }
         return any(header in known_headers or header.startswith("meta.") for header in headers) or "label" in lower or "词项" in line
@@ -344,7 +357,7 @@ def build_document_from_structured_text(text: str, title: str = "从结构化文
         line = raw_line.strip()
         if not line:
             continue
-        title_match = re.match(r"^#\s*title\s*[:：]\s*(.+)$", line, flags=re.IGNORECASE)
+        title_match = TITLE_DIRECTIVE_RE.match(line)
         if title_match:
             doc["title"] = _as_text(title_match.group(1)) or doc["title"]
             continue
@@ -355,6 +368,12 @@ def build_document_from_structured_text(text: str, title: str = "从结构化文
         head = parts[0] if parts else ""
         attrs = _parse_structured_attrs(parts[1:])
         lowered = head.lower()
+
+        if lowered.startswith("@title"):
+            title_val = _as_text(head[len("@title"):].lstrip(":： "))
+            if title_val:
+                doc["title"] = title_val
+            continue
 
         if lowered.startswith("@group"):
             group_name = _as_text(head[len("@group"):]) or "未分组"
@@ -502,7 +521,7 @@ def build_document_from_csv_text(csv_text: str, title: str = "从表格导入") 
         consumed = {
             "group", "组名", "组别", "group_name", "group_note", "组备注",
             "group_tags", "组tag", "组标签", "label", "词项", "字词", "word", "item",
-            "item_note", "词项备注", "备注", "note", "tags", "tag", "标签",
+            "item_note", "词项备注", "备注", "note", "tags", "tag", "标签", "词项标签", "词项tag",
             "aliases", "别名", "pinyin", "拼音", "tone", "声调", "rhyme", "韵母",
             "metadata_source", "自动补全状态", "review_status", "复核状态",
         }
@@ -524,7 +543,7 @@ def build_document_from_csv_text(csv_text: str, title: str = "从表格导入") 
         group["items"].append(_normalize_item({
             "label": label,
             "note": row.get("item_note") or row.get("词项备注") or row.get("备注") or row.get("note"),
-            "tags": row.get("tags") or row.get("tag") or row.get("标签"),
+            "tags": row.get("tags") or row.get("tag") or row.get("词项标签") or row.get("词项tag") or row.get("标签"),
             "aliases": row.get("aliases") or row.get("别名"),
             "meta": meta,
             "metadata_source": row.get("metadata_source") or row.get("自动补全状态") or row.get("review_status") or row.get("复核状态") or DEFAULT_REVIEW_STATUS,
@@ -545,7 +564,7 @@ def document_to_csv_text(doc: Dict[str, Any]) -> str:
                     meta_keys.append(key)
 
     headers = [
-        "组名", "组备注", "组标签", "词项", "词项备注", "标签",
+        "组别", "组备注", "组标签", "词项", "词项备注", "词项标签",
         "别名", "复核状态",
     ] + meta_keys
 
@@ -556,13 +575,13 @@ def document_to_csv_text(doc: Dict[str, Any]) -> str:
         for item in group.get("items", []):
             meta = item.get("meta", {})
             row = {
-                "组名": group.get("name", ""),
+                "组别": group.get("name", ""),
                 "组备注": group.get("note", ""),
-                "组标签": ";".join(group.get("tags", [])),
+                "组标签": "；".join(group.get("tags", [])),
                 "词项": item.get("label", ""),
                 "词项备注": item.get("note", ""),
-                "标签": ";".join(item.get("tags", [])),
-                "别名": ";".join(item.get("aliases", [])),
+                "词项标签": "；".join(item.get("tags", [])),
+                "别名": "；".join(item.get("aliases", [])),
                 "复核状态": item.get("metadata_source", DEFAULT_REVIEW_STATUS),
             }
             for key in meta_keys:

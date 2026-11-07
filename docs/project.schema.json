@@ -13,7 +13,20 @@
     "active_speaker_id": {"type": ["string", "null"]},
     "export_numbering_rule": {"type": "string"},
     "trim_silence": {"type": "boolean"},
-    "custom_script_runs": {"type": "array", "items": {"type": "object"}},
+    "groups": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/group"}
+    },
+    "phonrec": {"type": "object"},
+    "quality_config": {"type": "object"},
+    "custom_script_runs": {
+      "type": "array",
+      "items": {"type": "object"}
+    },
+    "scripts_library": {
+      "type": "object",
+      "additionalProperties": {"type": "string"}
+    },
     "speakers": {
       "type": "object",
       "minProperties": 1,
@@ -27,6 +40,36 @@
       "pattern": "^(audio|data)/[^\\\\]+(?:/[^\\\\]+)*$",
       "description": "归档内部资源相对路径；运行时还会检查越界、文件名与实际成员。"
     },
+    "group": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "id": {"type": "string"},
+        "name": {"type": "string"},
+        "note": {"type": "string"},
+        "tags": {"type": "array", "items": {"type": "string"}},
+        "meta": {"type": "object"},
+        "items": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/wordlistItem"}
+        }
+      },
+      "additionalProperties": true
+    },
+    "wordlistItem": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "string"},
+        "label": {"type": "string"},
+        "word": {"type": "string"},
+        "note": {"type": "string"},
+        "tags": {"type": "array", "items": {"type": "string"}},
+        "aliases": {"type": "array", "items": {"type": "string"}},
+        "meta": {"type": "object"},
+        "metadata_source": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
     "speaker": {
       "type": "object",
       "required": ["id", "name", "items"],
@@ -36,10 +79,13 @@
         "last_params": {"type": "object"},
         "tab_mode": {"type": "string"},
         "long_audio_path": {"anyOf": [{"$ref": "#/$defs/resourcePath"}, {"type": "null"}]},
+        "long_pitch_data_file": {"anyOf": [{"$ref": "#/$defs/resourcePath"}, {"type": "null"}]},
         "pending_batch_paths": {"type": "array", "items": {"$ref": "#/$defs/resourcePath"}},
         "current_macro_segments": {"type": "array"},
         "manual_segments": {"type": "array"},
         "last_selected_iid": {"type": ["string", "null"]},
+        "project_groups": {"type": "array", "items": {"type": "string"}},
+        "speaker_meta": {"type": "object"},
         "items": {
           "type": "object",
           "additionalProperties": {"$ref": "#/$defs/item"}
@@ -52,31 +98,68 @@
       "properties": {
         "id": {"type": "string"},
         "word": {"type": "string"},
+        "label": {"type": "string"},
         "group": {"type": "string"},
-        "path": {"$ref": "#/$defs/resourcePath"},
-        "pitch_data_file": {"$ref": "#/$defs/resourcePath"},
-        "formant_data_file": {"$ref": "#/$defs/resourcePath"},
-        "start": {"type": "number", "minimum": 0},
-        "end": {"type": "number", "minimum": 0},
+        "path": {"anyOf": [{"$ref": "#/$defs/resourcePath"}, {"type": "null"}]},
+        "pitch_data_file": {"anyOf": [{"$ref": "#/$defs/resourcePath"}, {"type": "null"}]},
+        "formant_data_file": {"anyOf": [{"$ref": "#/$defs/resourcePath"}, {"type": "null"}]},
+        "start": {"type": ["number", "null"]},
+        "end": {"type": ["number", "null"]},
+        "macro_start": {"type": ["number", "null"]},
+        "macro_end": {"type": ["number", "null"]},
+        "raw_start": {"type": ["number", "null"]},
+        "raw_end": {"type": ["number", "null"]},
         "chars_bounds": {
           "type": "array",
           "items": {
             "type": "array",
-            "prefixItems": [{"type": "number"}, {"type": "number"}],
-            "minItems": 2,
-            "maxItems": 2
+            "items": {"type": "number"}
           }
         },
         "inner_splits": {"type": "array", "items": {"type": "number"}},
+        "param_overrides": {"type": "object"},
+        "recomputed_pitch_params": {"type": "object"},
+        "recomputed_formant_params": {"type": "object"},
+        "analysis_mode": {"type": "string"},
         "is_excluded": {"type": "boolean"},
-        "review_status": {"type": "string"},
-        "metadata_source": {"type": "string"},
+        "is_manual_edited": {"type": "boolean"},
+        "exclusion_reason": {"type": "string"},
+        "note": {"type": "string"},
+        "tags": {"type": "array", "items": {"type": "string"}},
+        "aliases": {"type": "array", "items": {"type": "string"}},
+        "meta": {"type": "object"},
         "item_note": {"type": "string"},
         "item_tags": {"type": "array", "items": {"type": "string"}},
         "item_aliases": {"type": "array", "items": {"type": "string"}},
         "item_meta": {"type": "object"},
         "group_note": {"type": "string"},
-        "group_tags": {"type": "array", "items": {"type": "string"}}
+        "group_tags": {"type": "array", "items": {"type": "string"}},
+        "group_meta": {"type": "object"},
+        "review_status": {"type": "string"},
+        "metadata_source": {"type": "string"},
+        "quality": {"type": "object"},
+        "source_segment": {"type": "object"},
+        "preview_f0": {
+          "type": "object",
+          "properties": {
+            "xs": {"type": "array"},
+            "freqs": {"type": "array"}
+          },
+          "additionalProperties": true
+        },
+        "preview_formants": {
+          "type": "object",
+          "properties": {
+            "xs": {"type": "array"},
+            "f1": {"type": "array"},
+            "f2": {"type": "array"},
+            "f3": {"type": "array"},
+            "F1": {"type": "array"},
+            "F2": {"type": "array"},
+            "F3": {"type": "array"}
+          },
+          "additionalProperties": true
+        }
       },
       "additionalProperties": true
     }

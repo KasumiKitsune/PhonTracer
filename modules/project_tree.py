@@ -268,13 +268,13 @@ class CanvasButton(tk.Canvas):
 
 
 class AnomalyWarningDialog(ctk.CTkToplevel):
-    def __init__(self, parent, anomalous_labels, title="⚠️ 检测到可能影响分析的异常数据", description=None, font_title=None, font_main=None):
+    def __init__(self, parent, anomalous_labels, title="导出前数据复核提示", description=None, font_title=None, font_main=None):
         super().__init__(parent)
         self.parent = parent
         self.anomalous_labels = anomalous_labels
         self.result = False  # True if user ignores and continues, False if they return to edit
 
-        self.title("异常数据警告")
+        self.title("导出前数据复核提示")
         self.configure(fg_color=("#FFFFFF", "#1A1D24"))
         self.geometry("540x440")
         self.resizable(True, True)
@@ -297,26 +297,26 @@ class AnomalyWarningDialog(ctk.CTkToplevel):
         header_frame = ctk.CTkFrame(self, fg_color="transparent")
         header_frame.pack(fill=tk.X, padx=30, pady=(15, 5))
 
-        # Warning title in soft warning red/orange
+        # Title in soft primary / neutral color
         ctk.CTkLabel(
             header_frame, text=title,
-            font=self.font_title, text_color=("#E11D48", "#FB7185")
+            font=self.font_title, text_color=("#1E293B", "#F1F5F9")
         ).pack(anchor="w")
 
         if description is None:
             description = (
-                "以下项目检测到潜在异常（如 F0 缺失、边界无效、声母段过短、或跳变疑似噪声等）。"
-                "建议您返回主界面检查并重新切分/修正这些项目，以保证导出图表的科学性与准确性："
+                "以下条目检测到需复核的声学特征（如时间边界无效、短时音段或采样点含无基频帧等）。"
+                "建议您在导出前确认这些条目，或保持现状直接继续导出："
             )
         ctk.CTkLabel(
             header_frame, text=description, font=font_small, text_color=("#4B5563", "#9CA3AF"),
             wraplength=480, justify="left"
         ).pack(anchor="w", pady=(4, 0))
 
-        # Scrollable Warning List Frame with subtle warning border
+        # Scrollable Warning List Frame with subtle border
         scroll_frame = ctk.CTkScrollableFrame(
             self, height=160, corner_radius=8, border_width=1,
-            border_color=("#FCA5A5", "#7F1D1D"), fg_color=("#FFF5F5", "#1E1515")
+            border_color=("#E2E8F0", "#374151"), fg_color=("#F8FAFC", "#1E293B")
         )
         scroll_frame._scrollbar.grid_configure(padx=(0, 9))
         scroll_frame.pack(fill=tk.BOTH, expand=True, padx=30, pady=5)
@@ -325,14 +325,14 @@ class AnomalyWarningDialog(ctk.CTkToplevel):
             row_frame = ctk.CTkFrame(scroll_frame, fg_color="transparent")
             row_frame.pack(fill=tk.X, padx=5, pady=3)
 
-            # Warning bullet
+            # Bullet
             ctk.CTkLabel(
                 row_frame, text="•", font=ctk.CTkFont(family="Microsoft YaHei", size=14, weight="bold"),
-                text_color=("#EF4444", "#F87171")
+                text_color=("#64748B", "#94A3B8")
             ).pack(side=tk.LEFT, padx=(5, 5), anchor="n")
 
             ctk.CTkLabel(
-                row_frame, text=warning, font=font_small, text_color=("#991B1B", "#FCA5A5"),
+                row_frame, text=warning, font=font_small, text_color=("#334155", "#E2E8F0"),
                 wraplength=420, justify="left", anchor="w"
             ).pack(side=tk.LEFT, fill=tk.X, expand=True, anchor="w")
 
@@ -340,8 +340,8 @@ class AnomalyWarningDialog(ctk.CTkToplevel):
         count_bar = ctk.CTkFrame(self, fg_color="transparent")
         count_bar.pack(fill=tk.X, padx=30, pady=(6, 0))
         ctk.CTkLabel(
-            count_bar, text=f"共检测到 {len(self.anomalous_labels)} 处数据异常。",
-            font=font_small, text_color=("#DC2626", "#F87171")
+            count_bar, text=f"共检出 {len(self.anomalous_labels)} 处需复核条目。",
+            font=font_small, text_color=("#475569", "#94A3B8")
         ).pack(side=tk.LEFT)
 
         # Action Buttons Card
@@ -363,11 +363,11 @@ class AnomalyWarningDialog(ctk.CTkToplevel):
             font=self.font_main, command=on_cancel
         ).pack(side=tk.LEFT)
 
-        # Right button: Ignore warnings and continue export
+        # Right button: Keep status quo and continue export (secondary button style)
         ctk.CTkButton(
-            btn_frame, text="忽略警告并导出", width=140, height=36, corner_radius=18,
-            fg_color=("#F3F4F6", "#374151"), text_color=("#DC2626", "#F87171"), hover_color=("#E5E7EB", "#4B5563"),
-            border_width=1.5, border_color=("#EF4444", "#7F1D1D"),
+            btn_frame, text="保持现状并继续导出", width=160, height=36, corner_radius=18,
+            fg_color=("#F3F4F6", "#374151"), text_color=("#374151", "#E5E7EB"), hover_color=("#E5E7EB", "#4B5563"),
+            border_width=1, border_color=("#CBD5E1", "#4B5563"),
             font=self.font_main, command=on_ignore
         ).pack(side=tk.RIGHT)
 
@@ -973,7 +973,10 @@ class ProjectTreePanel:
     def ensure_group(self, group_name):
         if group_name not in self.project_groups:
             self.project_groups.append(group_name)
-            gid = self.tree.insert("", tk.END, iid=f"group_node_{group_name}", text=group_name, open=True, tags=('group',))
+        if group_name not in self.group_nodes:
+            gid = f"group_node_{group_name}"
+            if not self.tree.exists(gid):
+                self.tree.insert("", tk.END, iid=gid, text=group_name, open=True, tags=('group',))
             self.group_nodes[group_name] = gid
         return self.group_nodes[group_name]
 
@@ -1033,8 +1036,9 @@ class ProjectTreePanel:
                 self.project_groups[idx] = new_name
                 self.group_nodes[new_name] = self.group_nodes.pop(old_name)
                 self.tree.item(iid, text=new_name)
-                for child in self.tree.get_children(iid):
-                    if child in self.items: self.items[child]['group'] = new_name
+                for item in self.items.values():
+                    if item.get('group') == old_name:
+                        item['group'] = new_name
             else:
                 real_iid = iid[8:] if str(iid).startswith('warning_') else iid
                 w_iid = f"warning_{real_iid}"
@@ -1202,8 +1206,8 @@ class ProjectTreePanel:
             if messagebox.askyesno("确认彻底删除组", f"确定要从工程中彻底删除选中的 {len(groups_to_del)} 个组别及其所有音频/数据吗？\n此操作不可逆！"):
                 for gid in groups_to_del:
                     group_name = gid[11:]
-                    for child in self.tree.get_children(gid):
-                        real_child = child[8:] if str(child).startswith('warning_') else child
+                    items_in_group = [item_id for item_id, it in self.items.items() if it.get('group') == group_name]
+                    for real_child in items_in_group:
                         self.items.pop(real_child, None)
                         w_iid = f"warning_{real_child}"
                         if self.tree.exists(w_iid):
@@ -2711,8 +2715,8 @@ class ProjectTreePanel:
                 if item and self._check_item_has_empty_data(item):
                     empty_labels.append(f"[{grp_name}] {item['label']}")
         if empty_labels:
-            desc = "以下项目检测到潜在异常，其基频（F0）包含大量 0 值（可能无发音、数据丢失或未成功提取有效声调）："
-            dialog = AnomalyWarningDialog(self.parent, empty_labels, title="⚠️ 部分数据可能包含无效基频(空值)", description=desc, font_title=self.font_title, font_main=self.font_main)
+            desc = "以下条目基频（F0）包含较多无声或擦除帧（F0 = 0，常见于清声母、清化段或静音）："
+            dialog = AnomalyWarningDialog(self.parent, empty_labels, title="部分数据包含无基频帧提示", description=desc, font_title=self.font_title, font_main=self.font_main)
             self.parent.wait_window(dialog)
             if not dialog.result:
                 return
@@ -2884,7 +2888,14 @@ class ProjectTreePanel:
 
     def _ensure_item_loaded(self, item):
         """确保 item.snd 和 item.pitch / item.pitch_data 已正确加载或计算"""
-        if not item or not item.get('path'): return
+        if not item: return
+
+        long_snd = getattr(self.app, 'long_sound', None) or getattr(self.app, 'pending_long_snd', None) if self.app else None
+        has_path = bool(item.get('path') and os.path.exists(item['path']))
+        is_long = (not has_path) and (long_snd is not None) and (item.get('macro_start') is not None)
+
+        if not has_path and not is_long:
+            return
 
         has_snd = item.get('snd') is not None
         has_pitch = (item.get('pitch') is not None) or (item.get('pitch_data') is not None)
@@ -2892,15 +2903,36 @@ class ProjectTreePanel:
         if not has_snd or not has_pitch:
             try:
                 if not has_snd:
-                    item['snd'] = parselmouth.Sound(item['path'])
+                    if has_path:
+                        item['snd'] = parselmouth.Sound(item['path'])
+                    elif is_long:
+                        item['snd'] = long_snd
                 if not has_pitch:
                     from .audio_core import extract_f0
                     pf = item.get('pitch_floor', self.app_state_params.get('pitch_floor', 75))
                     pc = item.get('pitch_ceiling', self.app_state_params.get('pitch_ceiling', 600))
                     vt = item.get('voicing_threshold', self.app_state_params.get('voicing_threshold', 0.25))
-                    item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=pf, pitch_ceiling=pc, voicing_threshold=vt, very_accurate=True, octave_jump_cost=0.9)
+                    if has_path:
+                        global_pitch = item['snd'].to_pitch_ac(time_step=None, pitch_floor=pf, pitch_ceiling=pc, voicing_threshold=vt, very_accurate=True, octave_jump_cost=0.9)
+                        item['pitch'] = global_pitch
+                        item['pitch_data'] = {
+                            'xs': global_pitch.xs().copy(),
+                            'freqs': global_pitch.selected_array['frequency'].copy()
+                        }
+                    elif is_long:
+                        global_pitch = item['snd'].to_pitch_ac(time_step=None, pitch_floor=pf, pitch_ceiling=pc, voicing_threshold=vt, very_accurate=True, octave_jump_cost=0.9)
+                        item['pitch'] = global_pitch
+                        pxs = global_pitch.xs()
+                        pfreqs = global_pitch.selected_array['frequency']
+                        ms = max(0.0, float(item.get('macro_start', 0.0)) - 0.05)
+                        me = float(item.get('macro_end', item['snd'].get_total_duration())) + 0.05
+                        mask = (pxs >= ms) & (pxs <= me)
+                        item['pitch_data'] = {
+                            'xs': pxs[mask].copy(),
+                            'freqs': pfreqs[mask].copy()
+                        }
             except Exception as e:
-                logger.error(f"Error lazy loading sound/pitch for {item.get('path')}: {e}", exc_info=True)
+                logger.error(f"Error lazy loading sound/pitch for {item.get('path') or item.get('label')}: {e}", exc_info=True)
 
     def _extract_syl_data(self, item, num_points):
         """提取项目中每个字的真实发音段(收缩后)的 11 点 F0 数据和时长。返回 (总时长, [(字时长, [F0数组]), ...])"""
@@ -2986,66 +3018,8 @@ class ProjectTreePanel:
 
     def _write_raw_pitch_sheet(self, workbook, rows, include_speaker=False):
         """写入逐点 Hz 原始基频数据。这里保留 pitch_data 当前状态，包括橡皮擦置零后的点。"""
-        ws_raw = workbook.add_worksheet("原始基频数据")
-        headers = []
-        if include_speaker:
-            headers.append("发音人")
-        headers.extend([
-            "组别", "编号", "词语", "字序", "字",
-            "绝对时间(s)", "字内相对时间(s)", "基频Hz", "状态"
-        ])
-        for col, header in enumerate(headers):
-            ws_raw.write(0, col, header)
-
-        row_idx = 1
-        for entry in rows:
-            item = entry.get('item') or entry.get('raw_item')
-            if not item:
-                continue
-            self._ensure_item_loaded(item)
-            if item.get('start') is None or not item.get('snd') or (not item.get('pitch') and not item.get('pitch_data')):
-                continue
-
-            p_xs, p_freqs = self._get_pitch_arrays_for_item(item)
-            if p_xs is None or p_freqs is None:
-                continue
-
-            syls, bounds = self._get_syllables_and_bounds(item)
-            if not bounds:
-                continue
-
-            for syl_idx, (c_s, c_e) in enumerate(bounds, start=1):
-                if c_e <= c_s:
-                    continue
-                char = syls[syl_idx - 1] if syl_idx - 1 < len(syls) else ""
-                mask = (p_xs >= c_s) & (p_xs <= c_e)
-                indices = np.where(mask)[0]
-                for p_idx in indices:
-                    t = float(p_xs[p_idx])
-                    hz = float(p_freqs[p_idx]) if np.isfinite(p_freqs[p_idx]) else 0.0
-                    status = "有效" if hz > 0 else "无声/已擦除"
-
-                    values = []
-                    if include_speaker:
-                        values.append(entry.get('speaker', ''))
-                    values.extend([
-                        entry.get('group', ''),
-                        entry.get('index', ''),
-                        item.get('label', ''),
-                        syl_idx,
-                        char,
-                        round(t, 6),
-                        round(t - c_s, 6),
-                        round(hz, 6) if hz > 0 else 0.0,
-                        status
-                    ])
-                    for col, val in enumerate(values):
-                        ws_raw.write(row_idx, col, val)
-                    row_idx += 1
-
-        ws_raw.freeze_panes(1, 0)
-        ws_raw.autofilter(0, 0, max(row_idx - 1, 1), len(headers) - 1)
-        return ws_raw
+        from .data_utils import write_raw_pitch_sheet
+        return write_raw_pitch_sheet(workbook, rows, include_speaker=include_speaker)
 
     def _get_syllables_and_bounds(self, item):
         """返回与当前编辑边界一致的子段列表，优先使用 chars_bounds。"""
@@ -3136,6 +3110,9 @@ class ProjectTreePanel:
                 if len(lbl) > max_syls: max_syls = len(lbl)
 
         workbook = xlsxwriter.Workbook(out_file)
+        from .data_utils import ExcelStyleManager, autofit_worksheet_columns, write_analysis_sheet_with_formulas, build_five_point_chart
+        style = ExcelStyleManager(workbook)
+
         ws_data = workbook.add_worksheet("数据")
         ws_res = workbook.add_worksheet("分析结果")
         raw_pitch_rows = []
@@ -3144,8 +3121,9 @@ class ProjectTreePanel:
         for k in range(1, max_syls + 1):
             headers.append(f"字{k}_时长(s)")
             for i in range(1, num_points + 1):
-                headers.append(f"字{k}_T{i}(Hz)")
-        for col, header in enumerate(headers): ws_data.write(0, col, header)
+                headers.append(f"字{k}_P{i}(Hz)")
+        for col, header in enumerate(headers):
+            ws_data.write(0, col, header, style.header_fmt)
 
         global_idx = 1
         row_idx = 1
@@ -3168,8 +3146,6 @@ class ProjectTreePanel:
                     'item': item
                 })
 
-                row = [grp_name, global_idx, item['label'], float(f"{total_dur:.6f}")]
-
                 if grp_name not in dict_data:
                     dict_data[grp_name] = {
                         'syl_dur_sums': [0.0]*max_syls, 'syl_counts': [0]*max_syls,
@@ -3177,28 +3153,36 @@ class ProjectTreePanel:
                         'f0_counts': [[0]*num_points for _ in range(max_syls)]
                     }
 
+                col = 0
+                ws_data.write(row_idx, col, grp_name, style.text_center); col += 1
+                ws_data.write(row_idx, col, global_idx, style.int_fmt); col += 1
+                ws_data.write(row_idx, col, item['label'], style.text_left); col += 1
+                ws_data.write(row_idx, col, round(total_dur, 6), style.duration_fmt); col += 1
+
                 for k in range(max_syls):
                     if k < len(syl_data):
                         dur, f0s = syl_data[k]
-                        row.append(float(f"{dur:.6f}"))
+                        ws_data.write(row_idx, col, round(dur, 6), style.duration_fmt); col += 1
                         dict_data[grp_name]['syl_dur_sums'][k] += dur
                         dict_data[grp_name]['syl_counts'][k] += 1
                         for i, f0 in enumerate(f0s):
                             if not np.isnan(f0) and f0 > 0:
-                                row.append(float(f"{f0:.6f}"))
+                                ws_data.write(row_idx, col, round(f0, 6), style.hz_fmt); col += 1
                                 dict_data[grp_name]['f0_sums'][k][i] += f0
                                 dict_data[grp_name]['f0_counts'][k][i] += 1
                             else:
-                                row.append("")
+                                ws_data.write(row_idx, col, "", style.text_center); col += 1
                     else:
-                        row.append("")
-                        for _ in range(num_points): row.append("")
-
-                for col, val in enumerate(row):
-                    ws_data.write(row_idx, col, val)
+                        ws_data.write(row_idx, col, "", style.text_center); col += 1
+                        for _ in range(num_points):
+                            ws_data.write(row_idx, col, "", style.text_center); col += 1
 
                 row_idx += 1
                 global_idx += 1
+
+        ws_data.freeze_panes(1, 0)
+        ws_data.autofilter(0, 0, max(row_idx - 1, 1), len(headers) - 1)
+        autofit_worksheet_columns(ws_data, headers)
 
         self._write_raw_pitch_sheet(workbook, raw_pitch_rows, include_speaker=False)
 
@@ -3243,6 +3227,7 @@ class ProjectTreePanel:
         workbook.close()
 
     def _export_integrated(self, out_file, format_mode, include_chart, all_speakers):
+        import math
         try: import xlsxwriter
         except ImportError:
             if format_mode == 'xlsx': return messagebox.showerror("错误", "缺少 xlsxwriter 库，请先安装：pip install xlsxwriter")
@@ -3274,27 +3259,35 @@ class ProjectTreePanel:
             self.items = orig_items
             if f0_values:
                 import numpy as np
-                speaker_stats[speaker.id] = (np.min(f0_values), np.max(f0_values))
-            else: speaker_stats[speaker.id] = (0, 0)
+                speaker_stats[speaker.id] = (float(np.min(f0_values)), float(np.max(f0_values)))
+            else: speaker_stats[speaker.id] = (0.0, 0.0)
             speaker_rows[speaker.id] = rows
 
         if format_mode == 'xlsx':
             workbook = xlsxwriter.Workbook(out_file)
+            from .data_utils import ExcelStyleManager, autofit_worksheet_columns
+            style = ExcelStyleManager(workbook)
+
             ws_data = workbook.add_worksheet("整合数据(T值)")
             ws_res = workbook.add_worksheet("分析结果")
             headers = ["发音人", "组别", "编号", "词语", "总时长(s)"]
             for k in range(1, max_syls + 1):
                 headers.append(f"字{k}_时长(s)")
                 for i in range(1, num_points + 1): headers.append(f"字{k}_T{i}")
-            for col, header in enumerate(headers): ws_data.write(0, col, header)
+            for col, header in enumerate(headers):
+                ws_data.write(0, col, header, style.header_fmt)
 
             group_stats = {}
             raw_pitch_rows = []
             row_idx = 1
             for speaker in all_speakers:
                 rows = speaker_rows.get(speaker.id, [])
-                s_min, s_max = speaker_stats.get(speaker.id, (0, 0))
-                diff = s_max - s_min if s_max > s_min else 1.0
+                s_min, s_max = speaker_stats.get(speaker.id, (0.0, 0.0))
+                has_valid_range = (s_min > 0 and s_max > s_min)
+                log_min = math.log10(s_min) if s_min > 0 else 0.0
+                log_max = math.log10(s_max) if s_max > 0 else 0.0
+                log_diff = log_max - log_min if log_max > log_min else 1.0
+
                 global_idx = 1
                 for r in rows:
                     raw_pitch_rows.append({
@@ -3303,11 +3296,11 @@ class ProjectTreePanel:
                         'index': global_idx,
                         'item': r['raw_item']
                     })
-                    ws_data.write(row_idx, 0, speaker.name)
-                    ws_data.write(row_idx, 1, r['group'])
-                    ws_data.write(row_idx, 2, global_idx)
-                    ws_data.write(row_idx, 3, r['label'])
-                    ws_data.write(row_idx, 4, round(r['total_dur'], 4))
+                    ws_data.write(row_idx, 0, speaker.name, style.text_center)
+                    ws_data.write(row_idx, 1, r['group'], style.text_center)
+                    ws_data.write(row_idx, 2, global_idx, style.int_fmt)
+                    ws_data.write(row_idx, 3, r['label'], style.text_left)
+                    ws_data.write(row_idx, 4, round(r['total_dur'], 4), style.duration_fmt)
                     col_idx = 5
 
                     grp_name = r['group']
@@ -3321,52 +3314,67 @@ class ProjectTreePanel:
                     stats = group_stats[grp_name]
 
                     for k, (s_dur, freqs) in enumerate(r['syl_data']):
-                        ws_data.write(row_idx, col_idx, round(s_dur, 4))
+                        ws_data.write(row_idx, col_idx, round(s_dur, 4), style.duration_fmt)
                         col_idx += 1
                         if k < max_syls:
                             stats['syl_dur_sums'][k] += s_dur
                             stats['syl_counts'][k] += 1
                         for i, f in enumerate(freqs):
-                            t_val = round(((f - s_min) / diff) * 5 if f > 0 else 0.0, 2)
-                            ws_data.write(row_idx, col_idx, t_val)
+                            if f > 0 and has_valid_range:
+                                t_val = round(((math.log10(f) - log_min) / log_diff) * 5.0, 2)
+                                ws_data.write(row_idx, col_idx, t_val, style.t_val_fmt)
+                                if k < max_syls:
+                                    stats['t_sums'][k][i] += t_val
+                                    stats['t_counts'][k][i] += 1
+                            else:
+                                ws_data.write(row_idx, col_idx, "", style.text_center)
                             col_idx += 1
-                            if k < max_syls and f > 0:
-                                stats['t_sums'][k][i] += t_val
-                                stats['t_counts'][k][i] += 1
 
                     fill_count = max_syls - len(r['syl_data'])
                     for _ in range(fill_count):
-                        ws_data.write(row_idx, col_idx, 0.0)
+                        ws_data.write(row_idx, col_idx, "", style.text_center)
                         col_idx += 1
                         for _ in range(num_points):
-                            ws_data.write(row_idx, col_idx, 0.0)
+                            ws_data.write(row_idx, col_idx, "", style.text_center)
                             col_idx += 1
                     global_idx += 1
                     row_idx += 1
 
-            res_headers = ["声调类型"]
+            ws_data.freeze_panes(1, 0)
+            ws_data.autofilter(0, 0, max(row_idx - 1, 1), len(headers) - 1)
+            autofit_worksheet_columns(ws_data, headers)
+
+            res_headers = ["组别"]
             for k in range(1, max_syls + 1):
-                res_headers.append(f"字{k}_平均时长")
+                res_headers.append(f"字{k}_平均时长(s)")
                 for i in range(1, num_points + 1): res_headers.append(f"字{k}_T{i}")
-            for col, header in enumerate(res_headers): ws_res.write(0, col, header)
+            for col, header in enumerate(res_headers):
+                ws_res.write(0, col, header, style.header_fmt)
 
             res_row = 1
             for grp, st in group_stats.items():
-                ws_res.write(res_row, 0, grp)
+                ws_res.write(res_row, 0, grp, style.text_center)
                 col = 1
                 for k in range(max_syls):
                     cnt = st['syl_counts'][k]
-                    avg_dur = st['syl_dur_sums'][k] / cnt if cnt > 0 else 0
-                    ws_res.write(res_row, col, round(avg_dur, 4))
+                    if cnt > 0:
+                        avg_dur = st['syl_dur_sums'][k] / cnt
+                        ws_res.write(res_row, col, round(avg_dur, 4), style.duration_fmt)
+                    else:
+                        ws_res.write(res_row, col, "", style.text_center)
                     col += 1
                     for i in range(num_points):
                         t_cnt = st['t_counts'][k][i]
                         if t_cnt > 0:
-                            ws_res.write(res_row, col, round(st['t_sums'][k][i] / t_cnt, 2))
+                            ws_res.write(res_row, col, round(st['t_sums'][k][i] / t_cnt, 2), style.t_val_fmt)
                         else:
-                            ws_res.write(res_row, col, "")
+                            ws_res.write(res_row, col, "", style.text_center)
                         col += 1
                 res_row += 1
+
+            ws_res.freeze_panes(1, 0)
+            ws_res.autofilter(0, 0, max(res_row - 1, 1), len(res_headers) - 1)
+            autofit_worksheet_columns(ws_res, res_headers)
 
             self._write_raw_pitch_sheet(workbook, raw_pitch_rows, include_speaker=True)
 
@@ -3380,7 +3388,7 @@ class ProjectTreePanel:
                     # 此处使用独立的折线图保持兼容。
                     ws_chart_data = workbook.add_worksheet("图表数据")
                     ws_chart_data.hide()
-                    ws_chart_data.write(0, 0, "声调类型")
+                    ws_chart_data.write(0, 0, "组别")
                     for p in range(1, max_syls * num_points + 1):
                         ws_chart_data.write(0, p, p)
                     chart_row = 1
@@ -3441,18 +3449,27 @@ class ProjectTreePanel:
                 f_out.write("\t".join(headers) + "\n")
                 for speaker in all_speakers:
                     rows = speaker_rows.get(speaker.id, [])
-                    s_min, s_max = speaker_stats.get(speaker.id, (0, 0))
-                    diff = s_max - s_min if s_max > s_min else 1.0
+                    s_min, s_max = speaker_stats.get(speaker.id, (0.0, 0.0))
+                    has_valid_range = (s_min > 0 and s_max > s_min)
+                    log_min = math.log10(s_min) if s_min > 0 else 0.0
+                    log_max = math.log10(s_max) if s_max > 0 else 0.0
+                    log_diff = log_max - log_min if log_max > log_min else 1.0
+
                     global_idx = 1
                     for r in rows:
                         line_parts = [speaker.name, r['group'], str(global_idx), r['label'], f"{r['total_dur']:.4f}"]
                         for s_dur, freqs in r['syl_data']:
                             line_parts.append(f"{s_dur:.4f}")
-                            for f in freqs: line_parts.append(f"{((f - s_min) / diff) * 5 if f > 0 else 0.0:.2f}")
+                            for f in freqs:
+                                if f > 0 and has_valid_range:
+                                    t_v = ((math.log10(f) - log_min) / log_diff) * 5.0
+                                    line_parts.append(f"{t_v:.2f}")
+                                else:
+                                    line_parts.append("")
                         fill_count = max_syls - len(r['syl_data'])
                         for _ in range(fill_count):
-                            line_parts.append("0.0000")
-                            for _ in range(num_points): line_parts.append("0.00")
+                            line_parts.append("")
+                            for _ in range(num_points): line_parts.append("")
                         f_out.write("\t".join(line_parts) + "\n")
                         global_idx += 1
 
@@ -4529,20 +4546,23 @@ class ProjectTreePanel:
             all_speakers = [self.app.speaker_manager.get_active_speaker()]
 
         workbook = xlsxwriter.Workbook(out_file)
+        from .data_utils import ExcelStyleManager, autofit_worksheet_columns
+        style = ExcelStyleManager(workbook)
+
         ws_data = workbook.add_worksheet("提取数据")
         ws_analysis = workbook.add_worksheet("分析图表")
         ws_raw = workbook.add_worksheet("原始数据")
 
         # ══════════ Sheet 1: 提取数据 ══════════
         show_f3 = bool(self.app.last_params.get("show_f3", False))
-        data_headers = ["发音人", "组别", "编号", "词语", "音节序号", "单字", "时间点序号", "时间(s)", "F1(Hz)", "F2(Hz)"]
+        data_headers = ["发音人", "组别", "编号", "词语", "音节序号", "音节", "时间点序号", "时间(s)", "F1(Hz)", "F2(Hz)"]
         if show_f3:
             data_headers.append("F3(Hz)")
         for col, h in enumerate(data_headers):
-            ws_data.write(0, col, h)
+            ws_data.write(0, col, h, style.header_fmt)
 
         data_row = 1
-        group_char_pairs = []  # 有序的 (组别, 单字) 唯一列表 —— 用于分析图表页
+        group_char_pairs = []  # 有序的 (组别, 音节) 唯一列表 —— 用于分析图表页
         seen_pairs = set()
         raw_formant_entries = []  # 收集原始帧数据入口信息
 
@@ -4596,48 +4616,49 @@ class ProjectTreePanel:
                         char = syls[idx_syl] if idx_syl < len(syls) else f"字{idx_syl+1}"
                         flat_start = idx_syl * pts
 
-                        # 收集唯一的 (组别, 单字) 对
+                        # 收集唯一的 (组别, 音节) 对
                         pair_key = (grp_name, char)
                         if pair_key not in seen_pairs:
                             seen_pairs.add(pair_key)
                             group_char_pairs.append(pair_key)
 
                         for idx_pt in range(pts):
-                            ws_data.write(data_row, 0, spk.name)
-                            ws_data.write(data_row, 1, grp_name)
-                            ws_data.write(data_row, 2, global_idx)
-                            ws_data.write(data_row, 3, item.get('label', ''))
-                            ws_data.write(data_row, 4, idx_syl + 1)
-                            ws_data.write(data_row, 5, char)
-                            ws_data.write(data_row, 6, idx_pt + 1)
-                            ws_data.write(data_row, 7, preview_times[flat_start + idx_pt])
+                            ws_data.write(data_row, 0, spk.name, style.text_center)
+                            ws_data.write(data_row, 1, grp_name, style.text_center)
+                            ws_data.write(data_row, 2, global_idx, style.int_fmt)
+                            ws_data.write(data_row, 3, item.get('label', ''), style.text_left)
+                            ws_data.write(data_row, 4, idx_syl + 1, style.int_fmt)
+                            ws_data.write(data_row, 5, char, style.text_center)
+                            ws_data.write(data_row, 6, idx_pt + 1, style.int_fmt)
+                            ws_data.write(data_row, 7, round(preview_times[flat_start + idx_pt], 6), style.duration_fmt)
 
                             f1_v = f1_vals[flat_start + idx_pt]
                             f2_v = f2_vals[flat_start + idx_pt]
 
                             # 使用空单元格代替 "--"，以便分析图表页的公式能正确引用
                             if np.isnan(f1_v):
-                                ws_data.write(data_row, 8, "")
+                                ws_data.write(data_row, 8, "", style.text_center)
                             else:
-                                ws_data.write(data_row, 8, round(f1_v, 1))
+                                ws_data.write(data_row, 8, round(f1_v, 1), style.hz_fmt)
 
                             if np.isnan(f2_v):
-                                ws_data.write(data_row, 9, "")
+                                ws_data.write(data_row, 9, "", style.text_center)
                             else:
-                                ws_data.write(data_row, 9, round(f2_v, 1))
+                                ws_data.write(data_row, 9, round(f2_v, 1), style.hz_fmt)
 
                             if show_f3:
                                 f3_v = f3_vals[flat_start + idx_pt]
                                 if np.isnan(f3_v):
-                                    ws_data.write(data_row, 10, "")
+                                    ws_data.write(data_row, 10, "", style.text_center)
                                 else:
-                                    ws_data.write(data_row, 10, round(f3_v, 1))
+                                    ws_data.write(data_row, 10, round(f3_v, 1), style.hz_fmt)
                             data_row += 1
 
                     global_idx += 1
 
         ws_data.freeze_panes(1, 0)
         ws_data.autofilter(0, 0, max(data_row - 1, 1), len(data_headers) - 1)
+        autofit_worksheet_columns(ws_data, data_headers)
 
         # ══════════ Sheet 2: 分析图表（全部通过 Excel 公式引用提取数据表） ══════════
         last_data_row = data_row - 1  # 0-indexed
@@ -4648,14 +4669,14 @@ class ProjectTreePanel:
 
         # ══════════ Sheet 3: 原始数据（逐帧共振峰帧数据） ══════════
         raw_headers = [
-            "发音人", "组别", "编号", "词语", "音节序号", "单字",
+            "发音人", "组别", "编号", "词语", "音节序号", "音节",
             "绝对时间(s)", "字内相对时间(s)", "F1(Hz)", "F2(Hz)"
         ]
         if show_f3:
             raw_headers.append("F3(Hz)")
         raw_headers.append("状态")
         for col, h in enumerate(raw_headers):
-            ws_raw.write(0, col, h)
+            ws_raw.write(0, col, h, style.header_fmt)
 
         raw_row = 1
         for entry in raw_formant_entries:
@@ -4686,25 +4707,26 @@ class ProjectTreePanel:
 
                     status = "有效" if (f1 > 0 and f2 > 0 and f2 > f1) else "无效"
 
-                    ws_raw.write(raw_row, 0, entry['speaker'])
-                    ws_raw.write(raw_row, 1, entry['group'])
-                    ws_raw.write(raw_row, 2, entry['index'])
-                    ws_raw.write(raw_row, 3, item.get('label', ''))
-                    ws_raw.write(raw_row, 4, syl_idx + 1)
-                    ws_raw.write(raw_row, 5, char)
-                    ws_raw.write(raw_row, 6, round(t, 6))
-                    ws_raw.write(raw_row, 7, round(t - c_s, 6))
-                    ws_raw.write(raw_row, 8, round(f1, 1) if f1 > 0 else 0.0)
-                    ws_raw.write(raw_row, 9, round(f2, 1) if f2 > 0 else 0.0)
+                    ws_raw.write(raw_row, 0, entry['speaker'], style.text_center)
+                    ws_raw.write(raw_row, 1, entry['group'], style.text_center)
+                    ws_raw.write(raw_row, 2, entry['index'], style.int_fmt)
+                    ws_raw.write(raw_row, 3, item.get('label', ''), style.text_left)
+                    ws_raw.write(raw_row, 4, syl_idx + 1, style.int_fmt)
+                    ws_raw.write(raw_row, 5, char, style.text_center)
+                    ws_raw.write(raw_row, 6, round(t, 6), style.decimal6_fmt)
+                    ws_raw.write(raw_row, 7, round(t - c_s, 6), style.decimal6_fmt)
+                    ws_raw.write(raw_row, 8, round(f1, 1) if f1 > 0 else 0.0, style.hz_fmt)
+                    ws_raw.write(raw_row, 9, round(f2, 1) if f2 > 0 else 0.0, style.hz_fmt)
                     if show_f3:
-                        ws_raw.write(raw_row, 10, round(f3, 1) if f3 > 0 else 0.0)
-                        ws_raw.write(raw_row, 11, status)
+                        ws_raw.write(raw_row, 10, round(f3, 1) if f3 > 0 else 0.0, style.hz_fmt)
+                        ws_raw.write(raw_row, 11, status, style.text_center)
                     else:
-                        ws_raw.write(raw_row, 10, status)
+                        ws_raw.write(raw_row, 10, status, style.text_center)
                     raw_row += 1
 
         ws_raw.freeze_panes(1, 0)
         ws_raw.autofilter(0, 0, max(raw_row - 1, 1), len(raw_headers) - 1)
+        autofit_worksheet_columns(ws_raw, raw_headers)
 
         workbook.close()
 
@@ -4717,7 +4739,7 @@ class ProjectTreePanel:
 
         show_f3 = bool(self.app.last_params.get("show_f3", False))
         with open(out_file, "w", encoding="utf-8-sig") as f:
-            raw_headers = ["发音人", "组别", "编号", "词语", "音节序号", "单字", "时间点序号", "时间(s)", "F1(Hz)", "F2(Hz)"]
+            raw_headers = ["发音人", "组别", "编号", "词语", "音节序号", "音节", "时间点序号", "时间(s)", "F1(Hz)", "F2(Hz)"]
             if show_f3:
                 raw_headers.append("F3(Hz)")
             f.write("\t".join(raw_headers) + "\n")

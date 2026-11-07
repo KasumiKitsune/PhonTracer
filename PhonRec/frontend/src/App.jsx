@@ -1699,23 +1699,28 @@ export default function App() {
       const items = { ...(speaker.items || {}) };
       for (const group of updatedGroups || []) {
         for (const canonical of group.items || []) {
+          const existing = items[canonical.id] || {};
+          const {
+            item_note, item_tags, item_aliases, item_meta,
+            group_note, group_tags, group_meta,
+            ...cleanedExisting
+          } = existing;
+          let cleanedQuality = cleanedExisting.quality;
+          if (cleanedQuality && typeof cleanedQuality === 'object') {
+            const { config, recommendations, ...compactQuality } = cleanedQuality;
+            cleanedQuality = compactQuality;
+          }
           items[canonical.id] = {
-            ...(items[canonical.id] || {}),
+            ...cleanedExisting,
             id: canonical.id,
             label: canonical.label,
-            note: canonical.note || '',
-            tags: [...(canonical.tags || [])],
-            aliases: [...(canonical.aliases || [])],
-            meta: { ...(canonical.meta || {}) },
-            metadata_source: canonical.metadata_source || '导入字表',
-            group: group.name || '默认组',
-            item_note: canonical.note || '',
-            item_tags: [...(canonical.tags || [])],
-            item_aliases: [...(canonical.aliases || [])],
-            item_meta: { ...(canonical.meta || {}) },
-            group_note: group.note || '',
-            group_tags: [...(group.tags || [])],
-            group_meta: { ...(group.meta || {}) },
+            note: canonical.note ?? existing.note ?? existing.item_note ?? '',
+            tags: [...(canonical.tags ?? existing.tags ?? existing.item_tags ?? [])],
+            aliases: [...(canonical.aliases ?? existing.aliases ?? existing.item_aliases ?? [])],
+            meta: { ...(canonical.meta ?? existing.meta ?? existing.item_meta ?? {}) },
+            metadata_source: canonical.metadata_source || existing.metadata_source || '导入字表',
+            group: group.name || existing.group || '默认组',
+            ...(cleanedQuality ? { quality: cleanedQuality } : {})
           };
         }
       }
@@ -1728,7 +1733,8 @@ export default function App() {
       save_time: new Date().toISOString(),
       active_speaker_id: customActiveSpeakerId !== null ? customActiveSpeakerId : activeSpeakerIdRef.current,
       speakers: compatibleSpeakers,
-      groups: updatedGroups
+      groups: updatedGroups,
+      quality_config: projectStateRef.current?.quality_config || qualityRules
     };
 
     try {
@@ -1874,7 +1880,6 @@ export default function App() {
               }
             }
           }
-          break; // Scanning the first group with items is usually enough
         }
       }
     }
@@ -2828,6 +2833,15 @@ export default function App() {
     if (!ok) return;
 
     resetPlayback();
+    try {
+      await invoke('standalone_audio_discard', {
+        speakerId: activeSpeakerId,
+        wordId: activeItem.id,
+      });
+    } catch (err) {
+      console.warn('后端清理录音文件失败，回退状态重构:', err);
+    }
+
     const updatedSpeakers = {
       ...speakers,
       [activeSpeakerId]: {
@@ -2836,18 +2850,20 @@ export default function App() {
       },
     };
     if (updatedSpeakers[activeSpeakerId].items[activeItem.id]) {
-      const item = updatedSpeakers[activeSpeakerId].items[activeItem.id];
-      updatedSpeakers[activeSpeakerId].items[activeItem.id] = {
-        ...item,
-        path: null,
-        quality: null,
-        recorded_at: null,
-        duration_ms: null,
-        sample_rate_hz: null,
-        channels: null,
-        format: null,
-        source: null
-      };
+      const item = { ...updatedSpeakers[activeSpeakerId].items[activeItem.id] };
+      delete item.path;
+      delete item.audio_file;
+      delete item.quality;
+      delete item.recorded_at;
+      delete item.duration_ms;
+      delete item.sample_rate_hz;
+      delete item.channels;
+      delete item.format;
+      delete item.source;
+      item.path = null;
+      item.audio_file = null;
+      item.quality = null;
+      updatedSpeakers[activeSpeakerId].items[activeItem.id] = item;
     }
     setSpeakers(updatedSpeakers);
     await saveProjectState(updatedSpeakers);

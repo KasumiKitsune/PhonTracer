@@ -5,6 +5,8 @@ import zipfile
 import shutil
 import copy
 import stat
+import math
+import hashlib
 import numpy as np
 import threading
 import traceback
@@ -35,13 +37,16 @@ def to_json_serializable(val):
         return [to_json_serializable(v) for v in val]
     elif isinstance(val, np.integer):
         return int(val)
-    elif isinstance(val, np.floating):
-        return float(val)
-    elif isinstance(val, np.bool_):
+    elif isinstance(val, (float, np.floating)):
+        fval = float(val)
+        if math.isnan(fval) or math.isinf(fval):
+            return None
+        return fval
+    elif isinstance(val, (bool, np.bool_)):
         return bool(val)
     elif isinstance(val, np.ndarray):
         return to_json_serializable(val.tolist())
-    elif isinstance(val, (int, float, bool, str)) or val is None:
+    elif isinstance(val, (int, str)) or val is None:
         return val
     else:
         try:
@@ -49,6 +54,19 @@ def to_json_serializable(val):
             return val
         except TypeError:
             return str(val)
+
+RUNTIME_EXCLUDED_KEYS = {
+    'snd', 'pitch', 'formant',
+    'preview_f0', 'preview_formants',
+    'warnings', 'has_empty_data', 'preview_segment_mismatch',
+}
+
+ACOUSTIC_PARAM_KEYS = {
+    'pitch_floor', 'pitch_ceiling', 'voicing_threshold',
+    'formant_max_hz', 'formant_count', 'formant_window_length',
+    'formant_pre_emphasis', 'formant_sample_strategy',
+    'show_f3', 'analysis_mode'
+}
 
 def migrate_removed_f0_engine(state):
     """清理历史工程中已移除的 F0 引擎选项，同时保留已有分析缓存。"""
@@ -230,7 +248,10 @@ class ProjectManager:
     def _safe_token(self, value):
         raw = str(value or uuid.uuid4())
         safe = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in raw)
-        return safe[:80] or uuid.uuid4().hex
+        if len(safe) > 80:
+            sha_suffix = hashlib.sha1(str(value).encode('utf-8')).hexdigest()[:12]
+            return f"{safe[:64]}_{sha_suffix}"
+        return safe or uuid.uuid4().hex
 
     def _workspace_relpath(self, path):
         if not path:
@@ -315,6 +336,11 @@ class ProjectManager:
             if rel_path:
                 norm = str(rel_path).replace("\\", "/")
                 if norm.startswith("audio/") or norm.startswith("data/"):
+                    refs.add(norm)
+        for spk in state.get("speakers", {}).values():
+            if isinstance(spk, dict) and spk.get("long_pitch_data_file"):
+                norm = str(spk["long_pitch_data_file"]).replace("\\", "/")
+                if norm.startswith("data/"):
                     refs.add(norm)
         return refs
 
@@ -471,23 +497,83 @@ class ProjectManager:
         self._auto_save_timer.daemon = True
         self._auto_save_timer.start()
 
+    def _sync_speakers_to_groups(self, state, speakers_dict):
+        groups = state.get("groups")
+        if not isinstance(groups, list):
+            return
+        items_by_id = {}
+        items_by_slot = {}
+        groups_by_name = {}
+        for group in groups:
+            gname = group.get("name") or group.get("group") or "默认组"
+            groups_by_name[gname] = group
+            for g_item in group.get("items", []):
+                if g_item.get("id"):
+                    items_by_id[g_item["id"]] = g_item
+                label = g_item.get("label") or g_item.get("word")
+                if label:
+                    items_by_slot[(gname, label)] = g_item
+
+        for spk_data in speakers_dict.values():
+            for item_id, item in spk_data.get("items", {}).items():
+                g_item = items_by_id.get(item_id)
+                if not g_item:
+                    gname = item.get("group") or item.get("group_name") or "默认组"
+                    label = item.get("label") or item.get("word")
+                    if label:
+                        g_item = items_by_slot.get((gname, label))
+                if g_item:
+                    for k in ("note", "tags", "aliases", "meta"):
+                        if k in item and item[k]:
+                            g_item[k] = copy.deepcopy(item[k])
+                    if "label" in item and item["label"]:
+                        g_item["label"] = item["label"]
+                        if "word" in g_item:
+                            g_item["word"] = item["label"]
+
+        # Ensure any groups defined on the UI tree are present in groups
+        tree_groups = getattr(self.app, 'tree_panel', None) and getattr(self.app.tree_panel, 'project_groups', None)
+        if tree_groups:
+            for gname in tree_groups:
+                if gname and gname not in groups_by_name:
+                    new_grp = {
+                        "id": f"grp_{uuid.uuid4().hex[:8]}",
+                        "name": gname,
+                        "note": "",
+                        "tags": [],
+                        "meta": {},
+                        "items": []
+                    }
+                    groups.append(new_grp)
+                    groups_by_name[gname] = new_grp
+
+    def _prune_workspace_resources(self, state, workspace_dir):
+        patched_state = copy.deepcopy(state)
+        for spk_id, spk_data in patched_state.get("speakers", {}).items():
+            if isinstance(spk_data, dict) and spk_data.get("long_pitch_data_file"):
+                items = spk_data.setdefault("items", {})
+                dummy_key = f"__preserve_long_pitch_{spk_id}__"
+                items[dummy_key] = {"pitch_data_file": spk_data["long_pitch_data_file"]}
+        prune_unreferenced_resources(patched_state, workspace_dir)
+
     def save_autosave_snapshot(self):
         self.save_to_workspace()
         self._create_backup()
 
     def save_to_workspace(self):
         with self._save_lock:
-            state = {
-                "version": "1.0",
-                "software_version": __version__,
-                "report_format_version": "1.0",
-                "save_time": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-                "active_speaker_id": self.app.speaker_manager.active_speaker_id,
-                "export_numbering_rule": getattr(self.app, "export_numbering_rule_value", "continuous"),
-                "trim_silence": self.app.switch_trim_silence.get() if hasattr(self.app, "switch_trim_silence") else True,
-                "speakers": {},
-                "custom_script_runs": getattr(self.app, "custom_script_runs", [])
-            }
+            preserved = getattr(self, "_preserved_top_level", {}) or getattr(self.app, "_preserved_top_level", {})
+            state = copy.deepcopy(preserved) if preserved else {}
+            state["version"] = state.get("version", "1.0")
+            state["software_version"] = __version__
+            state["report_format_version"] = state.get("report_format_version", "1.0")
+            state["save_time"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+            state["active_speaker_id"] = self.app.speaker_manager.active_speaker_id
+            state["export_numbering_rule"] = getattr(self.app, "export_numbering_rule_value", "continuous")
+            state["trim_silence"] = self.app.switch_trim_silence.get() if hasattr(self.app, "switch_trim_silence") else True
+            state["speakers"] = {}
+            state["custom_script_runs"] = getattr(self.app, "custom_script_runs", [])
+
             data_dir = self._get_data_dir()
             audio_dir = self._get_audio_dir()
             copy_cache = {}
@@ -495,6 +581,21 @@ class ProjectManager:
             runtime_item_path_updates = []
 
             for spk_id, spk in self.app.speaker_manager.speakers.items():
+                tree_groups = getattr(self.app, 'tree_panel', None) and getattr(self.app.tree_panel, 'project_groups', None)
+                spk_groups = getattr(spk, 'project_groups', None)
+                if spk_id == self.app.speaker_manager.active_speaker_id and tree_groups:
+                    spk_project_groups = list(tree_groups)
+                elif spk_groups and isinstance(spk_groups, list):
+                    spk_project_groups = list(spk_groups)
+                else:
+                    seen = set()
+                    spk_project_groups = []
+                    for it in spk.items.values():
+                        g = it.get('group', '导入内容')
+                        if g not in seen:
+                            seen.add(g)
+                            spk_project_groups.append(g)
+
                 spk_data = {
                     "id": spk.id,
                     "name": spk.name,
@@ -505,8 +606,13 @@ class ProjectManager:
                     "current_macro_segments": spk.current_macro_segments,
                     "manual_segments": spk.manual_segments,
                     "last_selected_iid": getattr(spk, "last_selected_iid", None),
+                    "project_groups": spk_project_groups,
                     "items": {}
                 }
+                existing_long_pitch = getattr(spk, 'long_pitch_data_file', None)
+                if existing_long_pitch:
+                    spk_data["long_pitch_data_file"] = existing_long_pitch
+                    runtime_attr_updates.append((spk, "long_pitch_data_file", existing_long_pitch))
 
                 # Copy long audio to workspace if exists
                 spk_data["long_audio_path"] = self._copy_to_workspace(
@@ -532,16 +638,57 @@ class ProjectManager:
                     [self._resolve_project_path(path) for path in new_batch]
                 ))
 
+                long_pitch_saved = bool(spk_data.get("long_pitch_data_file"))
                 for item_id, item in spk.items.items():
                     item_dict = {}
+                    overrides = copy.deepcopy(item.get('param_overrides', {})) if isinstance(item.get('param_overrides'), dict) else {}
+
                     for k, v in item.items():
-                        if k in ['snd', 'pitch', 'formant']: continue
+                        if k in RUNTIME_EXCLUDED_KEYS:
+                            continue
+                        if k in ('item_note', 'item_tags', 'item_aliases', 'item_meta'):
+                            canonical_k = k[5:]
+                            if canonical_k not in item and v:
+                                item_dict[canonical_k] = v
+                            continue
+                        if k in ACOUSTIC_PARAM_KEYS:
+                            spk_default = spk.last_params.get(k)
+                            if spk_default is not None and v != spk_default:
+                                overrides[k] = v
+                            continue
+                        if k == 'param_overrides':
+                            continue
                         if k == 'pitch_data' and v is not None:
-                            # Save numpy arrays to npz
-                            npz_name = f"{self._safe_token(spk_id)}_{self._safe_token(item_id)}.npz"
-                            npz_path = os.path.join(data_dir, npz_name)
+                            macro_s = item.get('macro_start')
+                            macro_e = item.get('macro_end')
                             if isinstance(v, dict) and 'xs' in v and 'freqs' in v:
-                                np.savez(npz_path, xs=v['xs'], freqs=v['freqs'])
+                                xs = v['xs']
+                                freqs = v['freqs']
+                                if macro_s is not None and macro_e is not None and len(xs) > 0:
+                                    win_s = max(0.0, float(macro_s) - 0.05)
+                                    win_e = float(macro_e) + 0.05
+                                    if (xs[-1] - xs[0]) > (win_e - win_s + 2.0) and (xs[-1] - xs[0]) > 10.0:
+                                        if not long_pitch_saved:
+                                            long_npz_name = f"{self._safe_token(spk_id)}_long_pitch.npz"
+                                            long_npz_path = os.path.join(data_dir, long_npz_name)
+                                            np.savez(long_npz_path, xs=xs, freqs=freqs)
+                                            rel_long_pitch = os.path.join("data", long_npz_name).replace(os.sep, "/")
+                                            spk_data['long_pitch_data_file'] = rel_long_pitch
+                                            long_pitch_saved = True
+                                            runtime_attr_updates.append((
+                                                spk,
+                                                "long_pitch_data_file",
+                                                rel_long_pitch
+                                            ))
+                                        mask = (xs >= win_s) & (xs <= win_e)
+                                        xs = xs[mask]
+                                        freqs = freqs[mask]
+                                        v = {'xs': xs, 'freqs': freqs}
+                                        item['pitch_data'] = v
+
+                                npz_name = f"{self._safe_token(spk_id)}_{self._safe_token(item_id)}.npz"
+                                npz_path = os.path.join(data_dir, npz_name)
+                                np.savez(npz_path, xs=xs, freqs=freqs)
                                 item_dict['pitch_data_file'] = os.path.join("data", npz_name).replace(os.sep, "/")
                             else:
                                 item_dict[k] = v
@@ -565,15 +712,22 @@ class ProjectManager:
                             ))
                         else:
                             item_dict[k] = v
+
+                    overrides = {pk: pv for pk, pv in overrides.items() if pk in ACOUSTIC_PARAM_KEYS and pv != spk.last_params.get(pk)}
+                    if overrides:
+                        item_dict['param_overrides'] = overrides
                     spk_data["items"][item_id] = item_dict
 
                 state["speakers"][spk_id] = spk_data
+
+            if "groups" in state and isinstance(state["groups"], list):
+                self._sync_speakers_to_groups(state, state["speakers"])
 
             project_json = os.path.join(self.workspace_dir, "project.json")
             serializable_state = migrate_removed_f0_engine(to_json_serializable(state))
             tmp_json = project_json + ".tmp"
             with open(tmp_json, "w", encoding="utf-8") as f:
-                json.dump(serializable_state, f, ensure_ascii=False, indent=2)
+                json.dump(serializable_state, f, ensure_ascii=False, indent=2, allow_nan=False)
             os.replace(tmp_json, project_json)
 
             # Write recovery metadata to autosave_meta.json
@@ -589,7 +743,7 @@ class ProjectManager:
             except Exception as e:
                 print(f"Failed to write autosave meta: {e}")
 
-            prune_unreferenced_resources(serializable_state, self.workspace_dir)
+            self._prune_workspace_resources(serializable_state, self.workspace_dir)
             for obj, attr_name, value in runtime_attr_updates:
                 setattr(obj, attr_name, value)
             for item, key, value in runtime_item_path_updates:
@@ -862,6 +1016,11 @@ class ProjectManager:
         import parselmouth
         from .speaker_manager import SpeakerState
 
+        preserved_keys = [k for k in state.keys() if k not in ("speakers", "active_speaker_id", "save_time")]
+        self._preserved_top_level = {k: copy.deepcopy(state[k]) for k in preserved_keys}
+        if self.app:
+            self.app._preserved_top_level = self._preserved_top_level
+
         state = migrate_removed_f0_engine(copy.deepcopy(state))
         workspace_dir = workspace_dir or self.workspace_dir
         restored = {}
@@ -869,17 +1028,19 @@ class ProjectManager:
 
         current_speakers = self.app.speaker_manager.speakers
         existing_names = {s.name for s in current_speakers.values()} if overlay else set()
+        seen_speaker_names = set(existing_names) if overlay else set()
 
         for old_spk_id, spk_data in state.get("speakers", {}).items():
             name = spk_data.get("name", "发音人")
-            if overlay:
-                if name in existing_names:
-                    base_name = name
-                    counter = 2
-                    while f"{base_name}_{counter}" in existing_names:
-                        counter += 1
-                    name = f"{base_name}_{counter}"
-                existing_names.add(name)
+            if name in seen_speaker_names:
+                base_name = name
+                counter = 2
+                suffix = f"_{counter}" if overlay else f" ({counter})"
+                while f"{base_name}{suffix}" in seen_speaker_names:
+                    counter += 1
+                    suffix = f"_{counter}" if overlay else f" ({counter})"
+                name = f"{base_name}{suffix}"
+            seen_speaker_names.add(name)
 
             spk = SpeakerState(name)
 
@@ -905,13 +1066,31 @@ class ProjectManager:
                     spk.pending_long_snd = parselmouth.Sound(spk.long_audio_path)
 
             if spk.pending_long_snd:
-                has_independent_paths = False
-                for item_data in spk_data.get("items", {}).values():
-                    if item_data.get('path'):
-                        has_independent_paths = True
-                        break
-                if not has_independent_paths:
-                    spk.tab_mode = "单条长音频"
+                spk.tab_mode = "单条长音频"
+
+            spk_groups = spk_data.get("project_groups")
+            if spk_groups and isinstance(spk_groups, list):
+                spk.project_groups = list(spk_groups)
+            else:
+                seen_g = set()
+                spk.project_groups = []
+                for it in spk_data.get("items", {}).values():
+                    g = it.get("group", "导入内容")
+                    if g not in seen_g:
+                        seen_g.add(g)
+                        spk.project_groups.append(g)
+
+            long_pitch_data = None
+            long_pitch_file = spk_data.get("long_pitch_data_file")
+            if long_pitch_file:
+                spk.long_pitch_data_file = long_pitch_file
+                long_pitch_path = self._resolve_project_path(long_pitch_file, workspace_dir=workspace_dir)
+                if os.path.exists(long_pitch_path):
+                    try:
+                        with np.load(long_pitch_path) as loaded:
+                            long_pitch_data = {'xs': loaded['xs'].copy(), 'freqs': loaded['freqs'].copy()}
+                    except Exception as e:
+                        print(f"Failed to load long_pitch_data: {e}")
 
             spk.pending_batch_paths = [
                 self._resolve_project_path(p, workspace_dir=workspace_dir)
@@ -928,14 +1107,15 @@ class ProjectManager:
                 if 'path' in item:
                     item['path'] = self._resolve_project_path(item['path'], workspace_dir=workspace_dir)
 
-                if spk.tab_mode == "多条独立音频" and item.get('path') and os.path.exists(item['path']):
-                    item['snd'] = parselmouth.Sound(item['path'])
+                item_path = item.get('path')
+                if item_path and os.path.exists(item_path):
+                    item['snd'] = parselmouth.Sound(item_path)
                     normalize_independent_item_boundaries(
                         item,
                         item['snd'].duration,
-                        label=item.get('label', ''),
+                        label=item.get('label') or item.get('word', ''),
                     )
-                elif spk.tab_mode == "单条长音频" and spk.pending_long_snd:
+                elif spk.pending_long_snd:
                     item['snd'] = spk.pending_long_snd
 
                 if 'pitch_data_file' in item:
@@ -944,6 +1124,30 @@ class ProjectManager:
                         with np.load(npz_path) as loaded:
                             item['pitch_data'] = {'xs': loaded['xs'].copy(), 'freqs': loaded['freqs'].copy()}
                     del item['pitch_data_file']
+
+                if ('pitch_data' not in item or item['pitch_data'] is None) and long_pitch_data is not None:
+                    macro_s = item.get('macro_start')
+                    macro_e = item.get('macro_end')
+                    if macro_s is not None and macro_e is not None:
+                        win_s = max(0.0, float(macro_s) - 0.05)
+                        win_e = float(macro_e) + 0.05
+                        l_xs = long_pitch_data['xs']
+                        l_freqs = long_pitch_data['freqs']
+                        mask = (l_xs >= win_s) & (l_xs <= win_e)
+                        item['pitch_data'] = {'xs': l_xs[mask].copy(), 'freqs': l_freqs[mask].copy()}
+                elif 'pitch_data' in item and item['pitch_data'] is not None:
+                    macro_s = item.get('macro_start')
+                    macro_e = item.get('macro_end')
+                    if macro_s is not None and macro_e is not None:
+                        cur_xs = item['pitch_data']['xs']
+                        win_s = max(0.0, float(macro_s) - 0.05)
+                        win_e = float(macro_e) + 0.05
+                        if len(cur_xs) > 0 and (cur_xs[-1] - cur_xs[0]) > (win_e - win_s + 2.0) and (cur_xs[-1] - cur_xs[0]) > 10.0:
+                            mask = (cur_xs >= win_s) & (cur_xs <= win_e)
+                            item['pitch_data'] = {
+                                'xs': cur_xs[mask].copy(),
+                                'freqs': item['pitch_data']['freqs'][mask].copy()
+                            }
 
                 if 'formant_data_file' in item:
                     npz_path = self._resolve_project_path(item['formant_data_file'], workspace_dir=workspace_dir)
@@ -958,6 +1162,29 @@ class ProjectManager:
                                 formant_dict['f3'] = loaded['f3'].copy()
                             item['formant_data'] = formant_dict
                     del item['formant_data_file']
+
+                if 'preview_f0' in item and isinstance(item['preview_f0'], list):
+                    item['preview_f0'] = [np.nan if v is None else v for v in item['preview_f0']]
+                if 'preview_formants' in item and isinstance(item['preview_formants'], dict):
+                    for fk in ('f1', 'f2', 'f3'):
+                        if fk in item['preview_formants'] and isinstance(item['preview_formants'][fk], list):
+                            item['preview_formants'][fk] = [np.nan if v is None else v for v in item['preview_formants'][fk]]
+
+                overrides = item.get('param_overrides') or {}
+                for pk in ACOUSTIC_PARAM_KEYS:
+                    if pk in overrides:
+                        item[pk] = overrides[pk]
+                    elif pk not in item and pk in spk.last_params:
+                        item[pk] = spk.last_params[pk]
+
+                if 'note' in item and 'item_note' not in item:
+                    item['item_note'] = item['note']
+                if 'tags' in item and 'item_tags' not in item:
+                    item['item_tags'] = item['tags']
+                if 'aliases' in item and 'item_aliases' not in item:
+                    item['item_aliases'] = item['aliases']
+                if 'meta' in item and 'item_meta' not in item:
+                    item['item_meta'] = item['meta']
 
                 spk.items[item_id] = item
 

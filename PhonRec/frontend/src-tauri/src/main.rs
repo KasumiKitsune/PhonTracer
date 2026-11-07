@@ -511,12 +511,89 @@ fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
+fn sanitize_project_state_for_persistence(state: &mut Value) {
+    let mut detected_config = None;
+    if let Some(speakers) = state.get_mut("speakers").and_then(Value::as_object_mut) {
+        for speaker in speakers.values_mut() {
+            if let Some(items) = speaker.get_mut("items").and_then(Value::as_object_mut) {
+                for item in items.values_mut() {
+                    if let Some(item_obj) = item.as_object_mut() {
+                        item_obj.remove("item_note");
+                        item_obj.remove("item_tags");
+                        item_obj.remove("item_aliases");
+                        item_obj.remove("item_meta");
+                        item_obj.remove("group_note");
+                        item_obj.remove("group_tags");
+                        item_obj.remove("group_meta");
+                        if let Some(quality) = item_obj.get_mut("quality").and_then(Value::as_object_mut) {
+                            if detected_config.is_none() {
+                                if let Some(cfg) = quality.get("config") {
+                                    if cfg.is_object() && !cfg.as_object().unwrap().is_empty() {
+                                        detected_config = Some(cfg.clone());
+                                    }
+                                }
+                            }
+                            quality.remove("config");
+                            quality.remove("recommendations");
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if let Some(cfg) = detected_config {
+        if state.get("quality_config").is_none() || state["quality_config"].is_null() {
+            state["quality_config"] = cfg;
+        }
+    }
+}
+
+fn hydrate_project_state_after_load(state: &mut Value) {
+    let global_config = state.get("quality_config").cloned();
+    if let Some(speakers) = state.get_mut("speakers").and_then(Value::as_object_mut) {
+        for speaker in speakers.values_mut() {
+            if let Some(items) = speaker.get_mut("items").and_then(Value::as_object_mut) {
+                for item in items.values_mut() {
+                    if let Some(item_obj) = item.as_object_mut() {
+                        if item_obj.get("note").is_none() || item_obj["note"].as_str() == Some("") {
+                            if let Some(legacy_note) = item_obj.get("item_note") {
+                                item_obj.insert("note".to_string(), legacy_note.clone());
+                            }
+                        }
+                        if item_obj.get("tags").is_none()
+                            || item_obj["tags"].as_array().map(|a| a.is_empty()).unwrap_or(false)
+                        {
+                            if let Some(legacy_tags) = item_obj.get("item_tags") {
+                                item_obj.insert("tags".to_string(), legacy_tags.clone());
+                            }
+                        }
+                        if let Some(quality) = item_obj.get_mut("quality").and_then(Value::as_object_mut) {
+                            if quality.get("config").is_none() {
+                                if let Some(ref cfg) = global_config {
+                                    quality.insert("config".to_string(), cfg.clone());
+                                }
+                            }
+                            if quality.get("recommendations").is_none() {
+                                if let Some(issues) = quality.get("issues").cloned() {
+                                    quality.insert("recommendations".to_string(), issues);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn write_project_state_atomic(workspace: &Path, state: &Value) -> Result<(), String> {
     if !state.is_object() {
         return Err("工程状态必须是 JSON 对象".to_string());
     }
+    let mut persistent_state = state.clone();
+    sanitize_project_state_for_persistence(&mut persistent_state);
     let bytes =
-        serde_json::to_vec_pretty(state).map_err(|error| format!("序列化工程状态失败：{error}"))?;
+        serde_json::to_vec_pretty(&persistent_state).map_err(|error| format!("序列化工程状态失败：{error}"))?;
     write_bytes_atomic(&workspace.join("project.json"), &bytes)
 }
 
@@ -527,6 +604,20 @@ fn referenced_audio_paths(state: &Value, workspace: &Path) -> HashSet<PathBuf> {
             if let Some(items) = speaker.get("items").and_then(Value::as_object) {
                 for item in items.values() {
                     if let Some(relative) = item.get("path").and_then(Value::as_str) {
+                        if let Ok(path) = resolve_managed_workspace_path(workspace, relative) {
+                            referenced.insert(path);
+                        }
+                    }
+                }
+            }
+            if let Some(long_audio) = speaker.get("long_audio_path").and_then(Value::as_str) {
+                if let Ok(path) = resolve_managed_workspace_path(workspace, long_audio) {
+                    referenced.insert(path);
+                }
+            }
+            if let Some(pending) = speaker.get("pending_batch_paths").and_then(Value::as_array) {
+                for item in pending {
+                    if let Some(relative) = item.as_str() {
                         if let Ok(path) = resolve_managed_workspace_path(workspace, relative) {
                             referenced.insert(path);
                         }
@@ -1171,16 +1262,20 @@ fn standalone_project_load(app: AppHandle) -> Result<Value, String> {
         return Ok(json!({"version": "1.0", "speakers": {}, "groups": []}));
     }
     let bytes = fs::read(&path).map_err(|error| format!("读取独立工作区失败：{error}"))?;
-    serde_json::from_slice(&bytes).map_err(|error| format!("解析独立工作区失败：{error}"))
+    let mut state: Value =
+        serde_json::from_slice(&bytes).map_err(|error| format!("解析独立工作区失败：{error}"))?;
+    hydrate_project_state_after_load(&mut state);
+    Ok(state)
 }
 
 #[tauri::command]
-fn standalone_project_save(app: AppHandle, state: Value) -> Result<Value, String> {
+fn standalone_project_save(app: AppHandle, mut state: Value) -> Result<Value, String> {
     let workspace = workspace_dir(&app)?;
     fs::create_dir_all(workspace.join("audio"))
         .map_err(|error| format!("创建独立工作区失败：{error}"))?;
     write_project_state_atomic(&workspace, &state)?;
     prune_unreferenced_audio(&state, &workspace)?;
+    hydrate_project_state_after_load(&mut state);
     Ok(state)
 }
 
@@ -1248,6 +1343,84 @@ fn ensure_project_groups(state: &mut Value) -> Result<(), String> {
         })
         .unwrap_or(false);
     if has_groups {
+        let mut missing_items: Vec<(String, Value, String)> = Vec::new();
+        if let Some(speakers) = state.get("speakers").and_then(Value::as_object) {
+            let mut existing_item_ids: HashSet<String> = HashSet::new();
+            if let Some(groups) = state.get("groups").and_then(Value::as_array) {
+                for g in groups {
+                    if let Some(items) = g.get("items").and_then(Value::as_array) {
+                        for it in items {
+                            if let Some(id) = it.get("id").and_then(Value::as_str) {
+                                existing_item_ids.insert(id.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+            for speaker in speakers.values() {
+                if let Some(items) = speaker.get("items").and_then(Value::as_object) {
+                    for (item_key, item) in items {
+                        let item_id = item.get("id").and_then(Value::as_str).unwrap_or(item_key);
+                        if !existing_item_ids.contains(item_id) {
+                            let group_name = item
+                                .get("group")
+                                .or_else(|| item.get("group_name"))
+                                .and_then(Value::as_str)
+                                .unwrap_or("默认组")
+                                .to_string();
+                            existing_item_ids.insert(item_id.to_string());
+                            missing_items.push((item_id.to_string(), item.clone(), group_name));
+                        }
+                    }
+                }
+            }
+        }
+
+        if !missing_items.is_empty() {
+            if let Some(groups) = state.get_mut("groups").and_then(Value::as_array_mut) {
+                let mut group_indices: HashMap<String, usize> = HashMap::new();
+                for (idx, g) in groups.iter().enumerate() {
+                    if let Some(name) = g.get("name").and_then(Value::as_str) {
+                        group_indices.entry(name.to_string()).or_insert(idx);
+                    }
+                }
+                for (item_id, item, group_name) in missing_items {
+                    let label = item
+                        .get("label")
+                        .or_else(|| item.get("word"))
+                        .and_then(Value::as_str)
+                        .unwrap_or(&item_id)
+                        .to_string();
+                    let canonical = json!({
+                        "id": item_id,
+                        "label": label,
+                        "note": compatible_text(item.get("note"), item.get("item_note")),
+                        "tags": merge_compatible_arrays(item.get("tags"), item.get("item_tags")),
+                        "aliases": merge_compatible_arrays(item.get("aliases"), item.get("item_aliases")),
+                        "meta": merge_compatible_objects(item.get("meta"), item.get("item_meta")),
+                        "metadata_source": item.get("metadata_source").cloned().unwrap_or_else(|| json!("导入工程"))
+                    });
+                    let group_idx = if let Some(&idx) = group_indices.get(&group_name) {
+                        idx
+                    } else {
+                        let new_idx = groups.len();
+                        groups.push(json!({
+                            "id": format!("grp_{}", Uuid::new_v4().simple()),
+                            "name": group_name.clone(),
+                            "note": item.get("group_note").cloned().unwrap_or_else(|| json!("")),
+                            "tags": item.get("group_tags").cloned().unwrap_or_else(|| json!([])),
+                            "meta": item.get("group_meta").cloned().unwrap_or_else(|| json!({})),
+                            "items": []
+                        }));
+                        group_indices.insert(group_name, new_idx);
+                        new_idx
+                    };
+                    if let Some(group_items) = groups[group_idx].get_mut("items").and_then(Value::as_array_mut) {
+                        group_items.push(canonical);
+                    }
+                }
+            }
+        }
         return Ok(());
     }
 
@@ -1428,7 +1601,7 @@ fn ensure_project_groups(state: &mut Value) -> Result<(), String> {
             let Some(canonical_id) = remap.get(old_id) else {
                 continue;
             };
-            let Some((canonical, group_name, group_note, group_tags, group_meta)) =
+            let Some((canonical, group_name, _group_note, _group_tags, _group_meta)) =
                 canonical_by_id.get(canonical_id)
             else {
                 continue;
@@ -1448,14 +1621,14 @@ fn ensure_project_groups(state: &mut Value) -> Result<(), String> {
                     normalized.insert(key.to_string(), value.clone());
                 }
             }
-            normalized.insert("item_note".to_string(), canonical["note"].clone());
-            normalized.insert("item_tags".to_string(), canonical["tags"].clone());
-            normalized.insert("item_aliases".to_string(), canonical["aliases"].clone());
-            normalized.insert("item_meta".to_string(), canonical["meta"].clone());
             normalized.insert("group".to_string(), Value::String(group_name.clone()));
-            normalized.insert("group_note".to_string(), group_note.clone());
-            normalized.insert("group_tags".to_string(), group_tags.clone());
-            normalized.insert("group_meta".to_string(), group_meta.clone());
+            normalized.remove("item_note");
+            normalized.remove("item_tags");
+            normalized.remove("item_aliases");
+            normalized.remove("item_meta");
+            normalized.remove("group_note");
+            normalized.remove("group_tags");
+            normalized.remove("group_meta");
             normalized_items.insert(canonical_id.clone(), Value::Object(normalized));
         }
         if let Some(speaker_object) = speaker.as_object_mut() {
@@ -1713,6 +1886,9 @@ fn standalone_audio_save(
 
     if stored {
         let mut state = standalone_project_load(app.clone())?;
+        if state.get("quality_config").is_none() || state["quality_config"].is_null() {
+            state["quality_config"] = quality_rules.clone();
+        }
         let speaker = state
             .get_mut("speakers")
             .and_then(Value::as_object_mut)
@@ -1729,7 +1905,12 @@ fn standalone_audio_save(
             .and_then(Value::as_object_mut)
             .ok_or_else(|| "录音目标词项已不存在或数据无效".to_string())?;
         item.insert("path".to_string(), Value::String(relative.clone()));
-        item.insert("quality".to_string(), quality.clone());
+        let mut compact_quality = quality.clone();
+        if let Some(map) = compact_quality.as_object_mut() {
+            map.remove("config");
+            map.remove("recommendations");
+        }
+        item.insert("quality".to_string(), compact_quality);
         item.insert(
             "recorded_at".to_string(),
             Value::String(recorded_at.clone()),
@@ -1809,6 +1990,9 @@ fn standalone_audio_analyze(
     let quality = analyze_lightweight_quality(&parsed.samples, parsed.sample_rate, &quality_rules);
     let workspace = workspace_dir(&app)?;
     if let Ok(mut state) = standalone_project_load(app.clone()) {
+        if state.get("quality_config").is_none() || state["quality_config"].is_null() {
+            state["quality_config"] = quality_rules.clone();
+        }
         if let Some(item) = state
             .get_mut("speakers")
             .and_then(Value::as_object_mut)
@@ -1819,7 +2003,12 @@ fn standalone_audio_analyze(
             .and_then(|items| items.get_mut(&word_id))
             .and_then(Value::as_object_mut)
         {
-            item.insert("quality".to_string(), quality.clone());
+            let mut compact_quality = quality.clone();
+            if let Some(map) = compact_quality.as_object_mut() {
+                map.remove("config");
+                map.remove("recommendations");
+            }
+            item.insert("quality".to_string(), compact_quality);
             let _ = write_project_state_atomic(&workspace, &state);
         }
     }
@@ -1827,6 +2016,53 @@ fn standalone_audio_analyze(
         "status": "success",
         "quality": quality
     }))
+}
+
+#[tauri::command]
+fn standalone_audio_discard(
+    app: AppHandle,
+    speaker_id: String,
+    word_id: String,
+) -> Result<(), String> {
+    let workspace = workspace_dir(&app)?;
+    let mut state = standalone_project_load(app.clone())?;
+    let mut path_to_remove = None;
+    if let Some(item) = state
+        .get_mut("speakers")
+        .and_then(Value::as_object_mut)
+        .and_then(|speakers| speakers.get_mut(&speaker_id))
+        .and_then(Value::as_object_mut)
+        .and_then(|speaker| speaker.get_mut("items"))
+        .and_then(Value::as_object_mut)
+        .and_then(|items| items.get_mut(&word_id))
+        .and_then(Value::as_object_mut)
+    {
+        if let Some(rel) = item.get("path").and_then(Value::as_str) {
+            path_to_remove = Some(rel.to_string());
+        }
+        item.remove("path");
+        item.remove("quality");
+        item.remove("recorded_at");
+        item.remove("duration_ms");
+        item.remove("sample_rate_hz");
+        item.remove("channels");
+        item.remove("format");
+        item.remove("source");
+    }
+    if let Some(rel) = path_to_remove {
+        if let Ok(file_path) = resolve_existing_managed_file(&workspace, &rel) {
+            let _ = fs::remove_file(file_path);
+        }
+    }
+    let safe_speaker = sanitize_path_component(&speaker_id, "speaker");
+    let safe_word = sanitize_path_component(&word_id, "item");
+    let conventional_rel = format!("audio/{safe_speaker}/{safe_speaker}_{safe_word}.wav");
+    if let Ok(file_path) = resolve_existing_managed_file(&workspace, &conventional_rel) {
+        let _ = fs::remove_file(file_path);
+    }
+    write_project_state_atomic(&workspace, &state)?;
+    prune_unreferenced_audio(&state, &workspace)?;
+    Ok(())
 }
 
 fn write_standalone_project_archive(workspace: &Path, destination: &Path) -> Result<(), String> {
@@ -2450,17 +2686,26 @@ fn standalone_import_folder(app: AppHandle, payload: Value) -> Result<Value, Str
                 "groups": []
             });
             if let Ok(bytes) = fs::read(staging.join("meta.yaml")) {
-                if let Ok(meta_json) = serde_json::from_slice::<Value>(&bytes) {
+                let meta_json: Option<Value> = serde_json::from_slice::<Value>(&bytes)
+                    .ok()
+                    .or_else(|| serde_yaml::from_slice::<Value>(&bytes).ok());
+                if let Some(meta_json) = meta_json {
                     if let Some(speakers) = meta_json.get("speakers") {
                         reconstructed["speakers"] = speakers.clone();
                     }
                     if let Some(active) = meta_json.get("active_speaker_id") {
                         reconstructed["active_speaker_id"] = active.clone();
                     }
+                    if let Some(cfg) = meta_json.get("quality_config") {
+                        reconstructed["quality_config"] = cfg.clone();
+                    }
                 }
             }
             if let Ok(bytes) = fs::read(staging.join("wordlist.yaml")) {
-                if let Ok(wl_json) = serde_json::from_slice::<Value>(&bytes) {
+                let wl_json: Option<Value> = serde_json::from_slice::<Value>(&bytes)
+                    .ok()
+                    .or_else(|| serde_yaml::from_slice::<Value>(&bytes).ok());
+                if let Some(wl_json) = wl_json {
                     if let Some(groups) = wl_json.get("groups") {
                         reconstructed["groups"] = groups.clone();
                     }
@@ -3145,20 +3390,71 @@ fn write_wav_header(sample_rate: u32, num_samples: usize) -> Vec<u8> {
     header
 }
 
+fn apply_anti_aliasing_filter(input: &[f32], source_rate: u32, target_rate: u32) -> Vec<f32> {
+    if input.is_empty() || source_rate <= target_rate {
+        return input.to_vec();
+    }
+    let f_cutoff = 0.45 * (target_rate as f64);
+    let f_norm = f_cutoff / (source_rate as f64);
+
+    const TAPS: usize = 31;
+    let half_taps = (TAPS / 2) as isize;
+    let mut coeffs = [0.0f64; TAPS];
+    let mut sum = 0.0f64;
+
+    for i in 0..TAPS {
+        let k = (i as isize) - half_taps;
+        let sinc = if k == 0 {
+            2.0 * f_norm
+        } else {
+            let x = 2.0 * std::f64::consts::PI * f_norm * (k as f64);
+            x.sin() / (std::f64::consts::PI * (k as f64))
+        };
+        let w = 0.54 - 0.46 * (2.0 * std::f64::consts::PI * (i as f64) / ((TAPS - 1) as f64)).cos();
+        coeffs[i] = sinc * w;
+        sum += coeffs[i];
+    }
+    if sum.abs() > 1e-12 {
+        for c in coeffs.iter_mut() {
+            *c /= sum;
+        }
+    }
+
+    let len = input.len();
+    let mut filtered = Vec::with_capacity(len);
+    for i in 0..len {
+        let mut acc = 0.0f64;
+        for (t, &coeff) in coeffs.iter().enumerate() {
+            let offset = (t as isize) - half_taps;
+            let src_idx = (i as isize + offset).clamp(0, (len - 1) as isize) as usize;
+            acc += input[src_idx] as f64 * coeff;
+        }
+        filtered.push(acc as f32);
+    }
+    filtered
+}
+
 fn resample_audio(input: &[f32], source_rate: u32, target_rate: u32) -> Vec<f32> {
     if input.is_empty() || source_rate == target_rate {
         return input.to_vec();
     }
+    let filtered_input: Vec<f32>;
+    let src_slice = if target_rate < source_rate && input.len() >= 16 {
+        filtered_input = apply_anti_aliasing_filter(input, source_rate, target_rate);
+        &filtered_input[..]
+    } else {
+        input
+    };
     let output_len = ((input.len() as u64 * target_rate as u64) / source_rate as u64) as usize;
     let mut output = Vec::with_capacity(output_len);
     let ratio = source_rate as f64 / target_rate as f64;
     for i in 0..output_len {
         let pos = i as f64 * ratio;
         let left = pos.floor() as usize;
-        let right = (left + 1).min(input.len() - 1);
+        let right = (left + 1).min(src_slice.len() - 1);
         let frac = pos - left as f64;
-        if left < input.len() {
-            let val = input[left] as f64 * (1.0 - frac) + input[right] as f64 * frac;
+        if left < src_slice.len() {
+            let val = src_slice[left] as f64 * (1.0 - frac) + src_slice[right] as f64 * frac;
             output.push(val as f32);
         }
     }
@@ -3586,6 +3882,7 @@ fn main() {
             standalone_audio_save,
             standalone_audio_read,
             standalone_audio_analyze,
+            standalone_audio_discard,
             open_in_phontracer,
             standalone_export_wav_folder,
             standalone_export_folder,
@@ -4224,5 +4521,217 @@ mod tests {
             portable_archive_key(Path::new("Audio/Speaker/Word.wav")),
             portable_archive_key(Path::new("audio/speaker/word.WAV"))
         );
+    }
+
+    #[test]
+    fn test_resample_anti_aliasing_attenuates_above_nyquist() {
+        // High frequency (10 kHz) sampled at 48 kHz
+        let sr = 48000;
+        let target_sr = 16000;
+        let n = 4800; // 100 ms
+        let mut input = Vec::with_capacity(n);
+        for i in 0..n {
+            let t = i as f64 / sr as f64;
+            // 10000 Hz tone (above target Nyquist of 8000 Hz)
+            let val = (2.0 * std::f64::consts::PI * 10000.0 * t).sin();
+            input.push(val as f32);
+        }
+        let output = resample_audio(&input, sr, target_sr);
+        assert_eq!(output.len(), n * target_sr as usize / sr as usize);
+        // Middle portion RMS should be strongly attenuated compared to input RMS (~0.707)
+        let mid_output = &output[100..output.len() - 100];
+        let energy: f64 = mid_output.iter().map(|&s| (s as f64) * (s as f64)).sum();
+        let rms = (energy / mid_output.len() as f64).sqrt();
+        assert!(rms < 0.25, "10 kHz component should be attenuated below 0.25 RMS, got {rms}");
+    }
+
+    #[test]
+    fn test_prune_retains_long_audio_and_pending_batch() {
+        let root = std::env::temp_dir().join(format!("phonrec_test_prune_long_{}", Uuid::new_v4()));
+        let audio_dir = root.join("audio").join("spk_test");
+        fs::create_dir_all(&audio_dir).unwrap();
+        let item_wav = audio_dir.join("item.wav");
+        let long_wav = audio_dir.join("long.wav");
+        let batch_wav = audio_dir.join("batch_1.wav");
+        let orphan_wav = audio_dir.join("orphan.wav");
+
+        fs::write(&item_wav, b"item").unwrap();
+        fs::write(&long_wav, b"long").unwrap();
+        fs::write(&batch_wav, b"batch").unwrap();
+        fs::write(&orphan_wav, b"orphan").unwrap();
+
+        let state = json!({
+            "speakers": {
+                "spk_test": {
+                    "long_audio_path": "audio/spk_test/long.wav",
+                    "pending_batch_paths": ["audio/spk_test/batch_1.wav"],
+                    "items": {
+                        "w1": {"path": "audio/spk_test/item.wav"}
+                    }
+                }
+            }
+        });
+
+        prune_unreferenced_audio(&state, &root).unwrap();
+        assert!(item_wav.exists(), "item.wav must be preserved");
+        assert!(long_wav.exists(), "long_audio_path must be preserved");
+        assert!(batch_wav.exists(), "pending_batch_paths must be preserved");
+        assert!(!orphan_wav.exists(), "orphan.wav must be pruned");
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn test_ensure_project_groups_incremental_merge() {
+        let mut state = json!({
+            "groups": [
+                {
+                    "id": "grp_existing",
+                    "name": "旧分组",
+                    "items": [
+                        {"id": "w1", "label": "老词"}
+                    ]
+                }
+            ],
+            "speakers": {
+                "spk_1": {
+                    "items": {
+                        "w1": {"id": "w1", "label": "老词", "group": "旧分组"},
+                        "w2_new": {
+                            "id": "w2_new",
+                            "label": "新词",
+                            "group": "新增组",
+                            "note": "新词备注",
+                            "item_note": "冗余旧备注"
+                        }
+                    }
+                }
+            }
+        });
+
+        ensure_project_groups(&mut state).unwrap();
+        let groups = state["groups"].as_array().unwrap();
+        assert_eq!(groups.len(), 2, "Should have created a new group for w2_new");
+        assert_eq!(groups[0]["items"].as_array().unwrap().len(), 1);
+        assert_eq!(groups[1]["name"], "新增组");
+        assert_eq!(groups[1]["items"][0]["id"], "w2_new");
+        assert_eq!(groups[1]["items"][0]["label"], "新词");
+        assert_eq!(groups[1]["items"][0]["note"], "新词备注");
+    }
+
+    #[test]
+    fn test_quality_and_metadata_persistence_slimming() {
+        let root = std::env::temp_dir().join(format!("phonrec_test_slimming_{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+
+        let rules = json!({
+            "speech": {"enabled": true, "level": "medium"},
+            "volume": {"enabled": true, "level": "high"}
+        });
+        let state = json!({
+            "version": "1.0",
+            "speakers": {
+                "spk_1": {
+                    "items": {
+                        "w1": {
+                            "id": "w1",
+                            "label": "词项",
+                            "note": "主备注",
+                            "item_note": "冗余镜像备注",
+                            "item_tags": ["冗余标签"],
+                            "group": "默认组",
+                            "group_note": "冗余组备注",
+                            "quality": {
+                                "decision": "accept",
+                                "grade": "良好",
+                                "score": 95,
+                                "issues": ["轻微截断"],
+                                "recommendations": ["轻微截断"],
+                                "config": rules
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        write_project_state_atomic(&root, &state).unwrap();
+
+        // Read raw project.json from disk to verify slimming
+        let raw_bytes = fs::read(root.join("project.json")).unwrap();
+        let raw_json: Value = serde_json::from_slice(&raw_bytes).unwrap();
+
+        // Global config should be lifted to root
+        assert_eq!(raw_json["quality_config"]["volume"]["level"], "high");
+
+        let raw_item = &raw_json["speakers"]["spk_1"]["items"]["w1"];
+        assert!(raw_item.get("item_note").is_none(), "item_note should be stripped");
+        assert!(raw_item.get("item_tags").is_none(), "item_tags should be stripped");
+        assert!(raw_item.get("group_note").is_none(), "group_note should be stripped");
+        assert!(raw_item["quality"].get("config").is_none(), "quality.config should be stripped from item");
+        assert!(raw_item["quality"].get("recommendations").is_none(), "quality.recommendations should be stripped from item");
+        assert_eq!(raw_item["quality"]["score"], 95);
+
+        // Verify hydration upon loading
+        let mut loaded = raw_json.clone();
+        hydrate_project_state_after_load(&mut loaded);
+        let loaded_item = &loaded["speakers"]["spk_1"]["items"]["w1"];
+        assert_eq!(loaded_item["quality"]["config"]["volume"]["level"], "high");
+        assert_eq!(loaded_item["quality"]["recommendations"], json!(["轻微截断"]));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn test_import_folder_parses_yaml_when_project_json_missing() {
+        let temp_dir = std::env::temp_dir().join(format!("phonrec_yaml_import_test_{}", Uuid::new_v4()));
+        let export_out = temp_dir.join("folder");
+        fs::create_dir_all(&export_out).unwrap();
+
+        // Write pure YAML files
+        let wl_yaml = "schema: phontracer.wordlist.v2\ngroups:\n  - id: grp_yaml\n    name: YAML组\n    items:\n      - id: item_yaml\n        label: 验证词\n";
+        fs::write(export_out.join("wordlist.yaml"), wl_yaml).unwrap();
+
+        let meta_yaml = "version: '1.0'\napp: PhonRec\nactive_speaker_id: spk_yaml\nspeakers:\n  spk_yaml:\n    name: YAML发音人\n    items:\n      item_yaml:\n        id: item_yaml\n        label: 验证词\n";
+        fs::write(export_out.join("meta.yaml"), meta_yaml).unwrap();
+
+        assert!(!export_out.join("project.json").exists());
+
+        let mut reconstructed = json!({
+            "version": "1.0",
+            "active_speaker_id": "",
+            "speakers": {},
+            "groups": []
+        });
+        if let Ok(bytes) = fs::read(export_out.join("meta.yaml")) {
+            let meta_json: Option<Value> = serde_json::from_slice::<Value>(&bytes)
+                .ok()
+                .or_else(|| serde_yaml::from_slice::<Value>(&bytes).ok());
+            if let Some(meta_json) = meta_json {
+                if let Some(speakers) = meta_json.get("speakers") {
+                    reconstructed["speakers"] = speakers.clone();
+                }
+                if let Some(active) = meta_json.get("active_speaker_id") {
+                    reconstructed["active_speaker_id"] = active.clone();
+                }
+            }
+        }
+        if let Ok(bytes) = fs::read(export_out.join("wordlist.yaml")) {
+            let wl_json: Option<Value> = serde_json::from_slice::<Value>(&bytes)
+                .ok()
+                .or_else(|| serde_yaml::from_slice::<Value>(&bytes).ok());
+            if let Some(wl_json) = wl_json {
+                if let Some(groups) = wl_json.get("groups") {
+                    reconstructed["groups"] = groups.clone();
+                }
+            }
+        }
+
+        assert_eq!(reconstructed["active_speaker_id"], "spk_yaml");
+        assert_eq!(reconstructed["speakers"]["spk_yaml"]["name"], "YAML发音人");
+        assert_eq!(reconstructed["groups"][0]["name"], "YAML组");
+        assert_eq!(reconstructed["groups"][0]["items"][0]["label"], "验证词");
+
+        fs::remove_dir_all(temp_dir).unwrap();
     }
 }

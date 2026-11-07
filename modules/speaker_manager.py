@@ -22,6 +22,7 @@ class SpeakerState:
         }
         self.pending_long_snd = None
         self.long_audio_path = None
+        self.long_pitch_data_file = None
         self.pending_batch_paths = []
         self.current_macro_segments = []
         self.manual_segments = None

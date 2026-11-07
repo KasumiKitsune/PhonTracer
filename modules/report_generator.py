@@ -7,22 +7,60 @@ import hashlib
 import numpy as np
 from typing import Dict, Any, Callable, List, Optional, Tuple
 from collections import Counter
+from .anomaly_detection import detect_pitch_anomaly_points
+
+SPLIT_WARNING_ZH = {
+    "tiny_segment": "子段时长偏短",
+    "imbalanced_duration": "子段时长比例不均",
+    "no_clear_valley": "能量谷底不明显",
+    "fallback_equal_split": "等分兜底切分",
+    "low_f0_coverage": "有效基频帧偏少",
+}
 
 # Field Interpretation Layer
+def get_item_override_param(item: Dict[str, Any], key: str, default: Any = None) -> Any:
+    """优先从 item['param_overrides'] 读取覆盖参数，并兼容 recomputed_*_params 及条目顶层键。"""
+    if not isinstance(item, dict):
+        return default
+    overrides = item.get("param_overrides")
+    if isinstance(overrides, dict) and key in overrides and overrides[key] is not None:
+        return overrides[key]
+    recomp_pitch = item.get("recomputed_pitch_params")
+    if isinstance(recomp_pitch, dict) and key in recomp_pitch and recomp_pitch[key] is not None:
+        return recomp_pitch[key]
+    recomp_formant = item.get("recomputed_formant_params")
+    if isinstance(recomp_formant, dict) and key in recomp_formant and recomp_formant[key] is not None:
+        return recomp_formant[key]
+    alias_map = {
+        "pitch_floor": ("f0_min",),
+        "pitch_ceiling": ("f0_max",),
+        "voicing_threshold": ("voicing_thresh",),
+    }
+    for alias in alias_map.get(key, ()):
+        if isinstance(overrides, dict) and alias in overrides and overrides[alias] is not None:
+            return overrides[alias]
+        if isinstance(recomp_pitch, dict) and alias in recomp_pitch and recomp_pitch[alias] is not None:
+            return recomp_pitch[alias]
+        if alias in item and item[alias] is not None:
+            return item[alias]
+    if key in item and item[key] is not None:
+        return item[key]
+    return default
+
 def get_pitch_floor(params: Dict[str, Any], default: float = 75.0) -> float:
     if not params:
         return default
-    return params.get("pitch_floor") or params.get("f0_min") or default
+    return get_item_override_param(params, "pitch_floor", params.get("pitch_floor") or params.get("f0_min") or default)
 
 def get_pitch_ceiling(params: Dict[str, Any], default: float = 600.0) -> float:
     if not params:
         return default
-    return params.get("pitch_ceiling") or params.get("f0_max") or default
+    return get_item_override_param(params, "pitch_ceiling", params.get("pitch_ceiling") or params.get("f0_max") or default)
 
 def get_voicing_threshold(params: Dict[str, Any], default: float = 0.25) -> float:
     if not params:
         return default
-    return params.get("voicing_threshold") or params.get("voicing_thresh") or default
+    return get_item_override_param(params, "voicing_threshold", params.get("voicing_threshold") or params.get("voicing_thresh") or default)
 
 def _majority_value(values: List[Any], fallback: Any) -> Any:
     """返回出现次数最多的值；并列时优先使用发音人记录值。"""
@@ -62,23 +100,23 @@ def get_majority_item_params(items: Dict[str, Dict[str, Any]], speaker_params: D
             fallbacks["voicing_threshold"]
         ),
         "formant_max_hz": _majority_value(
-            [item.get("formant_max_hz", fallbacks["formant_max_hz"]) for item in included_items],
+            [get_item_override_param(item, "formant_max_hz", fallbacks["formant_max_hz"]) for item in included_items],
             fallbacks["formant_max_hz"]
         ),
         "formant_count": _majority_value(
-            [item.get("formant_count", fallbacks["formant_count"]) for item in included_items],
+            [get_item_override_param(item, "formant_count", fallbacks["formant_count"]) for item in included_items],
             fallbacks["formant_count"]
         ),
         "formant_window_length": _majority_value(
-            [item.get("formant_window_length", fallbacks["formant_window_length"]) for item in included_items],
+            [get_item_override_param(item, "formant_window_length", fallbacks["formant_window_length"]) for item in included_items],
             fallbacks["formant_window_length"]
         ),
         "formant_pre_emphasis": _majority_value(
-            [item.get("formant_pre_emphasis", fallbacks["formant_pre_emphasis"]) for item in included_items],
+            [get_item_override_param(item, "formant_pre_emphasis", fallbacks["formant_pre_emphasis"]) for item in included_items],
             fallbacks["formant_pre_emphasis"]
         ),
         "formant_sample_strategy": _majority_value(
-            [item.get("formant_sample_strategy", fallbacks["formant_sample_strategy"]) for item in included_items],
+            [get_item_override_param(item, "formant_sample_strategy", fallbacks["formant_sample_strategy"]) for item in included_items],
             fallbacks["formant_sample_strategy"]
         ),
     }
@@ -264,33 +302,22 @@ def check_item_has_empty_formant(item: Dict[str, Any], formant_data: Any) -> boo
 
     return has_empty
 
-def detect_pitch_anomaly_points(xs, freqs, bounds, start, end):
-    anomalies = []
-    if len(xs) < 2:
-        return anomalies
-    for i in range(1, len(xs)):
-        if freqs[i] > 0 and freqs[i-1] > 0:
-            ratio = freqs[i] / freqs[i-1]
-            if ratio > 1.4 or ratio < 0.7:  # Pitch jump
-                anomalies.append((xs[i], freqs[i]))
-    return anomalies
-
 def analyze_item_anomalies(item: Dict[str, Any], pitch_data: Any, formant_data: Any, params: Dict[str, Any], pitch_status: str = "无", formant_status: str = "无") -> List[str]:
     if item and item.get('ignore_warnings'):
         return []
     warnings = []
 
     if pitch_status == "损坏":
-        warnings.append("[致命] 基频缓存文件已损坏或无法解析")
+        warnings.append("[错误] 缓存文件无法读取 (基频)")
     if formant_status == "损坏":
-        warnings.append("[致命] 共振峰缓存文件已损坏或无法解析")
+        warnings.append("[错误] 缓存文件无法读取 (共振峰)")
 
     if not item or item.get('start') is None:
-        warnings.append("[致命] 时间边界无效或缺失")
+        warnings.append("[错误] 时间边界无效或缺失")
         return warnings
 
     if item.get('preview_segment_mismatch'):
-        warnings.append("[致命] 子段数量与预览不匹配")
+        warnings.append("[错误] 子段数量与预览不匹配")
 
     mode = item.get('analysis_mode') or params.get('analysis_mode', 'f0')
     pts = int(item.get('pts') or params.get('pts', 11))
@@ -302,7 +329,7 @@ def analyze_item_anomalies(item: Dict[str, Any], pitch_data: Any, formant_data: 
         f1 = formant_data.get('f1', np.array([]))
         f2 = formant_data.get('f2', np.array([]))
         if len(f_xs) == 0:
-            warnings.append("[致命] 共振峰数据为空")
+            warnings.append("[复核] 共振峰数据为空")
             return warnings
         if check_item_has_empty_formant(item, formant_data):
             warnings.append("[警告] 共振峰存在明显缺失帧或无效帧，建议复核边界与参数")
@@ -326,7 +353,7 @@ def analyze_item_anomalies(item: Dict[str, Any], pitch_data: Any, formant_data: 
             char = syls[idx] if idx < len(syls) else f"音节{idx+1}"
             dur = c_e - c_s
             if dur <= 0:
-                warnings.append(f"[致命] 音节 [{char}] 时间边界无效")
+                warnings.append(f"[错误] 音节 [{char}] 时间边界无效")
                 continue
             margin = dur * 0.125
             core_s = c_s + margin
@@ -337,12 +364,12 @@ def analyze_item_anomalies(item: Dict[str, Any], pitch_data: Any, formant_data: 
             seg_f1 = f1[mask]
             seg_f2 = f2[mask]
             if len(seg_xs) == 0:
-                warnings.append(f"[致命] 音节 [{char}] 核心区间无共振峰数据")
+                warnings.append(f"[复核] 音节 [{char}] 核心区间无共振峰数据")
                 continue
             valid_mask = ~np.isnan(seg_f1) & ~np.isnan(seg_f2) & (seg_f2 > seg_f1)
             ratio = np.sum(valid_mask) / len(seg_xs)
             if ratio < 0.30:
-                warnings.append(f"[致命] 音节 [{char}] 共振峰有效帧比例过低 ({ratio:.1%} < 30%)")
+                warnings.append(f"[复核] 音节 [{char}] 有效共振峰帧比例较低 ({ratio:.1%} < 30%)")
             elif ratio < 0.55:
                 warnings.append(f"[警告] 音节 [{char}] 共振峰有效帧比例偏低 ({ratio:.1%} < 55%)")
 
@@ -374,17 +401,17 @@ def analyze_item_anomalies(item: Dict[str, Any], pitch_data: Any, formant_data: 
         split_warnings = item.get('split_warnings', [])
         for sw in split_warnings:
             if sw == 'tiny_segment':
-                warnings.append("[致命] 边界过短 (某个子段短于 80ms)")
+                warnings.append("[复核] 音段时长较短 (< 80ms，常见于短促音节或切分偏窄)")
             elif sw == 'imbalanced_duration':
                 warnings.append("[警告] 时长严重失衡 (子段时长比例不均)")
             elif sw == 'no_clear_valley':
                 warnings.append("[警告] 未能识别到能量谷 (子音节切分谷底不明显)")
             elif sw == 'fallback_equal_split':
-                warnings.append("[提示] 采用等分兜底切割")
+                warnings.append("[提示] 采用等分兜底切分")
         return list(dict.fromkeys(warnings))
 
     if check_item_has_empty_f0(item, pitch_data, pts):
-        warnings.append("[致命] 基频数据含有0值 (F0 缺失)")
+        warnings.append("[复核] 采样点含无基频帧 (F0 = 0，常见于清化、嘎裂声或静音段)")
 
     if pitch_data:
         t_s, t_e = item.get('start'), item.get('end')
@@ -412,15 +439,15 @@ def analyze_item_anomalies(item: Dict[str, Any], pitch_data: Any, formant_data: 
     split_warnings = item.get('split_warnings', [])
     for sw in split_warnings:
         if sw == 'tiny_segment':
-            warnings.append("[致命] 边界过短 (某个子段短于 80ms)")
+            warnings.append("[复核] 音段时长较短 (< 80ms，常见于短促音节或切分偏窄)")
         elif sw == 'imbalanced_duration':
             warnings.append("[警告] 时长严重失衡 (子段时长比例不均)")
         elif sw == 'no_clear_valley':
             warnings.append("[警告] 未能识别到能量谷 (子音节切分谷底不明显)")
         elif sw == 'fallback_equal_split':
-            warnings.append("[提示] 采用等分兜底切割")
+            warnings.append("[提示] 采用等分兜底切分")
         elif sw == 'low_f0_coverage':
-            warnings.append("[致命] F0 覆盖率低 (某子段有效基频点比例低于 30%)")
+            warnings.append("[复核] 有效基频帧比例较低 (< 30%)")
 
     return warnings
 
@@ -591,7 +618,7 @@ def generate_markdown_report(teproj_path: str, state: Dict[str, Any], zip_ref: z
     export_rule = state.get("export_numbering_rule")
     if export_rule == "continuous":
         export_rule_str = "全部连续标号"
-    elif export_rule == "by_group":
+    elif export_rule in ("per_group", "by_group"):
         export_rule_str = "按分组重新标号"
     else:
         export_rule_str = "未记录"
@@ -680,7 +707,8 @@ def generate_markdown_report(teproj_path: str, state: Dict[str, Any], zip_ref: z
                     "warnings": item_warnings
                 })
 
-    adjusted_ratio = (manually_adjusted / total_items * 100) if total_items > 0 else 0.0
+    total_valid = total_items - excluded_count
+    adjusted_ratio = (manually_adjusted / total_valid * 100.0) if total_valid > 0 else 0.0
 
     # Start building MD
     lines = []
@@ -837,11 +865,11 @@ def generate_markdown_report(teproj_path: str, state: Dict[str, Any], zip_ref: z
             if item_thresh != v_thresh:
                 diffs.append(f"浊音阈值: {item_thresh:.2f} (多数值 {v_thresh:.2f})")
 
-            item_f_max = item.get("formant_max_hz", f_max)
-            item_f_count = item.get("formant_count", f_count)
-            item_f_win = item.get("formant_window_length", f_win)
-            item_f_pre = item.get("formant_pre_emphasis", f_pre)
-            item_f_strat = item.get("formant_sample_strategy", f_strat)
+            item_f_max = get_item_override_param(item, "formant_max_hz", f_max)
+            item_f_count = get_item_override_param(item, "formant_count", f_count)
+            item_f_win = get_item_override_param(item, "formant_window_length", f_win)
+            item_f_pre = get_item_override_param(item, "formant_pre_emphasis", f_pre)
+            item_f_strat = get_item_override_param(item, "formant_sample_strategy", f_strat)
 
             if item_f_max != f_max:
                 diffs.append(f"共振峰分析上限: {item_f_max:.0f} Hz (多数值 {f_max:.0f} Hz)")
@@ -863,7 +891,7 @@ def generate_markdown_report(teproj_path: str, state: Dict[str, Any], zip_ref: z
                 })
 
     if exceptions:
-        lines.append("| 发音人 | 条目ID | 音节标签 | 局部定制参数偏离详情 |")
+        lines.append("| 发音人 | 条目ID | 词项 | 局部定制参数偏离详情 |")
         lines.append("| :--- | :--- | :--- | :--- |")
         for exc in exceptions:
             lines.append(f"| {exc['speaker']} | {exc['id']} | {exc['label']} | {exc['diffs']} |")
@@ -882,30 +910,29 @@ def generate_markdown_report(teproj_path: str, state: Dict[str, Any], zip_ref: z
 
     lines.append("## 6. 人工复核与质量审计摘要")
     lines.append("")
-    lines.append(f"- **人工微调统计**：共有 **{manually_adjusted}** 个条目经过了人工复核微调或橡皮擦擦除修正，占全部条目的 **{adjusted_ratio:.1f}%**。这表明大部分数据基于自动检测，其余部分根据声谱图人工微调。")
-    lines.append("- **潜在异常条目列表 (需特别注意)**：")
-    lines.append("  以下条目在分析时因信号微弱、跳变或能量谷底不明显，触发了算法警告。建议在撰写论文前复核以下条目：")
+    other_ratio = (100.0 - adjusted_ratio) if total_valid > 0 else 0.0
+    other_count = total_valid - manually_adjusted
+    lines.append(f"- **边界与轨迹修订统计**：纳入分析的条目中，有 **{manually_adjusted}** 个条目（**{adjusted_ratio:.1f}%**）在声谱图复核过程中进行了边界微调或轨迹点修正；其余 **{other_count}** 个条目（**{other_ratio:.1f}%**）保持自动检测边界与原始提取轨迹。")
+    lines.append("- **声学特征复核记录**：以下条目包含短时音段、清音段间断或基频跳变等声学特征标记，供数据分析时参考：")
     lines.append("")
 
     if warning_list:
-        lines.append("| 发音人 | 分组 | 条目标签 | 触发的审计/切分警告详情 |")
+        lines.append("| 发音人 | 分组 | 词项 | 触发的声学复核标记 |")
         lines.append("| :--- | :--- | :--- | :--- |")
         for warn in warning_list:
             warning_joined = "; ".join(warn["warnings"])
             lines.append(f"| {warn['speaker']} | {warn['group']} | {warn['label']} | {warning_joined} |")
     else:
-        lines.append("（好消息：工程中所有分析条目均未触发明显的算法警告或清浊点缺失）")
+        lines.append("所有纳入分析的条目均通过基频与共振峰连续性检验，未检出缺失段或跳变标记。")
     lines.append("")
 
-    lines.append("## 7. 学术透明性与未记录信息公开说明")
+    lines.append("## 7. 实验背景与方法学补充清单")
     lines.append("")
-    lines.append("> [!WARNING]")
-    lines.append("> **本工程文件中无法确认的论文方法信息**：")
-    lines.append("> 为了确保科学研究的严谨性，以下研究所需的**非物理声学参数**由于不保存在工程结构中，**无法**自动包含。研究者必须在论文的方法或附录中进行人工补充说明：")
-    lines.append("> 1. **发音人人口学背景**：发音人的性别比例、年龄区间、出生及常住地、双语/双言环境、方言流利度评估。")
-    lines.append("> 2. **录音设备与声学环境**：录音室本底噪声水平（dB）、采样麦克风型号与方向性特征（录音数字化参数如采样率、位深和声道数已从物理文件头部自动提取，见第1节）。")
-    lines.append("> 3. **实验程序与刺激控制**：字表呈现的随机化设计、发音指导语、录音重复次数、发音疲兴控制策略等等。")
-    lines.append("> 4. **TextGrid 的外部导入溯源**：若边界来自外部 MFA (Montreal Forced Aligner) 或 Praat 标注的 TextGrid 导入，请在此处补充说明原始标注的标准和对齐信度。")
+    lines.append("撰写论文的方法（Methods）章节时，除本报告已记录的声学提取参数外，建议结合实验设计补充说明以下背景信息：")
+    lines.append("1. **发音人人口学信息**：性别、年龄分布、方言/母语背景及语言使用情况。")
+    lines.append("2. **录音硬件与声学环境**：麦克风型号、录音接口、声学环境（如消音室或安静室内）及本底噪声水平（采样率、位深与声道数见第 1 节）。")
+    lines.append("3. **实验材料与录音流程**：字表排列方式（如随机化或分组呈现）、发音指导语、重复次数及发音疲劳控制措施。")
+    lines.append("4. **外部标注溯源（如适用）**：若分段边界导入自外部 TextGrid（如 MFA 强制对齐或 Praat 人工标注），建议说明对齐模型或标注规范。")
     lines.append("")
 
     lines.append("## 8. 数据清洗与排除条目清单")
@@ -913,7 +940,7 @@ def generate_markdown_report(teproj_path: str, state: Dict[str, Any], zip_ref: z
     if excluded_list:
         lines.append("以下条目已被研究者标记为“忽略（不参与分析与导出）”，但在工程归档中完整保留了其原始录音、时间边界与状态，以便溯源和复核：")
         lines.append("")
-        lines.append("| 发音人 | 分组 | 条目 ID | 标签 | 时间边界(s) | 排除原因 | 排除操作时间 |")
+        lines.append("| 发音人 | 分组 | 条目ID | 词项 | 时间边界(s) | 排除原因 | 排除操作时间 |")
         lines.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
         for ex in excluded_list:
             b_str = f"{ex['start']:.3f}–{ex['end']:.3f}" if ex['start'] is not None and ex['end'] is not None else "-"
@@ -1052,11 +1079,11 @@ def write_excel_archive(teproj_path: str, state: Dict[str, Any], output_xlsx_pat
                 item_floor = get_pitch_floor(item, majority_floor)
                 item_ceiling = get_pitch_ceiling(item, majority_ceiling)
                 item_thresh = get_voicing_threshold(item, majority_thresh)
-                item_f_max = item.get("formant_max_hz", majority_f_max)
-                item_f_count = item.get("formant_count", majority_f_count)
-                item_f_win = item.get("formant_window_length", majority_f_win)
-                item_f_pre = item.get("formant_pre_emphasis", majority_f_pre)
-                item_f_strat = item.get("formant_sample_strategy", majority_f_strat)
+                item_f_max = get_item_override_param(item, "formant_max_hz", majority_f_max)
+                item_f_count = get_item_override_param(item, "formant_count", majority_f_count)
+                item_f_win = get_item_override_param(item, "formant_window_length", majority_f_win)
+                item_f_pre = get_item_override_param(item, "formant_pre_emphasis", majority_f_pre)
+                item_f_strat = get_item_override_param(item, "formant_sample_strategy", majority_f_strat)
 
                 diffs = []
                 if item_floor != majority_floor: diffs.append(f"基频下限: {item_floor:.0f}Hz (多数值: {majority_floor:.0f}Hz)")
@@ -1071,7 +1098,7 @@ def write_excel_archive(teproj_path: str, state: Dict[str, Any], output_xlsx_pat
                 if diffs and not is_excluded:
                     param_exception_rows.append([spk_name, group, item_id, label, ", ".join(diffs)])
 
-                item_meta = item.get("item_meta") or {}
+                item_meta = item.get("item_meta") or item.get("meta") or {}
                 item_meta_text = "；".join([f"{k}={v}" for k, v in item_meta.items()]) if isinstance(item_meta, dict) else str(item_meta)
                 item_detail_rows.append([spk_name, group, item_id, label, item.get("path", "无"), item_mode,
                                          "是" if is_excluded else "否",
@@ -1083,9 +1110,9 @@ def write_excel_archive(teproj_path: str, state: Dict[str, Any], output_xlsx_pat
                                          item.get("wordlist_title", ""),
                                          item.get("group_note", ""),
                                          "；".join(str(v) for v in (item.get("group_tags", []) or [])),
-                                         item.get("item_note", ""),
-                                         "；".join(str(v) for v in (item.get("item_tags", []) or [])),
-                                         "；".join(str(v) for v in (item.get("item_aliases", []) or [])),
+                                         item.get("item_note") or item.get("note", ""),
+                                         "；".join(str(v) for v in (item.get("item_tags") or item.get("tags") or [])),
+                                         "；".join(str(v) for v in (item.get("item_aliases") or item.get("aliases") or [])),
                                          item.get("metadata_source", ""),
                                          item_meta_text])
 
@@ -1126,9 +1153,11 @@ def write_excel_archive(teproj_path: str, state: Dict[str, Any], output_xlsx_pat
 
                 item_warnings = analyze_item_anomalies(item, pitch_data, formant_data, params, p_status, f_status)
                 if not is_excluded and item.get("is_manual_edited"): manually_adjusted += 1
+                mapped_split_warnings = [SPLIT_WARNING_ZH.get(w, w) for w in item.get("split_warnings", [])]
+                split_warn_str = "；".join(mapped_split_warnings)
                 audit_warning_rows.append([spk_name, group, item_id, label, "是" if is_excluded else "否", "是" if item.get("is_manual_edited") else "否",
-                                           item.get("split_confidence", 1.0), ", ".join(item.get("split_warnings", [])),
-                                           ", ".join(item_warnings) if item_warnings else "合格无警告"])
+                                           item.get("split_confidence", 1.0), split_warn_str,
+                                           "；".join(item_warnings) if item_warnings else "合格无警告"])
 
                 if include_cache_details:
                     if pitch_data:
@@ -1173,7 +1202,7 @@ def write_excel_archive(teproj_path: str, state: Dict[str, Any], output_xlsx_pat
         "词级边界": "保留宏范围、自动检测原始边界和最终采用边界。黄色表示最终边界与原始边界不同。",
         "字级边界": "多音节词的字级边界及词内切分点。黄色表示存在切分点，红色表示边界缺失。",
         "局部参数差异": "集中列出纳入分析条目中的局部参数偏离，便于方法透明性审计。",
-        "人工复核与风险": "集中列出人工修改、切分置信度、算法警告和致命异常。",
+        "质量控制与复核记录": "集中列出人工修改、切分置信度、声学复核提示与声学复核标记。",
         "排除与忽略条目": "保留已排除条目的原因和时间，确保清洗过程可追溯。",
         "资源清单": "归档内资源列表及校验状态。红色表示缓存损坏或录音参数偏离。",
         "字段说明": "工作表字段的用途和解释。",
@@ -1184,21 +1213,22 @@ def write_excel_archive(teproj_path: str, state: Dict[str, Any], output_xlsx_pat
     }
 
     width_overrides = {
-        "路径": 42, "差异详情": 62, "警告": 32, "致命异常": 68, "排除原因": 28,
+        "路径": 42, "差异详情": 62, "声学复核提示": 32, "声学复核标记": 68, "排除原因": 28,
         "排除时间": 20, "数字化参数": 28, "校验状态": 24, "定义": 54, "概览指标": 28,
         "指标取值": 68, "参数状态": 20, "边界状态": 36, "切分状态": 18, "类型": 20,
-        "条目ID": 20, "ID": 20, "标签": 18, "发音人": 16, "发音人姓名": 16, "组别": 18,
+        "条目ID": 20, "词项": 18, "发音人": 16, "组别": 18, "音节序号": 12,
+        "组标签": 20, "词项标签": 20, "自动检测起点(s)": 20, "自动检测终点(s)": 20,
         "运行时间": 20, "用户需求": 42, "完整源码": 80, "代码 SHA-256": 42, "输出文件": 28,
     }
 
     trim_silence_str = "是" if state.get("trim_silence") else "否"
     export_rule_val = state.get("export_numbering_rule")
-    export_rule_excel = "全部连续" if export_rule_val == "continuous" else ("按分组重新标号" if export_rule_val == "by_group" else "未记录")
+    export_rule_excel = "全部连续" if export_rule_val == "continuous" else ("按分组重新标号" if export_rule_val in ("per_group", "by_group") else "未记录")
 
     excluded_count = len(excluded_rows)
     included_count = total_items - excluded_count
-    warning_item_count = sum(1 for row in audit_warning_rows if row[8] != "合格无警告")
-    fatal_item_count = sum(1 for row in audit_warning_rows if "[致命]" in row[8])
+    warning_item_count = sum(1 for row in audit_warning_rows if row[7] != "")
+    review_item_count = sum(1 for row in audit_warning_rows if row[8] != "合格无警告")
     resource_issue_count = sum(1 for row in resource_rows if row[4] != "正常")
     group_summary_rows = [
         [group, group_included_counts.get(group, 0), count - group_included_counts.get(group, 0)]
@@ -1210,8 +1240,8 @@ def write_excel_archive(teproj_path: str, state: Dict[str, Any], output_xlsx_pat
                           ["归档文件 SHA-256 校验码", file_hash], ["发音人数量", len(speakers)], ["条目总数", total_items],
                           ["已忽略/排除条目数", excluded_count], ["实际分析条目数", included_count],
                           ["人工微调条目数", manually_adjusted],
-                          ["局部参数偏离条目数", len(param_exception_rows)], ["自动审计警告条目数", warning_item_count],
-                          ["含致命异常条目数", fatal_item_count], ["资源校验异常数", resource_issue_count],
+                          ["局部参数偏离条目数", len(param_exception_rows)], ["自动切分提示条目数", warning_item_count],
+                          ["含声学复核标记条目数", review_item_count], ["资源校验异常数", resource_issue_count],
                           ["录音数字化参数偏离文件数", len(deviations)], ["纳入分析模式分布", mode_summary],
                           ["边缘静音裁切是否启用", trim_silence_str], ["词内标号策略", export_rule_excel], ["总体录音数字化参数", consensus_str]])
 
@@ -1226,25 +1256,27 @@ def write_excel_archive(teproj_path: str, state: Dict[str, Any], output_xlsx_pat
     font_name = "Microsoft YaHei"
     title_fmt = wb.add_format({'bold': True, 'font_name': font_name, 'font_size': 15, 'font_color': 'white', 'bg_color': '#1E3A8A', 'align': 'left', 'valign': 'vcenter'})
     subtitle_fmt = wb.add_format({'font_name': font_name, 'font_size': 9, 'font_color': '#475569', 'bg_color': '#F8FAFC', 'align': 'left', 'valign': 'vcenter'})
-    empty_fmt = wb.add_format({'font_name': font_name, 'italic': True, 'font_color': '#64748B', 'bg_color': '#F8FAFC', 'align': 'left'})
-    red_fmt = wb.add_format({'font_name': font_name, 'bg_color': '#FEE2E2', 'font_color': '#991B1B'})
-    orange_fmt = wb.add_format({'font_name': font_name, 'bg_color': '#FFEDD5', 'font_color': '#9A3412'})
-    yellow_fmt = wb.add_format({'font_name': font_name, 'bg_color': '#FEF3C7', 'font_color': '#92400E'})
-    green_fmt = wb.add_format({'font_name': font_name, 'bg_color': '#DCFCE7', 'font_color': '#166534'})
+    empty_fmt = wb.add_format({'font_name': font_name, 'font_size': 10, 'italic': True, 'font_color': '#64748B', 'bg_color': '#F8FAFC', 'align': 'left', 'border': 1, 'border_color': '#CBD5E1'})
+    red_fmt = wb.add_format({'font_name': font_name, 'font_size': 10, 'bg_color': '#FEE2E2', 'font_color': '#991B1B', 'border': 1, 'border_color': '#CBD5E1'})
+    orange_fmt = wb.add_format({'font_name': font_name, 'font_size': 10, 'bg_color': '#FFEDD5', 'font_color': '#9A3412', 'border': 1, 'border_color': '#CBD5E1'})
+    yellow_fmt = wb.add_format({'font_name': font_name, 'font_size': 10, 'bg_color': '#FEF3C7', 'font_color': '#92400E', 'border': 1, 'border_color': '#CBD5E1'})
+    green_fmt = wb.add_format({'font_name': font_name, 'font_size': 10, 'bg_color': '#DCFCE7', 'font_color': '#166534', 'border': 1, 'border_color': '#CBD5E1'})
     section_fmt = wb.add_format({'bold': True, 'font_name': font_name, 'font_size': 11, 'font_color': 'white', 'bg_color': '#2563EB', 'align': 'left', 'valign': 'vcenter'})
     summary_title_fmt = wb.add_format({'bold': True, 'font_name': font_name, 'font_size': 18, 'font_color': 'white', 'bg_color': '#1E3A8A', 'align': 'left', 'valign': 'vcenter'})
     summary_subtitle_fmt = wb.add_format({'font_name': font_name, 'font_size': 10, 'font_color': '#334155', 'bg_color': '#DBEAFE', 'align': 'left', 'valign': 'vcenter'})
     summary_text_fmt = wb.add_format({'font_name': font_name, 'font_size': 10, 'font_color': '#1E293B', 'bg_color': '#EFF6FF', 'border': 1, 'border_color': '#BFDBFE', 'text_wrap': True, 'valign': 'top'})
-    label_fmt = wb.add_format({'bold': True, 'font_name': font_name, 'font_color': '#334155', 'bg_color': '#F1F5F9', 'border': 1, 'border_color': '#CBD5E1'})
-    value_fmt = wb.add_format({'font_name': font_name, 'font_color': '#1E293B', 'bg_color': 'white', 'border': 1, 'border_color': '#CBD5E1'})
-    link_fmt = wb.add_format({'font_name': font_name, 'font_color': '#2563EB', 'underline': True, 'bg_color': 'white', 'border': 1, 'border_color': '#CBD5E1'})
+    label_fmt = wb.add_format({'bold': True, 'font_name': font_name, 'font_size': 10, 'font_color': '#334155', 'bg_color': '#F1F5F9', 'border': 1, 'border_color': '#CBD5E1'})
+    value_fmt = wb.add_format({'font_name': font_name, 'font_size': 10, 'font_color': '#1E293B', 'bg_color': 'white', 'border': 1, 'border_color': '#CBD5E1'})
+    link_fmt = wb.add_format({'font_name': font_name, 'font_size': 10, 'font_color': '#2563EB', 'underline': True, 'bg_color': 'white', 'border': 1, 'border_color': '#CBD5E1'})
     card_label_fmt = wb.add_format({'bold': True, 'font_name': font_name, 'font_size': 9, 'font_color': '#475569', 'bg_color': '#F8FAFC', 'border': 1, 'border_color': '#CBD5E1', 'align': 'center', 'valign': 'vcenter'})
     card_value_fmt = wb.add_format({'bold': True, 'font_name': font_name, 'font_size': 16, 'font_color': '#1E3A8A', 'bg_color': 'white', 'border': 1, 'border_color': '#CBD5E1', 'align': 'center', 'valign': 'vcenter'})
-    time_fmt = wb.add_format({'num_format': '0.000'})
-    decimal_fmt = wb.add_format({'num_format': '0.00'})
-    integer_fmt = wb.add_format({'num_format': '0'})
-    size_fmt = wb.add_format({'num_format': '#,##0'})
-    header_fmt = wb.add_format({'bold': True, 'font_name': font_name, 'font_color': 'white', 'bg_color': '#2563EB', 'border': 1, 'border_color': '#DBEAFE', 'align': 'center', 'valign': 'vcenter'})
+    time_fmt = wb.add_format({'num_format': '0.000', 'font_name': font_name, 'font_size': 10, 'border': 1, 'border_color': '#CBD5E1'})
+    decimal_fmt = wb.add_format({'num_format': '0.00', 'font_name': font_name, 'font_size': 10, 'border': 1, 'border_color': '#CBD5E1'})
+    integer_fmt = wb.add_format({'num_format': '0', 'font_name': font_name, 'font_size': 10, 'border': 1, 'border_color': '#CBD5E1'})
+    size_fmt = wb.add_format({'num_format': '#,##0', 'font_name': font_name, 'font_size': 10, 'border': 1, 'border_color': '#CBD5E1'})
+    code_fmt = wb.add_format({'font_name': 'Consolas', 'font_size': 9, 'text_wrap': True, 'valign': 'top', 'border': 1, 'border_color': '#CBD5E1'})
+    default_data_fmt = wb.add_format({'font_name': font_name, 'font_size': 10, 'border': 1, 'border_color': '#CBD5E1'})
+    header_fmt = wb.add_format({'bold': True, 'font_name': font_name, 'font_size': 10, 'font_color': 'white', 'bg_color': '#2563EB', 'border': 1, 'border_color': '#DBEAFE', 'align': 'center', 'valign': 'vcenter'})
 
     # sheet_descriptions and width_overrides are defined above with script sheets support
 
@@ -1253,18 +1285,32 @@ def write_excel_archive(teproj_path: str, state: Dict[str, Any], output_xlsx_pat
             return time_fmt
         if any(token in header for token in ("阈值", "置信度")):
             return decimal_fmt
-        if header in ("F0下限", "F0上限", "共振峰分析上限", "追踪个数", "大小", "基频F0(Hz)", "F1共振峰(Hz)", "F2共振峰(Hz)", "F3共振峰(Hz)"):
+        if header in ("F0下限", "F0上限", "共振峰分析上限", "追踪个数", "大小", "基频F0(Hz)", "F1共振峰(Hz)", "F2共振峰(Hz)", "F3共振峰(Hz)", "音节序号"):
             return size_fmt if header == "大小" else integer_fmt
-        return None
+        if header == "完整源码":
+            return code_fmt
+        return default_data_fmt
+
+    def visual_len(text: Any) -> int:
+        if text is None:
+            return 0
+        s = str(text)
+        length = 0
+        for ch in s:
+            if ord(ch) > 127:
+                length += 2
+            else:
+                length += 1
+        return length
 
     def column_width(header: str, rows: List[List[Any]], col_idx: int) -> int:
         if header in width_overrides:
             return width_overrides[header]
-        longest = len(str(header))
+        longest = visual_len(header) + 5
         for row in rows[:300]:
             if col_idx < len(row):
-                longest = max(longest, len(str(row[col_idx])))
-        return min(max(longest + 3, 11), 24)
+                longest = max(longest, visual_len(row[col_idx]) + 2)
+        return min(max(longest, 12), 48)
 
     def add_formula_highlight(ws, last_row: int, first_col: int, last_col: int, formula: str, fmt, stop_if_true: bool = False):
         if last_row >= 3:
@@ -1284,14 +1330,14 @@ def write_excel_archive(teproj_path: str, state: Dict[str, Any], output_xlsx_pat
             col = xlsxwriter.utility.xl_col_to_name(index["是否排除"])
             add_formula_highlight(ws, last_row, 0, last_col, f'=${col}4="是"', red_fmt, True)
         if category == "工程概览":
-            add_formula_highlight(ws, last_row, 0, last_col, '=AND(ISNUMBER($B4),OR($A4="已忽略/排除条目数",$A4="人工微调条目数",$A4="局部参数偏离条目数",$A4="自动审计警告条目数",$A4="含致命异常条目数",$A4="资源校验异常数",$A4="录音数字化参数偏离文件数"),$B4>0)', orange_fmt)
+            add_formula_highlight(ws, last_row, 0, last_col, '=AND(ISNUMBER($B4),OR($A4="已忽略/排除条目数",$A4="人工微调条目数",$A4="局部参数偏离条目数",$A4="自动切分提示条目数",$A4="含声学复核标记条目数",$A4="资源校验异常数",$A4="录音数字化参数偏离文件数"),$B4>0)', orange_fmt)
         elif category == "条目明细":
             for header in ("定制下限", "定制上限", "定制阈值"):
                 col_idx = index[header]
                 col = xlsxwriter.utility.xl_col_to_name(col_idx)
                 add_formula_highlight(ws, last_row, col_idx, col_idx, f'=${col}4<>"同多数"', orange_fmt)
         elif category == "词级边界":
-            for header, baseline in (("采样起点", "自起点"), ("采样终点", "自终点")):
+            for header, baseline in (("采样起点", "自动检测起点(s)"), ("采样终点", "自动检测终点(s)")):
                 col_idx = index[header]
                 col = xlsxwriter.utility.xl_col_to_name(col_idx)
                 base_col = xlsxwriter.utility.xl_col_to_name(index[baseline])
@@ -1304,19 +1350,19 @@ def write_excel_archive(teproj_path: str, state: Dict[str, Any], output_xlsx_pat
             add_formula_highlight(ws, last_row, index["切分点"], index["切分点"], f'=${split_col}4<>""', yellow_fmt)
             add_formula_highlight(ws, last_row, index["切分状态"], index["切分状态"], f'=${status_col}4="字级边界缺失"', red_fmt)
         elif category == "局部参数差异":
-            add_formula_highlight(ws, last_row, 0, last_col, '=$A4<>""', orange_fmt)
-        elif category == "人工复核与风险":
+            pass  # 移除全表涂橙，保持清爽可读
+        elif category == "质量控制与复核记录":
             manual_col = xlsxwriter.utility.xl_col_to_name(index["人工修改"])
             confidence_col = xlsxwriter.utility.xl_col_to_name(index["置信度"])
-            warning_col = xlsxwriter.utility.xl_col_to_name(index["警告"])
-            fatal_col = xlsxwriter.utility.xl_col_to_name(index["致命异常"])
+            warning_col = xlsxwriter.utility.xl_col_to_name(index["声学复核提示"])
+            fatal_col = xlsxwriter.utility.xl_col_to_name(index["声学复核标记"])
             add_formula_highlight(ws, last_row, index["人工修改"], index["人工修改"], f'=${manual_col}4="是"', yellow_fmt)
             add_formula_highlight(ws, last_row, index["置信度"], index["置信度"], f'=${confidence_col}4<0.6', orange_fmt)
-            add_formula_highlight(ws, last_row, index["警告"], index["警告"], f'=${warning_col}4<>""', yellow_fmt)
-            add_formula_highlight(ws, last_row, index["致命异常"], index["致命异常"], f'=ISNUMBER(SEARCH("[致命]",${fatal_col}4))', red_fmt, True)
-            add_formula_highlight(ws, last_row, index["致命异常"], index["致命异常"], f'=${fatal_col}4<>"合格无警告"', orange_fmt)
+            add_formula_highlight(ws, last_row, index["声学复核提示"], index["声学复核提示"], f'=${warning_col}4<>""', yellow_fmt)
+            add_formula_highlight(ws, last_row, index["声学复核标记"], index["声学复核标记"], f'=OR(ISNUMBER(SEARCH("[错误]",${fatal_col}4)),ISNUMBER(SEARCH("[致命]",${fatal_col}4)))', red_fmt, True)
+            add_formula_highlight(ws, last_row, index["声学复核标记"], index["声学复核标记"], f'=${fatal_col}4<>"合格无警告"', orange_fmt)
         elif category == "排除与忽略条目":
-            add_formula_highlight(ws, last_row, 0, last_col, '=$A4<>""', red_fmt)
+            pass  # 移除全表涂红，保持清爽可读
         elif category == "资源清单":
             status_col = xlsxwriter.utility.xl_col_to_name(index["校验状态"])
             add_formula_highlight(ws, last_row, index["校验状态"], index["校验状态"], f'=${status_col}4<>"正常"', red_fmt)
@@ -1360,9 +1406,6 @@ def write_excel_archive(teproj_path: str, state: Dict[str, Any], output_xlsx_pat
         for col_idx, header in enumerate(headers):
             ws.set_column(col_idx, col_idx, column_width(header, rows, col_idx), column_format_for_header(header))
         apply_sheet_highlights(ws, category, headers, last_row)
-        ws.autofit()
-        for col_idx, header in enumerate(headers):
-            ws.set_column(col_idx, col_idx, column_width(header, rows, col_idx), column_format_for_header(header))
         ws.set_landscape()
         ws.fit_to_pages(1, 0)
         ws.repeat_rows(0, 2)
@@ -1402,25 +1445,26 @@ def write_excel_archive(teproj_path: str, state: Dict[str, Any], output_xlsx_pat
         ws_summary.merge_range(f"{start_idx}5:{end_idx}5", label, card_label_fmt)
         ws_summary.merge_range(f"{start_idx}6:{end_idx}7", value, card_value_fmt)
     ws_summary.merge_range("A9:J9", "研究方法摘要", section_fmt)
-    ws_summary.merge_range("A10:J12", generate_natural_language_summary(state), summary_text_fmt)
+    summary_text = generate_natural_language_summary(state)
+    ws_summary.merge_range("A10:J12", summary_text, summary_text_fmt)
     ws_summary.merge_range("A14:D14", "质量审计概览", section_fmt)
     ws_summary.write_row("A15", ["关注指标", "数量", "建议", "跳转"], header_fmt)
     risk_rows = [
         ["排除条目", excluded_count, "核对排除原因", "排除与忽略条目"],
         ["局部参数偏离", len(param_exception_rows), "确认条目级覆盖值", "局部参数差异"],
-        ["自动审计警告", warning_item_count, "优先复核算法提示", "人工复核与风险"],
-        ["致命异常", fatal_item_count, "导出分析前必须处理", "人工复核与风险"],
+        ["自动切分提示", warning_item_count, "核对子音节切分提示", "质量控制与复核记录"],
+        ["声学复核标记", review_item_count, "含缺失帧或短音段标记条目", "质量控制与复核记录"],
         ["资源校验异常", resource_issue_count, "检查缓存或录音参数", "资源清单"],
     ]
     for row_idx, row in enumerate(risk_rows, start=15):
         ws_summary.write(row_idx, 0, row[0], value_fmt)
-        ws_summary.write(row_idx, 1, row[1], green_fmt if row[1] == 0 else (red_fmt if row[0] == "致命异常" else orange_fmt))
+        ws_summary.write(row_idx, 1, row[1], green_fmt if row[1] == 0 else (red_fmt if row[0] == "资源校验异常" and any(r[4] != "正常" for r in resource_rows) else orange_fmt))
         ws_summary.write(row_idx, 2, row[2], value_fmt)
         ws_summary.write_url(row_idx, 3, f"internal:'{row[3]}'!A1", link_fmt, row[3])
     ws_summary.merge_range("F14:J14", "颜色图例与使用顺序", section_fmt)
     legend_rows = [
-        ["红色", "排除、致命异常、缓存损坏或关键缺失值", red_fmt],
-        ["橙色", "局部参数偏离、低置信度或需复核警告", orange_fmt],
+        ["红色", "排除条目、缓存损坏或关键错误", red_fmt],
+        ["橙色", "局部参数偏离、声学复核标记或低置信度", orange_fmt],
         ["黄色", "人工调整、最终边界变化或词内切分点", yellow_fmt],
         ["建议顺序", "先看红色，再看橙色与黄色；颜色仅辅助，状态列保留可机读说明。", value_fmt],
         ["模式分布", mode_summary, value_fmt],
@@ -1459,33 +1503,36 @@ def write_excel_archive(teproj_path: str, state: Dict[str, Any], output_xlsx_pat
     ws_summary.set_row(0, 26)
     ws_summary.set_row(1, 18)
     ws_summary.set_row(2, 22)
-    ws_summary.set_row(9, 22)
-    ws_summary.set_row(10, 22)
-    ws_summary.set_row(11, 22)
-    ws_summary.freeze_panes(4, 0)
+    approx_lines = max(3, int(np.ceil(visual_len(summary_text) / 140.0)))
+    row_h = max(22, int(np.ceil(approx_lines * 18.0 / 3.0)))
+    ws_summary.set_row(9, row_h)
+    ws_summary.set_row(10, row_h)
+    ws_summary.set_row(11, row_h)
+    ws_summary.freeze_panes(3, 0)
     ws_summary.set_landscape()
     ws_summary.fit_to_pages(1, 2)
     write_sheet("工程概览", ["概览指标", "指标取值"], overview_rows)
-    write_sheet("发音人参数", ["发音人姓名", "分析模式", "时序点数", "F0下限", "F0上限", "清浊阈值", "声能跌落", "排除声母", "共振峰分析上限", "追踪个数", "窗长", "预加重", "策略"], speaker_params_rows)
-    write_sheet("条目明细", ["发音人", "组别", "条目ID", "标签", "路径", "模式", "是否排除", "定制下限", "定制上限", "定制阈值", "参数状态", "字表版本", "字表名称", "组备注", "组tag", "词项备注", "词项tag", "别名", "元数据来源", "自定义字段"], item_detail_rows)
-    write_sheet("词级边界", ["发音人", "组别", "ID", "标签", "是否排除", "宏起点", "宏终点", "自起点", "自终点", "采样起点", "采样终点", "时长", "边界状态"], word_boundary_rows)
-    write_sheet("字级边界", ["发音人", "组别", "ID", "标签", "是否排除", "序号", "音节", "字起点", "字终点", "切分点", "切分状态"], char_boundary_rows)
-    write_sheet("局部参数差异", ["发音人", "组别", "ID", "标签", "差异详情"], param_exception_rows)
-    write_sheet("人工复核与风险", ["发音人", "组别", "ID", "标签", "是否排除", "人工修改", "置信度", "警告", "致命异常"], audit_warning_rows)
-    write_sheet("排除与忽略条目", ["发音人", "组别", "ID", "标签", "时间边界", "排除原因", "排除时间"], excluded_rows)
+    write_sheet("发音人参数", ["发音人", "分析模式", "时序点数", "F0下限", "F0上限", "清浊阈值", "声能跌落", "排除声母", "共振峰分析上限", "追踪个数", "窗长", "预加重", "策略"], speaker_params_rows)
+    write_sheet("条目明细", ["发音人", "组别", "条目ID", "词项", "路径", "模式", "是否排除", "定制下限", "定制上限", "定制阈值", "参数状态", "字表版本", "字表名称", "组备注", "组标签", "词项备注", "词项标签", "别名", "元数据来源", "自定义字段"], item_detail_rows)
+    write_sheet("词级边界", ["发音人", "组别", "条目ID", "词项", "是否排除", "宏起点", "宏终点", "自动检测起点(s)", "自动检测终点(s)", "采样起点", "采样终点", "时长", "边界状态"], word_boundary_rows)
+    write_sheet("字级边界", ["发音人", "组别", "条目ID", "词项", "是否排除", "音节序号", "音节", "字起点", "字终点", "切分点", "切分状态"], char_boundary_rows)
+    write_sheet("局部参数差异", ["发音人", "组别", "条目ID", "词项", "差异详情"], param_exception_rows)
+    write_sheet("质量控制与复核记录", ["发音人", "组别", "条目ID", "词项", "是否排除", "人工修改", "置信度", "声学复核提示", "声学复核标记"], audit_warning_rows)
+    write_sheet("排除与忽略条目", ["发音人", "组别", "条目ID", "词项", "时间边界", "排除原因", "排除时间"], excluded_rows)
     write_sheet("资源清单", ["类型", "路径", "大小", "数字化参数", "校验状态"], resource_rows)
     write_sheet("自定义脚本记录", ["脚本名", "类型", "运行时间", "用户需求", "代码 SHA-256", "运行状态", "输出文件", "软件版本", "API 版本"], script_records, empty_message="本工程未归档自定义脚本")
     write_sheet("自定义脚本源码", ["脚本名", "代码 SHA-256", "完整源码"], script_sources, empty_message="本工程未归档自定义脚本")
     write_sheet("字段说明", ["工作表", "字段", "定义"], [
         ["工程概览", "SHA-256", "归档文件唯一性校验码，用于确认报告对应的工程版本。"],
         ["条目明细", "参数状态", "说明条目是否沿用发音人多数参数，或存在局部参数偏离。"],
-        ["条目明细", "字表元数据字段", "高级字表 v2 导入时保存的组备注、词项备注、tag、别名和自定义字段。"],
+        ["条目明细", "字表元数据字段", "高级字表 v2 导入时保存的组备注、词项备注、标签、别名和自定义字段。"],
         ["词级边界", "宏起点/宏终点", "待分析音频宏范围。"],
-        ["词级边界", "自起点/自终点", "自动检测后的原始边界。"],
+        ["词级边界", "自动检测起点(s)/自动检测终点(s)", "自动检测后的原始边界。"],
         ["词级边界", "采样起点/采样终点", "最终进入声学采样的采用边界。"],
         ["词级边界", "边界状态", "明确记录人工调整、最终边界变化和词内切分点。"],
         ["字级边界", "切分状态", "明确记录词内切分点或字级边界缺失。"],
-        ["人工复核与风险", "致命异常", "算法审计结果；合格条目显示“合格无警告”。"],
+        ["质量控制与复核记录", "声学复核标记", "算法审计结果；合格条目显示“合格无警告”。"],
+        ["质量控制与复核记录", "声学复核提示", "子音节智能切分过程中的算法提示与置信度说明。"],
         ["资源清单", "校验状态", "归档缓存可解析性以及录音参数是否偏离多数值。"],
         ["自定义脚本记录", "代码 SHA-256", "已归档自定义脚本的完整性校验哈希值。"],
         ["自定义脚本源码", "完整源码", "自定义脚本的完整 Python 源代码内容。"],
@@ -1493,9 +1540,9 @@ def write_excel_archive(teproj_path: str, state: Dict[str, Any], output_xlsx_pat
 
     if include_cache_details:
         if f0_cache_rows:
-            write_sheet("F0缓存明细", ["发音人", "组别", "条目ID", "标签", "时间点(s)", "基频F0(Hz)"], f0_cache_rows)
+            write_sheet("F0缓存明细", ["发音人", "组别", "条目ID", "词项", "时间点(s)", "基频F0(Hz)", "是否当前模式"], f0_cache_rows)
         if formant_cache_rows:
-            write_sheet("共振峰缓存明细", ["发音人", "组别", "条目ID", "标签", "时间点(s)", "F1共振峰(Hz)", "F2共振峰(Hz)", "F3共振峰(Hz)", "是否当前模式"], formant_cache_rows)
+            write_sheet("共振峰缓存明细", ["发音人", "组别", "条目ID", "词项", "时间点(s)", "F1共振峰(Hz)", "F2共振峰(Hz)", "F3共振峰(Hz)", "是否当前模式"], formant_cache_rows)
 
     wb.close()
 

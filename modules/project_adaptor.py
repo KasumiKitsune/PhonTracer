@@ -9,7 +9,7 @@ import math
 import hashlib
 import numpy as np
 
-MAX_ARCHIVE_MEMBERS = 10000
+MAX_ARCHIVE_MEMBERS = 100000
 MAX_ARCHIVE_MEMBER_BYTES = 2 * 1024 * 1024 * 1024
 MAX_ARCHIVE_TOTAL_BYTES = 20 * 1024 * 1024 * 1024
 MAX_PROJECT_JSON_BYTES = 20 * 1024 * 1024
@@ -263,34 +263,69 @@ def normalize_independent_item_boundaries(item, duration, label=None):
         item[start_key], item[end_key] = pair
 
     from .data_utils import split_into_syllables
-    syllable_count = max(1, len(split_into_syllables(label if label is not None else item.get("label", ""))))
+    item_label = label if label else (item.get("label") or item.get("word") or "")
+    syllable_count = max(1, len(split_into_syllables(item_label)))
     old_bounds = item.get("chars_bounds")
     normalized_bounds = []
-    if isinstance(old_bounds, (list, tuple)) and len(old_bounds) == syllable_count:
+    if isinstance(old_bounds, (list, tuple)) and len(old_bounds) >= 1:
         previous_end = start
+        is_valid = True
+        temp_bounds = []
         for pair in old_bounds:
             if not isinstance(pair, (list, tuple)) or len(pair) != 2:
-                normalized_bounds = []
+                is_valid = False
                 break
             valid = valid_pair(pair[0], pair[1], start, end)
             if valid is None or valid[0] < previous_end - 1e-6:
-                normalized_bounds = []
+                is_valid = False
                 break
-            normalized_bounds.append([valid[0], valid[1]])
+            temp_bounds.append([valid[0], valid[1]])
             previous_end = valid[1]
+        if is_valid and temp_bounds:
+            normalized_bounds = temp_bounds
 
-    if len(normalized_bounds) != syllable_count:
+    if not normalized_bounds:
         edges = np.linspace(start, end, syllable_count + 1).tolist()
         normalized_bounds = [[float(edges[i]), float(edges[i + 1])] for i in range(syllable_count)]
         changed = True
-    if not isinstance(old_bounds, (list, tuple)) or old_bounds != normalized_bounds:
+    elif not isinstance(old_bounds, (list, tuple)) or old_bounds != normalized_bounds:
         changed = True
     item["chars_bounds"] = normalized_bounds
 
-    inner_splits = [bound[1] for bound in normalized_bounds[:-1]]
-    if item.get("inner_splits") != inner_splits:
+    expected_splits_count = len(normalized_bounds) - 1
+    old_splits = item.get("inner_splits")
+    valid_splits = False
+    if isinstance(old_splits, (list, tuple)) and len(old_splits) == expected_splits_count:
+        valid_splits = True
+        prev_s = start
+        checked_splits = []
+        for i, s_val in enumerate(old_splits):
+            try:
+                s = float(s_val)
+            except (TypeError, ValueError):
+                valid_splits = False
+                break
+            if not math.isfinite(s) or s < prev_s - 1e-6:
+                valid_splits = False
+                break
+            left_bound = normalized_bounds[i]
+            right_bound = normalized_bounds[i + 1]
+            in_gap = (left_bound[1] - 1e-6 <= s <= right_bound[0] + 1e-6)
+            in_span = (left_bound[0] - 1e-6 <= s <= right_bound[1] + 1e-6)
+            if not (in_gap or in_span):
+                valid_splits = False
+                break
+            checked_splits.append(s)
+            prev_s = s
+
+    if valid_splits:
+        final_splits = checked_splits
+    else:
+        final_splits = [float(bound[1]) for bound in normalized_bounds[:-1]]
+
+    if item.get("inner_splits") != final_splits:
         changed = True
-    item["inner_splits"] = inner_splits
+    item["inner_splits"] = final_splits
     return changed
 
 def _iter_state_resource_refs(state):
@@ -300,6 +335,10 @@ def _iter_state_resource_refs(state):
         long_audio_rel = spk_data.get("long_audio_path")
         if long_audio_rel:
             yield spk_data, "long_audio_path", None, long_audio_rel
+
+        long_pitch_rel = spk_data.get("long_pitch_data_file")
+        if long_pitch_rel:
+            yield spk_data, "long_pitch_data_file", None, long_pitch_rel
 
         for idx, p in enumerate(spk_data.get("pending_batch_paths", [])):
             if p:
@@ -355,7 +394,7 @@ def validate_project_resources(state, workspace_dir):
             raise FileNotFoundError(f"工程文件缺少资源：{rel_path}")
         if normalized.startswith("audio/"):
             audio_paths.add(file_path)
-        elif key == "pitch_data_file":
+        elif key in ("pitch_data_file", "long_pitch_data_file"):
             cache_paths[file_path] = ("xs", "freqs")
         elif key == "formant_data_file":
             cache_paths[file_path] = ("xs", "f1", "f2")
@@ -417,8 +456,11 @@ def adapt_project_state(state: dict, workspace_dir: str):
 
                 if slot not in slot_to_canonical:
                     global_slots.append(slot)
+                    canonical_id = str(item_data.get("id") or item_id or "").strip()
+                    if not canonical_id:
+                        canonical_id = f"slot_{len(global_slots)}"
                     slot_to_canonical[slot] = {
-                        "id": item_data.get("id") or item_id,
+                        "id": canonical_id,
                         "label": word_label,
                         "note": item_data.get("item_note") or item_data.get("note") or "",
                         "tags": to_list(item_data.get("item_tags") or item_data.get("tags") or []),
@@ -528,21 +570,25 @@ def adapt_project_state(state: dict, workspace_dir: str):
     global_slots = []
     groups_slots_map = {}
     groups_ids_map = {}
-    for group in state["groups"]:
+    for group_idx, group in enumerate(state.get("groups", []), start=1):
         grp_name = group.get("name", "默认组")
         grp_note = group.get("note", "")
         grp_tags = group.get("tags", []) if isinstance(group.get("tags", []), list) else []
         grp_meta = group.get("meta", {}) if isinstance(group.get("meta", {}), dict) else {}
         occ_counts = {}
-        for item in group.get("items", []):
+        for item_idx, item in enumerate(group.get("items", []), start=1):
             word_label = item.get("label") or item.get("word") or "未命名"
             occ = occ_counts.get(word_label, 0)
             occ_counts[word_label] = occ + 1
             slot = (grp_name, word_label, occ)
             global_slots.append(slot)
             
+            raw_id = str(item.get("id") or "").strip()
+            item_id = raw_id if raw_id else f"slot_{group_idx}_{item_idx}"
+            item["id"] = item_id
+
             canonical_info = {
-                "id": item["id"],
+                "id": item_id,
                 "label": word_label,
                 "note": item.get("note", ""),
                 "tags": item.get("tags", []),
@@ -555,7 +601,9 @@ def adapt_project_state(state: dict, workspace_dir: str):
                 "group_meta": grp_meta,
             }
             groups_slots_map[slot] = canonical_info
-            groups_ids_map[item["id"]] = canonical_info
+            groups_ids_map[item_id] = canonical_info
+            if raw_id:
+                groups_ids_map[raw_id] = canonical_info
 
     # 2. 规范化并对齐每个发音人的 items，执行录音转换
     for spk_id, spk_data in list(state.get("speakers", {}).items()):
@@ -567,8 +615,9 @@ def adapt_project_state(state: dict, workspace_dir: str):
             isinstance(item, dict) and item.get("path")
             for item in old_items.values()
         )
-        # 旧工程的 tab_mode 曾出现错误值；长音频存在且条目没有独立音频时仍按长音频转换。
-        is_long_mode = "单条" in tab_mode or bool(spk_data.get("long_audio_path") and not has_item_audio)
+        has_long_audio = bool(spk_data.get("long_audio_path"))
+        # 当发音人存在 long_audio_path 时，即便部分词条拥有独立 path（如已做单条裁剪），整体仍保留长音频切片，不可强制退化为纯独立音频模式
+        is_long_mode = "单条" in tab_mode or "长音频" in tab_mode or has_long_audio
 
         long_audio_abs = None
         long_source_sound = None
@@ -606,7 +655,8 @@ def adapt_project_state(state: dict, workspace_dir: str):
                 canonical_id = canonical_item["id"]
 
                 # 转换已有录音
-                if is_long_mode:
+                has_own_path = bool(item_data.get("path"))
+                if is_long_mode and not has_own_path:
                     # 长音频切片
                     start = item_data.get("macro_start")
                     end = item_data.get("macro_end")
@@ -634,25 +684,125 @@ def adapt_project_state(state: dict, workspace_dir: str):
                             ).save(dest_path, "WAV")
 
                             item_data["path"] = f"audio/{safe_spk_id}/{dest_filename}"
-                            # 边界转换到单项音频本地时间轴
-                            duration_local = float(end - start)
-                            item_data["start"] = 0.0
-                            item_data["end"] = duration_local
+                            slice_start = float(start)
+                            slice_end = float(end)
+                            duration_local = float(slice_end - slice_start)
+
+                            def _clamp(val, low=0.0, high=duration_local):
+                                return max(low, min(high, float(val)))
+
+                            # 边界转换到单项音频本地时间轴，平移并保留人工精修
+                            has_explicit_bounds = (item_data.get("start") is not None and item_data.get("end") is not None)
+                            orig_s = item_data.get("start")
+                            orig_e = item_data.get("end")
+                            if has_explicit_bounds:
+                                new_start = _clamp(float(orig_s) - slice_start)
+                                new_end = _clamp(float(orig_e) - slice_start)
+                                if new_start >= new_end:
+                                    new_start, new_end = 0.0, duration_local
+                            else:
+                                new_start = 0.0
+                                new_end = duration_local
+
+                            item_data["start"] = new_start
+                            item_data["end"] = new_end
                             item_data["macro_start"] = 0.0
                             item_data["macro_end"] = duration_local
-                            
-                            # 时间轴改变后，所有分析结果均作废；保留来源边界便于追溯。
+
+                            orig_bounds = item_data.get("chars_bounds")
+                            if isinstance(orig_bounds, (list, tuple)) and orig_bounds:
+                                if len(orig_bounds) == 1 and not has_explicit_bounds:
+                                    item_data["chars_bounds"] = [[0.0, duration_local]]
+                                else:
+                                    shifted_bounds = []
+                                    for pair in orig_bounds:
+                                        if isinstance(pair, (list, tuple)) and len(pair) >= 2:
+                                            bs = _clamp(float(pair[0]) - slice_start)
+                                            be = _clamp(float(pair[1]) - slice_start)
+                                            if be > bs:
+                                                shifted_bounds.append([bs, be])
+                                    if shifted_bounds:
+                                        item_data["chars_bounds"] = shifted_bounds
+                                    else:
+                                        item_data["chars_bounds"] = [[new_start, new_end]]
+                            else:
+                                item_data["chars_bounds"] = [[new_start, new_end]]
+
+                            orig_splits = item_data.get("inner_splits")
+                            if isinstance(orig_splits, (list, tuple)) and orig_splits:
+                                shifted_splits = []
+                                for s in orig_splits:
+                                    try:
+                                        sv = _clamp(float(s) - slice_start)
+                                        if 0.0 <= sv <= duration_local:
+                                            shifted_splits.append(sv)
+                                    except (TypeError, ValueError):
+                                        pass
+                                if shifted_splits:
+                                    item_data["inner_splits"] = sorted(shifted_splits)
+
                             item_data["source_segment"] = {
                                 "path": spk_data.get("long_audio_path"),
                                 "start": float(start),
                                 "end": float(end),
                             }
+
+                            # 迁移保留 .npz 缓存并将时间轴平移截取
+                            c_pitch = item_data.get("pitch_data_file") or spk_data.get("long_pitch_data_file")
+                            if c_pitch:
+                                c_abs = resolve_workspace_path(c_pitch, workspace_dir)
+                                if os.path.isfile(c_abs):
+                                    try:
+                                        with np.load(c_abs) as loaded:
+                                            if "xs" in loaded and "freqs" in loaded:
+                                                xs = loaded["xs"]
+                                                mask = (xs >= slice_start - 0.05) & (xs <= slice_end + 0.05)
+                                                dest_c_rel = f"data/{safe_spk_id}_{safe_canonical_id}.npz"
+                                                dest_c_abs = os.path.join(workspace_dir, dest_c_rel)
+                                                os.makedirs(os.path.dirname(dest_c_abs), exist_ok=True)
+                                                np.savez_compressed(dest_c_abs, xs=xs[mask] - slice_start, freqs=loaded["freqs"][mask])
+                                                item_data["pitch_data_file"] = dest_c_rel
+                                            else:
+                                                item_data.pop("pitch_data_file", None)
+                                    except Exception:
+                                        item_data.pop("pitch_data_file", None)
+                                else:
+                                    item_data.pop("pitch_data_file", None)
+
+                            c_formant = item_data.get("formant_data_file")
+                            if c_formant:
+                                c_abs = resolve_workspace_path(c_formant, workspace_dir)
+                                if os.path.isfile(c_abs):
+                                    try:
+                                        with np.load(c_abs) as loaded:
+                                            if "xs" in loaded and "f1" in loaded and "f2" in loaded:
+                                                xs = loaded["xs"]
+                                                mask = (xs >= slice_start - 0.05) & (xs <= slice_end + 0.05)
+                                                f_dict = {
+                                                    "xs": xs[mask] - slice_start,
+                                                    "f1": loaded["f1"][mask],
+                                                    "f2": loaded["f2"][mask],
+                                                }
+                                                if "f3" in loaded:
+                                                    f_dict["f3"] = loaded["f3"][mask]
+                                                dest_f_rel = f"data/{safe_spk_id}_{safe_canonical_id}_formant.npz"
+                                                dest_f_abs = os.path.join(workspace_dir, dest_f_rel)
+                                                os.makedirs(os.path.dirname(dest_f_abs), exist_ok=True)
+                                                np.savez_compressed(dest_f_abs, **f_dict)
+                                                item_data["formant_data_file"] = dest_f_rel
+                                            else:
+                                                item_data.pop("formant_data_file", None)
+                                    except Exception:
+                                        item_data.pop("formant_data_file", None)
+                                else:
+                                    item_data.pop("formant_data_file", None)
+
                             for cache_key in (
-                                "pitch_data_file", "formant_data_file", "pitch_data", "formant_data",
-                                "preview_f0", "preview_formants", "has_empty_data", "raw_start", "raw_end",
-                                "chars_bounds", "inner_splits", "analysis_params", "analysis_state",
+                                "pitch_data", "formant_data", "preview_f0", "preview_formants",
+                                "has_empty_data", "raw_start", "raw_end", "analysis_params", "analysis_state",
                             ):
                                 item_data.pop(cache_key, None)
+
                             normalize_independent_item_boundaries(
                                 item_data,
                                 duration_local,
@@ -781,6 +931,8 @@ def adapt_project_state(state: dict, workspace_dir: str):
                 item_data["group_note"] = canonical_item.get("group_note", "")
                 item_data["group_tags"] = list(canonical_item.get("group_tags", []))
                 item_data["group_meta"] = dict(canonical_item.get("group_meta", {}))
+                for dead_k in ("wordlist_version", "wordlist_title", "wordlist_note", "wordlist_tags"):
+                    item_data.pop(dead_k, None)
 
                 new_items[canonical_id] = item_data
             else:

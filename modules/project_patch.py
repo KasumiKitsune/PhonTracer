@@ -7,6 +7,7 @@ PhonTracer语音学标注与声学分析系统 V1.0 工程数据处理脚本写�
 
 import copy
 import json
+import math
 import os
 import re
 import shutil
@@ -213,11 +214,41 @@ def _load_project_state(workspace_dir):
     return state
 
 
+def _sanitize_for_json(val):
+    if isinstance(val, dict):
+        return {str(k): _sanitize_for_json(v) for k, v in val.items()}
+    elif isinstance(val, (list, tuple, set)):
+        return [_sanitize_for_json(v) for v in val]
+    elif isinstance(val, (np.floating, float)):
+        if math.isnan(val) or math.isinf(val):
+            return None
+        return float(val)
+    elif isinstance(val, (np.integer, int)):
+        if isinstance(val, bool):
+            return bool(val)
+        return int(val)
+    elif isinstance(val, (np.bool_, bool)):
+        return bool(val)
+    elif isinstance(val, np.ndarray):
+        return _sanitize_for_json(val.tolist())
+    elif isinstance(val, str) or val is None:
+        return val
+    else:
+        try:
+            val = to_json_serializable(val)
+            if isinstance(val, (float, np.floating)) and (math.isnan(val) or math.isinf(val)):
+                return None
+            return val
+        except Exception:
+            return str(val)
+
+
 def _save_project_state(workspace_dir, state):
     project_json = os.path.join(workspace_dir, "project.json")
     tmp_path = project_json + ".tmp"
+    sanitized = _sanitize_for_json(to_json_serializable(state))
     with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(to_json_serializable(state), f, ensure_ascii=False, indent=2)
+        json.dump(sanitized, f, ensure_ascii=False, indent=2, allow_nan=False)
     os.replace(tmp_path, project_json)
 
 
@@ -308,6 +339,20 @@ def _item_params(spk, item, override):
     params = {}
     if isinstance(spk.get("last_params"), dict):
         params.update(spk.get("last_params"))
+    # 兼容条目顶层平铺的声学参数
+    param_keys = {
+        "pitch_floor", "pitch_ceiling", "voicing_threshold", "pts", "method",
+        "time_step", "max_candidates", "silence_threshold", "f0_min", "f0_max",
+        "voicing_thresh", "analysis_mode", "formant_max_hz", "formant_count",
+        "formant_window_length", "formant_pre_emphasis", "formant_sample_strategy",
+    }
+    for k in param_keys:
+        if k in item and item[k] is not None:
+            params[k] = item[k]
+    if isinstance(item.get("recomputed_pitch_params"), dict):
+        params.update(item["recomputed_pitch_params"])
+    if isinstance(item.get("recomputed_formant_params"), dict):
+        params.update(item["recomputed_formant_params"])
     if isinstance(item.get("param_overrides"), dict):
         params.update(item.get("param_overrides"))
     if isinstance(override, dict):
@@ -344,8 +389,19 @@ def _load_item_sound(workspace_dir, spk, item, long_audio_cache=None):
 def _segment_sound_for_item(snd, source_kind, item, start=None, end=None, padding=0.0, with_offset=False):
     total = float(snd.get_total_duration())
     if source_kind == "long":
-        base_start = float(item.get("start", 0.0) if start is None else start)
-        base_end = float(item.get("end", total) if end is None else end)
+        if start is not None:
+            base_start = float(start)
+        elif item.get("macro_start") is not None:
+            base_start = float(item["macro_start"])
+        else:
+            base_start = float(item.get("start", 0.0))
+
+        if end is not None:
+            base_end = float(end)
+        elif item.get("macro_end") is not None:
+            base_end = float(item["macro_end"])
+        else:
+            base_end = float(item.get("end", total))
     else:
         base_start = float(0.0 if start is None else start)
         base_end = float(total if end is None else end)
@@ -405,7 +461,12 @@ def _apply_recompute_pitch(state, workspace_dir, op, records, long_audio_cache=N
     np.savez(out_path, xs=pitch_data["xs"], freqs=pitch_data["freqs"])
     item["pitch_data_file"] = rel_name
     item["analysis_mode"] = item.get("analysis_mode") or params.get("analysis_mode", "f0")
-    item["recomputed_pitch_params"] = params
+    item["recomputed_pitch_params"] = copy.deepcopy(params)
+    item.setdefault("param_overrides", {})
+    if isinstance(item["param_overrides"], dict):
+        item["param_overrides"].update(copy.deepcopy(params))
+    else:
+        item["param_overrides"] = copy.deepcopy(params)
     records.append({"op": "recompute_pitch", "label": item.get("label", ""), "resource": rel_name})
 
 
@@ -427,21 +488,28 @@ def _apply_recompute_formant(state, workspace_dir, op, records, long_audio_cache
     np.savez(out_path, **save_kwargs)
     item["formant_data_file"] = rel_name
     item["analysis_mode"] = "formant"
-    item["recomputed_formant_params"] = params
+    item["recomputed_formant_params"] = copy.deepcopy(params)
+    item.setdefault("param_overrides", {})
+    if isinstance(item["param_overrides"], dict):
+        item["param_overrides"].update(copy.deepcopy(params))
+    else:
+        item["param_overrides"] = copy.deepcopy(params)
     records.append({"op": "recompute_formant", "label": item.get("label", ""), "resource": rel_name})
 
 
 def _apply_trim_item_audio(state, workspace_dir, op, records, long_audio_cache=None, **kwargs):
     spk_id, spk, item_id, item = _find_item(state, op.get("target"))
     snd, source_kind = _load_item_sound(workspace_dir, spk, item, long_audio_cache=long_audio_cache)
-    part = _segment_sound_for_item(
+    part, from_time = _segment_sound_for_item(
         snd,
         source_kind,
         item,
         start=op.get("start"),
         end=op.get("end"),
         padding=op.get("padding", 0.0),
+        with_offset=True,
     )
+    dur = float(part.get_total_duration())
     rel_name = _audio_name(spk_id, item_id)
     out_path = _resolve_resource(workspace_dir, rel_name)
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
@@ -456,14 +524,57 @@ def _apply_trim_item_audio(state, workspace_dir, op, records, long_audio_cache=N
             rel_name if path == old_item_path else path
             for path in spk.get("pending_batch_paths", [])
         ]
-    item["start"] = 0.0
-    item["end"] = float(part.get_total_duration())
+
+    def _clamp(val, low=0.0, high=dur):
+        return max(low, min(high, float(val)))
+
+    orig_s = item.get("start")
+    orig_e = item.get("end")
+    if orig_s is not None:
+        new_start = _clamp(float(orig_s) - from_time)
+    else:
+        new_start = 0.0
+    if orig_e is not None:
+        new_end = _clamp(float(orig_e) - from_time)
+    else:
+        new_end = dur
+    if new_start >= new_end:
+        new_start, new_end = 0.0, dur
+
+    item["start"] = new_start
+    item["end"] = new_end
     item["macro_start"] = 0.0
-    item["macro_end"] = float(part.get_total_duration())
-    item["raw_start"] = 0.0
-    item["raw_end"] = float(part.get_total_duration())
-    item["inner_splits"] = []
-    item["chars_bounds"] = [[0.0, float(part.get_total_duration())]]
+    item["macro_end"] = dur
+    item["raw_start"] = new_start
+    item["raw_end"] = new_end
+
+    orig_bounds = item.get("chars_bounds")
+    if isinstance(orig_bounds, (list, tuple)) and orig_bounds:
+        shifted_bounds = []
+        for pair in orig_bounds:
+            if isinstance(pair, (list, tuple)) and len(pair) >= 2:
+                bs = _clamp(float(pair[0]) - from_time)
+                be = _clamp(float(pair[1]) - from_time)
+                if be > bs:
+                    shifted_bounds.append([bs, be])
+        item["chars_bounds"] = shifted_bounds if shifted_bounds else [[0.0, dur]]
+    else:
+        item["chars_bounds"] = [[0.0, dur]]
+
+    orig_splits = item.get("inner_splits")
+    if isinstance(orig_splits, (list, tuple)) and orig_splits:
+        shifted_splits = []
+        for s in orig_splits:
+            try:
+                sv = _clamp(float(s) - from_time)
+                if 0.0 <= sv <= dur:
+                    shifted_splits.append(sv)
+            except (TypeError, ValueError):
+                pass
+        item["inner_splits"] = sorted(shifted_splits)
+    else:
+        item["inner_splits"] = []
+
     _clear_analysis_cache_refs(item)
     records.append({"op": "trim_item_audio", "label": item.get("label", ""), "resource": rel_name})
 
@@ -575,6 +686,29 @@ APPLIERS = {
 }
 
 
+def _append_or_update_script_run(runs_list, new_record):
+    if not new_record:
+        return
+    rec = copy.deepcopy(new_record)
+    new_sha = rec.get("code_sha256")
+    if runs_list and new_sha and runs_list[-1].get("code_sha256") == new_sha:
+        last = runs_list[-1]
+        last["run_time"] = rec.get("run_time", last.get("run_time"))
+        last["run_count"] = last.get("run_count", 1) + 1
+        if "summary" in rec:
+            last["summary"] = rec["summary"]
+        if "outputs" in rec:
+            last["outputs"] = rec["outputs"]
+        if "title" in rec:
+            last["title"] = rec["title"]
+        if "description" in rec:
+            last["description"] = rec["description"]
+    else:
+        if "run_count" not in rec:
+            rec["run_count"] = 1
+        runs_list.append(rec)
+
+
 def apply_project_patch_to_teproj(teproj_path, patch_result, output_path, run_record=None):
     """
     将数据处理脚本返回的受控操作应用到 .teproj，并另存为 output_path。
@@ -625,7 +759,7 @@ def apply_project_patch_to_teproj(teproj_path, patch_result, output_path, run_re
             state = base_state
             state.setdefault("custom_script_runs", [])
             if run_record:
-                state["custom_script_runs"].append(copy.deepcopy(run_record))
+                _append_or_update_script_run(state["custom_script_runs"], run_record)
             _save_project_state(temp_dir, state)
             _prune_workspace_resources_for_state(temp_dir, state)
             _validate_project_workspace_for_import(temp_dir)
@@ -643,7 +777,7 @@ def apply_project_patch_to_teproj(teproj_path, patch_result, output_path, run_re
             _apply_split_project(state, temp_dir, op, records)
             state.setdefault("custom_script_runs", [])
             if run_record:
-                state["custom_script_runs"].append(copy.deepcopy(run_record))
+                _append_or_update_script_run(state["custom_script_runs"], run_record)
             _save_project_state(temp_dir, state)
             _prune_workspace_resources_for_state(temp_dir, state)
             _validate_project_workspace_for_import(temp_dir)
@@ -688,7 +822,7 @@ def apply_project_patch_to_teproj(teproj_path, patch_result, output_path, run_re
                         if sub_record.get("outputs"):
                             sub_record["outputs"][0]["saved_path"] = sub_output_path
                             sub_record["outputs"][0]["filename"] = sub_filename
-                        state_copy["custom_script_runs"].append(sub_record)
+                        _append_or_update_script_run(state_copy["custom_script_runs"], sub_record)
 
                     _save_project_state(split_dir, state_copy)
                     _prune_workspace_resources_for_state(split_dir, state_copy)

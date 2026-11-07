@@ -18,9 +18,11 @@ from .data_utils import parse_wordlist, fuzzy_match_word_to_path, split_into_syl
 from .wordlist_v2 import (
     ADVANCED_WORDLIST_AGENT_PROMPT,
     apply_record_metadata,
+    build_document_from_structured_text,
     document_to_v1_text,
     flatten_wordlist_document,
     load_wordlist_document,
+    looks_like_structured_wordlist_text,
     validate_wordlist_document,
 )
 from .audio_core import core_microscopic_vowel_nucleus, batch_process_worker, macroscopic_vad, check_audio_segments, long_process_worker, recalculate_bounds_fast, auto_split_inner_word, extract_f0, batch_process_worker_with_textgrid
@@ -1248,15 +1250,33 @@ class PhoneticsApp:
             self._sync_ui_and_plot(item)
             return
 
-        if not item.get('path'):
+        long_snd = getattr(self, 'long_sound', None) or getattr(self, 'pending_long_snd', None)
+        has_path = bool(item.get('path') and os.path.exists(item['path']))
+        has_long = (long_snd is not None) and (item.get('macro_start') is not None)
+
+        if not has_path and not has_long:
             return
 
         def run():
             try:
                 self.root.after(0, lambda: self.set_status(f"正在读取音频: {item['label']}...", "#2563EB", "status_loading"))
 
-                snd = parselmouth.Sound(item['path'])
-                pitch_data = extract_f0(snd, self.last_params)
+                if has_path:
+                    snd = parselmouth.Sound(item['path'])
+                    pitch_data = extract_f0(snd, self.last_params)
+                elif has_long:
+                    snd = long_snd
+                    macro_start = float(item.get('macro_start', 0.0))
+                    macro_end = float(item.get('macro_end', snd.get_total_duration()))
+                    ms = max(0.0, macro_start - 0.05)
+                    me = macro_end + 0.05
+                    full_pitch = extract_f0(snd, self.last_params)
+                    xs = full_pitch['xs']
+                    freqs = full_pitch['freqs']
+                    mask = (xs >= ms) & (xs <= me)
+                    pitch_data = {'xs': xs[mask].copy(), 'freqs': freqs[mask].copy()}
+                else:
+                    return
 
                 def done():
                     item['snd'] = snd
@@ -1519,6 +1539,35 @@ class PhoneticsApp:
         self.root.after(1500, lambda: self.progress_bar.pack_forget())
 
 
+    def _make_audio_cache_key(self, path, params=None):
+        if not path:
+            return None
+        p = params or self.last_params
+        sig = (
+            int(p.get('pitch_floor', 75)),
+            int(p.get('pitch_ceiling', 600)),
+            round(float(p.get('voicing_threshold', 0.25)), 4),
+            round(float(p.get('formant_max_hz', 5500.0)), 1),
+            int(p.get('formant_count', 5)),
+            round(float(p.get('formant_window_length', 0.025)), 4),
+            round(float(p.get('formant_pre_emphasis', 50.0)), 1),
+            str(p.get('formant_sample_strategy', '整段11点')),
+            str(p.get('analysis_mode', 'f0')),
+            bool(self.switch_trim_silence.get() if hasattr(self, 'switch_trim_silence') else True),
+        )
+        return (os.path.abspath(path), sig)
+
+    def _get_audio_cache(self, path, params=None):
+        k = self._make_audio_cache_key(path, params)
+        if k and k in self.audio_cache:
+            return copy.deepcopy(self.audio_cache[k])
+        return None
+
+    def _set_audio_cache(self, path, res, params=None):
+        k = self._make_audio_cache_key(path, params)
+        if k:
+            self.audio_cache[k] = copy.deepcopy(res)
+
     def on_add_speaker(self):
         idx = len(self.speaker_manager.get_all_speakers()) + 1
         while True:
@@ -1538,9 +1587,18 @@ class PhoneticsApp:
         dialog = RenameSpeakerDialog(self.root, current_name=current_name)
         new_name = dialog.result
         if new_name and new_name.strip():
-            self.speaker_manager.rename_speaker(self.speaker_manager.active_speaker_id, new_name.strip())
+            new_name = new_name.strip()
+            active_id = self.speaker_manager.active_speaker_id
+            other_names = {s.name for s in self.speaker_manager.get_all_speakers() if s.id != active_id}
+            if new_name in other_names:
+                base = new_name
+                cnt = 2
+                while f"{base} ({cnt})" in other_names:
+                    cnt += 1
+                new_name = f"{base} ({cnt})"
+            self.speaker_manager.rename_speaker(active_id, new_name)
             self._update_speaker_dropdown()
-            self.speaker_option_var.set(new_name.strip())
+            self.speaker_option_var.set(new_name)
             self.mark_modified()
 
     def on_delete_speaker(self):
@@ -1555,15 +1613,32 @@ class PhoneticsApp:
             self.mark_modified()
 
     def _update_speaker_dropdown(self):
-        self.speaker_dropdown.configure(values=[s.name for s in self.speaker_manager.get_all_speakers()])
+        speakers = self.speaker_manager.get_all_speakers()
+        seen = {}
+        values = []
+        self._speaker_dropdown_map = {}
+        for s in speakers:
+            c = seen.get(s.name, 0)
+            seen[s.name] = c + 1
+            display = s.name if c == 0 else f"{s.name} ({c + 1})"
+            values.append(display)
+            self._speaker_dropdown_map[display] = s.id
+        self.speaker_dropdown.configure(values=values)
 
     def on_speaker_changed(self, selected_name):
-        for s in self.speaker_manager.get_all_speakers():
-            if s.name == selected_name:
+        target_id = getattr(self, '_speaker_dropdown_map', {}).get(selected_name)
+        if not target_id:
+            for s in self.speaker_manager.get_all_speakers():
+                if s.name == selected_name:
+                    target_id = s.id
+                    break
+        if target_id and target_id in self.speaker_manager.speakers:
+            if hasattr(self, 'active_speaker') and self.active_speaker:
                 self.active_speaker.tab_mode = self.tabview.get()
-                self.speaker_manager.set_active_speaker(s.id)
-                self._refresh_ui_for_speaker()
-                break
+                if hasattr(self, 'tree_panel') and hasattr(self.tree_panel, 'project_groups'):
+                    self.active_speaker.project_groups = list(self.tree_panel.project_groups)
+            self.speaker_manager.set_active_speaker(target_id)
+            self._refresh_ui_for_speaker()
 
     def _refresh_ui_for_speaker(self):
         if hasattr(self.active_speaker, 'tab_mode'):
@@ -1615,10 +1690,29 @@ class PhoneticsApp:
             self.tree_panel.items = self.items
             self.tree_panel.app_state_params = self.last_params
             self.tree_panel.clear_ui_only()
-            unique_groups = set()
-            for item in self.items.values(): unique_groups.add(item.get('group', '导入内容'))
-            for g in unique_groups: self.tree_panel.ensure_group(g)
-            # 使用 rebuild_tree 重新构建，确保所有项的警告状态被精准重新评估
+
+            spk_groups = getattr(self.active_speaker, 'project_groups', None)
+            if spk_groups and isinstance(spk_groups, list):
+                ordered_groups = list(spk_groups)
+                for item in self.items.values():
+                    g = item.get('group', '导入内容')
+                    if g not in ordered_groups:
+                        ordered_groups.append(g)
+            else:
+                seen_g = set()
+                ordered_groups = []
+                for item in self.items.values():
+                    g = item.get('group', '导入内容')
+                    if g not in seen_g:
+                        seen_g.add(g)
+                        ordered_groups.append(g)
+                if not ordered_groups:
+                    ordered_groups = ['导入内容']
+
+            self.active_speaker.project_groups = ordered_groups
+            for g in ordered_groups:
+                self.tree_panel.ensure_group(g)
+
             self.tree_panel.rebuild_tree()
 
             if hasattr(self.active_speaker, 'last_selected_iid') and self.active_speaker.last_selected_iid in self.items:
@@ -2003,7 +2097,7 @@ class PhoneticsApp:
         return base_start, base_end
 
     def _save_item_mode_state(self, item, mode):
-        fields = ('start', 'end', 'raw_start', 'raw_end', 'inner_splits', 'chars_bounds', 'split_warnings', 'split_confidence')
+        fields = ('start', 'end', 'raw_start', 'raw_end', 'inner_splits', 'chars_bounds', 'split_warnings', 'split_confidence', 'is_manual_edited')
         state = {}
         for field in fields:
             if field in item:
@@ -2012,28 +2106,19 @@ class PhoneticsApp:
             item[self._mode_state_key(mode)] = state
 
     def _load_item_mode_state(self, item, mode):
-        fields = ('start', 'end', 'raw_start', 'raw_end', 'inner_splits', 'chars_bounds', 'split_warnings', 'split_confidence')
+        fields = ('start', 'end', 'raw_start', 'raw_end', 'inner_splits', 'chars_bounds', 'split_warnings', 'split_confidence', 'is_manual_edited')
         state = item.get(self._mode_state_key(mode))
         if state:
             for field in fields:
                 if field in state:
                     item[field] = copy.deepcopy(state[field])
-        else:
-            base_start, base_end = self._get_item_base_boundaries(item)
-            item['start'] = base_start
-            item['end'] = max(base_end, base_start + 0.01)
-            item['raw_start'] = item['start']
-            item['raw_end'] = item['end']
-            item['inner_splits'] = []
-            item['chars_bounds'] = [[item['start'], item['end']]]
-            item['split_warnings'] = []
-            item['split_confidence'] = 1.0
-
-        item.pop('preview_f0', None)
-        item.pop('preview_formants', None)
-        item.pop('has_empty_data', None)
-        item.pop('warnings', None)
-        item['analysis_mode'] = mode
+            item.pop('preview_f0', None)
+            item.pop('preview_formants', None)
+            item.pop('has_empty_data', None)
+            item.pop('warnings', None)
+            item['analysis_mode'] = mode
+            return True
+        return False
 
     def _reset_item_mode_boundaries(self, item, mode):
         base_start, base_end = self._get_item_base_boundaries(item)
@@ -2071,8 +2156,20 @@ class PhoneticsApp:
             if item.get('is_excluded', False):
                 continue
             self._save_item_mode_state(item, old_mode)
-            # Switching mode should start from a clean boundary state in that mode.
-            self._reset_item_mode_boundaries(item, mode)
+            if not self._load_item_mode_state(item, mode):
+                has_valid_bounds = (
+                    item.get('start') is not None
+                    and item.get('end') is not None
+                    and item['end'] > item['start']
+                )
+                if item.get('is_manual_edited') or has_valid_bounds:
+                    item['analysis_mode'] = mode
+                    item.pop('preview_f0', None)
+                    item.pop('preview_formants', None)
+                    item.pop('has_empty_data', None)
+                    item.pop('warnings', None)
+                else:
+                    self._reset_item_mode_boundaries(item, mode)
         self._update_mode_button_text_colors()
         self.update_param_containers_visibility()
         # Refresh current spectrogram panel erasure button text
@@ -2375,7 +2472,7 @@ class PhoneticsApp:
                                             target_item['preview_formants'] = res['preview_formants']
                                         # 如果是独立音频，还需要把 Cache 也更新了，防止下次加载又是旧的
                                         if target_item.get('path'):
-                                            self.audio_cache[target_item['path']] = res
+                                            self._set_audio_cache(target_item['path'], res, params)
                                     else:
                                         # 合并长音频处理结果
                                         if not target_item.get('is_manual_edited') and not only_pitch_changed:
@@ -2497,6 +2594,23 @@ class PhoneticsApp:
 
                 if item.get('formant_data'):
                     self._stamp_formant_params_on_item(item, worker_params)
+
+                # Track single item parameter overrides deviating from speaker default
+                overrides = dict(item.get('param_overrides') or {})
+                for pk in ('pitch_floor', 'pitch_ceiling', 'voicing_threshold',
+                           'formant_max_hz', 'formant_count', 'formant_window_length',
+                           'formant_pre_emphasis', 'formant_sample_strategy', 'show_f3', 'analysis_mode'):
+                    if pk in worker_params:
+                        spk_val = self.last_params.get(pk)
+                        if worker_params[pk] != spk_val:
+                            overrides[pk] = worker_params[pk]
+                        elif pk in overrides:
+                            del overrides[pk]
+                        item[pk] = worker_params[pk]
+                if overrides:
+                    item['param_overrides'] = overrides
+                elif 'param_overrides' in item:
+                    del item['param_overrides']
 
                 # 单条参数应用可以只刷新声学数据，保留已经识别或手动调整过的边界。
                 macro_bounds = self._get_valid_macro_bounds(item)
@@ -2835,7 +2949,12 @@ class PhoneticsApp:
                 item['snd'] = self.pending_long_snd
                 if global_pitch_cache is None:
                     global_pitch_cache = extract_f0(self.pending_long_snd, self.last_params)
-                item['pitch_data'] = global_pitch_cache
+                ms = max(0.0, float(item.get('macro_start', 0.0)) - 0.05)
+                me = float(item.get('macro_end', self.pending_long_snd.get_total_duration())) + 0.05
+                pxs = global_pitch_cache['xs']
+                pfreqs = global_pitch_cache['freqs']
+                mask = (pxs >= ms) & (pxs <= me)
+                item['pitch_data'] = {'xs': pxs[mask].copy(), 'freqs': pfreqs[mask].copy()}
                 if 'pitch' in item:
                     del item['pitch']
 
@@ -2998,8 +3117,12 @@ class PhoneticsApp:
                         has_empty = res.get('has_empty_data', False)
                         img = self.tk_icons.get('warning', '') if has_empty else ''
                         iid = self.tree_panel.tree.insert(gid, tk.END, text=res['word'], tags=('item',), image=img)
+                        win_s = max(0.0, float(res['ms']) - 0.05)
+                        win_e = float(res['me']) + 0.05
+                        p_mask = (pitch_xs >= win_s) & (pitch_xs <= win_e)
+                        item_pitch_data = {'xs': pitch_xs[p_mask].copy(), 'freqs': pitch_freqs[p_mask].copy()}
                         item_data = {
-                            'label': res['word'], 'group': res['group'], 'snd': snd, 'pitch_data': global_pitch_data,
+                            'label': res['word'], 'group': res['group'], 'snd': snd, 'pitch_data': item_pitch_data,
                             'macro_start': res['ms'], 'macro_end': res['me'],
                             'start': res['mis'], 'end': res['mie'],
                             'inner_splits': res.get('inner_splits', []),
@@ -3056,7 +3179,7 @@ class PhoneticsApp:
         def run():
             params = self._build_worker_params()
             trim = self.switch_trim_silence.get()
-            paths_to_process = [p for p in paths if p not in self.audio_cache]
+            paths_to_process = [p for p in paths if self._get_audio_cache(p, params) is None]
             if not paths_to_process:
                 self.root.after(0, lambda: self.lbl_status.configure(text="后台分析完成", text_color="#10B981"))
                 return
@@ -3068,9 +3191,9 @@ class PhoneticsApp:
             for i, future in enumerate(concurrent.futures.as_completed(futures)):
                 p = futures[future]
                 try:
-                    self.audio_cache[p] = future.result()
+                    self._set_audio_cache(p, future.result(), params)
                 except Exception as e:
-                    self.audio_cache[p] = {'success': False, 'error': str(e), 'path': p}
+                    self._set_audio_cache(p, {'success': False, 'error': str(e), 'path': p}, params)
 
                 self.root.after(0, lambda v=(i+1)/total: self.set_progress(v))
 
@@ -3093,8 +3216,9 @@ class PhoneticsApp:
             futures = {}
             executor = concurrent.futures.ProcessPoolExecutor(max_workers=min(os.cpu_count() or 4, 8))
             for i, p in enumerate(self.pending_batch_paths):
-                if p in self.audio_cache:
-                    results.append((i, self.audio_cache[p]))
+                cached = self._get_audio_cache(p, params)
+                if cached is not None:
+                    results.append((i, cached))
                 else:
                     futures[executor.submit(batch_process_worker, p, params, trim)] = i
 
@@ -3103,8 +3227,8 @@ class PhoneticsApp:
                     orig_idx = futures[future]
                     try:
                         res = future.result()
-                        self.audio_cache[self.pending_batch_paths[orig_idx]] = res
-                        results.append((orig_idx, res))
+                        self._set_audio_cache(self.pending_batch_paths[orig_idx], res, params)
+                        results.append((orig_idx, copy.deepcopy(res)))
                     except Exception as e: print(f"Error: {e}")
 
                     if i % 2 == 0 or i == len(futures) - 1:
@@ -3126,7 +3250,7 @@ class PhoneticsApp:
                         res['import_index'] = i
                         self._stamp_formant_params_on_item(res, params)
                         iid = f"batch_{res['label']}_{id(res)}"
-                        self.items[iid] = res
+                        self.items[iid] = copy.deepcopy(res)
                         has_empty = res.get('has_empty_data', False)
                         img = self.tk_icons.get('warning', '') if has_empty else ''
                         self.tree_panel.tree.insert(gid, tk.END, iid=iid, text=res['label'], tags=('item',), image=img)
@@ -3189,9 +3313,9 @@ class PhoneticsApp:
                 results[i] = {'label': t['word'], 'group': t['group'], 'success': False, 'missing': True}
             else:
                 path = t['path']
-                if path in self.audio_cache:
-                    res = self.audio_cache[path]
-                    results[i] = {**res, 'missing': False, 'group': t['group']}
+                cached = self._get_audio_cache(path, params)
+                if cached is not None:
+                    results[i] = {**cached, 'missing': False, 'group': t['group']}
                 else:
                     futures[executor.submit(batch_process_worker, path, params, trim, tasks[i]['word'])] = i
 
@@ -3202,8 +3326,8 @@ class PhoneticsApp:
                 orig_idx = futures[future]
                 try:
                     res = future.result()
-                    self.audio_cache[tasks[orig_idx]['path']] = res
-                    results[orig_idx] = {**res, 'missing': False, 'group': tasks[orig_idx]['group']}
+                    self._set_audio_cache(tasks[orig_idx]['path'], res, params)
+                    results[orig_idx] = {**copy.deepcopy(res), 'missing': False, 'group': tasks[orig_idx]['group']}
                 except Exception as e:
                     results[orig_idx] = {'label': tasks[orig_idx]['word'], 'group': tasks[orig_idx]['group'], 'success': False, 'missing': True, 'error': str(e)}
 
@@ -3268,7 +3392,7 @@ class PhoneticsApp:
                 img = self.tk_icons.get('warning', '') if has_empty else ''
                 self.tree_panel.tree.insert(gid, tk.END, iid=iid, text=display, tags=('item',), image=img)
 
-                self.items[iid] = apply_record_metadata(res, tasks[i].get('metadata_record'))
+                self.items[iid] = copy.deepcopy(apply_record_metadata(res, tasks[i].get('metadata_record')))
                 res['is_user_specified_structure'] = '/' in res['label']
                 self.tree_panel.update_item_icon(iid)
                 matched_count += 1
@@ -3574,7 +3698,17 @@ class PhoneticsApp:
 
         def update_stats(event=None):
             raw_text = text_box.get("1.0", tk.END)
-            groups, flat_words = parse_wordlist(raw_text)
+            if active_wordlist_document.get("doc"):
+                doc = active_wordlist_document["doc"]
+                groups, flat_words, _ = flatten_wordlist_document(doc)
+            elif looks_like_structured_wordlist_text(raw_text):
+                try:
+                    doc = build_document_from_structured_text(raw_text)
+                    groups, flat_words, _ = flatten_wordlist_document(doc)
+                except Exception:
+                    groups, flat_words = parse_wordlist(raw_text)
+            else:
+                groups, flat_words = parse_wordlist(raw_text)
             color = "#10B981" if flat_words else "#6B7280"
             lbl_stats.configure(text=f"实时统计：已识别 {len(groups)} 个组别 | {len(flat_words)} 个项", text_color=color)
 
@@ -3661,8 +3795,17 @@ class PhoneticsApp:
         # 5. 执行处理与防错预检
         def process():
             raw_text = text_box.get("1.0", tk.END)
-            groups, flat_words = parse_wordlist(raw_text)
-            wordlist_document = active_wordlist_document["doc"]
+            wordlist_document = active_wordlist_document.get("doc")
+            if wordlist_document is None and looks_like_structured_wordlist_text(raw_text):
+                try:
+                    wordlist_document = build_document_from_structured_text(raw_text)
+                    active_wordlist_document["doc"] = wordlist_document
+                except Exception:
+                    wordlist_document = None
+            if wordlist_document is not None:
+                groups, flat_words, _ = flatten_wordlist_document(wordlist_document)
+            else:
+                groups, flat_words = parse_wordlist(raw_text)
 
             if not flat_words:
                 return messagebox.showwarning("提示", "未识别到任何数据项，请检查文本格式。")
@@ -3833,7 +3976,7 @@ class PhoneticsApp:
                 for g in unique_groups:
                     if g not in self.tree_panel.project_groups:
                         self.tree_panel.project_groups.append(g)
-                    iid_grp = f"group_{g}"
+                    iid_grp = f"group_node_{g}"
                     self.tree_panel.tree.insert("", tk.END, iid=iid_grp, text=g, tags=('group',), open=True)
                     self.tree_panel.group_nodes[g] = iid_grp
 
@@ -3976,7 +4119,7 @@ class PhoneticsApp:
                 for g in unique_groups:
                     if g not in self.tree_panel.project_groups:
                         self.tree_panel.project_groups.append(g)
-                    iid_grp = f"group_{g}"
+                    iid_grp = f"group_node_{g}"
                     self.tree_panel.tree.insert("", tk.END, iid=iid_grp, text=g, tags=('group',), open=True)
                     self.tree_panel.group_nodes[g] = iid_grp
 
@@ -3985,6 +4128,18 @@ class PhoneticsApp:
                     if res and res.get('success'):
                         iid = f"item_{res['label']}_{id(res)}"
                         res['snd'] = self.pending_long_snd
+                        task_t = tasks[idx]
+                        macro_s = task_t.get('ms', res.get('start', 0.0))
+                        macro_e = task_t.get('me', res.get('end', snd.get_total_duration()))
+                        res['macro_start'] = macro_s
+                        res['macro_end'] = macro_e
+                        win_s = max(0.0, float(macro_s) - 0.05)
+                        win_e = float(macro_e) + 0.05
+                        mask = (pitch_xs >= win_s) & (pitch_xs <= win_e)
+                        res['pitch_data'] = {
+                            'xs': pitch_xs[mask].copy(),
+                            'freqs': pitch_freqs[mask].copy()
+                        }
                         res['pitch'] = global_pitch
                         res['pitch_floor'] = params['pitch_floor']
                         res['pitch_ceiling'] = params['pitch_ceiling']
@@ -4364,7 +4519,7 @@ class PhoneticsApp:
 
                     if len(all_stable_f0) < 20:
                         self.root.after(0, self.stop_loading)
-                        self.root.after(0, lambda: messagebox.showwarning("无法可靠建议", "当前条目有效有声数据太少（少于 20 帧），无法提取稳定 F0。"))
+                        self.root.after(0, lambda: messagebox.showwarning("有效语音帧不足", "当前条目有效有声数据太少（少于 20 帧），无法提取稳定 F0。"))
                         return
 
                     import numpy as np
@@ -4554,7 +4709,7 @@ class PhoneticsApp:
                 # 判断有效有声帧是否足够（例如，每帧 10ms，至少需 50 帧，即 0.5 秒）
                 if len(all_stable_f0) < 50:
                     self.root.after(0, self.stop_loading)
-                    self.root.after(0, lambda: messagebox.showwarning("无法可靠建议", "有效有声数据太少，无法进行可靠建议。请先导入更多音频，或确保当前音频包含足够稳定发音段。"))
+                    self.root.after(0, lambda: messagebox.showwarning("有效语音帧不足", "有效有声数据太少，无法进行可靠建议。请先导入更多音频，或确保当前音频包含足够稳定发音段。"))
                     return
 
                 # 计算百分位数

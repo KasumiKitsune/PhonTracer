@@ -70,7 +70,7 @@ class FormantDetectionDialog(ctk.CTkToplevel):
         reason_frame.pack(fill="x", padx=15, pady=(0, 15))
         
         if self.insufficient_data:
-            reason_text = "【警告】有效发音时长不足（低于 0.5s），以下推荐仅供参考。"
+            reason_text = "提示：当前条目有效时长短于 0.5s，建议结合同发音人更多样本综合确定参数。"
             reason_color = ("#D97706", "#F59E0B")
             reason_frame.configure(fg_color=("#FFFBEB", "#451A03"), border_color=("#FDE68A", "#D97706"))
         else:

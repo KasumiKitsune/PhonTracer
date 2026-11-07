@@ -453,6 +453,312 @@ def get_formant_export_text_for_item(item: Dict[str, Any], real_index: int, num_
     return output
 
 
+class ExcelStyleManager:
+    """
+    统一的 Excel 样式管理器 (基于 xlsxwriter)
+    统一工作簿全域字体为 Microsoft YaHei、规范浅灰边框 (#CBD5E1) 及标准化数值/对齐格式。
+    """
+    FONT_FAMILY = "Microsoft YaHei"
+    BORDER_COLOR = "#CBD5E1"
+
+    def __init__(self, workbook):
+        self.workbook = workbook
+        self._init_formats()
+
+    def _init_formats(self):
+        # 表头格式 (10.5pt, 粗体, 优雅灰蓝底色, 细边框, 居中)
+        self.header_fmt = self.workbook.add_format({
+            'font_name': self.FONT_FAMILY,
+            'font_size': 10.5,
+            'bold': True,
+            'bg_color': '#F1F5F9',
+            'border': 1,
+            'border_color': self.BORDER_COLOR,
+            'align': 'center',
+            'valign': 'vcenter',
+        })
+        # 章节大标题格式 (11pt, 粗体, 雅致浅蓝背景)
+        self.section_fmt = self.workbook.add_format({
+            'font_name': self.FONT_FAMILY,
+            'font_size': 11,
+            'bold': True,
+            'bg_color': '#D9E2F3',
+            'border': 1,
+            'border_color': self.BORDER_COLOR,
+            'valign': 'vcenter',
+        })
+        # 重点突出格式 (黄色背景, 用于极值等)
+        self.highlight_fmt = self.workbook.add_format({
+            'font_name': self.FONT_FAMILY,
+            'font_size': 10,
+            'bold': True,
+            'bg_color': '#FFF2CC',
+            'border': 1,
+            'border_color': self.BORDER_COLOR,
+            'align': 'right',
+            'valign': 'vcenter',
+            'num_format': '0.00',
+        })
+        # 基础文本格式 (左对齐)
+        self.text_left = self.workbook.add_format({
+            'font_name': self.FONT_FAMILY,
+            'font_size': 10,
+            'border': 1,
+            'border_color': self.BORDER_COLOR,
+            'align': 'left',
+            'valign': 'vcenter',
+        })
+        # 基础文本格式 (居中, 常用于编号、状态、单字、发音人等)
+        self.text_center = self.workbook.add_format({
+            'font_name': self.FONT_FAMILY,
+            'font_size': 10,
+            'border': 1,
+            'border_color': self.BORDER_COLOR,
+            'align': 'center',
+            'valign': 'vcenter',
+        })
+        # 基础文本格式 (右对齐)
+        self.text_right = self.workbook.add_format({
+            'font_name': self.FONT_FAMILY,
+            'font_size': 10,
+            'border': 1,
+            'border_color': self.BORDER_COLOR,
+            'align': 'right',
+            'valign': 'vcenter',
+        })
+        # 时长格式 (3位小数 0.000)
+        self.duration_fmt = self.workbook.add_format({
+            'font_name': self.FONT_FAMILY,
+            'font_size': 10,
+            'border': 1,
+            'border_color': self.BORDER_COLOR,
+            'align': 'right',
+            'valign': 'vcenter',
+            'num_format': '0.000',
+        })
+        self.time_fmt = self.duration_fmt
+        # 五度值 / T值 / 两位小数格式 (0.00)
+        self.t_val_fmt = self.workbook.add_format({
+            'font_name': self.FONT_FAMILY,
+            'font_size': 10,
+            'border': 1,
+            'border_color': self.BORDER_COLOR,
+            'align': 'right',
+            'valign': 'vcenter',
+            'num_format': '0.00',
+        })
+        self.decimal2_fmt = self.t_val_fmt
+        # 赫兹值 / 一位小数格式 (0.0)
+        self.hz_fmt = self.workbook.add_format({
+            'font_name': self.FONT_FAMILY,
+            'font_size': 10,
+            'border': 1,
+            'border_color': self.BORDER_COLOR,
+            'align': 'right',
+            'valign': 'vcenter',
+            'num_format': '0.0',
+        })
+        self.decimal1_fmt = self.hz_fmt
+        # 整数格式 (0)
+        self.int_fmt = self.workbook.add_format({
+            'font_name': self.FONT_FAMILY,
+            'font_size': 10,
+            'border': 1,
+            'border_color': self.BORDER_COLOR,
+            'align': 'right',
+            'valign': 'vcenter',
+            'num_format': '0',
+        })
+        self.integer_fmt = self.int_fmt
+        # 千分位整数格式 (#,##0)
+        self.thousands_fmt = self.workbook.add_format({
+            'font_name': self.FONT_FAMILY,
+            'font_size': 10,
+            'border': 1,
+            'border_color': self.BORDER_COLOR,
+            'align': 'right',
+            'valign': 'vcenter',
+            'num_format': '#,##0',
+        })
+        self.size_fmt = self.thousands_fmt
+        # 4位小数格式 (0.0000)
+        self.decimal4_fmt = self.workbook.add_format({
+            'font_name': self.FONT_FAMILY,
+            'font_size': 10,
+            'border': 1,
+            'border_color': self.BORDER_COLOR,
+            'align': 'right',
+            'valign': 'vcenter',
+            'num_format': '0.0000',
+        })
+        # 6位小数格式 (0.000000)
+        self.decimal6_fmt = self.workbook.add_format({
+            'font_name': self.FONT_FAMILY,
+            'font_size': 10,
+            'border': 1,
+            'border_color': self.BORDER_COLOR,
+            'align': 'right',
+            'valign': 'vcenter',
+            'num_format': '0.000000',
+        })
+
+
+def compute_visual_width(text: Any) -> float:
+    """
+    计算文本在 Excel 中的视觉字符宽度：
+    中文字符 (CJK) 计 2.0 字符宽，英文字母、数字和半角符号计 1.0 字符宽。
+    """
+    if text is None:
+        return 0.0
+    s = str(text)
+    if not s:
+        return 0.0
+    width = 0.0
+    for char in s:
+        code = ord(char)
+        if ('\u4e00' <= char <= '\u9fff' or
+            '\u3400' <= char <= '\u4dbf' or
+            '\uf900' <= char <= '\ufaff' or
+            0xff00 <= code <= 0xffef):
+            width += 2.0
+        elif code > 127:
+            width += 1.8
+        else:
+            width += 1.0
+    return width
+
+
+def autofit_worksheet_columns(ws, headers: List[str], rows: Optional[List[List[Any]]] = None,
+                              extra_padding: float = 4.0, min_width: float = 10.0, max_width: float = 60.0):
+    """
+    按表头与数据的中英文字符视觉宽度自适应设置工作表列宽，
+    并为表头额外预留下拉筛选箭头与边距空间。
+    """
+    num_cols = len(headers)
+    col_widths = [compute_visual_width(h) + extra_padding for h in headers]
+
+    if rows:
+        sample_rows = rows[:100]  # 取前 100 行样本提升性能
+        for r in sample_rows:
+            for c_idx, val in enumerate(r):
+                if c_idx < num_cols and val is not None and val != "":
+                    w = compute_visual_width(val) + 2.0
+                    if w > col_widths[c_idx]:
+                        col_widths[c_idx] = w
+
+    for c_idx, w in enumerate(col_widths):
+        clamped_w = max(min_width, min(w, max_width))
+        ws.set_column(c_idx, c_idx, round(clamped_w, 1))
+
+
+def get_pitch_arrays_for_item(item: Dict[str, Any]) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+    """提取词条的基频时间点与频率数组。"""
+    if item.get('pitch_data'):
+        p_xs = item['pitch_data'].get('xs')
+        p_freqs = item['pitch_data'].get('freqs')
+        if p_xs is not None and p_freqs is not None:
+            return np.asarray(p_xs), np.asarray(p_freqs)
+    if item.get('pitch'):
+        pitch = item['pitch']
+        try:
+            p_xs = np.asarray(pitch.xs())
+            p_freqs = np.asarray(pitch.selected_array['frequency'])
+            if p_xs.ndim == 1 and p_freqs.ndim == 1 and len(p_xs) == len(p_freqs):
+                return p_xs, p_freqs
+        except Exception:
+            return None, None
+    return None, None
+
+
+def write_raw_pitch_sheet(workbook, rows: List[Dict[str, Any]], style_manager=None, include_speaker: bool = False):
+    """写入逐点 Hz 原始基频数据到 '原始基频数据' Sheet。"""
+    ws_raw = workbook.add_worksheet("原始基频数据")
+    if style_manager is None:
+        style_manager = ExcelStyleManager(workbook)
+    style = style_manager
+
+    headers = []
+    if include_speaker:
+        headers.append("发音人")
+    headers.extend([
+        "组别", "编号", "词语", "音节序号", "音节",
+        "绝对时间(s)", "字内相对时间(s)", "基频Hz", "状态"
+    ])
+    for col, header in enumerate(headers):
+        ws_raw.write(0, col, header, style.header_fmt)
+
+    row_idx = 1
+    sample_rows = []
+    for entry in rows:
+        item = entry.get('item') or entry.get('raw_item')
+        if not item:
+            continue
+        if item.get('start') is None or (not item.get('snd') and not item.get('path')):
+            continue
+
+        p_xs, p_freqs = get_pitch_arrays_for_item(item)
+        if p_xs is None or p_freqs is None:
+            continue
+
+        label = item.get('label', '')
+        syls = split_into_syllables(label)
+        if not syls and label:
+            syls = [label]
+        bounds = get_item_syllable_bounds(item)
+        if not bounds:
+            continue
+
+        for syl_idx, (c_s, c_e) in enumerate(bounds, start=1):
+            if c_e <= c_s:
+                continue
+            char = syls[syl_idx - 1] if syl_idx - 1 < len(syls) else ""
+            mask = (p_xs >= c_s) & (p_xs <= c_e)
+            indices = np.where(mask)[0]
+            for p_idx in indices:
+                t = float(p_xs[p_idx])
+                hz = float(p_freqs[p_idx]) if np.isfinite(p_freqs[p_idx]) else 0.0
+                status = "有效" if hz > 0 else "无声/已擦除"
+
+                col = 0
+                if include_speaker:
+                    ws_raw.write(row_idx, col, entry.get('speaker', ''), style.text_center)
+                    col += 1
+                ws_raw.write(row_idx, col, entry.get('group', ''), style.text_center)
+                col += 1
+                ws_raw.write(row_idx, col, entry.get('index', ''), style.int_fmt)
+                col += 1
+                ws_raw.write(row_idx, col, item.get('label', ''), style.text_left)
+                col += 1
+                ws_raw.write(row_idx, col, syl_idx, style.int_fmt)
+                col += 1
+                ws_raw.write(row_idx, col, char, style.text_center)
+                col += 1
+                ws_raw.write(row_idx, col, round(t, 6), style.decimal6_fmt)
+                col += 1
+                ws_raw.write(row_idx, col, round(t - c_s, 6), style.decimal6_fmt)
+                col += 1
+                ws_raw.write(row_idx, col, round(hz, 1) if hz > 0 else 0.0, style.hz_fmt)
+                col += 1
+                ws_raw.write(row_idx, col, status, style.text_center)
+
+                if row_idx <= 100:
+                    sample_vals = []
+                    if include_speaker:
+                        sample_vals.append(entry.get('speaker', ''))
+                    sample_vals.extend([
+                        entry.get('group', ''), entry.get('index', ''), item.get('label', ''),
+                        syl_idx, char, round(t, 6), round(t - c_s, 6), round(hz, 1), status
+                    ])
+                    sample_rows.append(sample_vals)
+
+                row_idx += 1
+
+    ws_raw.freeze_panes(1, 0)
+    ws_raw.autofilter(0, 0, max(row_idx - 1, 1), len(headers) - 1)
+    autofit_worksheet_columns(ws_raw, headers, sample_rows)
+    return ws_raw
+
+
 def write_analysis_sheet_with_formulas(workbook, ws_res, group_list, num_points, max_syls,
                                        last_data_row, data_sheet_name='数据', speaker_col=None):
     """
@@ -493,37 +799,32 @@ def write_analysis_sheet_with_formulas(workbook, ws_res, group_list, num_points,
     grp_col_letter = 'B' if is_integrated else 'A'
     col_offset = 5 if is_integrated else 4
 
-    # ────────── 格式 ──────────
-    bold_fmt = workbook.add_format({'bold': True, 'bg_color': '#F2F2F2'})
-    section_fmt = workbook.add_format({'bold': True, 'font_size': 12, 'bg_color': '#D9E2F3'})
-    highlight_fmt = workbook.add_format({'bold': True, 'bg_color': '#FFF2CC', 'num_format': '0.00'})
-
-    # 设置列宽以防显示 ######
-    ws_res.set_column(0, 0, 16)  # 声调类型
-    ws_res.set_column(1, 1, 16)  # 字1_平均时长 / 全局最低最高Hz 所在列
-    for k in range(max_syls):
-        base_col = 1 + k * (num_points + 1)
-        ws_res.set_column(base_col, base_col, 16)  # 时长列
-        ws_res.set_column(base_col + 1, base_col + num_points, 10)  # T值或Hz值列
+    # ────────── 统一格式管理器 ──────────
+    style = ExcelStyleManager(workbook)
 
     # ══════════ Section A: 基频均值 (Hz) ══════════
     sec_a_header_row = 0
     ws_res.merge_range(sec_a_header_row, 0, sec_a_header_row,
                        max_syls * (num_points + 1),
-                       '一、各声调平均基频 (Hz)  —— 由 AVERAGEIFS 公式自动从「数据」表计算', section_fmt)
+                       '一、各组别平均基频 (Hz)  —— 由 AVERAGEIFS 公式自动从「数据」表计算', style.section_fmt)
 
     hz_header_row = 1
-    ws_res.write(hz_header_row, 0, '声调类型', bold_fmt)
+    ws_res.write(hz_header_row, 0, '组别', style.header_fmt)
+    analysis_headers = ['组别']
     for k in range(max_syls):
         base_col = 1 + k * (num_points + 1)
-        ws_res.write(hz_header_row, base_col, f'字{k+1}_平均时长(s)', bold_fmt)
+        dur_hdr = f'字{k+1}_平均时长(s)'
+        ws_res.write(hz_header_row, base_col, dur_hdr, style.header_fmt)
+        analysis_headers.append(dur_hdr)
         for i in range(num_points):
-            ws_res.write(hz_header_row, base_col + 1 + i, f'字{k+1}_T{i+1}均值(Hz)', bold_fmt)
+            hz_hdr = f'字{k+1}_P{i+1}均值(Hz)'
+            ws_res.write(hz_header_row, base_col + 1 + i, hz_hdr, style.header_fmt)
+            analysis_headers.append(hz_hdr)
 
     hz_data_start = 2  # 0-indexed row where Hz averages begin
     for g_idx, grp in enumerate(group_list):
         r = hz_data_start + g_idx
-        ws_res.write(r, 0, grp)
+        ws_res.write(r, 0, grp, style.text_center)
 
         # 数据 Sheet 组别列 条件范围固定
         grp_range = f'{ds}!${grp_col_letter}$2:${grp_col_letter}${lr}'
@@ -538,7 +839,9 @@ def write_analysis_sheet_with_formulas(workbook, ws_res, group_list, num_points,
             val_range = f'{ds}!${dc}$2:${dc}${lr}'
             ws_res.write_formula(
                 r, base_col,
-                f'=IFERROR(AVERAGEIFS({val_range},{grp_range},{criteria},{val_range},">0"),"")')
+                f'=IFERROR(AVERAGEIFS({val_range},{grp_range},{criteria},{val_range},">0"),"")',
+                style.duration_fmt
+            )
 
             # ── 各测量点 Hz 均值 ──
             for i in range(num_points):
@@ -547,15 +850,17 @@ def write_analysis_sheet_with_formulas(workbook, ws_res, group_list, num_points,
                 hz_range = f'{ds}!${hc}$2:${hc}${lr}'
                 ws_res.write_formula(
                     r, base_col + 1 + i,
-                    f'=IFERROR(AVERAGEIFS({hz_range},{grp_range},{criteria},{hz_range},">0"),"")')
+                    f'=IFERROR(AVERAGEIFS({hz_range},{grp_range},{criteria},{hz_range},">0"),"")',
+                    style.hz_fmt
+                )
 
     # ══════════ Section B: 全局基频范围 ══════════
     gap1 = hz_data_start + num_groups  # blank row
     min_row = gap1 + 1
     max_row = gap1 + 2
 
-    ws_res.write(min_row, 0, '全局最低Hz =', highlight_fmt)
-    ws_res.write(max_row, 0, '全局最高Hz =', highlight_fmt)
+    ws_res.write(min_row, 0, '全局最低Hz =', style.highlight_fmt)
+    ws_res.write(max_row, 0, '全局最高Hz =', style.highlight_fmt)
 
     # 收集 Section A 中所有 Hz 均值单元格的范围
     hz_cell_ranges = []
@@ -567,8 +872,8 @@ def write_analysis_sheet_with_formulas(workbook, ws_res, group_list, num_points,
             hz_cell_ranges.append(f'{cl}{hz_data_start + 1}:{cl}{hz_data_start + num_groups}')
 
     joined = ','.join(hz_cell_ranges)
-    ws_res.write_formula(min_row, 1, f'=MIN({joined})', highlight_fmt)
-    ws_res.write_formula(max_row, 1, f'=MAX({joined})', highlight_fmt)
+    ws_res.write_formula(min_row, 1, f'=MIN({joined})', style.highlight_fmt)
+    ws_res.write_formula(max_row, 1, f'=MAX({joined})', style.highlight_fmt)
 
     min_cell_abs = xl_rowcol_to_cell(min_row, 1, row_abs=True, col_abs=True)
     max_cell_abs = xl_rowcol_to_cell(max_row, 1, row_abs=True, col_abs=True)
@@ -578,26 +883,26 @@ def write_analysis_sheet_with_formulas(workbook, ws_res, group_list, num_points,
     sec_c_header_row = gap2 + 1
     ws_res.merge_range(sec_c_header_row, 0, sec_c_header_row,
                        max_syls * (num_points + 1),
-                       '二、赵元任五度标调 T 值  —— 由上方 Hz 均值 + 全局极值经 LOG 公式换算', section_fmt)
+                       '二、赵元任五度标调 T 值  —— 由上方 Hz 均值 + 全局极值经 LOG 公式换算', style.section_fmt)
 
     t_header_row = sec_c_header_row + 1
-    ws_res.write(t_header_row, 0, '声调类型', bold_fmt)
+    ws_res.write(t_header_row, 0, '组别', style.header_fmt)
     for k in range(max_syls):
         base_col = 1 + k * (num_points + 1)
-        ws_res.write(t_header_row, base_col, f'字{k+1}_平均时长(s)', bold_fmt)
+        ws_res.write(t_header_row, base_col, f'字{k+1}_平均时长(s)', style.header_fmt)
         for i in range(num_points):
-            ws_res.write(t_header_row, base_col + 1 + i, f'字{k+1}_T{i+1}', bold_fmt)
+            ws_res.write(t_header_row, base_col + 1 + i, f'字{k+1}_T{i+1}', style.header_fmt)
 
     t_data_start = t_header_row + 1
     for g_idx, grp in enumerate(group_list):
         t_r = t_data_start + g_idx
-        ws_res.write(t_r, 0, grp)
+        ws_res.write(t_r, 0, grp, style.text_center)
 
         for k in range(max_syls):
             base_col = 1 + k * (num_points + 1)
             # 平均时长直接引用 Section A 的对应单元格
             dur_ref = xl_rowcol_to_cell(hz_data_start + g_idx, base_col)
-            ws_res.write_formula(t_r, base_col, f'={dur_ref}')
+            ws_res.write_formula(t_r, base_col, f'={dur_ref}', style.duration_fmt)
 
             for i in range(num_points):
                 hz_ref = xl_rowcol_to_cell(hz_data_start + g_idx, base_col + 1 + i)
@@ -606,9 +911,15 @@ def write_analysis_sheet_with_formulas(workbook, ws_res, group_list, num_points,
                 ws_res.write_formula(
                     t_r, base_col + 1 + i,
                     f'=IF(AND(ISNUMBER({hz_ref}),{hz_ref}>0,{max_cell_abs}>{min_cell_abs},{min_cell_abs}>0),'
-                    f'5*(LOG({hz_ref})-LOG({min_cell_abs}))/(LOG({max_cell_abs})-LOG({min_cell_abs})),"")')
+                    f'5*(LOG({hz_ref})-LOG({min_cell_abs}))/(LOG({max_cell_abs})-LOG({min_cell_abs})),"")',
+                    style.t_val_fmt
+                )
 
     res_row = t_data_start + num_groups
+
+    # 统一设置自适应列宽与冻结首行
+    autofit_worksheet_columns(ws_res, analysis_headers, extra_padding=4.0, min_width=12.0)
+    ws_res.freeze_panes(1, 0)
     return res_row, min_cell_abs, max_cell_abs
 
 
@@ -645,20 +956,12 @@ def write_formant_analysis_sheet_with_formulas(
         '#EA580C', '#0891B2', '#CA8A04', '#6366F1',
     ]
 
-    # ── 格式 ──
-    bold_fmt = workbook.add_format({'bold': True, 'bg_color': '#F2F2F2'})
-    section_fmt = workbook.add_format({
-        'bold': True, 'font_size': 12, 'bg_color': '#D9E2F3',
-    })
-
-    # ── 列宽 ──
-    ws_res.set_column(0, 0, 14)   # 组别
-    ws_res.set_column(1, 1, 10)   # 单字
-    ws_res.set_column(2, 6, 18)   # 统计列
+    # ── 统一样式管理器 ──
+    style = ExcelStyleManager(workbook)
 
     # 提取数据 Sheet 列布局 (0-indexed):
     #   A=发音人  B=组别  C=编号  D=词语  E=音节序号
-    #   F=单字  G=时间点序号  H=时间(s)  I=F1(Hz)  J=F2(Hz)
+    #   F=音节(单字)  G=时间点序号  H=时间(s)  I=F1(Hz)  J=F2(Hz)
     grp_range = f"'{ds}'!$B$2:$B${lr}"
     char_range = f"'{ds}'!$F$2:$F${lr}"
     f1_range = f"'{ds}'!$I$2:$I${lr}"
@@ -668,26 +971,26 @@ def write_formant_analysis_sheet_with_formulas(
     sec_a_row = 0
     ws_res.merge_range(
         sec_a_row, 0, sec_a_row, 6,
-        '各组别/单字 F1·F2 统计  —— 由 AVERAGEIFS / COUNTIFS / MEDIAN 公式自动从「提取数据」表计算',
-        section_fmt,
+        '各组别/音节 F1·F2 统计  —— 由 AVERAGEIFS / COUNTIFS / MEDIAN 公式自动从「提取数据」表计算',
+        style.section_fmt,
     )
 
     header_row = 1
     headers = [
-        '组别', '单字',
+        '组别', '音节',
         'F1_均值(Hz)', 'F2_均值(Hz)',
         'F1_中位数(Hz)', 'F2_中位数(Hz)',
         '有效帧数',
     ]
     for col, h in enumerate(headers):
-        ws_res.write(header_row, col, h, bold_fmt)
+        ws_res.write(header_row, col, h, style.header_fmt)
 
     data_start = 2  # first formula-data row (0-indexed)
 
     for idx, (grp, char) in enumerate(group_char_pairs):
         r = data_start + idx
-        ws_res.write(r, 0, grp)
-        ws_res.write(r, 1, char)
+        ws_res.write(r, 0, grp, style.text_center)
+        ws_res.write(r, 1, char, style.text_center)
 
         grp_ref = f'$A{r + 1}'
         char_ref = f'$B{r + 1}'
@@ -697,6 +1000,7 @@ def write_formant_analysis_sheet_with_formulas(
             r, 2,
             f'=IFERROR(AVERAGEIFS({f1_range},{grp_range},{grp_ref},'
             f'{char_range},{char_ref},{f1_range},">0",{f2_range},">0"),"")',
+            style.hz_fmt
         )
 
         # ── F2 均值 ──
@@ -704,6 +1008,7 @@ def write_formant_analysis_sheet_with_formulas(
             r, 3,
             f'=IFERROR(AVERAGEIFS({f2_range},{grp_range},{grp_ref},'
             f'{char_range},{char_ref},{f1_range},">0",{f2_range},">0"),"")',
+            style.hz_fmt
         )
 
         # ── F1 中位数 (数组公式) ──
@@ -711,23 +1016,28 @@ def write_formant_analysis_sheet_with_formulas(
             f'=IFERROR(MEDIAN(IF(({grp_range}={grp_ref})*({char_range}={char_ref})'
             f'*({f1_range}>0)*({f2_range}>0),{f1_range})),"")'
         )
-        ws_res.write_array_formula(r, 4, r, 4, '{' + median_f1 + '}')
+        ws_res.write_array_formula(r, 4, r, 4, '{' + median_f1 + '}', style.hz_fmt)
 
         # ── F2 中位数 (数组公式) ──
         median_f2 = (
             f'=IFERROR(MEDIAN(IF(({grp_range}={grp_ref})*({char_range}={char_ref})'
             f'*({f1_range}>0)*({f2_range}>0),{f2_range})),"")'
         )
-        ws_res.write_array_formula(r, 5, r, 5, '{' + median_f2 + '}')
+        ws_res.write_array_formula(r, 5, r, 5, '{' + median_f2 + '}', style.hz_fmt)
 
         # ── 有效帧数 ──
         ws_res.write_formula(
             r, 6,
             f'=COUNTIFS({grp_range},{grp_ref},{char_range},{char_ref},'
             f'{f1_range},">0",{f2_range},">0")',
+            style.int_fmt
         )
 
     res_row = data_start + len(group_char_pairs)
+
+    # 统一自适应列宽与冻结首行
+    autofit_worksheet_columns(ws_res, headers, extra_padding=4.0, min_width=12.0)
+    ws_res.freeze_panes(1, 0)
 
     # ══════════ Chart: 元音空间散点图 ══════════
     if group_char_pairs:

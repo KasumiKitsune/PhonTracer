@@ -2343,7 +2343,7 @@ class AcousticChartExporter:
                 y_flat = np.array(y_flat)
                 x_flat = np.array(x_flat)
 
-                has_warning = any(w.startswith("[警告]") or w.startswith("[致命]") for w in entry.get('warnings', []))
+                has_warning = any(w.startswith("[警告]") or w.startswith("[致命]") or w.startswith("[复核]") or w.startswith("[错误]") for w in entry.get('warnings', []))
 
                 seg = np.column_stack((x_flat, y_flat))
                 if has_warning:
@@ -2355,11 +2355,11 @@ class AcousticChartExporter:
             if normal_lines:
                 lc_norm = LineCollection(normal_lines, colors="#3B82F6", linewidths=0.75, alpha=0.3)
                 ax.add_collection(lc_norm)
-                ax.plot([], [], color="#3B82F6", linewidth=0.75, alpha=0.3, label="质量良好的常规发音")
+                ax.plot([], [], color="#3B82F6", linewidth=0.75, alpha=0.3, label="未触发复核阈值轨迹")
             if outlier_lines:
                 lc_out = LineCollection(outlier_lines, colors="#EF4444", linewidths=1.2, alpha=0.75, linestyles="--")
                 ax.add_collection(lc_out)
-                ax.plot([], [], color="#EF4444", linewidth=1.2, alpha=0.75, linestyle="--", label="存在质量异常的发音")
+                ax.plot([], [], color="#EF4444", linewidth=1.2, alpha=0.75, linestyle="--", label="触发复核阈值轨迹")
 
             if max_syls > 1:
                 for k in range(1, max_syls):

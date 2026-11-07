@@ -2832,6 +2832,11 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
         speaker = speaker or self.current_speaker
         import xlsxwriter
         import numpy as np
+        from modules.data_utils import (
+            ExcelStyleManager, autofit_worksheet_columns,
+            write_analysis_sheet_with_formulas, build_five_point_chart,
+            write_raw_pitch_sheet
+        )
         is_continuous = (rule == "continuous")
         num_points = speaker.last_params['pts']
 
@@ -2842,15 +2847,18 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                 if len(lbl) > max_syls: max_syls = len(lbl)
 
         workbook = xlsxwriter.Workbook(out_file)
+        style = ExcelStyleManager(workbook)
         ws_data = workbook.add_worksheet("数据")
         ws_res = workbook.add_worksheet("分析结果")
+        raw_pitch_rows = []
 
         headers = ["组别", "编号", "词语", "总时长(s)"]
         for k in range(1, max_syls + 1):
             headers.append(f"字{k}_时长(s)")
             for i in range(1, num_points + 1):
-                headers.append(f"字{k}_T{i}(Hz)")
-        for col, header in enumerate(headers): ws_data.write(0, col, header)
+                headers.append(f"字{k}_P{i}(Hz)")
+        for col, header in enumerate(headers):
+            ws_data.write(0, col, header, style.header_fmt)
 
         global_idx = 1
         row_idx = 1
@@ -2860,10 +2868,15 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
             if not is_continuous: global_idx = 1
             for child in children:
                 item = speaker.items[child]
+                self._ensure_item_loaded(item)
                 total_dur, syl_data = self._extract_syl_data(item, num_points)
                 if total_dur <= 0: continue
 
-                row = [grp_name, global_idx, item['label'], float(f"{total_dur:.6f}")]
+                raw_pitch_rows.append({
+                    'group': grp_name,
+                    'index': global_idx,
+                    'item': item
+                })
 
                 if grp_name not in dict_data:
                     dict_data[grp_name] = {
@@ -2872,32 +2885,41 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                         'f0_counts': [[0]*num_points for _ in range(max_syls)]
                     }
 
+                col = 0
+                ws_data.write(row_idx, col, grp_name, style.text_center); col += 1
+                ws_data.write(row_idx, col, global_idx, style.int_fmt); col += 1
+                ws_data.write(row_idx, col, item['label'], style.text_left); col += 1
+                ws_data.write(row_idx, col, round(total_dur, 6), style.duration_fmt); col += 1
+
                 for k in range(max_syls):
                     if k < len(syl_data):
                         dur, f0s = syl_data[k]
-                        row.append(float(f"{dur:.6f}"))
+                        ws_data.write(row_idx, col, round(dur, 6), style.duration_fmt); col += 1
                         dict_data[grp_name]['syl_dur_sums'][k] += dur
                         dict_data[grp_name]['syl_counts'][k] += 1
                         for i, f0 in enumerate(f0s):
                             if not np.isnan(f0) and f0 > 0:
-                                row.append(float(f"{f0:.6f}"))
+                                ws_data.write(row_idx, col, round(f0, 6), style.hz_fmt); col += 1
                                 dict_data[grp_name]['f0_sums'][k][i] += f0
                                 dict_data[grp_name]['f0_counts'][k][i] += 1
                             else:
-                                row.append("")
+                                ws_data.write(row_idx, col, "", style.text_center); col += 1
                     else:
-                        row.append("")
-                        for _ in range(num_points): row.append("")
-
-                for col, val in enumerate(row):
-                    ws_data.write(row_idx, col, val)
+                        ws_data.write(row_idx, col, "", style.text_center); col += 1
+                        for _ in range(num_points):
+                            ws_data.write(row_idx, col, "", style.text_center); col += 1
 
                 row_idx += 1
                 global_idx += 1
 
+        ws_data.freeze_panes(1, 0)
+        ws_data.autofilter(0, 0, max(row_idx - 1, 1), len(headers) - 1)
+        autofit_worksheet_columns(ws_data, headers)
+
+        write_raw_pitch_sheet(workbook, raw_pitch_rows, style_manager=style, include_speaker=False)
+
         all_avg_hz = []
         avg_points_map = {}
-        import math
 
         for grp, st in dict_data.items():
             avg_points_map[grp] = []
@@ -2916,7 +2938,6 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
         min_hz, max_hz = min(all_avg_hz), max(all_avg_hz)
 
         # 写入分析结果 Sheet（全部使用 Excel 公式引用数据表）
-        from modules.data_utils import write_analysis_sheet_with_formulas
         group_list = list(dict_data.keys())
         last_data_row = row_idx - 1  # 0-indexed
         res_row, _, _ = write_analysis_sheet_with_formulas(
@@ -3220,6 +3241,11 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
     def _export_xlsx_integrated(self, out_file, speakers, rule):
         import xlsxwriter
         import numpy as np
+        from modules.data_utils import (
+            ExcelStyleManager, autofit_worksheet_columns,
+            write_analysis_sheet_with_formulas, build_five_point_chart,
+            write_raw_pitch_sheet
+        )
         is_continuous = (rule == "continuous")
 
         # Max syllables across all speakers
@@ -3230,6 +3256,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                 if len(lbl) > max_syls: max_syls = len(lbl)
 
         workbook = xlsxwriter.Workbook(out_file)
+        style = ExcelStyleManager(workbook)
         ws_data = workbook.add_worksheet("数据")
         ws_res = workbook.add_worksheet("分析结果")
 
@@ -3240,13 +3267,15 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
         for k in range(1, max_syls + 1):
             headers.append(f"字{k}_时长(s)")
             for i in range(1, num_points + 1):
-                headers.append(f"字{k}_T{i}(Hz)")
-        for col, header in enumerate(headers): ws_data.write(0, col, header)
+                headers.append(f"字{k}_P{i}(Hz)")
+        for col, header in enumerate(headers):
+            ws_data.write(0, col, header, style.header_fmt)
 
         global_idx = 1
         row_idx = 1
         dict_data = {}
         all_groups = []
+        raw_pitch_rows = []
 
         for s in speakers:
             if not is_continuous: global_idx = 1
@@ -3255,37 +3284,58 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                 if grp_name not in all_groups: all_groups.append(grp_name)
                 for child in children:
                     item = s.items[child]
+                    self._ensure_item_loaded(item)
                     total_dur, syl_data = self._extract_syl_data(item, num_points)
                     if total_dur <= 0: continue
 
-                    row = [s.name, grp_name, global_idx, item['label'], float(f"{total_dur:.6f}")]
+                    raw_pitch_rows.append({
+                        'speaker': s.name,
+                        'group': grp_name,
+                        'index': global_idx,
+                        'item': item
+                    })
 
                     if grp_name not in dict_data:
                         dict_data[grp_name] = {
+                            'syl_dur_sums': [0.0]*max_syls,
+                            'syl_counts': [0]*max_syls,
                             'f0_sums': [[0.0]*num_points for _ in range(max_syls)],
                             'f0_counts': [[0]*num_points for _ in range(max_syls)]
                         }
 
+                    col = 0
+                    ws_data.write(row_idx, col, s.name, style.text_center); col += 1
+                    ws_data.write(row_idx, col, grp_name, style.text_center); col += 1
+                    ws_data.write(row_idx, col, global_idx, style.int_fmt); col += 1
+                    ws_data.write(row_idx, col, item['label'], style.text_left); col += 1
+                    ws_data.write(row_idx, col, round(total_dur, 6), style.duration_fmt); col += 1
+
                     for k in range(max_syls):
                         if k < len(syl_data):
                             dur, f0s = syl_data[k]
-                            row.append(float(f"{dur:.6f}"))
+                            ws_data.write(row_idx, col, round(dur, 6), style.duration_fmt); col += 1
+                            dict_data[grp_name]['syl_dur_sums'][k] += dur
+                            dict_data[grp_name]['syl_counts'][k] += 1
                             for i, f0 in enumerate(f0s):
                                 if not np.isnan(f0) and f0 > 0:
-                                    row.append(float(f"{f0:.6f}"))
+                                    ws_data.write(row_idx, col, round(f0, 6), style.hz_fmt); col += 1
                                     dict_data[grp_name]['f0_sums'][k][i] += f0
                                     dict_data[grp_name]['f0_counts'][k][i] += 1
                                 else:
-                                    row.append("")
+                                    ws_data.write(row_idx, col, "", style.text_center); col += 1
                         else:
-                            row.append("")
-                            for _ in range(num_points): row.append("")
-
-                    for col, val in enumerate(row):
-                        ws_data.write(row_idx, col, val)
+                            ws_data.write(row_idx, col, "", style.text_center); col += 1
+                            for _ in range(num_points):
+                                ws_data.write(row_idx, col, "", style.text_center); col += 1
 
                     row_idx += 1
                     global_idx += 1
+
+        ws_data.freeze_panes(1, 0)
+        ws_data.autofilter(0, 0, max(row_idx - 1, 1), len(headers) - 1)
+        autofit_worksheet_columns(ws_data, headers)
+
+        write_raw_pitch_sheet(workbook, raw_pitch_rows, style_manager=style, include_speaker=True)
 
         all_avg_hz = []
         avg_points_map = {}
@@ -3308,7 +3358,6 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
 
         min_hz, max_hz = min(all_avg_hz), max(all_avg_hz)
 
-        from modules.data_utils import write_analysis_sheet_with_formulas, build_five_point_chart
         last_data_row = row_idx - 1
         res_row, _, _ = write_analysis_sheet_with_formulas(
             workbook, ws_res, all_groups, num_points, max_syls, last_data_row, speaker_col='A'
@@ -5008,23 +5057,31 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
             print(json.dumps({"success": False, "error": "Missing xlsxwriter library. Please install via: pip install xlsxwriter"}))
             return
 
+        from modules.data_utils import (
+            ExcelStyleManager, autofit_worksheet_columns,
+            write_formant_analysis_sheet_with_formulas,
+            clean_str, get_item_syllable_bounds, split_into_syllables,
+            sample_formant_points_by_bounds_extended
+        )
+
         workbook = xlsxwriter.Workbook(out_file)
-        ws_raw = workbook.add_worksheet("逐点数据")
-        ws_sum = workbook.add_worksheet("摘要数据")
+        style = ExcelStyleManager(workbook)
+
+        ws_data = workbook.add_worksheet("提取数据")
+        ws_analysis = workbook.add_worksheet("分析图表")
+        ws_raw = workbook.add_worksheet("原始数据")
 
         show_f3 = bool(self.params.get('show_f3', False))
-        raw_headers = ["发音人", "组别", "编号", "词语", "音节序号", "单字", "时间点序号", "时间(s)", "F1(Hz)", "F2(Hz)"]
+        data_headers = ["发音人", "组别", "编号", "词语", "音节序号", "音节", "时间点序号", "时间(s)", "F1(Hz)", "F2(Hz)"]
         if show_f3:
-            raw_headers.append("F3(Hz)")
-        for col, h in enumerate(raw_headers):
-            ws_raw.write(0, col, h)
+            data_headers.append("F3(Hz)")
+        for col, h in enumerate(data_headers):
+            ws_data.write(0, col, h, style.header_fmt)
 
-        sum_headers = ["发音人", "组别", "编号", "词语", "音节序号", "单字", "F1_均值(Hz)", "F2_均值(Hz)", "F1_中位数(Hz)", "F2_中位数(Hz)", "有效帧数"]
-        for col, h in enumerate(sum_headers):
-            ws_sum.write(0, col, h)
-
-        raw_row = 1
-        sum_row = 1
+        data_row = 1
+        group_char_pairs = []
+        seen_pairs = set()
+        raw_formant_entries = []
 
         for spk in speakers_to_process:
             is_continuous = (self.params.get('num_rule', 'continuous') == 'continuous')
@@ -5040,7 +5097,6 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                     groups[g] = []
                 groups[g].append(item)
 
-            from modules.data_utils import clean_str, get_item_syllable_bounds, sample_formant_points_by_bounds, split_into_syllables
             sorted_groups = sorted(groups.keys(), key=clean_str)
 
             global_idx = 1
@@ -5057,90 +5113,130 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
 
                     bounds = get_item_syllable_bounds(item)
                     syls = split_into_syllables(item.get('label', ''))
-                    from modules.data_utils import sample_formant_points_by_bounds_extended
                     res_samp = sample_formant_points_by_bounds_extended(item, bounds, pts, strategy, include_f3=show_f3)
                     preview_times = res_samp["times"]
                     f1_vals = res_samp["f1"]
                     f2_vals = res_samp["f2"]
                     f3_vals = res_samp["f3"]
 
-                    # 逐字写入逐点数据和摘要数据
+                    raw_formant_entries.append({
+                        'speaker': spk.name,
+                        'group': grp_name,
+                        'index': global_idx,
+                        'item': item,
+                    })
+
                     for idx_syl, (c_s, c_e) in enumerate(bounds):
                         char = syls[idx_syl] if idx_syl < len(syls) else f"字{idx_syl+1}"
                         flat_start = idx_syl * pts
-                        flat_end = flat_start + pts
 
-                        f1_slice = f1_vals[flat_start:flat_end]
-                        f2_slice = f2_vals[flat_start:flat_end]
+                        pair_key = (grp_name, char)
+                        if pair_key not in seen_pairs:
+                            seen_pairs.add(pair_key)
+                            group_char_pairs.append(pair_key)
 
-                        # 逐点数据写入
                         for idx_pt in range(pts):
-                            ws_raw.write(raw_row, 0, spk.name)
-                            ws_raw.write(raw_row, 1, grp_name)
-                            ws_raw.write(raw_row, 2, global_idx)
-                            ws_raw.write(raw_row, 3, item.get('label', ''))
-                            ws_raw.write(raw_row, 4, idx_syl + 1)
-                            ws_raw.write(raw_row, 5, char)
-                            ws_raw.write(raw_row, 6, idx_pt + 1)
-                            ws_raw.write(raw_row, 7, preview_times[flat_start + idx_pt])
+                            ws_data.write(data_row, 0, spk.name, style.text_center)
+                            ws_data.write(data_row, 1, grp_name, style.text_center)
+                            ws_data.write(data_row, 2, global_idx, style.int_fmt)
+                            ws_data.write(data_row, 3, item.get('label', ''), style.text_left)
+                            ws_data.write(data_row, 4, idx_syl + 1, style.int_fmt)
+                            ws_data.write(data_row, 5, char, style.text_center)
+                            ws_data.write(data_row, 6, idx_pt + 1, style.int_fmt)
+                            ws_data.write(data_row, 7, round(preview_times[flat_start + idx_pt], 6), style.duration_fmt)
 
-                            f1_v = f1_slice[idx_pt]
-                            f2_v = f2_slice[idx_pt]
+                            f1_v = f1_vals[flat_start + idx_pt]
+                            f2_v = f2_vals[flat_start + idx_pt]
 
                             if np.isnan(f1_v):
-                                ws_raw.write_string(raw_row, 8, "--")
+                                ws_data.write(data_row, 8, "", style.text_center)
                             else:
-                                ws_raw.write(raw_row, 8, round(f1_v, 1))
+                                ws_data.write(data_row, 8, round(f1_v, 1), style.hz_fmt)
 
                             if np.isnan(f2_v):
-                                ws_raw.write_string(raw_row, 9, "--")
+                                ws_data.write(data_row, 9, "", style.text_center)
                             else:
-                                ws_raw.write(raw_row, 9, round(f2_v, 1))
+                                ws_data.write(data_row, 9, round(f2_v, 1), style.hz_fmt)
 
                             if show_f3:
                                 f3_v = f3_vals[flat_start + idx_pt]
                                 if np.isnan(f3_v):
-                                    ws_raw.write_string(raw_row, 10, "--")
+                                    ws_data.write(data_row, 10, "", style.text_center)
                                 else:
-                                    ws_raw.write(raw_row, 10, round(f3_v, 1))
-                            raw_row += 1
-
-                        # 计算共振峰的成对有效统计特征
-                        f1_arr = np.array(f1_slice)
-                        f2_arr = np.array(f2_slice)
-                        valid_mask = ~np.isnan(f1_arr) & ~np.isnan(f2_arr) & (f2_arr > f1_arr)
-                        paired_f1 = f1_arr[valid_mask]
-                        paired_f2 = f2_arr[valid_mask]
-
-                        valid_cnt = int(np.sum(valid_mask))
-
-                        ws_sum.write(sum_row, 0, spk.name)
-                        ws_sum.write(sum_row, 1, grp_name)
-                        ws_sum.write(sum_row, 2, global_idx)
-                        ws_sum.write(sum_row, 3, item.get('label', ''))
-                        ws_sum.write(sum_row, 4, idx_syl + 1)
-                        ws_sum.write(sum_row, 5, char)
-
-                        if valid_cnt > 0:
-                            mean_f1 = float(np.nanmean(paired_f1))
-                            mean_f2 = float(np.nanmean(paired_f2))
-                            med_f1 = float(np.nanmedian(paired_f1))
-                            med_f2 = float(np.nanmedian(paired_f2))
-
-                            ws_sum.write(sum_row, 6, round(mean_f1, 1))
-                            ws_sum.write(sum_row, 7, round(mean_f2, 1))
-                            ws_sum.write(sum_row, 8, round(med_f1, 1))
-                            ws_sum.write(sum_row, 9, round(med_f2, 1))
-                        else:
-                            ws_sum.write_string(sum_row, 6, "--")
-                            ws_sum.write_string(sum_row, 7, "--")
-                            ws_sum.write_string(sum_row, 8, "--")
-                            ws_sum.write_string(sum_row, 9, "--")
-
-                        ws_sum.write(sum_row, 10, valid_cnt)
-                        sum_row += 1
+                                    ws_data.write(data_row, 10, round(f3_v, 1), style.hz_fmt)
+                            data_row += 1
 
                     global_idx += 1
+
+        ws_data.freeze_panes(1, 0)
+        ws_data.autofilter(0, 0, max(data_row - 1, 1), len(data_headers) - 1)
+        autofit_worksheet_columns(ws_data, data_headers)
+
+        last_data_row = data_row - 1
+        write_formant_analysis_sheet_with_formulas(
+            workbook, ws_analysis, group_char_pairs, last_data_row,
+            data_sheet_name='提取数据',
+        )
+
+        raw_headers = [
+            "发音人", "组别", "编号", "词语", "音节序号", "音节",
+            "绝对时间(s)", "字内相对时间(s)", "F1(Hz)", "F2(Hz)"
+        ]
+        if show_f3:
+            raw_headers.append("F3(Hz)")
+        raw_headers.append("状态")
+        for col, h in enumerate(raw_headers):
+            ws_raw.write(0, col, h, style.header_fmt)
+
+        raw_row = 1
+        for entry in raw_formant_entries:
+            item = entry['item']
+            f_data = item.get('formant_data')
+            if not f_data or 'xs' not in f_data:
+                continue
+
+            xs = f_data['xs']
+            f1_arr = f_data.get('f1', np.array([]))
+            f2_arr = f_data.get('f2', np.array([]))
+
+            bounds = get_item_syllable_bounds(item)
+            syls = split_into_syllables(item.get('label', ''))
+
+            f3_arr = f_data.get('f3') if show_f3 else None
+            for syl_idx, (c_s, c_e) in enumerate(bounds):
+                char = syls[syl_idx] if syl_idx < len(syls) else f"字{syl_idx+1}"
+                mask = (xs >= c_s) & (xs <= c_e)
+                indices = np.where(mask)[0]
+
+                for frame_idx in indices:
+                    t = float(xs[frame_idx])
+                    f1 = float(f1_arr[frame_idx]) if frame_idx < len(f1_arr) and np.isfinite(f1_arr[frame_idx]) else 0.0
+                    f2 = float(f2_arr[frame_idx]) if frame_idx < len(f2_arr) and np.isfinite(f2_arr[frame_idx]) else 0.0
+                    if show_f3:
+                        f3 = float(f3_arr[frame_idx]) if f3_arr is not None and frame_idx < len(f3_arr) and np.isfinite(f3_arr[frame_idx]) else 0.0
+
+                    status = "有效" if (f1 > 0 and f2 > 0 and f2 > f1) else "无效"
+
+                    ws_raw.write(raw_row, 0, entry['speaker'], style.text_center)
+                    ws_raw.write(raw_row, 1, entry['group'], style.text_center)
+                    ws_raw.write(raw_row, 2, entry['index'], style.int_fmt)
+                    ws_raw.write(raw_row, 3, item.get('label', ''), style.text_left)
+                    ws_raw.write(raw_row, 4, syl_idx + 1, style.int_fmt)
+                    ws_raw.write(raw_row, 5, char, style.text_center)
+                    ws_raw.write(raw_row, 6, round(t, 6), style.decimal6_fmt)
+                    ws_raw.write(raw_row, 7, round(t - c_s, 6), style.decimal6_fmt)
+                    ws_raw.write(raw_row, 8, round(f1, 1) if f1 > 0 else 0.0, style.hz_fmt)
+                    ws_raw.write(raw_row, 9, round(f2, 1) if f2 > 0 else 0.0, style.hz_fmt)
+                    if show_f3:
+                        ws_raw.write(raw_row, 10, round(f3, 1) if f3 > 0 else 0.0, style.hz_fmt)
+                        ws_raw.write(raw_row, 11, status, style.text_center)
+                    else:
+                        ws_raw.write(raw_row, 10, status, style.text_center)
+                    raw_row += 1
+
+        ws_raw.freeze_panes(1, 0)
+        ws_raw.autofilter(0, 0, max(raw_row - 1, 1), len(raw_headers) - 1)
+        autofit_worksheet_columns(ws_raw, raw_headers)
 
         workbook.close()
 
