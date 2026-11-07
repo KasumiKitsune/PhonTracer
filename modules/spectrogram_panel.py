@@ -1324,6 +1324,10 @@ class SpectrogramPanel:
 
         if applied_pitch or applied_formant:
             item['is_manual_edited'] = True
+            if applied_pitch:
+                item['_dirty_pitch'] = True
+            if applied_formant:
+                item['_dirty_formant'] = True
             # 清理预览和空值标记
             if 'preview_f0' in item:
                 item.pop('preview_f0')

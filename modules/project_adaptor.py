@@ -10,8 +10,10 @@ import hashlib
 import numpy as np
 
 MAX_ARCHIVE_MEMBERS = 100000
-MAX_ARCHIVE_MEMBER_BYTES = 2 * 1024 * 1024 * 1024
-MAX_ARCHIVE_TOTAL_BYTES = 20 * 1024 * 1024 * 1024
+MAX_SINGLE_MEMBER_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB
+MAX_TOTAL_UNCOMPRESSED_BYTES = 4 * 1024 * 1024 * 1024  # 4 GiB
+MAX_ARCHIVE_MEMBER_BYTES = MAX_SINGLE_MEMBER_BYTES
+MAX_ARCHIVE_TOTAL_BYTES = MAX_TOTAL_UNCOMPRESSED_BYTES
 MAX_PROJECT_JSON_BYTES = 20 * 1024 * 1024
 SUPPORTED_PROJECT_VERSIONS = {"1.0"}
 
@@ -94,11 +96,11 @@ def validate_project_archive_members(zip_file):
         file_type = (member.external_attr >> 16) & 0o170000
         if file_type == stat.S_IFLNK:
             raise ValueError("工程文件不能包含符号链接")
-        if member.file_size > MAX_ARCHIVE_MEMBER_BYTES:
-            raise ValueError(f"工程文件成员过大：{normalized}")
+        if member.file_size > MAX_SINGLE_MEMBER_BYTES:
+            raise ValueError(f"归档成员体积超过安全上限: {normalized}")
         total_size += member.file_size
-        if total_size > MAX_ARCHIVE_TOTAL_BYTES:
-            raise ValueError("工程文件解压后的总大小超过限制")
+        if total_size > MAX_TOTAL_UNCOMPRESSED_BYTES:
+            raise ValueError("工程归档总解压体积超过安全上限")
 
     return infos
 
@@ -133,17 +135,38 @@ def read_project_metadata_from_archive(zip_path):
 def safe_extract_zip(zip_ref, destination):
     destination_abs = os.path.abspath(destination)
     infos = validate_project_archive_members(zip_ref)
-    for member in infos:
-        normalized = member.filename.replace("\\", "/")
-        member_path = os.path.abspath(os.path.join(destination_abs, *normalized.split("/")))
-        if os.path.commonpath([member_path, destination_abs]) != destination_abs:
-            raise ValueError("工程文件包含非法路径")
-        if member.is_dir():
-            os.makedirs(member_path, exist_ok=True)
-            continue
-        os.makedirs(os.path.dirname(member_path), exist_ok=True)
-        with zip_ref.open(member) as source, open(member_path, "wb") as target:
-            shutil.copyfileobj(source, target)
+    total_written = 0
+    extracted_paths = []
+    try:
+        for member in infos:
+            normalized = member.filename.replace("\\", "/")
+            member_path = os.path.abspath(os.path.join(destination_abs, *normalized.split("/")))
+            if os.path.commonpath([member_path, destination_abs]) != destination_abs:
+                raise ValueError("工程文件包含非法路径")
+            if member.is_dir():
+                os.makedirs(member_path, exist_ok=True)
+                continue
+            os.makedirs(os.path.dirname(member_path), exist_ok=True)
+            file_written = 0
+            with zip_ref.open(member) as source, open(member_path, "wb") as target:
+                extracted_paths.append(member_path)
+                while True:
+                    chunk = source.read(64 * 1024)
+                    if not chunk:
+                        break
+                    file_written += len(chunk)
+                    total_written += len(chunk)
+                    if file_written > MAX_SINGLE_MEMBER_BYTES or total_written > MAX_TOTAL_UNCOMPRESSED_BYTES:
+                        raise ValueError("解压数据超出安全上限")
+                    target.write(chunk)
+    except Exception:
+        for p in reversed(extracted_paths):
+            try:
+                if os.path.isfile(p):
+                    os.remove(p)
+            except OSError:
+                pass
+        raise
 
 def resolve_workspace_path(path, workspace_dir):
     if not path:
@@ -764,8 +787,9 @@ def adapt_project_state(state: dict, workspace_dir: str):
                                                 item_data["pitch_data_file"] = dest_c_rel
                                             else:
                                                 item_data.pop("pitch_data_file", None)
-                                    except Exception:
+                                    except Exception as exc:
                                         item_data.pop("pitch_data_file", None)
+                                        warnings.append(f"词项 '{word_label}' (ID: {canonical_id}) 的基频缓存迁移跳过: {exc}")
                                 else:
                                     item_data.pop("pitch_data_file", None)
 
@@ -792,8 +816,9 @@ def adapt_project_state(state: dict, workspace_dir: str):
                                                 item_data["formant_data_file"] = dest_f_rel
                                             else:
                                                 item_data.pop("formant_data_file", None)
-                                    except Exception:
+                                    except Exception as exc:
                                         item_data.pop("formant_data_file", None)
+                                        warnings.append(f"词项 '{word_label}' (ID: {canonical_id}) 的共振峰缓存迁移跳过: {exc}")
                                 else:
                                     item_data.pop("formant_data_file", None)
 

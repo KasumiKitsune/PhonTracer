@@ -7,16 +7,21 @@ import copy
 import stat
 import math
 import hashlib
+import logging
 import numpy as np
 import threading
 import traceback
 import time
 from .version import __version__
 
+logger = logging.getLogger(__name__)
+
 from .project_adaptor import (
     MAX_ARCHIVE_MEMBERS,
     MAX_ARCHIVE_MEMBER_BYTES,
     MAX_ARCHIVE_TOTAL_BYTES,
+    MAX_SINGLE_MEMBER_BYTES,
+    MAX_TOTAL_UNCOMPRESSED_BYTES,
     MAX_PROJECT_JSON_BYTES,
     SUPPORTED_PROJECT_VERSIONS,
     validate_project_version,
@@ -60,6 +65,7 @@ RUNTIME_EXCLUDED_KEYS = {
     'preview_f0', 'preview_formants',
     'warnings', 'has_empty_data', 'preview_segment_mismatch',
     '_mode_state_f0', '_mode_state_formant',
+    '_dirty_pitch', '_dirty_formant',
 }
 
 ACOUSTIC_PARAM_KEYS = {
@@ -99,10 +105,10 @@ class ProjectManager:
                 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
                 ERROR_ACCESS_DENIED = 5
                 STILL_ACTIVE = 259
-                kernel32 = ctypes.windll.kernel32
-                handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
-                if not handle:
-                    return kernel32.GetLastError() == ERROR_ACCESS_DENIED
+                kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+                handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+                if not handle or handle == 0:
+                    return ctypes.get_last_error() == ERROR_ACCESS_DENIED
                 try:
                     exit_code = ctypes.c_ulong()
                     if kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
@@ -120,6 +126,20 @@ class ProjectManager:
                 return True
             except (OSError, ProcessLookupError):
                 return False
+
+    _pid_exists = _is_pid_alive
+
+    def allocate_isolated_workspace(self):
+        """当默认工作区被其他存活实例占用时，分配独立工作区目录（workspace_{pid}）并获取锁。"""
+        self._default_workspace_contended = True
+        new_ws = os.path.join(self.base_dir, f"workspace_{os.getpid()}")
+        self._fallback_workspace_dir = new_ws
+        self.workspace_dir = new_ws
+        self.backup_path = os.path.join(self.workspace_dir, "auto_save_backup.teproj")
+        os.makedirs(self.workspace_dir, exist_ok=True)
+        self._lock_acquired = self.acquire_workspace_lock()
+        self.auto_save_enabled = False
+        return self.workspace_dir
 
     def acquire_workspace_lock(self):
         """尝试获取工作区锁文件。若被其他存活进程或实例占用则返回 False，否则写入当前 PID 与实例 ID 并返回 True。"""
@@ -180,17 +200,18 @@ class ProjectManager:
 
     def __init__(self, app, workspace_dir=None):
         import atexit
-        import tempfile
         self.app = app
         self._instance_id = uuid.uuid4().hex
         self._fallback_workspace_dir = None
         if workspace_dir:
             self.workspace_dir = os.path.abspath(workspace_dir)
+            self.base_dir = os.path.dirname(self.workspace_dir)
             self.backup_path = os.path.join(self.workspace_dir, "auto_save_backup.teproj")
             self.is_custom_workspace = True
         else:
-            self.workspace_dir = os.path.join(os.path.expanduser("~"), ".phon_tracer", "workspace")
-            self.backup_path = os.path.join(os.path.expanduser("~"), ".phon_tracer", "auto_save_backup.teproj")
+            self.base_dir = os.path.join(os.path.expanduser("~"), ".phon_tracer")
+            self.workspace_dir = os.path.join(self.base_dir, "workspace")
+            self.backup_path = os.path.join(self.base_dir, "auto_save_backup.teproj")
             self.is_custom_workspace = False
 
         self.config_path = os.path.join(os.path.expanduser("~"), ".phon_tracer", "config.json")
@@ -211,15 +232,11 @@ class ProjectManager:
         self._lock_acquired = self.acquire_workspace_lock()
         self._default_workspace_contended = False
         if not self._lock_acquired and not self.is_custom_workspace:
-            self._default_workspace_contended = True
-            self._fallback_workspace_dir = tempfile.mkdtemp(prefix="phontracer_ws_fallback_")
+            self.allocate_isolated_workspace()
             print(
-                f"Warning: Default workspace {self.workspace_dir} is locked by another running process. "
-                f"Switched to isolated workspace {self._fallback_workspace_dir} and disabled auto-save."
+                f"Warning: Default workspace is locked by another running process. "
+                f"Switched to isolated workspace {self.workspace_dir} and disabled auto-save."
             )
-            self.workspace_dir = self._fallback_workspace_dir
-            self.backup_path = os.path.join(self.workspace_dir, "auto_save_backup.teproj")
-            self._lock_acquired = self.acquire_workspace_lock()
 
         atexit.register(self.release_workspace_lock)
         self.load_config()
@@ -583,11 +600,35 @@ class ProjectManager:
                 items[dummy_key] = {"pitch_data_file": spk_data["long_pitch_data_file"]}
         prune_unreferenced_resources(patched_state, workspace_dir)
 
-    def save_autosave_snapshot(self):
-        self.save_to_workspace()
-        self._create_backup()
+    def _trigger_async_backup(self):
+        if not hasattr(self, "_backup_thread_lock"):
+            self._backup_thread_lock = threading.Lock()
+        if not hasattr(self, "_backup_in_progress"):
+            self._backup_in_progress = False
 
-    def save_to_workspace(self):
+        with self._backup_thread_lock:
+            if self._backup_in_progress:
+                return  # 节流：已有后台备份线程在执行，避免并发重复压缩
+            self._backup_in_progress = True
+
+        def backup_worker():
+            try:
+                with self._save_lock:
+                    self._create_backup()
+            except Exception as e:
+                logger.warning(f"后台自动保存备份失败: {e}")
+            finally:
+                with self._backup_thread_lock:
+                    self._backup_in_progress = False
+
+        t = threading.Thread(target=backup_worker, daemon=True)
+        t.start()
+
+    def save_autosave_snapshot(self):
+        self.save_to_workspace(incremental=True)
+        self._trigger_async_backup()
+
+    def save_to_workspace(self, incremental=False):
         with self._save_lock:
             preserved = getattr(self, "_preserved_top_level", {}) or getattr(self.app, "_preserved_top_level", {})
             state = copy.deepcopy(preserved) if preserved else {}
@@ -666,11 +707,11 @@ class ProjectManager:
                 ))
 
                 long_pitch_saved = bool(spk_data.get("long_pitch_data_file"))
-                for item_id, item in spk.items.items():
+                for item_id, item in list(spk.items.items()):
                     item_dict = {}
                     overrides = copy.deepcopy(item.get('param_overrides', {})) if isinstance(item.get('param_overrides'), dict) else {}
 
-                    for k, v in item.items():
+                    for k, v in list(item.items()):
                         if k in RUNTIME_EXCLUDED_KEYS:
                             continue
                         if k in ('item_note', 'item_tags', 'item_aliases', 'item_meta'):
@@ -698,7 +739,8 @@ class ProjectManager:
                                         if not long_pitch_saved:
                                             long_npz_name = f"{self._safe_token(spk_id)}_long_pitch.npz"
                                             long_npz_path = os.path.join(data_dir, long_npz_name)
-                                            np.savez(long_npz_path, xs=xs, freqs=freqs)
+                                            if not incremental or not os.path.exists(long_npz_path):
+                                                np.savez_compressed(long_npz_path, xs=xs, freqs=freqs)
                                             rel_long_pitch = os.path.join("data", long_npz_name).replace(os.sep, "/")
                                             spk_data['long_pitch_data_file'] = rel_long_pitch
                                             long_pitch_saved = True
@@ -715,7 +757,14 @@ class ProjectManager:
 
                                 npz_name = f"{self._safe_token(spk_id)}_{self._safe_token(item_id)}.npz"
                                 npz_path = os.path.join(data_dir, npz_name)
-                                np.savez(npz_path, xs=xs, freqs=freqs)
+                                should_write = (
+                                    not incremental
+                                    or item.get('_dirty_pitch', False)
+                                    or not os.path.exists(npz_path)
+                                )
+                                if should_write:
+                                    np.savez_compressed(npz_path, xs=xs, freqs=freqs)
+                                    item['_dirty_pitch'] = False
                                 item_dict['pitch_data_file'] = os.path.join("data", npz_name).replace(os.sep, "/")
                             else:
                                 item_dict[k] = v
@@ -726,7 +775,14 @@ class ProjectManager:
                                 save_kwargs = {'xs': v['xs'], 'f1': v['f1'], 'f2': v['f2']}
                                 if 'f3' in v:
                                     save_kwargs['f3'] = v['f3']
-                                np.savez(npz_path, **save_kwargs)
+                                should_write = (
+                                    not incremental
+                                    or item.get('_dirty_formant', False)
+                                    or not os.path.exists(npz_path)
+                                )
+                                if should_write:
+                                    np.savez_compressed(npz_path, **save_kwargs)
+                                    item['_dirty_formant'] = False
                                 item_dict['formant_data_file'] = os.path.join("data", npz_name).replace(os.sep, "/")
                             else:
                                 item_dict[k] = v
@@ -1009,19 +1065,9 @@ class ProjectManager:
             return False
 
     def _safe_extract(self, zip_file, target_dir):
-        target_dir_abs = os.path.abspath(target_dir)
-        infos = validate_project_archive_members(zip_file)
-        for member in infos:
-            normalized = member.filename.replace("\\", "/")
-            member_path = os.path.abspath(os.path.join(target_dir_abs, *normalized.split("/")))
-            if os.path.commonpath([member_path, target_dir_abs]) != target_dir_abs:
-                raise ValueError("工程文件包含非法路径")
-            if member.is_dir():
-                os.makedirs(member_path, exist_ok=True)
-                continue
-            os.makedirs(os.path.dirname(member_path), exist_ok=True)
-            with zip_file.open(member) as source, open(member_path, "wb") as target:
-                shutil.copyfileobj(source, target)
+        safe_extract_zip(zip_file, target_dir)
+
+    _safe_extract_zip = _safe_extract
 
     def _resolve_project_path(self, path, workspace_dir=None):
         if not path:
@@ -1122,7 +1168,7 @@ class ProjectManager:
                         with np.load(long_pitch_path) as loaded:
                             long_pitch_data = {'xs': loaded['xs'].copy(), 'freqs': loaded['freqs'].copy()}
                     except Exception as e:
-                        print(f"Failed to load long_pitch_data: {e}")
+                        logger.warning(f"Failed to load long_pitch_data: {e}")
 
             spk.pending_batch_paths = [
                 self._resolve_project_path(p, workspace_dir=workspace_dir)
@@ -1153,8 +1199,11 @@ class ProjectManager:
                 if 'pitch_data_file' in item:
                     npz_path = self._resolve_project_path(item['pitch_data_file'], workspace_dir=workspace_dir)
                     if os.path.exists(npz_path):
-                        with np.load(npz_path) as loaded:
-                            item['pitch_data'] = {'xs': loaded['xs'].copy(), 'freqs': loaded['freqs'].copy()}
+                        try:
+                            with np.load(npz_path) as loaded:
+                                item['pitch_data'] = {'xs': loaded['xs'].copy(), 'freqs': loaded['freqs'].copy()}
+                        except Exception as e:
+                            logger.warning(f"Failed to load pitch_data from {npz_path}: {e}")
                     del item['pitch_data_file']
 
                 if ('pitch_data' not in item or item['pitch_data'] is None) and long_pitch_data is not None:
@@ -1184,15 +1233,18 @@ class ProjectManager:
                 if 'formant_data_file' in item:
                     npz_path = self._resolve_project_path(item['formant_data_file'], workspace_dir=workspace_dir)
                     if os.path.exists(npz_path):
-                        with np.load(npz_path) as loaded:
-                            formant_dict = {
-                                'xs': loaded['xs'].copy(),
-                                'f1': loaded['f1'].copy(),
-                                'f2': loaded['f2'].copy()
-                            }
-                            if 'f3' in loaded:
-                                formant_dict['f3'] = loaded['f3'].copy()
-                            item['formant_data'] = formant_dict
+                        try:
+                            with np.load(npz_path) as loaded:
+                                formant_dict = {
+                                    'xs': loaded['xs'].copy(),
+                                    'f1': loaded['f1'].copy(),
+                                    'f2': loaded['f2'].copy()
+                                }
+                                if 'f3' in loaded:
+                                    formant_dict['f3'] = loaded['f3'].copy()
+                                item['formant_data'] = formant_dict
+                        except Exception as e:
+                            logger.warning(f"Failed to load formant_data from {npz_path}: {e}")
                     del item['formant_data_file']
 
                 if 'preview_f0' in item and isinstance(item['preview_f0'], list):

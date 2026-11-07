@@ -42,8 +42,8 @@ describe('独立模式字表弹窗', () => {
     expect(screen.getByText('AI 字表整理提示词已复制。')).toBeTruthy();
   });
 
-  it('文件入口严格声明只接受 TXT', () => {
+  it('文件入口声明接受常用字表格式', () => {
     const { container } = render(<PlainWordlistModal isOpen onClose={onClose} onImport={onImport} />);
-    expect(container.querySelector('input[type="file"]').getAttribute('accept')).toBe('.txt');
+    expect(container.querySelector('input[type="file"]').getAttribute('accept')).toBe('.txt,.csv,.ptwl,.json');
   });
 });

@@ -5,8 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::{BufRead, BufReader, Cursor, Read, Write};
-use std::net::{SocketAddr, TcpStream};
+use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{mpsc, Arc, Mutex};
@@ -85,27 +84,6 @@ impl Default for EngineRuntime {
 #[derive(Default)]
 struct EngineState(Mutex<EngineRuntime>);
 
-#[derive(Debug, Deserialize)]
-struct EngineHandshake {
-    event: String,
-    port: u16,
-    protocol_version: u32,
-    engine_version: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct HealthResponse {
-    status: String,
-    protocol_version: u32,
-    engine_version: String,
-}
-
-#[derive(Debug)]
-struct EngineLocation {
-    executable: PathBuf,
-    declared_protocol: Option<u32>,
-}
-
 fn validate_protocol(protocol: u32) -> Result<(), String> {
     if protocol == ENGINE_PROTOCOL {
         Ok(())
@@ -116,100 +94,10 @@ fn validate_protocol(protocol: u32) -> Result<(), String> {
     }
 }
 
-#[cfg(windows)]
-fn discover_engine() -> Result<EngineLocation, String> {
-    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_64KEY};
-    use winreg::RegKey;
-
-    #[cfg(debug_assertions)]
-    if let Some(path) = std::env::var_os("PHONTRACER_ENGINE_PATH") {
-        let executable = PathBuf::from(path);
-        if executable.is_file() {
-            return Ok(EngineLocation {
-                executable,
-                declared_protocol: Some(ENGINE_PROTOCOL),
-            });
-        }
-    }
-
-    let mut last_error = None;
-    for root in [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE] {
-        let root_key = RegKey::predef(root);
-        let key = root_key.open_subkey_with_flags(
-            r"Software\KasumiKitsune\PhonTracer",
-            KEY_READ | KEY_WOW64_64KEY,
-        );
-        if let Ok(key) = key {
-            if let Ok(install_dir) = key.get_value::<String, _>("InstallDir") {
-                let declared_protocol = key.get_value::<u32, _>("EngineProtocol").ok();
-                let executable = PathBuf::from(install_dir).join("PhonTracerAnalysisEngine.exe");
-                if executable.is_file() {
-                    return Ok(EngineLocation {
-                        executable,
-                        declared_protocol,
-                    });
-                } else {
-                    last_error = Some(
-                        "已检测到 PhonTracer，但安装目录中缺少分析引擎；请更新主程序".to_string(),
-                    );
-                }
-            } else {
-                last_error = Some("PhonTracer 安装信息缺少 InstallDir".to_string());
-            }
-        }
-    }
-    Err(last_error.unwrap_or_else(|| "尚未检测到已安装的 PhonTracer".to_string()))
-}
-
-#[cfg(target_os = "macos")]
-fn discover_engine() -> Result<EngineLocation, String> {
-    #[cfg(debug_assertions)]
-    if let Some(path) = std::env::var_os("PHONTRACER_ENGINE_PATH") {
-        let executable = PathBuf::from(path);
-        if executable.is_file() {
-            return Ok(EngineLocation {
-                executable,
-                declared_protocol: Some(ENGINE_PROTOCOL),
-            });
-        }
-    }
-
-    let mut bundles = Vec::new();
-    if let Ok(output) = Command::new("/usr/bin/mdfind")
-        .arg("kMDItemCFBundleIdentifier == 'com.kasumikitsune.phonetracer'")
-        .output()
-    {
-        if output.status.success() {
-            bundles.extend(
-                String::from_utf8_lossy(&output.stdout)
-                    .lines()
-                    .map(PathBuf::from),
-            );
-        }
-    }
-    bundles.push(PathBuf::from("/Applications/PhonTracer.app"));
-    if let Some(home) = std::env::var_os("HOME") {
-        bundles.push(PathBuf::from(home).join("Applications/PhonTracer.app"));
-    }
-
-    for bundle in bundles {
-        let executable = bundle
-            .join("Contents")
-            .join("MacOS")
-            .join("PhonTracerAnalysisEngine");
-        if executable.is_file() {
-            return Ok(EngineLocation {
-                executable,
-                declared_protocol: None,
-            });
-        }
-    }
-    Err("尚未检测到已安装的 PhonTracer.app".into())
-}
-
-#[cfg(not(any(windows, target_os = "macos")))]
-fn discover_engine() -> Result<EngineLocation, String> {
-    Err("当前系统不在 PhonRec 支持范围内".into())
+// 以前的独立 Python FastAPI 引擎已废弃，由 Tauri 原生能力直接接管
+#[allow(dead_code)]
+fn discover_engine() -> Result<PathBuf, String> {
+    Ok(PathBuf::from("native://tauri"))
 }
 
 fn workspace_dir(_app: &AppHandle) -> Result<PathBuf, String> {
@@ -2817,84 +2705,6 @@ fn standalone_import_folder(app: AppHandle, payload: Value) -> Result<Value, Str
     result
 }
 
-fn read_handshake(child: &mut Child) -> Result<EngineHandshake, String> {
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "无法读取分析引擎启动信息".to_string())?;
-    let (sender, receiver) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut reader = BufReader::new(stdout);
-        let mut line = String::new();
-        let result = reader
-            .read_line(&mut line)
-            .map(|_| line)
-            .map_err(|error| error.to_string());
-        let _ = sender.send(result);
-
-        // 就绪握手之后继续排空标准输出，避免引擎后续诊断信息写入已关闭管道。
-        let mut discarded = String::new();
-        loop {
-            discarded.clear();
-            match reader.read_line(&mut discarded) {
-                Ok(0) | Err(_) => break,
-                Ok(_) => {}
-            }
-        }
-    });
-
-    let line = receiver
-        .recv_timeout(Duration::from_secs(15))
-        .map_err(|_| "等待分析引擎启动超时".to_string())?
-        .map_err(|error| format!("读取分析引擎启动信息失败：{error}"))?;
-    let handshake: EngineHandshake = serde_json::from_str(line.trim())
-        .map_err(|error| format!("分析引擎启动信息无效：{error}"))?;
-    if handshake.event != "ready" {
-        return Err("分析引擎未返回 ready 状态".into());
-    }
-    Ok(handshake)
-}
-
-fn fetch_health(port: u16) -> Result<HealthResponse, String> {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let address = SocketAddr::from(([127, 0, 0, 1], port));
-    loop {
-        match TcpStream::connect_timeout(&address, Duration::from_millis(500)) {
-            Ok(mut stream) => {
-                stream
-                    .set_read_timeout(Some(Duration::from_secs(2)))
-                    .map_err(|error| error.to_string())?;
-                stream
-                    .write_all(
-                        format!(
-                            "GET /api/health HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
-                        )
-                        .as_bytes(),
-                    )
-                    .map_err(|error| format!("健康检查写入失败：{error}"))?;
-                let mut response = String::new();
-                stream
-                    .read_to_string(&mut response)
-                    .map_err(|error| format!("健康检查读取失败：{error}"))?;
-                if !response.starts_with("HTTP/1.1 200") {
-                    return Err("分析引擎健康检查未返回 200".into());
-                }
-                let body = response
-                    .split_once("\r\n\r\n")
-                    .map(|(_, body)| body)
-                    .ok_or_else(|| "分析引擎健康检查响应无效".to_string())?;
-                return serde_json::from_str(body)
-                    .map_err(|error| format!("分析引擎健康检查内容无效：{error}"));
-            }
-            Err(error) if Instant::now() < deadline => {
-                let _ = error;
-                std::thread::sleep(Duration::from_millis(100));
-            }
-            Err(error) => return Err(format!("无法连接分析引擎：{error}")),
-        }
-    }
-}
-
 fn stop_engine(runtime: &mut EngineRuntime) {
     if let Some(mut child) = runtime.process.take() {
         let _ = child.kill();
@@ -2912,82 +2722,10 @@ fn refresh_process_status(runtime: &mut EngineRuntime) {
     }
 }
 
-fn start_engine(app: &AppHandle, runtime: &mut EngineRuntime) -> EngineStatus {
-    stop_engine(runtime);
-    let location = match discover_engine() {
-        Ok(location) => location,
-        Err(message) => return EngineStatus::blocked("missing", message),
-    };
-    if let Some(protocol) = location.declared_protocol {
-        if let Err(message) = validate_protocol(protocol) {
-            return EngineStatus::blocked("incompatible", message);
-        }
-    }
-
-    let workspace = match workspace_dir(app) {
-        Ok(path) => path,
-        Err(message) => return EngineStatus::blocked("failed", message),
-    };
-    if let Err(message) = fs::create_dir_all(&workspace)
-        .map_err(|error| format!("创建 PhonRec 工作区失败：{error}"))
-        .and_then(|_| migrate_legacy_workspace(&workspace))
-    {
-        return EngineStatus::blocked("failed", message);
-    }
-
-    let token = Uuid::new_v4().simple().to_string();
-    let mut command = Command::new(&location.executable);
-    command
-        .arg("--workspace")
-        .arg(&workspace)
-        .arg("--port")
-        .arg("0")
-        .env("PHONTRACER_SESSION_TOKEN", &token)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000);
-    }
-
-    let mut child = match command.spawn() {
-        Ok(child) => child,
-        Err(error) => {
-            return EngineStatus::blocked("failed", format!("分析引擎启动失败：{error}"));
-        }
-    };
-    let result: Result<EngineConnection, String> = (|| {
-        let handshake = read_handshake(&mut child)?;
-        validate_protocol(handshake.protocol_version)?;
-        let health = fetch_health(handshake.port)?;
-        if health.status != "ok" {
-            return Err("分析引擎健康状态异常".into());
-        }
-        validate_protocol(health.protocol_version)?;
-        if health.engine_version != handshake.engine_version {
-            return Err("分析引擎版本信息不一致".into());
-        }
-        Ok(EngineConnection {
-            api_base: format!("http://127.0.0.1:{}/api", handshake.port),
-            token,
-            protocol_version: handshake.protocol_version,
-            engine_version: handshake.engine_version,
-        })
-    })();
-
-    match result {
-        Ok(connection) => {
-            runtime.process = Some(child);
-            EngineStatus::ready_with_connection(connection)
-        }
-        Err(message) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            EngineStatus::blocked("failed", message)
-        }
-    }
+// 以前的独立 Python FastAPI 引擎启动与握手逻辑已废弃，由 Tauri 原生能力直接接管
+#[allow(dead_code)]
+fn start_engine(_app: &AppHandle, _runtime: &mut EngineRuntime) -> EngineStatus {
+    EngineStatus::ready("native://tauri".to_string(), None)
 }
 
 #[tauri::command]

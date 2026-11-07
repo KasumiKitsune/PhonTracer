@@ -333,19 +333,19 @@ export default function OperationGuide({ isOpen, onClose } = {}) {
               </thead>
               <tbody>
                 <tr>
-                  <td><strong>CSV / Excel 表格</strong><br /><code>.csv / .xlsx</code></td>
-                  <td>推荐表头：<br /><code>word, ipa, pinyin, group, note</code><br />亦兼容中文表头：<br /><code>词项, 音标, 拼音, 组名, 发音提示</code></td>
-                  <td>必须包含 <code>word</code> 或 <code>词项</code> 列。若有 <code>ipa</code>、<code>pinyin</code> 会自动在大字下方双层展示；未知自定义列会保存在元数据中随工程导出。</td>
+                  <td><strong>CSV 表格字表</strong><br /><code>.csv</code></td>
+                  <td>推荐表头：<br /><code>word, ipa, pinyin, group, note</code><br />亦兼容中文表头：<br /><code>词项, 音标, 拼音, 组名, 词项备注</code></td>
+                  <td>必须包含 <code>word</code> 或 <code>词项</code> 列。若有 <code>ipa</code>、<code>pinyin</code> 会自动在大字下方展示；未知自定义列会保存在条目元数据中随工程导出。</td>
                 </tr>
                 <tr>
-                  <td><strong>TXT 纯文本</strong><br /><code>.txt</code></td>
-                  <td>一行一词；<br />使用 <code>【组名】</code> 或 <code>[组名]</code> 分组</td>
-                  <td>最轻量格式，未加组名标记的词条归入“未分组”。词内斜杠（如 <code>北/京</code>）会被保留作为发音边界提示，不会拆分为两行。</td>
+                  <td><strong>TXT 纯文本字表</strong><br /><code>.txt</code></td>
+                  <td>一行一词；<br />使用 <code>【组名】</code>、<code>[组名]</code> 或 <code>#组名</code> 分组</td>
+                  <td>轻量快捷格式，未加组名标记的词条归入“未分组”。词内斜杠（如 <code>北/京</code>）会被保留作为发音边界提示，不会拆分为两行。</td>
                 </tr>
                 <tr>
-                  <td><strong>JSON 工程字表</strong><br /><code>.json</code></td>
-                  <td>PhonTracer 标准字表规范</td>
-                  <td>完整保留词条全局唯一 ID、多音节切分、实验条件标注与拓展字段。</td>
+                  <td><strong>PTWL / JSON 高级字表</strong><br /><code>.ptwl / .json</code></td>
+                  <td>PhonTracer 标准字表规范（含 <code>groups</code> 分组结构）</td>
+                  <td>完整保留词条全局唯一 ID、多音节切分、实验条件标注与扩展字段。亦支持词条列表或分组映射格式。</td>
                 </tr>
               </tbody>
             </table>

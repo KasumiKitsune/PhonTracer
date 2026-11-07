@@ -19,8 +19,10 @@ export default function PlainWordlistModal({ isOpen, initialText = '', initialTi
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
-    if (!file.name.toLowerCase().endsWith('.txt')) {
-      setMessage('独立模式只能导入 TXT 普通字表。');
+    const ext = file.name.toLowerCase();
+    const validExts = ['.txt', '.csv', '.ptwl', '.json'];
+    if (!validExts.some(e => ext.endsWith(e))) {
+      setMessage('仅支持选择 .txt、.csv、.ptwl 或 .json 字表文件。');
       return;
     }
     try {
@@ -28,7 +30,7 @@ export default function PlainWordlistModal({ isOpen, initialText = '', initialTi
       setSourceTitle(file.name);
       setMessage('');
     } catch (error) {
-      setMessage(`读取 TXT 文件失败：${error}`);
+      setMessage(`读取字表文件失败：${error}`);
     }
   };
 
@@ -61,12 +63,12 @@ export default function PlainWordlistModal({ isOpen, initialText = '', initialTi
         <div className="modal-body" style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
           <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
             <button type="button" className="btn-primary" onClick={() => fileInputRef.current?.click()}>
-              选择 TXT 文件
+              选择字表文件 (.txt, .csv, .ptwl, .json)
             </button>
             <button type="button" className="btn-secondary" onClick={copyPrompt}>
               复制 AI 整理提示词
             </button>
-            <input ref={fileInputRef} type="file" accept=".txt" hidden onChange={chooseFile} />
+            <input ref={fileInputRef} type="file" accept=".txt,.csv,.ptwl,.json" hidden onChange={chooseFile} />
           </div>
           <textarea
             className="form-input"

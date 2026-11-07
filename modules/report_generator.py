@@ -8,6 +8,7 @@ import numpy as np
 from typing import Dict, Any, Callable, List, Optional, Tuple
 from collections import Counter
 from .anomaly_detection import detect_pitch_anomaly_points
+from .project_adaptor import validate_project_archive_members
 
 SPLIT_WARNING_ZH = {
     "tiny_segment": "子段时长偏短",
@@ -582,6 +583,9 @@ def generate_natural_language_summary(state: Dict[str, Any]) -> str:
     return summary
 
 def generate_markdown_report(teproj_path: str, state: Dict[str, Any], zip_ref: zipfile.ZipFile) -> str:
+    from modules.project_adaptor import validate_project_archive_members
+    if zip_ref:
+        validate_project_archive_members(zip_ref)
     teproj_filename = os.path.basename(teproj_path)
     file_hash = calculate_sha256(teproj_path)
     current_time = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -1007,6 +1011,7 @@ def write_excel_archive(teproj_path: str, state: Dict[str, Any], output_xlsx_pat
             return left != right
 
     with zipfile.ZipFile(teproj_path, "r") as z:
+        validate_project_archive_members(z)
         save_time = state.get("save_time")
         if not save_time or save_time == "未记录":
             try:

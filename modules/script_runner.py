@@ -5,6 +5,7 @@ PhonTracer语音学标注与声学分析系统 V1.0 自定义脚本运行器
 
 import ast
 import builtins
+import os
 import threading
 import traceback
 import matplotlib
@@ -72,6 +73,50 @@ ALLOWED_BUILTINS = {
     "zip": zip,
 }
 
+# 明确移除 getattr 以免通过 getattr(obj, "__subclasses__") 逃逸沙箱
+ALLOWED_BUILTINS.pop("getattr", None)
+SAFE_BUILTINS = dict(ALLOWED_BUILTINS)
+
+
+class _SafeOSPathNamespace:
+    """受控的只读/纯路径操作包装器，绝不暴露 underlying os 或 sys 模块"""
+    join = staticmethod(os.path.join)
+    basename = staticmethod(os.path.basename)
+    dirname = staticmethod(os.path.dirname)
+    splitext = staticmethod(os.path.splitext)
+    split = staticmethod(os.path.split)
+    normpath = staticmethod(os.path.normpath)
+    normcase = staticmethod(os.path.normcase)
+    abspath = staticmethod(os.path.abspath)
+    expanduser = staticmethod(os.path.expanduser)
+    commonpath = staticmethod(os.path.commonpath)
+    commonprefix = staticmethod(os.path.commonprefix)
+    exists = staticmethod(os.path.exists)
+    isfile = staticmethod(os.path.isfile)
+    isdir = staticmethod(os.path.isdir)
+    isabs = staticmethod(os.path.isabs)
+    relpath = staticmethod(os.path.relpath)
+    sep = os.path.sep
+    altsep = os.path.altsep
+    extsep = os.path.extsep
+    pathsep = os.path.pathsep
+
+    def __getattribute__(self, name):
+        if name.startswith("_") or name in ("os", "sys"):
+            raise AttributeError(f"安全限制: 禁止访问 '{name}'")
+        return super().__getattribute__(name)
+
+
+class _SafeOSNamespace:
+    """受控 os 命名空间，仅提供受限制的只读 path 操作"""
+    def __init__(self, path=None):
+        self.path = _SafeOSPathNamespace()
+
+    def __getattribute__(self, name):
+        if name == "path":
+            return object.__getattribute__(self, "path")
+        raise AttributeError(f"安全限制: 禁止通过 os 访问 '{name}'，仅允许受控 os.path")
+
 
 def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
     if level != 0:
@@ -95,10 +140,13 @@ def check_script_safety(code):
         "compile",
         "eval",
         "exec",
+        "getattr",
         "globals",
         "input",
         "locals",
         "open",
+        "setattr",
+        "delattr",
         "vars",
     }
     forbidden_output_calls = {
@@ -128,7 +176,10 @@ def check_script_safety(code):
         return ""
 
     for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
+        if isinstance(node, ast.Attribute):
+            if node.attr.startswith("_"):
+                raise ValueError(f"安全限制: 禁止访问私有或双下划线属性 '{node.attr}'")
+        elif isinstance(node, ast.Import):
             for alias in node.names:
                 name = alias.name.split('.')[0]
                 if name not in ALLOWED_IMPORT_ROOTS:
@@ -147,6 +198,8 @@ def check_script_safety(code):
                 raise ValueError(f"安全检查拦截：禁止在第一版脚本中调用系统函数 '{short_name}'")
             if short_name in forbidden_output_calls:
                 raise ValueError(f"安全检查拦截：禁止在脚本中直接调用输出/写入函数 '{short_name}'；请通过 ctx.figure(...) 或 ctx.table(...) 返回结果。")
+
+validate_ast = check_script_safety
 
 
 def run_custom_script(code, dataset_items, timeout=30, cancel_event=None, teproj_path=None):
@@ -177,15 +230,17 @@ def run_custom_script(code, dataset_items, timeout=30, cancel_event=None, teproj
         ctx.log(msg.rstrip('\r\n'))
 
     # 4. 执行作用域
-    globals_dict = {
+    safe_globals = {
         "ctx": ctx,
         "print": custom_print,
+        "os": _SafeOSNamespace(),
         "__builtins__": {
-            **ALLOWED_BUILTINS,
+            **SAFE_BUILTINS,
             "__import__": _safe_import,
             "print": custom_print,
         },
     }
+    globals_dict = safe_globals
 
     result_container = {}
     exception_container = {}

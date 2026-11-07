@@ -83,14 +83,14 @@ describe('独立软件模式主界面', () => {
     expect(screen.getByRole('button', { name: '导入' })).toBeTruthy();
     expect(screen.getByRole('button', { name: /保存工程/ })).toBeTruthy();
     expect(container.querySelector('input[accept=".teproj"]')).toBeTruthy();
-    expect(container.querySelector('input[accept=".ptwl,.txt,.csv"]')).toBeTruthy();
+    expect(container.querySelector('input[accept=".ptwl,.txt,.csv,.json"]')).toBeTruthy();
     expect(screen.queryByRole('button', { name: /语谱图/ })).toBeNull();
     expect(screen.queryAllByText('完整模式可用')).toHaveLength(0);
     expect(screen.queryByText('字段显示设置')).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: /粘贴普通字表/ }));
     expect(await screen.findByRole('dialog', { name: '导入普通字表' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: '选择 TXT 文件' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /选择字表文件/ })).toBeTruthy();
     await waitFor(() => expect(client.loadProject).toHaveBeenCalled());
   });
 

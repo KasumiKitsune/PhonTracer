@@ -4309,13 +4309,21 @@ class ToolkitApp(ctk.CTk):
 
     @staticmethod
     def _safe_extract_project_archive(archive_path, target_dir):
+        from modules.project_adaptor import (
+            validate_project_archive_members,
+            MAX_SINGLE_MEMBER_BYTES,
+            MAX_TOTAL_UNCOMPRESSED_BYTES,
+        )
+
         target_root = os.path.abspath(target_dir)
         os.makedirs(target_root, exist_ok=False)
         extracted_count = 0
+        total_written = 0
 
         try:
             with zipfile.ZipFile(archive_path, "r") as archive:
-                for member in archive.infolist():
+                infos = validate_project_archive_members(archive)
+                for member in infos:
                     member_name = member.filename.replace("\\", "/")
                     parts = [part for part in member_name.split("/") if part not in ("", ".")]
                     if not parts or any(part == ".." for part in parts):
@@ -4330,11 +4338,16 @@ class ToolkitApp(ctk.CTk):
                         continue
 
                     os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+                    file_written = 0
                     with archive.open(member, "r") as src, open(dest_path, "wb") as dst:
                         while True:
-                            chunk = src.read(1024 * 1024)
+                            chunk = src.read(64 * 1024)
                             if not chunk:
                                 break
+                            file_written += len(chunk)
+                            total_written += len(chunk)
+                            if file_written > MAX_SINGLE_MEMBER_BYTES or total_written > MAX_TOTAL_UNCOMPRESSED_BYTES:
+                                raise ValueError("解压数据超出安全上限")
                             dst.write(chunk)
                     extracted_count += 1
         except Exception:

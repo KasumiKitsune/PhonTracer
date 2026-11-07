@@ -29,6 +29,14 @@ const groupNameFromHeader = (line) => line
   .trim();
 
 export function parsePlainWordlist(rawText, idFactory = defaultIdFactory) {
+  const trimmed = String(rawText || '').replace(/^\ufeff/, '').trim();
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    try {
+      return parseJsonWordlist(trimmed, idFactory);
+    } catch (_) {
+      // fallback to plain text parsing if JSON parse fails
+    }
+  }
   const groups = [];
   let currentName = '未分组';
   let currentItems = [];
@@ -209,17 +217,43 @@ export function parseCsvWordlist(rawText, idFactory = defaultIdFactory) {
   return normalizeAdvancedWordlist({ groups: [...grouped.values()] }, idFactory);
 }
 
+export function parseJsonWordlist(rawText, idFactory = defaultIdFactory) {
+  let raw;
+  try {
+    raw = JSON.parse(String(rawText || '').replace(/^\ufeff/u, ''));
+  } catch (error) {
+    throw new Error(`JSON 字表无效：${error.message}`, { cause: error });
+  }
+  if (Array.isArray(raw)) {
+    if (raw.length > 0 && typeof raw[0] === 'object' && raw[0] !== null && Array.isArray(raw[0].items)) {
+      return normalizeAdvancedWordlist({ groups: raw }, idFactory);
+    }
+    return normalizeAdvancedWordlist({ groups: [{ name: '默认组', items: raw }] }, idFactory);
+  }
+  if (raw && typeof raw === 'object') {
+    if (Array.isArray(raw.groups)) {
+      return normalizeAdvancedWordlist(raw, idFactory);
+    }
+    const groups = [];
+    for (const [groupName, val] of Object.entries(raw)) {
+      if (Array.isArray(val)) {
+        groups.push({ name: groupName, items: val });
+      } else if (val && typeof val === 'object' && Array.isArray(val.items)) {
+        groups.push({ name: groupName, ...val });
+      }
+    }
+    if (groups.length > 0) {
+      return normalizeAdvancedWordlist({ groups }, idFactory);
+    }
+  }
+  throw new Error('JSON 字表结构无效，需包含 groups 数组、字词列表或分组对象映射');
+}
+
 export async function parseWordlistFile(file, idFactory = defaultIdFactory) {
   const name = String(file?.name || '').toLowerCase();
   const text = await file.text();
-  if (name.endsWith('.ptwl')) {
-    let raw;
-    try {
-      raw = JSON.parse(text.replace(/^\ufeff/u, ''));
-    } catch (error) {
-      throw new Error(`高级字表 JSON 无效：${error.message}`, { cause: error });
-    }
-    return normalizeAdvancedWordlist(raw, idFactory);
+  if (name.endsWith('.ptwl') || name.endsWith('.json')) {
+    return parseJsonWordlist(text, idFactory);
   }
   if (name.endsWith('.csv')) return parseCsvWordlist(text, idFactory);
   if (name.endsWith('.txt')) {
@@ -227,5 +261,5 @@ export async function parseWordlistFile(file, idFactory = defaultIdFactory) {
     if (groups.length === 0) throw new Error('普通字表中没有可录制词项');
     return groups;
   }
-  throw new Error('仅支持 .ptwl、.csv 或 .txt 字表');
+  throw new Error('仅支持 .ptwl、.csv、.txt 或 .json 字表');
 }

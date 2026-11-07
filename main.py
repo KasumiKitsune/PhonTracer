@@ -255,6 +255,19 @@ def _load_phase_3(root, splash, set_target_progress, PhoneticsApp, startup_files
         _startup_debug(f"创建 PhoneticsApp startup_files={startup_files!r}")
         app = PhoneticsApp(root, initial_files=startup_files, defer_startup_check=True)
         root._phontracer_app = app
+        if hasattr(app, "project_manager") and app.project_manager:
+            pm = app.project_manager
+            if not getattr(pm, "_lock_acquired", False):
+                pm.allocate_isolated_workspace()
+            if getattr(pm, "_default_workspace_contended", False):
+                from tkinter import messagebox
+                messagebox.showwarning(
+                    "工作区冲突警告",
+                    f"检测到另一个 PhonTracer 实例正在使用默认工作区。\n"
+                    f"已自动为当前实例分配独立工作区：\n{pm.workspace_dir}\n"
+                    f"（已禁用当前实例的自动保存以防止数据覆盖冲突）",
+                    parent=root
+                )
     
     def finish():
         splash_alive["value"] = False

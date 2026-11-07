@@ -3226,7 +3226,7 @@ export default function App() {
                 type="file"
                 ref={fileInputRef}
                 style={{ display: 'none' }}
-                accept=".ptwl,.txt,.csv"
+                accept=".ptwl,.txt,.csv,.json"
                 onChange={handleWordlistUpload}
               />
               {isStandalone && (

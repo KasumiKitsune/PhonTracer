@@ -27,12 +27,15 @@ import numpy as np
 import concurrent.futures
 from collections import OrderedDict
 import json
+import logging
 
 # Override json.dumps to output raw UTF-8 Chinese characters rather than Unicode escape sequences (\uXXXX)
 _orig_dumps = json.dumps
 def dumps_utf8(*args, **kwargs):
     if 'ensure_ascii' not in kwargs:
         kwargs['ensure_ascii'] = False
+    if 'allow_nan' not in kwargs:
+        kwargs['allow_nan'] = False
     return _orig_dumps(*args, **kwargs)
 json.dumps = dumps_utf8
 
@@ -288,7 +291,7 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
         if message:
             data["message"] = message
         data.update(payload)
-        print(json.dumps(data))
+        print(json.dumps(data, ensure_ascii=False, allow_nan=False))
 
     def _after_state_change(self, action="updated"):
         if getattr(self.project_manager, "auto_save_enabled", False):
@@ -448,7 +451,7 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
         """
         args = shlex.split(arg)
         if not args:
-            print(json.dumps({"success": True, "params": self.params}))
+            self._emit(True, params=self.params)
             return
 
         updated = False
@@ -464,7 +467,7 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
                         elif k == 'analysis_mode':
                             val_str = str(v).lower().strip()
                             if val_str not in ('f0', 'formant'):
-                                print(json.dumps({"success": False, "error": f"Invalid value for analysis_mode: must be 'f0' or 'formant'"}))
+                                self._emit(False, error="Invalid value for analysis_mode: must be 'f0' or 'formant'")
                                 return
                             self.params[k] = val_str
                         elif k == 'formant_sample_strategy':
@@ -475,13 +478,13 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
                             self.params[k] = float(v)
                         updated = True
                     except ValueError:
-                        print(json.dumps({"success": False, "error": f"Invalid value for {k}"}))
+                        self._emit(False, error=f"Invalid value for {k}")
                         return
                 else:
-                    print(json.dumps({"success": False, "error": f"Unknown parameter {k}"}))
+                    self._emit(False, error=f"Unknown parameter {k}")
                     return
 
-        print(json.dumps({"success": True, "message": "Parameters updated", "params": self.params}))
+        self._emit(True, "Parameters updated", params=self.params)
 
     def do_lang(self, arg):
         """
@@ -493,13 +496,13 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
         if choice in ('zh', 'cn', 'chinese', '中文'):
             self.lang = 'zh'
             self.prompt = "(phontracer)[中文] "
-            print(json.dumps({"success": True, "message": "语言已切换为中文", "lang": "zh"}))
+            self._emit(True, "语言已切换为中文", lang="zh")
         elif choice in ('en', 'english', '英文'):
             self.lang = 'en'
             self.prompt = "(phontracer) "
-            print(json.dumps({"success": True, "message": "Language switched to English", "lang": "en"}))
+            self._emit(True, "Language switched to English", lang="en")
         else:
-            print(json.dumps({"success": True, "lang": self.lang}))
+            self._emit(True, lang=self.lang)
 
     def do_help(self, arg):
         if not arg:
@@ -770,7 +773,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                 "active": s.id == active_id,
                 "items_count": len(s.items)
             })
-        print(json.dumps({"success": True, "speakers": res}))
+        self._emit(True, speakers=res)
 
     def do_add_speaker(self, arg):
         """
@@ -779,11 +782,11 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
         """
         name = arg.strip()
         if not name:
-            print('{"success": False, "error": "Speaker name required"}')
+            self._emit(False, error="Speaker name required")
             return
         new_speaker = self.speaker_manager.add_speaker(name)
         self._after_state_change("add_speaker")
-        print(json.dumps({"success": True, "message": f"Speaker '{name}' added", "speaker_id": new_speaker.id}))
+        self._emit(True, f"Speaker '{name}' added", speaker_id=new_speaker.id)
 
     def do_switch_speaker(self, arg):
         """
@@ -792,7 +795,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
         """
         target = arg.strip()
         if not target:
-            print('{"success": False, "error": "Speaker name or id required"}')
+            self._emit(False, error="Speaker name or id required")
             return
         found_id = None
         for s in self.speaker_manager.get_all_speakers():
@@ -802,9 +805,9 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
 
         if found_id:
             self.speaker_manager.set_active_speaker(found_id)
-            print(json.dumps({"success": True, "message": f"Switched to speaker '{target}'"}))
+            self._emit(True, f"Switched to speaker '{target}'")
         else:
-            print(json.dumps({"success": False, "error": f"Speaker '{target}' not found"}))
+            self._emit(False, error=f"Speaker '{target}' not found")
 
     def do_remove_speaker(self, arg):
         """
@@ -813,7 +816,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
         """
         target = arg.strip()
         if not target:
-            print('{"success": False, "error": "Speaker name or id required"}')
+            self._emit(False, error="Speaker name or id required")
             return
         found_id = None
         for s in self.speaker_manager.get_all_speakers():
@@ -822,15 +825,15 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                 break
 
         if not found_id:
-            print(json.dumps({"success": False, "error": f"Speaker '{target}' not found"}))
+            self._emit(False, error=f"Speaker '{target}' not found")
             return
 
         success = self.speaker_manager.remove_speaker(found_id)
         if success:
             self._after_state_change("remove_speaker")
-            print(json.dumps({"success": True, "message": f"Speaker '{target}' removed"}))
+            self._emit(True, f"Speaker '{target}' removed")
         else:
-            print(json.dumps({"success": False, "error": "Cannot remove the last speaker"}))
+            self._emit(False, error="Cannot remove the last speaker")
 
     def do_load_long(self, arg):
         """
@@ -839,12 +842,12 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
         """
         args = shlex.split(arg)
         if not args:
-            print('{"success": False, "error": "Filepath required"}')
+            self._emit(False, error="Filepath required")
             return
 
         filepath = args[0]
         if not os.path.exists(filepath):
-            print(json.dumps({"success": False, "error": f"File not found: {filepath}"}))
+            self._emit(False, error=f"File not found: {filepath}")
             return
 
         try:
@@ -857,7 +860,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
             self._after_state_change("load_long")
             self._emit(True, "长音频已加载。下一步通常是 apply_wordlist 或 apply_textgrid。", mode=self.mode, path=filepath)
         except Exception as e:
-            print(json.dumps({"success": False, "error": str(e)}))
+            self._emit(False, error=str(e))
 
     def do_load_batch(self, arg):
         """
@@ -866,7 +869,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
         """
         args = shlex.split(arg)
         if not args:
-            print('{"success": False, "error": "Filepaths required"}')
+            self._emit(False, error="Filepaths required")
             return
 
         valid_paths = []
@@ -874,7 +877,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
             if os.path.exists(p):
                 valid_paths.append(p)
             else:
-                print(json.dumps({"success": False, "error": f"File not found: {p}"}))
+                self._emit(False, error=f"File not found: {p}")
                 return
 
         self.batch_paths = valid_paths
@@ -894,14 +897,14 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
         """
         args = shlex.split(arg)
         if not args:
-            print('{"success": False, "error": "Wordlist filepath required"}')
+            self._emit(False, error="Wordlist filepath required")
             return
 
         filepath = args[0]
         match_mode = args[1] if len(args) > 1 else 'fuzzy'
 
         if not os.path.exists(filepath):
-            print(json.dumps({"success": False, "error": f"File not found: {filepath}"}))
+            self._emit(False, error=f"File not found: {filepath}")
             return
 
         with open(filepath, 'r', encoding='utf-8') as f:
@@ -909,7 +912,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
 
         groups, flat_words = parse_wordlist(raw_text)
         if not flat_words:
-            print('{"success": False, "error": "No words found in wordlist"}')
+            self._emit(False, error="No words found in wordlist")
             return
 
         self.groups = [g['group'] for g in groups]
@@ -920,7 +923,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
         elif self.mode == 'batch':
             self._process_batch_wordlist(groups, flat_words, match_mode)
         else:
-            print('{"success": False, "error": "No audio loaded. Use load_long or load_batch first."}')
+            self._emit(False, error="No audio loaded. Use load_long or load_batch first.")
 
     def do_apply_textgrid(self, arg):
         """
@@ -929,16 +932,16 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
         """
         args = shlex.split(arg)
         if not args:
-            print('{"success": False, "error": "TextGrid filepath required"}')
+            self._emit(False, error="TextGrid filepath required")
             return
 
         filepath = args[0]
         if not os.path.exists(filepath):
-            print(json.dumps({"success": False, "error": f"File not found: {filepath}"}))
+            self._emit(False, error=f"File not found: {filepath}")
             return
 
         if self.mode != 'long' or not self.long_snd:
-            print('{"success": False, "error": "This command requires active long audio mode. Use load_long first."}')
+            self._emit(False, error="This command requires active long audio mode. Use load_long first.")
             return
 
         try:
@@ -963,7 +966,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                         break
 
             if not words_tier:
-                print('{"success": False, "error": "No IntervalTier found in TextGrid"}')
+                self._emit(False, error="No IntervalTier found in TextGrid")
                 return
 
             tg_intervals = []
@@ -1019,7 +1022,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                     })
 
             if not tg_intervals:
-                print('{"success": False, "error": "No non-empty labeled intervals found in TextGrid"}')
+                self._emit(False, error="No non-empty labeled intervals found in TextGrid")
                 return
 
             self.items.clear()
@@ -1131,7 +1134,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
             self._after_state_change("apply_textgrid")
             self._emit(True, f"TextGrid 已应用：完成 {matched_count}/{len(results)} 项。", processed=matched_count, total=len(results))
         except Exception as e:
-            print(json.dumps({"success": False, "error": str(e)}))
+            self._emit(False, error=str(e))
 
     def do_textgrid_inspect(self, arg):
         """
@@ -1593,7 +1596,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
             self._after_state_change("apply_wordlist")
             self._emit(True, f"长音频已按字表处理，共 {len(flat_words)} 个词/字。", total=len(flat_words))
         except Exception as e:
-            print(json.dumps({"success": False, "error": str(e)}))
+            self._emit(False, error=str(e))
 
     def _process_batch_wordlist(self, groups, flat_words, match_mode):
         tasks = []
@@ -1740,7 +1743,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
         """
         args = shlex.split(arg)
         if len(args) != 3:
-            print('{"success": False, "error": "Requires item_id, start, and end"}')
+            self._emit(False, error="Requires item_id, start, and end")
             return
 
         iid = args[0]
@@ -1748,16 +1751,16 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
             new_s = float(args[1])
             new_e = float(args[2])
         except ValueError:
-            print('{"success": False, "error": "start and end must be floats"}')
+            self._emit(False, error="start and end must be floats")
             return
 
         if iid not in self.items:
-            print(json.dumps({"success": False, "error": f"Item {iid} not found"}))
+            self._emit(False, error=f"Item {iid} not found")
             return
 
         item = self.items[iid]
         if 'snd' not in item or item['snd'] is None:
-            print('{"success": False, "error": "Item has no loaded audio data"}')
+            self._emit(False, error="Item has no loaded audio data")
             return
 
         item['start'] = new_s
@@ -1805,17 +1808,17 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
         """
         args = shlex.split(arg)
         if len(args) < 2:
-            print('{"success": False, "error": "Requires item_id and key=value pairs"}')
+            self._emit(False, error="Requires item_id and key=value pairs")
             return
 
         iid = args[0]
         if iid not in self.items:
-            print(json.dumps({"success": False, "error": f"Item {iid} not found"}))
+            self._emit(False, error=f"Item {iid} not found")
             return
 
         item = self.items[iid]
         if item.get('missing') or not item.get('success', True):
-            print('{"success": False, "error": "Item has no loaded audio data"}')
+            self._emit(False, error="Item has no loaded audio data")
             return
 
         # Initialize defaults if not present
@@ -1836,7 +1839,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                             item[k] = float(v)
                         updated = True
                     except ValueError:
-                        print(json.dumps({"success": False, "error": f"Invalid value for {k}"}))
+                        self._emit(False, error=f"Invalid value for {k}")
                         return
 
         if updated and 'snd' in item and item['snd'] is not None:
@@ -1871,7 +1874,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                 item['preview_f0'] = _calc_preview_f0(preview_times, p_xs, p_freqs)
                 item['has_empty_data'] = any(f == 0.0 for f in item['preview_f0'])
             except Exception as e:
-                print(json.dumps({"success": False, "error": str(e)}))
+                self._emit(False, error=str(e))
                 return
 
         self._after_state_change("modify_params")
@@ -1893,7 +1896,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
         Recalculate bounds and pitches for all items based on current params.
         Usage: recalculate
         """
-        print('{"status": "processing", "message": "Recalculating... this may take a moment."}')
+        self._emit(True, status="processing", message="Recalculating... this may take a moment.")
 
         if self.mode == 'long' and self.long_snd:
             pitch_data = extract_f0(self.long_snd, self.params)
@@ -2018,7 +2021,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                     pass
 
         self._after_state_change("recalculate")
-        print('{"success": True, "message": "重算完成。"}')
+        self._emit(True, message="重算完成。")
 
     def _recompute_pitch_only_all_items(self):
         """
@@ -2178,7 +2181,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
         Example: detect_f0 recommended
         """
         if not self.items:
-            print(json.dumps({"success": False, "error": "No items loaded. Please load audio files first."}))
+            self._emit(False, error="No items loaded. Please load audio files first.")
             return
 
         import os
@@ -2205,7 +2208,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                 except Exception:
                     pass
             if snd is None:
-                print(json.dumps({"success": False, "error": "Active long audio file not loaded or not found"}))
+                self._emit(False, error="Active long audio file not loaded or not found")
                 return
 
             pitch_data = extract_f0(snd, params_temp)
@@ -2231,7 +2234,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                            if not it.get('is_excluded', False)
                            and (it.get('snd') or (it.get('path') and os.path.exists(it['path'])))]
             if not valid_items:
-                print(json.dumps({"success": False, "error": "No valid independent audio files found in project"}))
+                self._emit(False, error="No valid independent audio files found in project")
                 return
 
             for item in valid_items:
@@ -2356,7 +2359,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
         """
         args = shlex.split(arg)
         if len(args) < 2:
-            print('{"success": False, "error": "Requires format and output_file"}')
+            self._emit(False, error="Requires format and output_file")
             return
 
         fmt = args[0]
@@ -2452,7 +2455,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                         try:
                             v = parse_chart_group_rule(v)
                         except ValueError as exc:
-                            print(json.dumps({"success": False, "error": str(exc)}))
+                            self._emit(False, error=str(exc))
                             return
                     params[k] = v
                 else:
@@ -2501,7 +2504,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
             # Check if there are speakers and if they have data
             speakers_to_process = [self.current_speaker] if scope == 'active' else all_speakers
             if not any(len(s.items) > 0 for s in speakers_to_process):
-                print('{"success": False, "error": "No items to export"}')
+                self._emit(False, error="No items to export")
                 return
 
             old_mode = self.params.get('analysis_mode')
@@ -2517,17 +2520,17 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                         if data:
                             out_path = os.path.join(out_file, f"{speaker.name}_{fmt}{ext}")
                             exporter._export_dataset(data, out_path, ext)
-                    print(json.dumps({"success": True, "message": f"Exported {fmt} for multiple speakers separately to {out_file}"}))
+                    self._emit(True, f"Exported {fmt} for multiple speakers separately to {out_file}")
                 else:
                     # active or integrated
                     data = exporter._get_current_data_entries()
                     if not data:
-                        print('{"success": False, "error": "No valid data found for export"}')
+                        self._emit(False, error="No valid data found for export")
                         return
                     exporter._export_dataset(data, out_file, ext)
-                    print(json.dumps({"success": True, "message": f"Exported {fmt} ({scope}) to {out_file}"}))
+                    self._emit(True, f"Exported {fmt} ({scope}) to {out_file}")
             except Exception as e:
-                print(json.dumps({"success": False, "error": str(e)}))
+                self._emit(False, error=str(e))
             finally:
                 if old_mode is not None:
                     self.params['analysis_mode'] = old_mode
@@ -2544,17 +2547,17 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
         speakers_to_process = [self.current_speaker] if target == 'active' else self.speaker_manager.get_all_speakers()
 
         if not any(len(s.items) > 0 for s in speakers_to_process):
-            print('{"success": False, "error": "No items to export"}')
+            self._emit(False, error="No items to export")
             return
 
         try:
             if fmt == 'formant_table':
                 self._export_formant_table(out_file, speakers_to_process)
-                print(json.dumps({"success": True, "message": f"Exported formant_table to {out_file}"}))
+                self._emit(True, f"Exported formant_table to {out_file}")
                 return
             elif fmt == 'formant_space':
                 self._export_vowel_space_chart(out_file, speakers_to_process)
-                print(json.dumps({"success": True, "message": f"Exported formant_space to {out_file}"}))
+                self._emit(True, f"Exported formant_space to {out_file}")
                 return
 
             if target == 'separate':
@@ -2582,13 +2585,13 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                         else:
                             self._export_textgrid(f"{s_out}.TextGrid", s_struct, s)
                     else:
-                        print(f'{{"success": False, "error": "Unknown format: {fmt}"}}')
+                        self._emit(False, error=f"Unknown format: {fmt}")
                         return
-                print(json.dumps({"success": True, "message": f"Exported {fmt} for multiple speakers to {out_file}"}))
+                self._emit(True, f"Exported {fmt} for multiple speakers to {out_file}")
 
             elif target == 'integrated':
                 if fmt not in ('txt', 'xlsx', 'line_chart', 'kde'):
-                    print(f'{{"success": False, "error": "Format {fmt} does not support integrated multi-speaker export"}}')
+                    self._emit(False, error=f"Format {fmt} does not support integrated multi-speaker export")
                     return
                 if fmt == 'txt':
                     self._export_txt_integrated(out_file, speakers_to_process, rule)
@@ -2598,7 +2601,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                     self._export_line_chart_integrated(out_file, speakers_to_process)
                 elif fmt == 'kde':
                     self._export_kde_heatmap_integrated(out_file, speakers_to_process)
-                print(json.dumps({"success": True, "message": f"Exported integrated {fmt} to {out_file}"}))
+                self._emit(True, f"Exported integrated {fmt} to {out_file}")
 
             else: # active
                 s = self.current_speaker
@@ -2618,11 +2621,11 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                 elif fmt == 'textgrid':
                     self._export_textgrid(out_file, structure, s)
                 else:
-                    print(f'{{"success": False, "error": "Unknown format: {fmt}"}}')
+                    self._emit(False, error=f"Unknown format: {fmt}")
                     return
-                print(json.dumps({"success": True, "message": f"Exported to {out_file}"}))
+                self._emit(True, f"Exported to {out_file}")
         except Exception as e:
-            print(json.dumps({"success": False, "error": str(e)}))
+            self._emit(False, error=str(e))
 
     # --- Export Implementation Helpers (Abstracted from GUI) ---
     def _export_merged_wav(self, out_file, structure, rule, speaker=None):
@@ -2968,8 +2971,8 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                 insert_cell=f'A{res_row + 3}',
                 chart_title='各声调平均基频五度标调图（保留真实时长）'
             )
-        except Exception:
-            pass  # CLI 下静默忽略图表错误
+        except Exception as e:
+            logging.getLogger(__name__).warning("Failed to generate five point chart in xlsx export: %s", e)
 
         workbook.close()
 
@@ -3146,7 +3149,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                     all_mean_vals.extend(mean_contour.tolist())
 
         if not all_mean_vals:
-            print('{"success": False, "error": "No valid data to plot"}')
+            self._emit(False, error="No valid data to plot")
             return
 
         min_f0, max_f0 = min(all_mean_vals), max(all_mean_vals)
@@ -3524,8 +3527,8 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                 })
                 chart.set_size({'width': 650, 'height': 450})
                 ws_res.insert_chart(f'A{res_row + 3}', chart)
-            except Exception:
-                pass
+            except Exception as e:
+                logging.getLogger(__name__).warning("Failed to insert integrated xlsx chart: %s", e)
 
         workbook.close()
 
@@ -3778,7 +3781,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
         min_f0, max_f0 = self._calculate_kde_f0_bounds(group_syl_contours)
 
         if min_f0 is None or max_f0 is None:
-            print('{"success": False, "error": "No valid data to plot"}')
+            self._emit(False, error="No valid data to plot")
             return
 
         group_norm_points = self._normalize_kde_points(group_syl_contours, min_f0, max_f0, N_DENSE)
@@ -5166,31 +5169,31 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
         """
         args = shlex.split(arg)
         if not args:
-            print('{"success": False, "error": "Missing argument: on or off"}')
+            self._emit(False, error="Missing argument: on or off")
             return
 
         action = args[0].lower()
         if action == 'on':
             if self.log_file:
-                print('{"success": False, "error": "Logging is already on"}')
+                self._emit(False, error="Logging is already on")
                 return
             filename = args[1] if len(args) > 1 else 'phontracer_session.log'
             try:
                 self.log_file = open(filename, 'a', encoding='utf-8')
                 sys.stdout = LoggerOut(self.original_stdout, self.log_file)
-                print(json.dumps({"success": True, "message": f"Logging enabled to {filename}"}))
+                self._emit(True, f"Logging enabled to {filename}")
             except Exception as e:
-                print(json.dumps({"success": False, "error": str(e)}))
+                self._emit(False, error=str(e))
         elif action == 'off':
             if not self.log_file:
-                print('{"success": False, "error": "Logging is not currently on"}')
+                self._emit(False, error="Logging is not currently on")
                 return
             sys.stdout = self.original_stdout
             self.log_file.close()
             self.log_file = None
-            print(json.dumps({"success": True, "message": "Logging disabled"}))
+            self._emit(True, "Logging disabled")
         else:
-            print('{"success": False, "error": "Invalid argument. Use on or off"}')
+            self._emit(False, error="Invalid argument. Use on or off")
 
     def do_exit(self, arg):
         """Exit the CLI."""
@@ -5209,7 +5212,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
         try:
             import xlsxwriter
         except ImportError:
-            print(json.dumps({"success": False, "error": "Missing xlsxwriter library. Please install via: pip install xlsxwriter"}))
+            self._emit(False, error="Missing xlsxwriter library. Please install via: pip install xlsxwriter")
             return
 
         from modules.data_utils import (
@@ -5514,7 +5517,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                     })
                     
         if not data_points:
-            print(json.dumps({"success": False, "error": "No valid formant data found"}))
+            self._emit(False, error="No valid formant data found")
             return
             
         fig, ax = plt.subplots(figsize=(8, 7), dpi=300)
@@ -5576,7 +5579,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                     flat_items.append(speaker.items[child])
 
         if not flat_items:
-            print('{"success": False, "error": "No valid items to export"}')
+            self._emit(False, error="No valid items to export")
             return
 
         # Simple heuristic: if we have paths, it might be batch mode, but CLI might not have "long audio" vs "batch" mode
@@ -5602,10 +5605,10 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                 tg_path = os.path.join(out_subdir, f"{base_name}.TextGrid")
                 self._write_textgrid(tg_path, items)
 
-            print(f'{{"success": True, "message": "Exported batch TextGrids to {out_subdir}"}}')
+            self._emit(True, message=f"Exported batch TextGrids to {out_subdir}")
         else:
             self._write_textgrid(out_path, flat_items)
-            print(f'{{"success": True, "message": "Exported TextGrid to {out_path}"}}')
+            self._emit(True, message=f"Exported TextGrid to {out_path}")
 
     def _write_textgrid(self, tg_path, items):
         import textgrid

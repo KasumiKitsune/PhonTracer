@@ -3,6 +3,7 @@ import {
   countPlainWordlist,
   normalizeAdvancedWordlist,
   parseCsvWordlist,
+  parseJsonWordlist,
   parsePlainWordlist,
   PLAIN_WORDLIST_AI_PROMPT,
 } from './plainWordlist.js';
@@ -82,5 +83,41 @@ describe('独立模式高级字表解析', () => {
     expect(groups[0].note).toBe('说明');
     expect(groups[0].items[0].aliases).toEqual(['ma1']);
     expect(groups[0].items[0].meta.拼音).toBe('mā');
+  });
+
+  it('JSON 支持 groups 结构、平铺数组与组名字典映射', () => {
+    let nextId = 0;
+    // 1. groups 结构
+    const g1 = parseJsonWordlist(
+      JSON.stringify({ groups: [{ name: '第一组', items: ['苹果', '香蕉'] }] }),
+      () => `json-${nextId++}`
+    );
+    expect(g1[0].name).toBe('第一组');
+    expect(g1[0].items.map(i => i.label)).toEqual(['苹果', '香蕉']);
+
+    // 2. 平铺数组
+    const g2 = parseJsonWordlist(
+      JSON.stringify(['红', '黄', '蓝']),
+      () => `json-${nextId++}`
+    );
+    expect(g2[0].name).toBe('默认组');
+    expect(g2[0].items.map(i => i.label)).toEqual(['红', '黄', '蓝']);
+
+    // 3. 字典分组映射
+    const g3 = parseJsonWordlist(
+      JSON.stringify({ "水果": ["苹果", "西瓜"], "蔬菜": ["白菜"] }),
+      () => `json-${nextId++}`
+    );
+    expect(g3.map(g => g.name)).toEqual(['水果', '蔬菜']);
+    expect(g3[0].items.map(i => i.label)).toEqual(['苹果', '西瓜']);
+    expect(g3[1].items.map(i => i.label)).toEqual(['白菜']);
+
+    // 4. parsePlainWordlist 自动检测并解析 JSON
+    const g4 = parsePlainWordlist(
+      JSON.stringify({ groups: [{ name: '自动JSON组', items: ['测试'] }] }),
+      () => `json-${nextId++}`
+    );
+    expect(g4[0].name).toBe('自动JSON组');
+    expect(g4[0].items[0].label).toBe('测试');
   });
 });

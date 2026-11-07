@@ -1281,6 +1281,7 @@ class PhoneticsApp:
                 def done():
                     item['snd'] = snd
                     item['pitch_data'] = pitch_data
+                    item['_dirty_pitch'] = True
                     if 'pitch' in item:
                         del item['pitch']
                     item['pitch_floor'] = self.last_params['pitch_floor']
@@ -1384,12 +1385,14 @@ class PhoneticsApp:
         from .audio_core import extract_f0, extract_formants
         try:
             item['pitch_data'] = extract_f0(snd, self.last_params)
+            item['_dirty_pitch'] = True
             if 'pitch' in item:
                 del item['pitch']
         except Exception:
             pass
         try:
             item['formant_data'] = extract_formants(snd, self.last_params)
+            item['_dirty_formant'] = True
             self._stamp_formant_params_on_item(item)
         except Exception:
             pass
@@ -2408,6 +2411,7 @@ class PhoneticsApp:
                                     'xs': p_xs_all[idx_s:idx_e].copy(),
                                     'freqs': p_freqs_all[idx_s:idx_e].copy()
                                 }
+                                item['_dirty_pitch'] = True
                                 if 'pitch' in item:
                                     del item['pitch']
                             except Exception: pass
@@ -2479,12 +2483,14 @@ class PhoneticsApp:
                                             target_item['split_warnings'] = res.get('split_warnings', [])
                                             target_item['split_confidence'] = res.get('split_confidence', 1.0)
                                         target_item['pitch_data'] = res['pitch_data']
+                                        target_item['_dirty_pitch'] = True
                                         if 'pitch' in target_item:
                                             del target_item['pitch']
                                         target_item.pop('has_empty_data', None)
                                         target_item['preview_f0'] = res.get('preview_f0', [])
                                         if 'formant_data' in res:
                                             target_item['formant_data'] = res['formant_data']
+                                            target_item['_dirty_formant'] = True
                                             self._stamp_formant_params_on_item(target_item)
                                         if 'preview_formants' in res:
                                             target_item['preview_formants'] = res['preview_formants']
@@ -2506,6 +2512,7 @@ class PhoneticsApp:
                                         target_item['preview_f0'] = res.get('preview_f0', [])
                                         if 'formant_data' in res:
                                             target_item['formant_data'] = res['formant_data']
+                                            target_item['_dirty_formant'] = True
                                             self._stamp_formant_params_on_item(target_item)
                                         if 'preview_formants' in res:
                                             target_item['preview_formants'] = res['preview_formants']
@@ -2582,6 +2589,7 @@ class PhoneticsApp:
                     # 总是为单项重新生成 pitch 确保准确性
                     if not recompute_formant_only:
                         item['pitch_data'] = get_segmented_f0(item['snd'], worker_params)
+                        item['_dirty_pitch'] = True
                         if 'pitch' in item:
                             del item['pitch']
                         item['pitch_floor'] = worker_params['pitch_floor']
@@ -2590,6 +2598,7 @@ class PhoneticsApp:
 
                     # 总是为单项重新生成 formant
                     item['formant_data'] = get_segmented_formant(item['snd'], worker_params)
+                    item['_dirty_formant'] = True
 
                     # 独立音频的宏观边界就是全文
                     item['macro_start'] = 0.0
@@ -2598,9 +2607,11 @@ class PhoneticsApp:
                 # 如果是仅重新计算共振峰且 Sound 对象已存在
                 if recompute_formant_only and item.get('snd'):
                     item['formant_data'] = get_segmented_formant(item['snd'], worker_params)
+                    item['_dirty_formant'] = True
                 # 如果修改了 Pitch Floor/Ceiling 或 Formant 参数，且非仅重算共振峰，重新计算该项
                 elif recompute_pitch and item.get('snd'):
                     item['pitch_data'] = get_segmented_f0(item['snd'], worker_params)
+                    item['_dirty_pitch'] = True
                     if 'pitch' in item:
                         del item['pitch']
                     item['pitch_floor'] = worker_params['pitch_floor']
@@ -2609,6 +2620,7 @@ class PhoneticsApp:
 
                     # 重新生成 formant
                     item['formant_data'] = get_segmented_formant(item['snd'], worker_params)
+                    item['_dirty_formant'] = True
 
                 if item.get('formant_data'):
                     self._stamp_formant_params_on_item(item, worker_params)
@@ -2973,6 +2985,7 @@ class PhoneticsApp:
                 pfreqs = global_pitch_cache['freqs']
                 mask = (pxs >= ms) & (pxs <= me)
                 item['pitch_data'] = {'xs': pxs[mask].copy(), 'freqs': pfreqs[mask].copy()}
+                item['_dirty_pitch'] = True
                 if 'pitch' in item:
                     del item['pitch']
 
@@ -3141,6 +3154,8 @@ class PhoneticsApp:
                         item_pitch_data = {'xs': pitch_xs[p_mask].copy(), 'freqs': pitch_freqs[p_mask].copy()}
                         item_data = {
                             'label': res['word'], 'group': res['group'], 'snd': snd, 'pitch_data': item_pitch_data,
+                            '_dirty_pitch': True,
+                            '_dirty_formant': True if res.get('formant_data') is not None else False,
                             'macro_start': res['ms'], 'macro_end': res['me'],
                             'start': res['mis'], 'end': res['mie'],
                             'inner_splits': res.get('inner_splits', []),
@@ -4158,6 +4173,7 @@ class PhoneticsApp:
                             'xs': pitch_xs[mask].copy(),
                             'freqs': pitch_freqs[mask].copy()
                         }
+                        res['_dirty_pitch'] = True
                         res['pitch'] = global_pitch
                         res['pitch_floor'] = params['pitch_floor']
                         res['pitch_ceiling'] = params['pitch_ceiling']
@@ -5385,6 +5401,7 @@ class PhoneticsApp:
                             formant_data, preview_formants = _sample_formants_helper(snd, mic_s, mic_e, params)
 
                         item['formant_data'] = formant_data
+                        item['_dirty_formant'] = True
                         item['preview_formants'] = preview_formants
 
                         item['formant_max_hz'] = params['formant_max_hz']
@@ -5398,6 +5415,7 @@ class PhoneticsApp:
                             cache_item = self._get_audio_cache(item['path'], params)
                             if cache_item is not None:
                                 cache_item['formant_data'] = formant_data
+                                cache_item['_dirty_formant'] = True
                                 cache_item['preview_formants'] = preview_formants
                                 cache_item['formant_max_hz'] = params['formant_max_hz']
                                 cache_item['formant_count'] = params['formant_count']
