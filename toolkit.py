@@ -3657,14 +3657,15 @@ class ToolkitApp(ctk.CTk):
 
             # 避免同一 SHA256 频繁追加入历史，做唯一性/最后一次覆盖，或直接追加
             script_runs = self.project_data["custom_script_runs"]
-            script_runs.append(run_record)
+            prev_runs = copy.deepcopy(script_runs)
+            from modules.project_patch import _append_or_update_script_run
+            _append_or_update_script_run(script_runs, run_record)
 
             # 自动写回 zip 压缩包
             if self.save_project_data_back_to_teproj():
                 self.append_script_log("本次脚本运行已写入工程记录。\n")
             else:
-                if script_runs and script_runs[-1] is run_record:
-                    script_runs.pop()
+                self.project_data["custom_script_runs"] = prev_runs
                 self.append_script_log("本次脚本运行写入工程记录失败。\n")
 
     def _on_project_patch_complete(self, summary, output_path):

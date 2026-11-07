@@ -717,8 +717,8 @@ def adapt_project_state(state: dict, workspace_dir: str):
                                     shifted_bounds = []
                                     for pair in orig_bounds:
                                         if isinstance(pair, (list, tuple)) and len(pair) >= 2:
-                                            bs = _clamp(float(pair[0]) - slice_start)
-                                            be = _clamp(float(pair[1]) - slice_start)
+                                            bs = _clamp(float(pair[0]) - slice_start, new_start, new_end)
+                                            be = _clamp(float(pair[1]) - slice_start, new_start, new_end)
                                             if be > bs:
                                                 shifted_bounds.append([bs, be])
                                     if shifted_bounds:
@@ -733,8 +733,8 @@ def adapt_project_state(state: dict, workspace_dir: str):
                                 shifted_splits = []
                                 for s in orig_splits:
                                     try:
-                                        sv = _clamp(float(s) - slice_start)
-                                        if 0.0 <= sv <= duration_local:
+                                        sv = _clamp(float(s) - slice_start, new_start, new_end)
+                                        if new_start <= sv <= new_end:
                                             shifted_splits.append(sv)
                                     except (TypeError, ValueError):
                                         pass
@@ -922,16 +922,11 @@ def adapt_project_state(state: dict, workspace_dir: str):
                 item_data["meta"] = canonical_item["meta"]
                 item_data["metadata_source"] = canonical_item["metadata_source"]
                 item_data["group"] = grp_name
-                # PhonRec 使用简洁字段，主程序使用 item_*/group_* 字段；双写保证
-                # .teproj 在两端反复打开和保存后仍保留完整高级字表元数据。
-                item_data["item_note"] = canonical_item["note"]
-                item_data["item_tags"] = list(canonical_item["tags"])
-                item_data["item_aliases"] = list(canonical_item["aliases"])
-                item_data["item_meta"] = dict(canonical_item["meta"])
-                item_data["group_note"] = canonical_item.get("group_note", "")
-                item_data["group_tags"] = list(canonical_item.get("group_tags", []))
-                item_data["group_meta"] = dict(canonical_item.get("group_meta", {}))
-                for dead_k in ("wordlist_version", "wordlist_title", "wordlist_note", "wordlist_tags"):
+                for dead_k in (
+                    "wordlist_version", "wordlist_title", "wordlist_note", "wordlist_tags",
+                    "item_note", "item_tags", "item_aliases", "item_meta",
+                    "group_note", "group_tags", "group_meta"
+                ):
                     item_data.pop(dead_k, None)
 
                 new_items[canonical_id] = item_data
@@ -953,13 +948,6 @@ def adapt_project_state(state: dict, workspace_dir: str):
                     "meta": canonical_item["meta"],
                     "metadata_source": canonical_item["metadata_source"],
                     "group": canonical_item["group_name"],
-                    "item_note": canonical_item["note"],
-                    "item_tags": list(canonical_item["tags"]),
-                    "item_aliases": list(canonical_item["aliases"]),
-                    "item_meta": dict(canonical_item["meta"]),
-                    "group_note": canonical_item.get("group_note", ""),
-                    "group_tags": list(canonical_item.get("group_tags", [])),
-                    "group_meta": dict(canonical_item.get("group_meta", {})),
                 }
                 summary["missing_items"] += 1
 
@@ -995,6 +983,9 @@ def prune_unreferenced_resources(state: dict, workspace_dir: str):
         long_audio = spk_data.get("long_audio_path")
         if long_audio:
             referenced.add(os.path.normpath(resolve_workspace_path(long_audio, workspace_dir)))
+        long_pitch = spk_data.get("long_pitch_data_file")
+        if long_pitch:
+            referenced.add(os.path.normpath(resolve_workspace_path(long_pitch, workspace_dir)))
         for p in spk_data.get("pending_batch_paths", []):
             if p:
                 referenced.add(os.path.normpath(resolve_workspace_path(p, workspace_dir)))

@@ -256,7 +256,7 @@ def _iter_state_resource_paths(state):
     for spk in state.get("speakers", {}).values():
         if not isinstance(spk, dict):
             continue
-        for path in (spk.get("long_audio_path"),):
+        for path in (spk.get("long_audio_path"), spk.get("long_pitch_data_file")):
             if path:
                 yield _normalize_rel_path(path)
         for path in spk.get("pending_batch_paths", []) or []:
@@ -462,11 +462,13 @@ def _apply_recompute_pitch(state, workspace_dir, op, records, long_audio_cache=N
     item["pitch_data_file"] = rel_name
     item["analysis_mode"] = item.get("analysis_mode") or params.get("analysis_mode", "f0")
     item["recomputed_pitch_params"] = copy.deepcopy(params)
+    spk_params = spk.get("last_params", {}) if isinstance(spk, dict) else {}
+    diff_params = {k: v for k, v in params.items() if spk_params.get(k) != v}
     item.setdefault("param_overrides", {})
     if isinstance(item["param_overrides"], dict):
-        item["param_overrides"].update(copy.deepcopy(params))
+        item["param_overrides"].update(diff_params)
     else:
-        item["param_overrides"] = copy.deepcopy(params)
+        item["param_overrides"] = diff_params
     records.append({"op": "recompute_pitch", "label": item.get("label", ""), "resource": rel_name})
 
 
@@ -489,11 +491,13 @@ def _apply_recompute_formant(state, workspace_dir, op, records, long_audio_cache
     item["formant_data_file"] = rel_name
     item["analysis_mode"] = "formant"
     item["recomputed_formant_params"] = copy.deepcopy(params)
+    spk_params = spk.get("last_params", {}) if isinstance(spk, dict) else {}
+    diff_params = {k: v for k, v in params.items() if spk_params.get(k) != v}
     item.setdefault("param_overrides", {})
     if isinstance(item["param_overrides"], dict):
-        item["param_overrides"].update(copy.deepcopy(params))
+        item["param_overrides"].update(diff_params)
     else:
-        item["param_overrides"] = copy.deepcopy(params)
+        item["param_overrides"] = diff_params
     records.append({"op": "recompute_formant", "label": item.get("label", ""), "resource": rel_name})
 
 

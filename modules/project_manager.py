@@ -59,6 +59,7 @@ RUNTIME_EXCLUDED_KEYS = {
     'snd', 'pitch', 'formant',
     'preview_f0', 'preview_formants',
     'warnings', 'has_empty_data', 'preview_segment_mismatch',
+    '_mode_state_f0', '_mode_state_formant',
 }
 
 ACOUSTIC_PARAM_KEYS = {
@@ -517,11 +518,10 @@ class ProjectManager:
         for spk_data in speakers_dict.values():
             for item_id, item in spk_data.get("items", {}).items():
                 g_item = items_by_id.get(item_id)
-                if not g_item:
-                    gname = item.get("group") or item.get("group_name") or "默认组"
-                    label = item.get("label") or item.get("word")
-                    if label:
-                        g_item = items_by_slot.get((gname, label))
+                gname = item.get("group") or item.get("group_name") or "默认组"
+                label = item.get("label") or item.get("word")
+                if not g_item and label:
+                    g_item = items_by_slot.get((gname, label))
                 if g_item:
                     for k in ("note", "tags", "aliases", "meta"):
                         if k in item and item[k]:
@@ -530,8 +530,33 @@ class ProjectManager:
                         g_item["label"] = item["label"]
                         if "word" in g_item:
                             g_item["word"] = item["label"]
+                else:
+                    target_grp = groups_by_name.get(gname)
+                    if not target_grp:
+                        target_grp = {
+                            "id": f"grp_{uuid.uuid4().hex[:8]}",
+                            "name": gname,
+                            "note": "",
+                            "tags": [],
+                            "meta": {},
+                            "items": []
+                        }
+                        groups.append(target_grp)
+                        groups_by_name[gname] = target_grp
+                    new_g_item = {
+                        "id": item_id or f"slot_{len(target_grp.get('items', []))}",
+                        "label": label or "",
+                        "note": copy.deepcopy(item.get("note", "")),
+                        "tags": copy.deepcopy(item.get("tags", [])),
+                        "aliases": copy.deepcopy(item.get("aliases", [])),
+                        "meta": copy.deepcopy(item.get("meta", {}))
+                    }
+                    target_grp.setdefault("items", []).append(new_g_item)
+                    items_by_id[new_g_item["id"]] = new_g_item
+                    if label:
+                        items_by_slot[(gname, label)] = new_g_item
 
-        # Ensure any groups defined on the UI tree are present in groups
+        # Ensure any groups defined on the UI tree are present in groups and preserve UI order
         tree_groups = getattr(self.app, 'tree_panel', None) and getattr(self.app.tree_panel, 'project_groups', None)
         if tree_groups:
             for gname in tree_groups:
@@ -546,6 +571,8 @@ class ProjectManager:
                     }
                     groups.append(new_grp)
                     groups_by_name[gname] = new_grp
+            order_map = {name: i for i, name in enumerate(tree_groups)}
+            groups.sort(key=lambda g: order_map.get(g.get("name") or g.get("group"), 9999))
 
     def _prune_workspace_resources(self, state, workspace_dir):
         patched_state = copy.deepcopy(state)
@@ -1017,7 +1044,12 @@ class ProjectManager:
         from .speaker_manager import SpeakerState
 
         preserved_keys = [k for k in state.keys() if k not in ("speakers", "active_speaker_id", "save_time")]
-        self._preserved_top_level = {k: copy.deepcopy(state[k]) for k in preserved_keys}
+        if not overlay or not getattr(self, "_preserved_top_level", None):
+            self._preserved_top_level = {k: copy.deepcopy(state[k]) for k in preserved_keys}
+        else:
+            for k in preserved_keys:
+                if k not in self._preserved_top_level:
+                    self._preserved_top_level[k] = copy.deepcopy(state[k])
         if self.app:
             self.app._preserved_top_level = self._preserved_top_level
 

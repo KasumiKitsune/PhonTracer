@@ -309,16 +309,25 @@ def test_cli_export_integrated_and_formant_3_sheets():
         spk = MockSpeaker()
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            int_xlsx = os.path.join(tmpdir, "cli_int.xlsx")
-            cli._export_xlsx_integrated(int_xlsx, [spk], rule="continuous")
-            with zipfile.ZipFile(int_xlsx, 'r') as zf:
+            single_xlsx = os.path.join(tmpdir, "cli_single.xlsx")
+            cli._export_xlsx(single_xlsx, [("阴平", ["item1"])], spk)
+            with zipfile.ZipFile(single_xlsx, 'r') as zf:
                 wb_xml = zf.read('xl/workbook.xml').decode('utf-8')
                 assert 'name="数据"' in wb_xml
                 assert 'name="分析结果"' in wb_xml
                 assert 'name="原始基频数据"' in wb_xml
                 shared_strings = zf.read('xl/sharedStrings.xml').decode('utf-8')
                 assert '字1_P1(Hz)' in shared_strings
-                assert '字1_P1均值(Hz)' in shared_strings
+
+            int_xlsx = os.path.join(tmpdir, "cli_int.xlsx")
+            cli._export_xlsx_integrated(int_xlsx, [spk], rule="continuous")
+            with zipfile.ZipFile(int_xlsx, 'r') as zf:
+                wb_xml = zf.read('xl/workbook.xml').decode('utf-8')
+                assert 'name="整合数据(T值)"' in wb_xml
+                assert 'name="分析结果"' in wb_xml
+                assert 'name="原始基频数据"' in wb_xml
+                shared_strings = zf.read('xl/sharedStrings.xml').decode('utf-8')
+                assert '字1_T1' in shared_strings
 
             fmt_xlsx = os.path.join(tmpdir, "cli_formant.xlsx")
             cli._export_formant_table(fmt_xlsx, [spk])

@@ -693,7 +693,7 @@ def write_raw_pitch_sheet(workbook, rows: List[Dict[str, Any]], style_manager=No
         item = entry.get('item') or entry.get('raw_item')
         if not item:
             continue
-        if item.get('start') is None or (not item.get('snd') and not item.get('path')):
+        if item.get('start') is None:
             continue
 
         p_xs, p_freqs = get_pitch_arrays_for_item(item)
@@ -917,9 +917,9 @@ def write_analysis_sheet_with_formulas(workbook, ws_res, group_list, num_points,
 
     res_row = t_data_start + num_groups
 
-    # 统一设置自适应列宽与冻结首行
+    # 统一设置自适应列宽与冻结表头
     autofit_worksheet_columns(ws_res, analysis_headers, extra_padding=4.0, min_width=12.0)
-    ws_res.freeze_panes(1, 0)
+    ws_res.freeze_panes(2, 0)
     return res_row, min_cell_abs, max_cell_abs
 
 
@@ -1035,9 +1035,9 @@ def write_formant_analysis_sheet_with_formulas(
 
     res_row = data_start + len(group_char_pairs)
 
-    # 统一自适应列宽与冻结首行
+    # 统一自适应列宽与冻结表头
     autofit_worksheet_columns(ws_res, headers, extra_padding=4.0, min_width=12.0)
-    ws_res.freeze_panes(1, 0)
+    ws_res.freeze_panes(2, 0)
 
     # ══════════ Chart: 元音空间散点图 ══════════
     if group_char_pairs:

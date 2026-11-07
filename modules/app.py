@@ -1681,6 +1681,14 @@ class PhoneticsApp:
                 else:
                     self.switch_show_f3.deselect()
 
+        if hasattr(self, 'active_speaker') and self.active_speaker:
+            if getattr(self.active_speaker, 'pending_long_snd', None):
+                self.pending_long_snd = self.active_speaker.pending_long_snd
+                self.long_sound = self.pending_long_snd
+                for it in getattr(self, 'items', {}).values():
+                    if it.get('snd') is None and not it.get('path'):
+                        it['snd'] = self.pending_long_snd
+
         if self.pending_long_snd: self.lbl_long_file.configure(text="已加载音频", text_color="#2563EB")
         else: self.lbl_long_file.configure(text="未选择", text_color="#6B7280")
         if self.pending_batch_paths: self.lbl_batch_files.configure(text=f"已选 {len(self.pending_batch_paths)} 个文件", text_color="#2563EB")
@@ -2380,12 +2388,26 @@ class PhoneticsApp:
                         snd = item['snd']
                         snd_id = id(snd)
 
+                        mac_s, mac_e = macro_bounds
+                        valid_ms = max(0, mac_s)
+                        valid_me = min(snd.get_total_duration(), mac_e)
+
                         # 性能优化：按 snd 实例缓存 Pitch，避免长音频模式下被重复计算上千次
                         if recompute_pitch:
                             try:
                                 if snd_id not in recomputed_pitches:
                                     recomputed_pitches[snd_id] = extract_f0(snd, self.last_params)
-                                item['pitch_data'] = recomputed_pitches[snd_id]
+                                full_pitch = recomputed_pitches[snd_id]
+                                p_xs_all = full_pitch['xs']
+                                p_freqs_all = full_pitch['freqs']
+                                win_s = max(0.0, valid_ms - 0.05)
+                                win_e = valid_me + 0.05
+                                idx_s = np.searchsorted(p_xs_all, win_s)
+                                idx_e = np.searchsorted(p_xs_all, win_e)
+                                item['pitch_data'] = {
+                                    'xs': p_xs_all[idx_s:idx_e].copy(),
+                                    'freqs': p_freqs_all[idx_s:idx_e].copy()
+                                }
                                 if 'pitch' in item:
                                     del item['pitch']
                             except Exception: pass
@@ -2394,10 +2416,6 @@ class PhoneticsApp:
                         item['pitch_floor'] = params['pitch_floor']
                         item['pitch_ceiling'] = params['pitch_ceiling']
                         item['voicing_threshold'] = params['voicing_threshold']
-
-                        mac_s, mac_e = macro_bounds
-                        valid_ms = max(0, mac_s)
-                        valid_me = min(snd.get_total_duration(), mac_e)
 
                         if valid_me > valid_ms:
                             part = snd.extract_part(from_time=valid_ms, to_time=valid_me)
@@ -5377,8 +5395,8 @@ class PhoneticsApp:
                         item['show_f3'] = params['show_f3']
 
                         if item.get('path'):
-                            if item['path'] in self.audio_cache:
-                                cache_item = self.audio_cache[item['path']]
+                            cache_item = self._get_audio_cache(item['path'], params)
+                            if cache_item is not None:
                                 cache_item['formant_data'] = formant_data
                                 cache_item['preview_formants'] = preview_formants
                                 cache_item['formant_max_hz'] = params['formant_max_hz']
@@ -5387,6 +5405,7 @@ class PhoneticsApp:
                                 cache_item['formant_pre_emphasis'] = params['formant_pre_emphasis']
                                 cache_item['formant_sample_strategy'] = params['formant_sample_strategy']
                                 cache_item['show_f3'] = params['show_f3']
+                                self._set_audio_cache(item['path'], cache_item, params)
                     except Exception as e:
                         import logging
                         logging.getLogger(__name__).error(f"Error recalculating formant: {e}")

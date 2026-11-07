@@ -3129,6 +3129,7 @@ class ProjectTreePanel:
         row_idx = 1
 
         dict_data = {}
+        data_sample_rows = []
 
         for grp_name, children in tree_structure:
             if not is_continuous: global_idx = 1
@@ -3159,30 +3160,39 @@ class ProjectTreePanel:
                 ws_data.write(row_idx, col, item['label'], style.text_left); col += 1
                 ws_data.write(row_idx, col, round(total_dur, 6), style.duration_fmt); col += 1
 
+                sample_row = [grp_name, global_idx, item['label'], round(total_dur, 6)]
                 for k in range(max_syls):
                     if k < len(syl_data):
                         dur, f0s = syl_data[k]
                         ws_data.write(row_idx, col, round(dur, 6), style.duration_fmt); col += 1
+                        sample_row.append(round(dur, 6))
                         dict_data[grp_name]['syl_dur_sums'][k] += dur
                         dict_data[grp_name]['syl_counts'][k] += 1
                         for i, f0 in enumerate(f0s):
                             if not np.isnan(f0) and f0 > 0:
                                 ws_data.write(row_idx, col, round(f0, 6), style.hz_fmt); col += 1
+                                sample_row.append(round(f0, 6))
                                 dict_data[grp_name]['f0_sums'][k][i] += f0
                                 dict_data[grp_name]['f0_counts'][k][i] += 1
                             else:
                                 ws_data.write(row_idx, col, "", style.text_center); col += 1
+                                sample_row.append("")
                     else:
                         ws_data.write(row_idx, col, "", style.text_center); col += 1
+                        sample_row.append("")
                         for _ in range(num_points):
                             ws_data.write(row_idx, col, "", style.text_center); col += 1
+                            sample_row.append("")
+
+                if len(data_sample_rows) < 100:
+                    data_sample_rows.append(sample_row)
 
                 row_idx += 1
                 global_idx += 1
 
         ws_data.freeze_panes(1, 0)
         ws_data.autofilter(0, 0, max(row_idx - 1, 1), len(headers) - 1)
-        autofit_worksheet_columns(ws_data, headers)
+        autofit_worksheet_columns(ws_data, headers, data_sample_rows)
 
         self._write_raw_pitch_sheet(workbook, raw_pitch_rows, include_speaker=False)
 
@@ -3279,6 +3289,7 @@ class ProjectTreePanel:
 
             group_stats = {}
             raw_pitch_rows = []
+            int_data_sample_rows = []
             row_idx = 1
             for speaker in all_speakers:
                 rows = speaker_rows.get(speaker.id, [])
@@ -3288,20 +3299,32 @@ class ProjectTreePanel:
                 log_max = math.log10(s_max) if s_max > 0 else 0.0
                 log_diff = log_max - log_min if log_max > log_min else 1.0
 
-                global_idx = 1
+                current_group = None
+                group_item_idx = 0
+                global_idx = 0
                 for r in rows:
+                    if r['group'] != current_group:
+                        current_group = r['group']
+                        group_item_idx = 1
+                    else:
+                        group_item_idx += 1
+                    global_idx += 1
+                    display_idx = global_idx if is_continuous else group_item_idx
+
                     raw_pitch_rows.append({
                         'speaker': speaker.name,
                         'group': r['group'],
-                        'index': global_idx,
+                        'index': display_idx,
                         'item': r['raw_item']
                     })
                     ws_data.write(row_idx, 0, speaker.name, style.text_center)
                     ws_data.write(row_idx, 1, r['group'], style.text_center)
-                    ws_data.write(row_idx, 2, global_idx, style.int_fmt)
+                    ws_data.write(row_idx, 2, display_idx, style.int_fmt)
                     ws_data.write(row_idx, 3, r['label'], style.text_left)
                     ws_data.write(row_idx, 4, round(r['total_dur'], 4), style.duration_fmt)
                     col_idx = 5
+
+                    sample_r = [speaker.name, r['group'], display_idx, r['label'], round(r['total_dur'], 4)]
 
                     grp_name = r['group']
                     if grp_name not in group_stats:
@@ -3315,6 +3338,7 @@ class ProjectTreePanel:
 
                     for k, (s_dur, freqs) in enumerate(r['syl_data']):
                         ws_data.write(row_idx, col_idx, round(s_dur, 4), style.duration_fmt)
+                        sample_r.append(round(s_dur, 4))
                         col_idx += 1
                         if k < max_syls:
                             stats['syl_dur_sums'][k] += s_dur
@@ -3323,26 +3347,32 @@ class ProjectTreePanel:
                             if f > 0 and has_valid_range:
                                 t_val = round(((math.log10(f) - log_min) / log_diff) * 5.0, 2)
                                 ws_data.write(row_idx, col_idx, t_val, style.t_val_fmt)
+                                sample_r.append(t_val)
                                 if k < max_syls:
                                     stats['t_sums'][k][i] += t_val
                                     stats['t_counts'][k][i] += 1
                             else:
                                 ws_data.write(row_idx, col_idx, "", style.text_center)
+                                sample_r.append("")
                             col_idx += 1
 
                     fill_count = max_syls - len(r['syl_data'])
                     for _ in range(fill_count):
                         ws_data.write(row_idx, col_idx, "", style.text_center)
+                        sample_r.append("")
                         col_idx += 1
                         for _ in range(num_points):
                             ws_data.write(row_idx, col_idx, "", style.text_center)
+                            sample_r.append("")
                             col_idx += 1
+                    if len(int_data_sample_rows) < 100:
+                        int_data_sample_rows.append(sample_r)
                     global_idx += 1
                     row_idx += 1
 
             ws_data.freeze_panes(1, 0)
             ws_data.autofilter(0, 0, max(row_idx - 1, 1), len(headers) - 1)
-            autofit_worksheet_columns(ws_data, headers)
+            autofit_worksheet_columns(ws_data, headers, int_data_sample_rows)
 
             res_headers = ["组别"]
             for k in range(1, max_syls + 1):
@@ -3352,29 +3382,37 @@ class ProjectTreePanel:
                 ws_res.write(0, col, header, style.header_fmt)
 
             res_row = 1
+            int_res_sample_rows = []
             for grp, st in group_stats.items():
                 ws_res.write(res_row, 0, grp, style.text_center)
                 col = 1
+                sample_res = [grp]
                 for k in range(max_syls):
                     cnt = st['syl_counts'][k]
                     if cnt > 0:
                         avg_dur = st['syl_dur_sums'][k] / cnt
                         ws_res.write(res_row, col, round(avg_dur, 4), style.duration_fmt)
+                        sample_res.append(round(avg_dur, 4))
                     else:
                         ws_res.write(res_row, col, "", style.text_center)
+                        sample_res.append("")
                     col += 1
                     for i in range(num_points):
                         t_cnt = st['t_counts'][k][i]
                         if t_cnt > 0:
                             ws_res.write(res_row, col, round(st['t_sums'][k][i] / t_cnt, 2), style.t_val_fmt)
+                            sample_res.append(round(st['t_sums'][k][i] / t_cnt, 2))
                         else:
                             ws_res.write(res_row, col, "", style.text_center)
+                            sample_res.append("")
                         col += 1
+                if len(int_res_sample_rows) < 100:
+                    int_res_sample_rows.append(sample_res)
                 res_row += 1
 
             ws_res.freeze_panes(1, 0)
             ws_res.autofilter(0, 0, max(res_row - 1, 1), len(res_headers) - 1)
-            autofit_worksheet_columns(ws_res, res_headers)
+            autofit_worksheet_columns(ws_res, res_headers, int_res_sample_rows)
 
             self._write_raw_pitch_sheet(workbook, raw_pitch_rows, include_speaker=True)
 
@@ -3455,9 +3493,18 @@ class ProjectTreePanel:
                     log_max = math.log10(s_max) if s_max > 0 else 0.0
                     log_diff = log_max - log_min if log_max > log_min else 1.0
 
-                    global_idx = 1
+                    current_group = None
+                    group_item_idx = 0
+                    global_idx = 0
                     for r in rows:
-                        line_parts = [speaker.name, r['group'], str(global_idx), r['label'], f"{r['total_dur']:.4f}"]
+                        if r['group'] != current_group:
+                            current_group = r['group']
+                            group_item_idx = 1
+                        else:
+                            group_item_idx += 1
+                        global_idx += 1
+                        display_idx = global_idx if is_continuous else group_item_idx
+                        line_parts = [speaker.name, r['group'], str(display_idx), r['label'], f"{r['total_dur']:.4f}"]
                         for s_dur, freqs in r['syl_data']:
                             line_parts.append(f"{s_dur:.4f}")
                             for f in freqs:
@@ -4562,6 +4609,7 @@ class ProjectTreePanel:
             ws_data.write(0, col, h, style.header_fmt)
 
         data_row = 1
+        formant_sample_rows = []
         group_char_pairs = []  # 有序的 (组别, 音节) 唯一列表 —— 用于分析图表页
         seen_pairs = set()
         raw_formant_entries = []  # 收集原始帧数据入口信息
@@ -4646,19 +4694,32 @@ class ProjectTreePanel:
                             else:
                                 ws_data.write(data_row, 9, round(f2_v, 1), style.hz_fmt)
 
+                            sample_r = [
+                                spk.name, grp_name, global_idx, item.get('label', ''),
+                                idx_syl + 1, char, idx_pt + 1, round(preview_times[flat_start + idx_pt], 6),
+                                round(f1_v, 1) if not np.isnan(f1_v) else "",
+                                round(f2_v, 1) if not np.isnan(f2_v) else ""
+                            ]
+
                             if show_f3:
                                 f3_v = f3_vals[flat_start + idx_pt]
                                 if np.isnan(f3_v):
                                     ws_data.write(data_row, 10, "", style.text_center)
+                                    sample_r.append("")
                                 else:
                                     ws_data.write(data_row, 10, round(f3_v, 1), style.hz_fmt)
+                                    sample_r.append(round(f3_v, 1))
+
+                            if len(formant_sample_rows) < 100:
+                                formant_sample_rows.append(sample_r)
+
                             data_row += 1
 
                     global_idx += 1
 
         ws_data.freeze_panes(1, 0)
         ws_data.autofilter(0, 0, max(data_row - 1, 1), len(data_headers) - 1)
-        autofit_worksheet_columns(ws_data, data_headers)
+        autofit_worksheet_columns(ws_data, data_headers, formant_sample_rows)
 
         # ══════════ Sheet 2: 分析图表（全部通过 Excel 公式引用提取数据表） ══════════
         last_data_row = data_row - 1  # 0-indexed
@@ -4679,6 +4740,7 @@ class ProjectTreePanel:
             ws_raw.write(0, col, h, style.header_fmt)
 
         raw_row = 1
+        raw_sample_rows = []
         for entry in raw_formant_entries:
             item = entry['item']
             f_data = item.get('formant_data')
@@ -4722,11 +4784,20 @@ class ProjectTreePanel:
                         ws_raw.write(raw_row, 11, status, style.text_center)
                     else:
                         ws_raw.write(raw_row, 10, status, style.text_center)
+
+                    if len(raw_sample_rows) < 100:
+                        raw_sample_rows.append([
+                            entry['speaker'], entry['group'], entry['index'], item.get('label', ''),
+                            syl_idx + 1, char, round(t, 6), round(t - c_s, 6),
+                            round(f1, 1) if f1 > 0 else 0.0, round(f2, 1) if f2 > 0 else 0.0,
+                            *( [round(f3, 1) if f3 > 0 else 0.0] if show_f3 else [] ),
+                            status
+                        ])
                     raw_row += 1
 
         ws_raw.freeze_panes(1, 0)
         ws_raw.autofilter(0, 0, max(raw_row - 1, 1), len(raw_headers) - 1)
-        autofit_worksheet_columns(ws_raw, raw_headers)
+        autofit_worksheet_columns(ws_raw, raw_headers, raw_sample_rows)
 
         workbook.close()
 
@@ -4795,8 +4866,8 @@ class ProjectTreePanel:
                                 f1_v = f1_slice[idx_pt]
                                 f2_v = f2_slice[idx_pt]
 
-                                f1_str = "--" if np.isnan(f1_v) else f"{f1_v:.1f}"
-                                f2_str = "--" if np.isnan(f2_v) else f"{f2_v:.1f}"
+                                f1_str = "" if np.isnan(f1_v) else f"{f1_v:.1f}"
+                                f2_str = "" if np.isnan(f2_v) else f"{f2_v:.1f}"
 
                                 line_parts = [
                                     spk.name,
@@ -4812,7 +4883,7 @@ class ProjectTreePanel:
                                 ]
                                 if show_f3:
                                     f3_v = f3_slice[idx_pt]
-                                    f3_str = "--" if np.isnan(f3_v) else f"{f3_v:.1f}"
+                                    f3_str = "" if np.isnan(f3_v) else f"{f3_v:.1f}"
                                     line_parts.append(f3_str)
                                 f.write("\t".join(line_parts) + "\n")
                         global_idx += 1

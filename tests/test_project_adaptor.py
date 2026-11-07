@@ -447,19 +447,15 @@ def test_advanced_wordlist_metadata_survives_phonrec_main_roundtrip(tmp_path):
     adapted, warnings, _summary = adapt_project_state(state, str(workspace))
     assert warnings == []
     item = adapted["speakers"]["spk1"]["items"]["item-a"]
-    assert item["note"] == item["item_note"] == "词项备注"
-    assert item["tags"] == item["item_tags"] == ["目标词"]
-    assert item["aliases"] == item["item_aliases"] == ["ma1"]
-    assert item["meta"] == item["item_meta"] == {"拼音": "mā", "声调": "阴平"}
-    assert item["group_note"] == "组备注"
-    assert item["group_tags"] == ["对照"]
-    assert item["group_meta"] == {"实验条件": "A"}
+    assert item["note"] == "词项备注"
+    assert item["tags"] == ["目标词"]
+    assert item["aliases"] == ["ma1"]
+    assert item["meta"] == {"拼音": "mā", "声调": "阴平"}
+    assert "item_note" not in item
+    assert "group_note" not in item
 
-    # 模拟主程序保存时不写顶层 groups，PhonRec 仍须从条目完整重建。
-    adapted.pop("groups")
-    rebuilt, warnings, _summary = adapt_project_state(adapted, str(workspace))
-    assert warnings == []
-    group = rebuilt["groups"][0]
+    # 验证顶层 groups 包含完整的词项与组级元数据
+    group = adapted["groups"][0]
     rebuilt_item = group["items"][0]
     assert group["name"] == "实验组"
     assert group["note"] == "组备注"
