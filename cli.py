@@ -2,6 +2,7 @@ import cmd
 import shlex
 import sys
 import os
+import re
 import multiprocessing
 
 # Force sys.stdin, sys.stdout, sys.stderr to use UTF-8 encoding to avoid encoding issues (especially on Windows)
@@ -264,9 +265,22 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
                 pass
             self._temp_workspace_dir = None
 
+    @staticmethod
+    def _safe_normalize_cli_line(line: str) -> str:
+        if not isinstance(line, str) or "\\" not in line:
+            return line
+        marker_esc_quote = "__ESCAPED_QUOTE_TOKEN__"
+        marker_unc = "__UNC_PREFIX_TOKEN__"
+        s = line.replace(r'\"', marker_esc_quote)
+        s = re.sub(r'(^|[\s"\'])\\\\(?!\\)', r'\1' + marker_unc, s)
+        s = s.replace('\\', '/')
+        s = s.replace(marker_unc, r'\\')
+        s = s.replace(marker_esc_quote, r'\"')
+        return s
+
     def onecmd(self, line):
         if isinstance(line, str):
-            line = line.replace('\\', '/')
+            line = self._safe_normalize_cli_line(line)
         return super().onecmd(line)
 
     def _emit(self, success=True, message="", **payload):
@@ -363,32 +377,10 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
             self.log_file.flush()
         return line
 
-    def default(self, line):
-        line_stripped = line.strip()
-        if not line_stripped:
-            return
-
-        is_external = False
-
-        # 1. Normalize line: strip PowerShell leading operator '&'
-        test_line = line_stripped
+    def _is_external_command(self, line_text: str) -> bool:
+        test_line = line_text.strip()
         if test_line.startswith('&'):
             test_line = test_line[1:].strip()
-
-        # 2. Extract tokens
-        import os
-        import shlex
-        try:
-            parts = shlex.split(test_line)
-        except Exception:
-            parts = test_line.split()
-
-        normalized_tokens = []
-        for p in parts:
-            p_clean = p.strip().lower().strip('\'"')
-            if p_clean.startswith('.\\') or p_clean.startswith('./'):
-                p_clean = p_clean[2:]
-            normalized_tokens.append(p_clean)
 
         banned_commands = {
             "python", "py", "powershell", "pwsh", "cmd", "bash", "sh",
@@ -396,41 +388,36 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
         }
         banned_suffixes = ('.bat', '.cmd', '.ps1', '.py', '.r', '.js', '.vbs')
 
-        if normalized_tokens:
-            first_token = normalized_tokens[0]
-            # Extract basename in case of paths (e.g. C:\Python312\python.exe)
-            cmd_name = os.path.basename(first_token.replace('\\', '/'))
+        token_sets = []
+        try:
+            token_sets.append(shlex.split(test_line))
+        except Exception:
+            pass
+        token_sets.append(test_line.split())
+
+        for tokens in token_sets:
+            if not tokens:
+                continue
+            first = tokens[0].strip().lower().strip('\'"')
+            if first.startswith('.\\') or first.startswith('./'):
+                first = first[2:]
+            cmd_name = os.path.basename(first.replace('\\', '/'))
             if cmd_name.endswith('.exe'):
                 cmd_name = cmd_name[:-4]
-
             if cmd_name in banned_commands:
-                is_external = True
+                return True
+            for t in tokens:
+                t_clean = t.strip().lower().strip('\'"')
+                if t_clean.endswith(banned_suffixes):
+                    return True
+        return False
 
-            for token in normalized_tokens:
-                if token.endswith(banned_suffixes):
-                    is_external = True
-                    break
+    def default(self, line):
+        line_stripped = line.strip()
+        if not line_stripped:
+            return
 
-        # Double check with simple whitespace splitting to prevent shlex parsing bypasses
-        raw_parts = line_stripped.split()
-        if raw_parts:
-            raw_first = raw_parts[0].strip().lower().strip('\'"')
-            if raw_first.startswith('.\\') or raw_first.startswith('./'):
-                raw_first = raw_first[2:]
-            raw_cmd_name = os.path.basename(raw_first.replace('\\', '/'))
-            if raw_cmd_name.endswith('.exe'):
-                raw_cmd_name = raw_cmd_name[:-4]
-
-            if raw_cmd_name in banned_commands:
-                is_external = True
-
-            for rp in raw_parts:
-                rp_clean = rp.strip().lower().strip('\'"')
-                if rp_clean.endswith(banned_suffixes):
-                    is_external = True
-                    break
-
-        if is_external:
+        if self._is_external_command(line_stripped):
             print(json.dumps({
                 "success": False,
                 "error": f"Unknown CLI command: {line_stripped}",
@@ -4386,6 +4373,16 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                     logs.append(f"图表 {idx} 已保存：{out_path}")
                 except Exception as e:
                     logs.append(f"图表 {idx} 保存失败：{e}")
+
+            try:
+                import matplotlib.pyplot as plt
+                for fig_res in figure_results:
+                    try:
+                        plt.close(fig_res.fig)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
                     
             # Save tables
             for idx, tbl_res in enumerate(table_results, start=1):

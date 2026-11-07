@@ -667,10 +667,7 @@ fn parse_pcm_wav(bytes: &[u8]) -> Result<ParsedWav, String> {
 
 fn quality_rule<'a>(rules: &'a Value, name: &str) -> (bool, &'a str) {
     if let Some(rule) = rules.get(name) {
-        let enabled = rule
-            .get("enabled")
-            .and_then(Value::as_bool)
-            .unwrap_or(true);
+        let enabled = rule.get("enabled").and_then(Value::as_bool).unwrap_or(true);
         let level = rule
             .get("level")
             .and_then(Value::as_str)
@@ -796,7 +793,7 @@ fn analyze_lightweight_quality(samples: &[f32], sample_rate: u32, rules: &Value)
     let frame_count = if samples.is_empty() {
         0
     } else {
-        (samples.len() + frame_size - 1) / frame_size
+        samples.len().div_ceil(frame_size)
     };
 
     let mut frame_rms = Vec::with_capacity(frame_count);
@@ -807,10 +804,7 @@ fn analyze_lightweight_quality(samples: &[f32], sample_rate: u32, rules: &Value)
         if chunk.is_empty() {
             continue;
         }
-        let sq_sum: f64 = chunk
-            .iter()
-            .map(|s| (*s as f64) * (*s as f64))
-            .sum();
+        let sq_sum: f64 = chunk.iter().map(|s| (*s as f64) * (*s as f64)).sum();
         let rms = (sq_sum / chunk.len() as f64).sqrt();
         let db = 20.0 * (rms + 1e-10).log10();
         frame_rms.push(rms);
@@ -819,7 +813,9 @@ fn analyze_lightweight_quality(samples: &[f32], sample_rate: u32, rules: &Value)
         let zcr = if chunk.len() > 1 {
             let mut crossings = 0usize;
             for i in 0..(chunk.len() - 1) {
-                if (chunk[i] >= 0.0 && chunk[i + 1] < 0.0) || (chunk[i] < 0.0 && chunk[i + 1] >= 0.0) {
+                if (chunk[i] >= 0.0 && chunk[i + 1] < 0.0)
+                    || (chunk[i] < 0.0 && chunk[i + 1] >= 0.0)
+                {
                     crossings += 1;
                 }
             }
@@ -845,25 +841,21 @@ fn analyze_lightweight_quality(samples: &[f32], sample_rate: u32, rules: &Value)
 
     let mut is_speech = vec![false; frame_dbs.len()];
     let mut run_start: Option<usize> = None;
-    for i in 0..is_candidate.len() {
-        if is_candidate[i] {
+    for (i, &candidate) in is_candidate.iter().enumerate() {
+        if candidate {
             if run_start.is_none() {
                 run_start = Some(i);
             }
         } else if let Some(start) = run_start {
             if i - start >= 2 {
-                for j in start..i {
-                    is_speech[j] = true;
-                }
+                is_speech[start..i].fill(true);
             }
             run_start = None;
         }
     }
     if let Some(start) = run_start {
         if is_candidate.len() - start >= 2 {
-            for j in start..is_candidate.len() {
-                is_speech[j] = true;
-            }
+            is_speech[start..].fill(true);
         }
     }
 
@@ -890,7 +882,10 @@ fn analyze_lightweight_quality(samples: &[f32], sample_rate: u32, rules: &Value)
         -100.0
     };
 
-    let peak = samples.iter().map(|s| s.abs() as f64).fold(0.0f64, f64::max);
+    let peak = samples
+        .iter()
+        .map(|s| s.abs() as f64)
+        .fold(0.0f64, f64::max);
     let peak_dbfs = 20.0 * (peak + 1e-10).log10();
 
     let clipped_count = samples.iter().filter(|s| s.abs() >= 0.99).count();
@@ -1815,10 +1810,13 @@ fn write_standalone_project_archive(workspace: &Path, destination: &Path) -> Res
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent).map_err(|error| format!("创建归档目录失败：{error}"))?;
     }
-    let file = fs::File::create(destination).map_err(|error| format!("创建工程归档文件失败：{error}"))?;
+    let file =
+        fs::File::create(destination).map_err(|error| format!("创建工程归档文件失败：{error}"))?;
     let mut writer = zip::ZipWriter::new(file);
     add_archive_directory(&mut writer, workspace, workspace)?;
-    writer.finish().map_err(|error| format!("完成工程归档失败：{error}"))?;
+    writer
+        .finish()
+        .map_err(|error| format!("完成工程归档失败：{error}"))?;
     Ok(())
 }
 
@@ -1858,6 +1856,8 @@ fn discover_phontracer(_app: &AppHandle) -> Result<(PathBuf, Vec<String>), Strin
                 current_dir.join("../../PhonTracer.exe"),
                 current_dir.join("../../../PhonTracer.exe"),
                 #[cfg(target_os = "macos")]
+                current_dir.join("../../../PhonTracer.app/Contents/MacOS/PhonTracer"),
+                #[cfg(target_os = "macos")]
                 PathBuf::from("/Applications/PhonTracer.app/Contents/MacOS/PhonTracer"),
             ];
             for candidate in candidates {
@@ -1880,7 +1880,10 @@ fn discover_phontracer(_app: &AppHandle) -> Result<(PathBuf, Vec<String>), Strin
                             PathBuf::from("python3"),
                         ];
                         for py in python_candidates {
-                            if py.is_file() || py == Path::new("python") || py == Path::new("python3") {
+                            if py.is_file()
+                                || py == Path::new("python")
+                                || py == Path::new("python3")
+                            {
                                 return Ok((py, vec![main_py.to_string_lossy().to_string()]));
                             }
                         }
@@ -1946,7 +1949,8 @@ fn open_in_phontracer(
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x08000000);
     }
-    cmd.spawn().map_err(|e| format!("启动 PhonTracer 失败：{e}"))?;
+    cmd.spawn()
+        .map_err(|e| format!("启动 PhonTracer 失败：{e}"))?;
 
     Ok(json!({
         "status": "success",
@@ -3451,7 +3455,8 @@ mod tests {
             channels: 1,
             samples: severe_samples,
         };
-        let severe_result = analyze_lightweight_quality(&severe.samples, severe.sample_rate, &rules);
+        let severe_result =
+            analyze_lightweight_quality(&severe.samples, severe.sample_rate, &rules);
         assert_eq!(severe_result["decision"], "retry");
         assert!(severe_result["issues"]
             .as_array()
@@ -3468,7 +3473,8 @@ mod tests {
             "creak": {"enabled": true, "level": "medium"},
             "dc_offset": {"enabled": true, "level": "medium"}
         });
-        let full_result = analyze_lightweight_quality(&quiet.samples, quiet.sample_rate, &all_rules);
+        let full_result =
+            analyze_lightweight_quality(&quiet.samples, quiet.sample_rate, &all_rules);
         assert_eq!(full_result["creak"]["status"], "pass");
         assert_ne!(full_result["speech"]["label"], "完整模式可用");
         assert_ne!(full_result["creak"]["label"], "完整模式可用");

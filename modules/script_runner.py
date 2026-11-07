@@ -101,13 +101,6 @@ def check_script_safety(code):
         "open",
         "vars",
     }
-    forbidden_expensive_calls = {
-        "gaussian_kde": (
-            "第一版脚本运行器暂不允许调用 scipy.stats.gaussian_kde。"
-            "该函数在数据点或网格较多时很容易长时间占用后台 Python 线程，"
-            "请改用散点图、分箱均值曲线、hexbin/hist2d，或先将每组数据降采样到很小规模。"
-        ),
-    }
     forbidden_output_calls = {
         "dump",
         "imsave",
@@ -154,8 +147,6 @@ def check_script_safety(code):
                 raise ValueError(f"安全检查拦截：禁止在第一版脚本中调用系统函数 '{short_name}'")
             if short_name in forbidden_output_calls:
                 raise ValueError(f"安全检查拦截：禁止在脚本中直接调用输出/写入函数 '{short_name}'；请通过 ctx.figure(...) 或 ctx.table(...) 返回结果。")
-            if short_name in forbidden_expensive_calls:
-                raise ValueError(f"安全检查拦截：{forbidden_expensive_calls[short_name]}")
 
 
 def run_custom_script(code, dataset_items, timeout=30, cancel_event=None, teproj_path=None):

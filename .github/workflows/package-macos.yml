@@ -40,12 +40,27 @@ jobs:
       run: |
         pyinstaller --noconfirm --clean PhonTracer_Suite.spec
 
+    - name: 配置 Node.js
+      uses: actions/setup-node@v6
+      with:
+        node-version: '22'
+        cache: npm
+        cache-dependency-path: PhonRec/frontend/package-lock.json
+
+    - name: 构建 PhonRec.app
+      working-directory: PhonRec/frontend
+      run: |
+        rustup target add aarch64-apple-darwin
+        npm ci
+        npm run tauri:build -- --target aarch64-apple-darwin --bundles app
+
     - name: 创建 macOS 磁盘映像
       run: |
         cd dist
         mkdir -p PhonTracer_Suite
         mv PhonTracer.app PhonTracer_Suite/
         mv Toolkit.app PhonTracer_Suite/
+        cp -R ../PhonRec/frontend/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/PhonRec.app PhonTracer_Suite/
         for attempt in 1 2 3; do
           hdiutil detach "/Volumes/PhonTracer_Suite" -force 2>/dev/null || true
           rm -f PhonTracer_Suite-macOS.dmg

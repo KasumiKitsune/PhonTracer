@@ -197,7 +197,7 @@ def _fit_vad_segments_to_expected_count(segs: List[List[float]], expected_count:
     return fitted
 
 
-def macroscopic_vad(snd: parselmouth.Sound, expected_count: int = None) -> List[List[float]]:
+def macroscopic_vad(snd: parselmouth.Sound, expected_count: int = None, min_dur: float = VAD_MIN_DURATION, merge_thresh: float = VAD_CLEAR_GAP_THRESHOLD) -> List[List[float]]:
     """长音频宏观静音检测分割，可按字表数量择优保留停顿。"""
     intensity = snd.to_intensity(time_step=VAD_TIME_STEP)
     vals = intensity.values[0]
@@ -229,8 +229,8 @@ def macroscopic_vad(snd: parselmouth.Sound, expected_count: int = None) -> List[
         merged = _fit_vad_segments_to_expected_count(usable_segs, expected_count)
     else:
         # 明显静音应当保留为段落边界；更短的停顿仍视为词内波动。
-        merged = _merge_vad_segments(usable_segs, VAD_CLEAR_GAP_THRESHOLD)
-    return [s for s in merged if s[1] - s[0] > VAD_MIN_DURATION]
+        merged = _merge_vad_segments(usable_segs, merge_thresh)
+    return [s for s in merged if s[1] - s[0] > min_dur]
 
 
 def core_microscopic_vowel_nucleus(snd: parselmouth.Sound, global_pitch_or_arrays: Union[parselmouth.Pitch, Tuple[np.ndarray, np.ndarray], Dict[str, Any]], t_min: float, t_max: float, drop_db: float, skip_front: float, trim_silence: bool) -> Tuple[float, float, float, float]:

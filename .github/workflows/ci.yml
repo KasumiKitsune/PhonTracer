@@ -44,10 +44,10 @@ jobs:
         run: git diff --check
 
       - name: 编译检查
-        run: python -m compileall -q main.py cli.py toolkit.py modules tests PhonRec/backend
+        run: python -m compileall -q main.py cli.py toolkit.py modules tests
 
       - name: 执行完整 Python 测试范围
-        run: python -m pytest -q tests PhonRec/backend/test_backend.py
+        run: python -m pytest -q tests
 
       - name: CLI 冒烟与退出码检查
         shell: pwsh

@@ -9,7 +9,7 @@ from .ui_widgets import CTkReleaseButton
 from .data_utils import split_into_syllables
 
 class VisualSplitter(ctk.CTkToplevel):
-    def __init__(self, master, snd, icons, callback, existing_items=None, vad_segments=None, word_items=None):
+    def __init__(self, master, snd, icons=None, callback=None, existing_items=None, vad_segments=None, word_items=None, **kwargs):
         super().__init__(master)
         self.title("PhonTracer语音学标注与声学分析系统 V1.0 - 段落编辑器")
         
@@ -24,8 +24,9 @@ class VisualSplitter(ctk.CTkToplevel):
         self.attributes('-topmost', True)
         
         self.snd = snd
-        self.icons = icons
+        self.icons = icons or {}
         self.callback = callback
+        self.wordlist = kwargs.get('wordlist', []) or []
         
         # 三种模式：
         # 'edit'   - 已有字表匹配结果，微调边界
@@ -67,9 +68,7 @@ class VisualSplitter(ctk.CTkToplevel):
         
         self.setup_ui()
         self.init_data()
-        
-        if self.mode == 'edit':
-            self.update_dynamic_labels()
+        self.update_dynamic_labels()
             
         # 延迟一下等待窗口布局完成后计算自适应缩放
         self.after(100, self.auto_fit_scale)
@@ -239,14 +238,27 @@ class VisualSplitter(ctk.CTkToplevel):
         self.render_canvas()
 
     def update_dynamic_labels(self):
-        if self.mode != 'edit': return
         word_idx = 0
         for i, seg in enumerate(self.segments):
             if i in self.deleted_indices:
                 seg['dyn_label'] = "已剔除"
                 seg['dyn_id'] = None
             else:
-                if word_idx < len(self.original_words):
+                if self.wordlist and word_idx < len(self.wordlist):
+                    dyn_lbl = self.wordlist[word_idx]
+                    seg['dyn_label'] = dyn_lbl
+                    seg['dyn_id'] = word_idx
+                    syls = split_into_syllables(dyn_lbl)
+                    if len(syls) > 1:
+                        target_splits = len(syls) - 1
+                        splits = seg.get('inner_splits', [])
+                        if len(splits) != target_splits:
+                            dur = seg['end'] - seg['start']
+                            seg['inner_splits'] = [seg['start'] + dur * j / len(syls) for j in range(1, len(syls))]
+                    else:
+                        seg['inner_splits'] = []
+                    word_idx += 1
+                elif hasattr(self, 'original_words') and word_idx < len(self.original_words):
                     dyn_lbl = self.original_words[word_idx]['label']
                     seg['dyn_label'] = dyn_lbl
                     seg['dyn_id'] = self.original_words[word_idx]['id']
@@ -264,9 +276,10 @@ class VisualSplitter(ctk.CTkToplevel):
                         
                     word_idx += 1
                 else:
-                    seg['dyn_label'] = "【未分配段】"
+                    seg['dyn_label'] = f"#{word_idx + 1}" if self.mode == 'review' else "【未分配段】"
                     seg['dyn_id'] = None
                     seg['inner_splits'] = []
+                    word_idx += 1
 
     def render_canvas(self):
         self.canvas_width = int(self.duration * self.px_per_sec)

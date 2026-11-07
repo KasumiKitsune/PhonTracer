@@ -16,6 +16,20 @@ MAX_PROJECT_JSON_BYTES = 20 * 1024 * 1024
 SUPPORTED_PROJECT_VERSIONS = {"1.0"}
 
 
+def to_list(val):
+    if isinstance(val, list):
+        return val
+    if isinstance(val, str):
+        return [t.strip() for t in val.split(",") if t.strip()]
+    return []
+
+
+def to_dict(val):
+    if isinstance(val, dict):
+        return val
+    return {}
+
+
 def safe_resource_token(value, fallback, max_length=96):
     """把工程内 ID 转成跨平台安全的资源文件名片段，但不改动逻辑 ID。"""
     raw = str(value or "").strip()
@@ -400,18 +414,6 @@ def adapt_project_state(state: dict, workspace_dir: str):
                 occ_counts[key] = occ + 1
                 slot = (grp_name, word_label, occ)
                 spk_slots.append(slot)
-
-                def to_list(val):
-                    if isinstance(val, list):
-                        return val
-                    if isinstance(val, str):
-                        return [t.strip() for t in val.split(",") if t.strip()]
-                    return []
-
-                def to_dict(val):
-                    if isinstance(val, dict):
-                        return val
-                    return {}
 
                 if slot not in slot_to_canonical:
                     global_slots.append(slot)

@@ -11,7 +11,9 @@ import customtkinter as ctk
 import encodings.cp437
 import gc
 import queue
-from modules.audio_core import trim_bounds_by_amplitude
+from modules.audio_core import trim_bounds_by_amplitude, macroscopic_vad, SILENCE_AMPLITUDE_THRESHOLD
+from modules.ui_widgets import CTkReleaseButton
+from modules.visual_splitter import VisualSplitter
 
 SCRIPT_EDITOR_DEFAULT_NAME = "新建自定义脚本"
 SCRIPT_EDITOR_DEFAULT_DESC = "自定义分析说明"
@@ -267,101 +269,9 @@ class CTkScriptList(ctk.CTkScrollableFrame):
             super().bind(event_name, callback, add)
 
 
-class CTkReleaseButton(ctk.CTkButton):
-    """
-    自定义按钮类，将 command 触发时机从“按下”改为“松开且在按钮范围内”。
-    避免误触并提升交互手感。
-    """
-    def __init__(self, master=None, **kwargs):
-        self._release_command = kwargs.pop("command", None)
-        super().__init__(master, **kwargs)
-        self._is_pressed = False
-        if self._release_command:
-            widgets = [self]
-            for attr in ("_canvas", "_text_label", "_image_label"):
-                if hasattr(self, attr):
-                    w = getattr(self, attr)
-                    if w:
-                        widgets.append(w)
-            for w in widgets:
-                w.bind("<ButtonPress-1>", self._on_press, add="+")
-                w.bind("<ButtonRelease-1>", self._on_release, add="+")
-
-    def _on_press(self, event):
-        if self.cget("state") == "disabled":
-            return
-        self._is_pressed = True
-
-    def _on_release(self, event):
-        if not getattr(self, "_is_pressed", False):
-            return
-        self._is_pressed = False
-
-        if self.cget("state") == "disabled":
-            return
-        x, y = self.winfo_pointerxy()
-        btn_x = self.winfo_rootx()
-        btn_y = self.winfo_rooty()
-        btn_w = self.winfo_width()
-        btn_h = self.winfo_height()
-
-        if btn_x <= x <= btn_x + btn_w and btn_y <= y <= btn_y + btn_h:
-            if self._release_command:
-                self._release_command()
-
 # ==========================================
-# 核心音频处理算法
+# 核心音频处理辅助
 # ==========================================
-
-def _fit_vad_segments_to_expected_count(segs, expected_count):
-    """按停顿长度保留最可信的边界，使切分段数量尽量贴合字表。"""
-    expected_count = max(1, int(expected_count))
-    fitted = [list(seg) for seg in segs]
-    while len(fitted) > expected_count:
-        merge_idx = min(
-            range(len(fitted) - 1),
-            key=lambda idx: fitted[idx + 1][0] - fitted[idx][1]
-        )
-        fitted[merge_idx][1] = fitted[merge_idx + 1][1]
-        fitted.pop(merge_idx + 1)
-    return fitted
-
-
-def macroscopic_vad(snd: parselmouth.Sound, min_dur=0.1, merge_thresh=0.12, expected_count=None):
-    """VAD 静音检测：用于拆分音频时自动识别有效发音段"""
-    intensity = snd.to_intensity(time_step=0.01)
-    vals = intensity.values[0]
-    xs = intensity.xs()
-    sorted_vals = np.sort(vals[~np.isnan(vals)])
-
-    if len(sorted_vals) > 20:
-        max_int = np.mean(sorted_vals[-int(len(sorted_vals)*0.05):])
-        noise_floor = np.mean(sorted_vals[:int(len(sorted_vals)*0.1)])
-        thresh = max(noise_floor + 15, max_int - 25)
-    else:
-        thresh = 50.0
-
-    is_sp = vals > thresh
-    starts_idx = np.where(np.diff(is_sp.astype(int), prepend=0) == 1)[0]
-    ends_idx = np.where(np.diff(is_sp.astype(int), append=0) == -1)[0]
-
-    segs = []
-    for s_idx, e_idx in zip(starts_idx, ends_idx):
-        if s_idx < len(xs) and e_idx < len(xs):
-            segs.append([xs[s_idx], xs[e_idx]])
-
-    usable_segs = [s for s in segs if s[1] - s[0] > 0.02]
-    if expected_count:
-        merged = _fit_vad_segments_to_expected_count(usable_segs, expected_count)
-    else:
-        merged = []
-        for s in usable_segs:
-            if not merged or s[0] - merged[-1][1] >= merge_thresh:
-                merged.append(s)
-            else:
-                merged[-1][1] = s[1]
-
-    return [s for s in merged if s[1]-s[0] > min_dur]
 
 def parse_wordlist(raw_text: str):
     """解析字表，兼容主程序的【组别】格式"""
@@ -375,504 +285,6 @@ def parse_wordlist(raw_text: str):
         words = [w.strip() for w in re.split(r'[,\s\t，、]+', line) if w.strip()]
         flat_words.extend(words)
     return flat_words
-
-# ==========================================
-# 可视化段落编辑器 (直接移植自主程序)
-# ==========================================
-
-class VisualSplitter(ctk.CTkToplevel):
-    def __init__(self, master, snd, icons, callback, existing_items=None, vad_segments=None, **kwargs):
-        super().__init__(master)
-        self.title("PhonTracer语音学标注与声学分析系统 V1.0 - 段落编辑器")
-
-        w, h = 950, 550
-        sw = self.winfo_screenwidth()
-        sh = self.winfo_screenheight()
-        x = (sw - w) // 2
-        y = (sh - h) // 2
-        self.geometry(f"{w}x{h}+{x}+{y}")
-        self.attributes('-topmost', True)
-
-        self.snd = snd
-        self.icons = icons
-        self.callback = callback
-
-        # 确保文字为白色
-        self.btn_kwargs = {"text_color": "white", "corner_radius": 20, "height": 36, "font": ("Microsoft YaHei", 13, "bold")}
-
-        if existing_items:
-            self.mode = 'edit'
-            self.segments = []
-            for source_seg in existing_items:
-                seg = dict(source_seg)
-                seg['inner_splits'] = list(source_seg.get('inner_splits', []))
-                self.segments.append(seg)
-            for i, seg in enumerate(self.segments):
-                seg['orig_start'] = seg['start']
-                seg['orig_end'] = seg['end']
-                seg['orig_inner_splits'] = list(seg.get('inner_splits', []))
-            self.original_words = [{'id': s['id'], 'label': s['label']} for s in existing_items if s.get('id') is not None]
-        elif vad_segments:
-            self.mode = 'review'
-            self.segments = [{'start': s, 'end': e, 'label': f'#{i+1}'} for i, (s, e) in enumerate(vad_segments)]
-        else:
-            self.mode = 'cut'
-            self.segments = []
-
-        self.cuts = []
-        self.deleted_indices = set()
-        self.px_per_sec = 100
-        self.duration = self.snd.get_total_duration()
-        self.dragging = None
-        self.play_rects = []
-        self.delete_rects = []
-        self.wordlist = kwargs.get('wordlist', [])
-
-        self.setup_ui()
-        self.init_data()
-        self.update_dynamic_labels()
-        self.after(100, self.auto_fit_scale)
-
-    def auto_fit_scale(self):
-        cw = self.canvas.winfo_width()
-        if cw > 100:
-            fit_scale = cw / self.duration
-            min_px_per_sec = 20
-            if self.segments:
-                total_seg_time = sum([s['end'] - s['start'] for s in self.segments])
-                avg_seg_dur = total_seg_time / len(self.segments) if len(self.segments) > 0 else 0.5
-                if avg_seg_dur < 0.1: avg_seg_dur = 0.1
-                min_px_per_sec = 100 / avg_seg_dur
-            self.px_per_sec = max(min_px_per_sec, fit_scale)
-            self.px_per_sec = round(self.px_per_sec / 25) * 25
-            self.px_per_sec = max(25, min(2000, self.px_per_sec))
-            self.zoom_slider.set(self.px_per_sec)
-            self.update_zoom_label()
-        self.render_canvas()
-
-    def update_zoom_label(self):
-        if hasattr(self, 'lbl_zoom'):
-            self.lbl_zoom.configure(text=f"缩放: {int(self.px_per_sec)}")
-
-    def setup_ui(self):
-        self.configure(fg_color="#F9FAFB")
-        info_frame = ctk.CTkFrame(self, height=45, fg_color="#F3F4F6", corner_radius=0)
-        info_frame.pack(side=tk.TOP, fill=tk.X)
-
-        if self.mode == 'cut': msg = "操作说明：【左键】添加切分线，【右键】删除最近线，【滚轮】滚动，【Ctrl+滚轮】缩放波形。"
-        elif self.mode == 'review': msg = "VAD 自动检测完成。【右键】删除噪声段，点击标签【试听】，拖拽红线【微调边界】。"
-        else: msg = "【右键】删除错误段。拖动【红线】微调边界。完成后点击右下角确认。"
-
-        ctk.CTkLabel(info_frame, text=msg, font=("Microsoft YaHei", 13), text_color="#1F2937").pack(side=tk.LEFT, padx=20, pady=10)
-
-        bottom_frame = ctk.CTkFrame(self, height=70, fg_color="white", corner_radius=0)
-        bottom_frame.pack(side=tk.BOTTOM, fill=tk.X)
-
-        if self.mode == 'cut':
-            CTkReleaseButton(bottom_frame, text=" 清空所有点", image=self.icons.get("warning"), compound="left", fg_color="#EF4444", hover_color="#DC2626", text_color="white", corner_radius=20, height=36, command=self.clear_cuts).pack(side=tk.LEFT, padx=20, pady=15)
-            self.lbl_count = ctk.CTkLabel(bottom_frame, text="当前切分点：0", font=("Microsoft YaHei", 13, "bold"), text_color="#4B5563")
-            self.lbl_count.pack(side=tk.RIGHT, padx=20)
-
-        if self.mode in ('review', 'edit'):
-            self.lbl_count = ctk.CTkLabel(bottom_frame, text="", font=("Microsoft YaHei", 13, "bold"), text_color="#4B5563")
-            self.lbl_count.pack(side=tk.RIGHT, padx=20)
-            self.update_review_count()
-
-        CTkReleaseButton(bottom_frame, text=" 确认并应用", image=self.icons.get("check"), compound="left", text_color="white", fg_color="#10B981", hover_color="#059669", corner_radius=20, height=40, width=120, command=self.confirm).pack(side=tk.RIGHT, padx=20, pady=15)
-
-        zoom_frame = ctk.CTkFrame(bottom_frame, fg_color="transparent")
-        zoom_frame.pack(side=tk.LEFT, padx=30, pady=15)
-        self.lbl_zoom = ctk.CTkLabel(zoom_frame, text=f"缩放: {int(self.px_per_sec)}", font=("Microsoft YaHei", 13), text_color="#4B5563")
-        self.lbl_zoom.pack(side=tk.LEFT, padx=5)
-        self.zoom_slider = ctk.CTkSlider(zoom_frame, from_=25, to=2000, number_of_steps=79, command=self.on_zoom_change, button_color="#3B82F6", progress_color="#93C5FD")
-        self.zoom_slider.set(self.px_per_sec)
-        self.zoom_slider.pack(side=tk.LEFT)
-
-        self.main_frame = ctk.CTkFrame(self, fg_color="white", corner_radius=12, border_width=1, border_color="#E5E7EB")
-        self.main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=(20, 10))
-
-        self.canvas = tk.Canvas(self.main_frame, bg="white", highlightthickness=0)
-        self.scrollbar = ttk.Scrollbar(self.main_frame, orient="horizontal", command=self.canvas.xview)
-        self.canvas.configure(xscrollcommand=self.scrollbar.set)
-
-        self.scrollbar.pack(side=tk.BOTTOM, fill=tk.X, padx=2, pady=2)
-        self.canvas.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=2, pady=2)
-
-        self.canvas.bind("<Button-1>", self.on_click)
-        self.canvas.bind("<B1-Motion>", self.on_motion)
-        self.canvas.bind("<ButtonRelease-1>", self.on_release)
-        self.canvas.bind("<Motion>", self.on_hover)
-        if self.mode in ('cut', 'review', 'edit'):
-            self.canvas.bind("<Button-3>", self.on_right_click)
-            self.canvas.bind("<Button-2>", self.on_right_click)
-
-        self.canvas.bind("<MouseWheel>", self.on_mousewheel)
-        self.canvas.bind("<Control-MouseWheel>", self.on_ctrl_mousewheel)
-        if platform.system() == 'Darwin':
-            self.canvas.bind("<Command-MouseWheel>", self.on_ctrl_mousewheel)
-        self.canvas.bind("<Configure>", lambda e: self.render_canvas())
-
-    def init_data(self):
-        full_values = self.snd.values[0]
-        target_sr = 2000
-        step = max(1, int(self.snd.sampling_frequency / target_sr))
-        self.envelope_data = full_values[::step]
-
-    def on_zoom_change(self, val):
-        old_zoom = self.px_per_sec
-        new_zoom = round(float(val) / 25) * 25
-        if new_zoom == old_zoom:
-            return
-
-        # 1. 计算当前视口中心的时间点
-        viewport_width = self.canvas.winfo_width()
-        center_canvas_x = self.canvas.canvasx(0) + viewport_width / 2
-        time_at_center = center_canvas_x / old_zoom
-
-        # 2. 存储缩放中心目标：保持 time_at_center 在屏幕中心位置不变
-        self.zoom_target = {
-            'time': time_at_center,
-            'widget_x': viewport_width / 2
-        }
-
-        self.px_per_sec = new_zoom
-        self.update_zoom_label()
-        if hasattr(self, '_zoom_timer'):
-            self.after_cancel(self._zoom_timer)
-        self._zoom_timer = self.after(50, self.render_canvas)
-
-    def on_mousewheel(self, event):
-        delta = event.delta if platform.system() == 'Darwin' else event.delta / 120
-        self.canvas.xview_scroll(int(-1 * delta), "units")
-
-    def on_ctrl_mousewheel(self, event):
-        delta = event.delta if platform.system() == 'Darwin' else event.delta / 120
-        old_zoom = self.px_per_sec
-        new_zoom = old_zoom * (1.2 if delta > 0 else 0.8)
-        new_zoom = max(25, min(2000, round(new_zoom / 25) * 25))
-        if new_zoom == old_zoom:
-            return
-
-        # 1. 计算当前鼠标指针所在的时间点
-        canvas_x = self.canvas.canvasx(event.x)
-        time_at_mouse = canvas_x / old_zoom
-
-        # 2. 存储缩放中心目标：保持 time_at_mouse 在 event.x 位置不变
-        self.zoom_target = {
-            'time': time_at_mouse,
-            'widget_x': event.x
-        }
-
-        self.px_per_sec = new_zoom
-        self.zoom_slider.set(new_zoom)
-        self.update_zoom_label()
-        self.render_canvas()
-
-    def update_dynamic_labels(self):
-        # 统一处理动态标签显示
-        word_idx = 0
-        for i, seg in enumerate(self.segments):
-            if i in self.deleted_indices:
-                seg['dyn_label'] = "已剔除"
-                seg['dyn_id'] = None
-            else:
-                # 优先匹配传入的字表 (wordlist)
-                if self.wordlist and word_idx < len(self.wordlist):
-                    dyn_lbl = self.wordlist[word_idx]
-                    seg['dyn_label'] = dyn_lbl
-                    seg['dyn_id'] = word_idx
-                    word_idx += 1
-                # 如果是编辑模式且有原始词汇信息
-                elif hasattr(self, 'original_words') and word_idx < len(self.original_words):
-                    dyn_lbl = self.original_words[word_idx]['label']
-                    seg['dyn_label'] = dyn_lbl
-                    seg['dyn_id'] = self.original_words[word_idx]['id']
-                    word_idx += 1
-                else:
-                    seg['dyn_label'] = f"#{word_idx + 1}" if self.mode == 'review' else "【未分配段】"
-                    seg['dyn_id'] = None
-                    word_idx += 1
-
-    def render_canvas(self):
-        self.canvas_width = int(self.duration * self.px_per_sec)
-        self.canvas_height = self.canvas.winfo_height()
-        if self.canvas_height < 100: self.canvas_height = 400
-
-        self.canvas.delete("all")
-        self.canvas.config(scrollregion=(0, 0, self.canvas_width, self.canvas_height))
-
-        # 绘制片段背景
-        if self.mode in ('edit', 'review'):
-            for i, seg in enumerate(self.segments):
-                x1 = seg['start'] * self.px_per_sec
-                x2 = seg['end'] * self.px_per_sec
-                bg_color = "#FEE2E2" if i in self.deleted_indices else "#EFF6FF"
-                self.canvas.create_rectangle(x1, 0, x2, self.canvas_height, fill=bg_color, outline="")
-
-        # 波形中心线
-        mid_y = self.canvas_height / 2 + 20
-        self.canvas.create_line(0, mid_y, self.canvas_width, mid_y, fill="#E5E7EB")
-
-        # 绘制波形
-        draw_step = max(1, len(self.envelope_data) // self.canvas_width)
-        draw_values = self.envelope_data[::draw_step]
-        points = []
-        n = len(draw_values)
-        if n > 1:
-            for i, val in enumerate(draw_values):
-                x = (i / n) * self.canvas_width
-                y = mid_y - (val * (self.canvas_height/2 - 30) * 0.9)
-                points.extend([x, y])
-            chunk_size = 8000
-            for i in range(0, len(points), chunk_size):
-                chunk = points[i:i+chunk_size+2]
-                if len(chunk) >= 4:
-                    self.canvas.create_line(chunk, fill="#9CA3AF", width=1, tags="waveform")
-
-        # 刻度
-        step_sec = 1 if self.px_per_sec > 50 else 5
-        if self.px_per_sec > 200: step_sec = 0.5
-        for t in np.arange(0, self.duration, step_sec):
-            x = t * self.px_per_sec
-            self.canvas.create_line(x, self.canvas_height-15, x, self.canvas_height, fill="#D1D5DB")
-            self.canvas.create_text(x+2, self.canvas_height-8, text=f"{t}s", anchor=tk.W, font=("Arial", 9), fill="#6B7280")
-
-        # 边界与标签
-        if self.mode == 'cut':
-            for cut in self.cuts:
-                x = cut * self.px_per_sec
-                self.canvas.create_line(x, 0, x, self.canvas_height, fill="#EF4444", width=2)
-        elif self.mode in ('edit', 'review'):
-            self.play_rects = []
-            self.delete_rects = []
-            for i, seg in enumerate(self.segments):
-                is_deleted = i in self.deleted_indices
-                x1 = seg['start'] * self.px_per_sec
-                x2 = seg['end'] * self.px_per_sec
-
-                line_color = "#D1D5DB" if is_deleted else "#EF4444"
-                line_dash = (4, 4) if is_deleted else ()
-                self.canvas.create_line(x1, 0, x1, self.canvas_height, fill=line_color, width=2, dash=line_dash)
-                self.canvas.create_line(x2, 0, x2, self.canvas_height, fill=line_color, width=2, dash=line_dash)
-
-                tag_y = 25
-                display_label = seg.get('dyn_label', seg['label'])
-
-                def create_pill(canvas, x, y, text, bg_color, tags):
-                    text_id = canvas.create_text(x, y, text=text, font=("Microsoft YaHei", 10, "bold"), fill="white", tags=tags)
-                    b = canvas.bbox(text_id)
-                    h = b[3] - b[1] + 8
-                    canvas.create_line(b[0], y, b[2], y, width=h, fill=bg_color, capstyle='round', tags=tags)
-                    canvas.tag_raise(text_id)
-                    return canvas.bbox(tags)
-
-                cx = (x1 + x2) / 2
-                if is_deleted:
-                    bbox = create_pill(self.canvas, cx, tag_y, f"✕ {display_label}", "#9CA3AF", f"btn_{i}")
-                    self.delete_rects.append({'idx': i, 'bbox': bbox})
-                else:
-                    bbox = create_pill(self.canvas, cx, tag_y, f"▶ {display_label}", "#3B82F6", f"btn_{i}")
-                    self.play_rects.append({'idx': i, 'start': seg['start'], 'end': seg['end'], 'bbox': bbox})
-
-        # 在绘制完毕后，如果存在 zoom_target，则执行视口精确滚动
-        if hasattr(self, 'zoom_target') and self.zoom_target:
-            target_time = self.zoom_target['time']
-            widget_x = self.zoom_target['widget_x']
-            new_left_x = target_time * self.px_per_sec - widget_x
-            fraction = max(0.0, min(1.0, new_left_x / self.canvas_width))
-            self.canvas.xview_moveto(fraction)
-            self.zoom_target = None
-
-    def clear_cuts(self):
-        self.cuts = []
-        self.render_canvas()
-        if hasattr(self, 'lbl_count'): self.lbl_count.configure(text="当前切分点：0")
-
-    def update_review_count(self):
-        if hasattr(self, 'lbl_count'):
-            total = len(self.segments)
-            deleted = len(self.deleted_indices)
-            kept = total - deleted
-            if deleted > 0: self.lbl_count.configure(text=f"共 {total} 段 | 保留 {kept} 段 | 已移除 {deleted} 段", text_color="#DC2626")
-            else: self.lbl_count.configure(text=f"共 {total} 个检测区段", text_color="#4B5563")
-
-    def toggle_delete_segment(self, idx):
-        if idx in self.deleted_indices: self.deleted_indices.discard(idx)
-        else: self.deleted_indices.add(idx)
-        self.update_dynamic_labels()
-        self.render_canvas()
-        if self.mode in ('review', 'edit'): self.update_review_count()
-
-    def add_segment_at(self, start, end):
-        new_seg = {
-            'start': start,
-            'end': end,
-            'label': f'#{len(self.segments)+1}'
-        }
-        if self.mode == 'edit':
-            new_seg['orig_start'] = start
-            new_seg['orig_end'] = end
-            new_seg['orig_inner_splits'] = []
-            new_seg['inner_splits'] = []
-
-        # Find sorted insertion index
-        insert_idx = 0
-        while insert_idx < len(self.segments) and self.segments[insert_idx]['start'] < start:
-            insert_idx += 1
-
-        self.segments.insert(insert_idx, new_seg)
-
-        # Adjust deleted_indices because we shifted segments after insert_idx
-        new_deleted_indices = set()
-        for idx in self.deleted_indices:
-            if idx >= insert_idx:
-                new_deleted_indices.add(idx + 1)
-            else:
-                new_deleted_indices.add(idx)
-        self.deleted_indices = new_deleted_indices
-
-        self.update_dynamic_labels()
-        if self.mode in ('review', 'edit'):
-            self.update_review_count()
-        self.render_canvas()
-
-    def _get_element_at_x(self, x):
-        tolerance = 10
-        time_sec = x / self.px_per_sec
-        for i, seg in enumerate(self.segments):
-            if i in self.deleted_indices: continue
-            if abs(seg['start'] - time_sec) * self.px_per_sec < tolerance: return i, 'start'
-            if abs(seg['end'] - time_sec) * self.px_per_sec < tolerance: return i, 'end'
-        return None, None
-
-    def _get_segment_at_x(self, x):
-        time_sec = x / self.px_per_sec
-        for i, seg in enumerate(self.segments):
-            if seg['start'] <= time_sec <= seg['end']: return i
-        return None
-
-    def on_hover(self, event):
-        canvas_x = self.canvas.canvasx(event.x)
-        canvas_y = self.canvas.canvasy(event.y)
-
-        if self.mode in ('edit', 'review'):
-            for pr in reversed(self.play_rects):
-                x1, y1, x2, y2 = pr['bbox']
-                if x1 <= canvas_x <= x2 and y1 <= canvas_y <= y2:
-                    return self.canvas.config(cursor="hand2")
-            for dr in reversed(self.delete_rects):
-                x1, y1, x2, y2 = dr['bbox']
-                if x1 <= canvas_x <= x2 and y1 <= canvas_y <= y2:
-                    return self.canvas.config(cursor="hand2")
-
-        if self.mode in ('edit', 'review') and not self.dragging:
-            idx, bound = self._get_element_at_x(canvas_x)
-            if idx is not None:
-                return self.canvas.config(cursor="sb_h_double_arrow")
-
-        self.canvas.config(cursor="arrow")
-
-    def on_click(self, event):
-        canvas_x = self.canvas.canvasx(event.x)
-        canvas_y = self.canvas.canvasy(event.y)
-        time_sec = canvas_x / self.px_per_sec
-
-        if self.mode in ('edit', 'review'):
-            for pr in reversed(self.play_rects):
-                x1, y1, x2, y2 = pr['bbox']
-                if x1 <= canvas_x <= x2 and y1 <= canvas_y <= y2:
-                    return self.play_segment(pr['start'], pr['end'])
-            for dr in reversed(self.delete_rects):
-                x1, y1, x2, y2 = dr['bbox']
-                if x1 <= canvas_x <= x2 and y1 <= canvas_y <= y2:
-                    return self.toggle_delete_segment(dr['idx'])
-
-            idx, bound = self._get_element_at_x(canvas_x)
-            if idx is not None:
-                self.dragging = {'seg_idx': idx, 'bound': bound}
-
-        elif self.mode == 'cut' and 0 <= time_sec <= self.duration:
-            self.cuts.append(time_sec)
-            self.cuts.sort()
-            self.render_canvas()
-            if hasattr(self, 'lbl_count'): self.lbl_count.configure(text=f"当前切分点：{len(self.cuts)}")
-
-    def on_motion(self, event):
-        if self.dragging:
-            canvas_x = self.canvas.canvasx(event.x)
-            time_sec = max(0, min(self.duration, canvas_x / self.px_per_sec))
-            idx = self.dragging['seg_idx']
-            bound = self.dragging['bound']
-            seg = self.segments[idx]
-
-            if bound == 'start': seg['start'] = min(time_sec, seg['end'] - 0.01)
-            elif bound == 'end': seg['end'] = max(time_sec, seg['start'] + 0.01)
-            self.render_canvas()
-
-    def on_release(self, event):
-        self.dragging = None
-
-    def on_right_click(self, event):
-        canvas_x = self.canvas.canvasx(event.x)
-        if self.mode == 'cut' and self.cuts:
-            time_sec = canvas_x / self.px_per_sec
-            closest_idx = np.argmin([abs(c - time_sec) for c in self.cuts])
-            if abs(self.cuts[closest_idx] - time_sec) < (20 / self.px_per_sec):
-                self.cuts.pop(closest_idx)
-                self.render_canvas()
-                if hasattr(self, 'lbl_count'): self.lbl_count.configure(text=f"当前切分点：{len(self.cuts)}")
-        elif self.mode in ('review', 'edit'):
-            seg_idx = self._get_segment_at_x(canvas_x)
-            if seg_idx is not None:
-                self.toggle_delete_segment(seg_idx)
-            else:
-                time_sec = canvas_x / self.px_per_sec
-                start = max(0, time_sec - 0.25)
-                end = min(self.duration, start + 0.5)
-                if end - start < 0.5 and self.duration >= 0.5:
-                    start = max(0, end - 0.5)
-                self.add_segment_at(start, end)
-
-    def play_segment(self, start_t, end_t):
-        if not sd:
-            return messagebox.showerror("错误", "缺少 sounddevice 模块，无法试听。")
-        try:
-            part = self.snd.extract_part(from_time=start_t, to_time=end_t)
-            audio_data = np.ascontiguousarray(part.values.T, dtype=np.float32)
-            sd.play(audio_data, samplerate=int(part.sampling_frequency))
-        except Exception as e:
-            messagebox.showerror("错误", f"播放失败: {str(e)}")
-
-    def confirm(self):
-        if self.mode == 'cut':
-            if not self.cuts: return messagebox.showwarning("提示", "请至少添加一个切分点。")
-            sorted_cuts = sorted(self.cuts)
-            segments = []
-            last_t = 0
-            for c in sorted_cuts:
-                if c > last_t: segments.append((last_t, c))
-                last_t = c
-            if last_t < self.duration: segments.append((last_t, self.duration))
-            self.destroy()
-            self.callback(segments, False)
-        elif self.mode == 'review':
-            kept_segments = [(seg['start'], seg['end']) for i, seg in enumerate(self.segments) if i not in self.deleted_indices]
-            if not kept_segments: return messagebox.showwarning("提示", "至少需要保留一个区段。")
-            self.destroy()
-            self.callback(kept_segments, False)
-        else:
-            kept_segments = []
-            for idx, seg in enumerate(self.segments):
-                if idx in self.deleted_indices:
-                    continue
-                kept_segments.append({
-                    'id': seg.get('dyn_id'),
-                    'start': seg['start'],
-                    'end': seg['end']
-                })
-            self.destroy()
-            self.callback(kept_segments, True, len(self.deleted_indices))
-
 
 class ExportReportDialog(ctk.CTkToplevel):
     def __init__(self, parent, callback):
@@ -1674,7 +1086,7 @@ class ToolkitApp(ctk.CTk):
         actions = ctk.CTkFrame(right_panel, fg_color="transparent")
         actions.pack(side=tk.BOTTOM, fill=tk.X, padx=20, pady=20)
         self._make_button(actions, "匹配字表", self.match_segments_to_wordlist, tone="warning", image=self.icons.get("check")).pack(fill=tk.X, pady=(0, 10))
-        self._make_button(actions, "保存到目录", lambda: self.process_split(send_to_main=False), tone="success", image=self.icons.get("save")).pack(fill=tk.X)
+        self._make_button(actions, "保存到目录", self.process_split, tone="success", image=self.icons.get("save")).pack(fill=tk.X)
 
     def _make_converter_option(self, parent, values, command=None, width=190):
         combo = ctk.CTkOptionMenu(
@@ -2862,18 +2274,6 @@ class ToolkitApp(ctk.CTk):
 
         self.after(0, apply_update)
 
-    def _send_files_to_main_app(self, files):
-        target = "main.py"
-        if not os.path.exists(target):
-            parent_main = os.path.join("..", "main.py")
-            if os.path.exists(parent_main): target = parent_main
-            else: target = None
-
-        if target:
-            subprocess.Popen([sys.executable, target] + files)
-        else:
-            messagebox.showinfo("提示", "拆分已完成，但未能在同目录下找到主程序 main.py，请手动将其拖拽入 PhonTracer。")
-
     # ==========================
     # 可视化编辑器调用
     # ==========================
@@ -2958,7 +2358,7 @@ class ToolkitApp(ctk.CTk):
     # 核心任务：拆分
     # ==========================
 
-    def process_split(self, send_to_main=False):
+    def process_split(self):
         if not self.split_source: return messagebox.showwarning("提示", "请选择长音频源文件")
 
         raw_text = self.txt_wordlist.get("1.0", tk.END)
@@ -3020,10 +2420,7 @@ class ToolkitApp(ctk.CTk):
 
                     self.update_progress((i+1)/total)
 
-                if send_to_main and saved_files:
-                    self.after(0, lambda: self._send_files_to_main_app(saved_files))
-                else:
-                    self.after(0, lambda: messagebox.showinfo("成功", f"成功拆分 {total} 段音频并保存到:\n{out_dir}"))
+                self.after(0, lambda: messagebox.showinfo("成功", f"成功拆分 {total} 段音频并保存到:\n{out_dir}"))
 
             except Exception as e:
                 error_message = f"拆分失败:\n{e}"
@@ -4167,6 +3564,16 @@ class ToolkitApp(ctk.CTk):
                 "ext": file_ext.lower(),
                 "fig_id": fig_id
             })
+
+        try:
+            import matplotlib.pyplot as plt
+            for fig_res in figure_results:
+                try:
+                    plt.close(fig_res.fig)
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
         # 过滤 SVG 同名重复预览：若存在 PNG/JPG 则排除 SVG 预览
         png_basenames = {c["basename"] for c in preview_candidates if c["ext"] in (".png", ".jpg", ".jpeg")}

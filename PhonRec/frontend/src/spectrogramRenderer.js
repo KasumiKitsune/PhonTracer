@@ -261,7 +261,6 @@ export async function renderSpectrogramDataUrl(wavInput, options = {}) {
 
     const specCols = [];
     let globalMaxDb = -120;
-    let globalMinDb = 0;
 
     const realBuf = new Float32Array(FFT_SIZE);
     const imagBuf = new Float32Array(FFT_SIZE);

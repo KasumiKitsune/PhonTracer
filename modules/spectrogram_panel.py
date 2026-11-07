@@ -498,18 +498,11 @@ class SpectrogramPanel:
         self.ax2.clear()
         self.eraser_circle = None
 
-        if hasattr(self, 'bound_lines'):
-            self.bound_lines.clear()
-        else:
-            self.bound_lines = []
-
-        if hasattr(self, 'span_fills'):
-            for fill in self.span_fills:
-                try: fill.remove()
-                except: pass
-            self.span_fills.clear()
-        else:
-            self.span_fills = []
+        self.bound_lines.clear()
+        for fill in self.span_fills:
+            try: fill.remove()
+            except Exception: pass
+        self.span_fills.clear()
 
         self.char_texts.clear()
         self.cursor_line = None
