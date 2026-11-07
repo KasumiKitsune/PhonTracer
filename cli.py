@@ -180,6 +180,34 @@ class AcousticChartCLIAdapter:
         y_dense[nearest_dist > gap_threshold] = np.nan
         return y_dense
 
+
+def _calc_preview_f0(preview_times, pitch_xs, pitch_freqs, valid_xs=None):
+    """
+    计算预览 F0 轨迹。使用 np.searchsorted 进行二分查找加速，避免内层循环重复布尔扫描。
+    """
+    if valid_xs is None:
+        valid_indices = np.where(pitch_freqs > 0)[0]
+        if len(valid_indices) == 0:
+            return [0.0] * len(preview_times)
+        valid_xs = pitch_xs[valid_indices]
+    elif len(valid_xs) == 0:
+        return [0.0] * len(preview_times)
+
+    preview_f0 = np.interp(preview_times, pitch_xs, pitch_freqs).tolist()
+    idxs = np.searchsorted(valid_xs, preview_times)
+    n = len(valid_xs)
+    for j, (t, idx) in enumerate(zip(preview_times, idxs)):
+        dist = float("inf")
+        if idx < n:
+            dist = valid_xs[idx] - t
+        if idx > 0:
+            left_dist = t - valid_xs[idx - 1]
+            if left_dist < dist:
+                dist = left_dist
+        if dist > 0.025:
+            preview_f0[j] = 0.0
+    return preview_f0
+
 class PhonTracerCLI(cmd.Cmd):
     intro = f"""{APP_NAME}语音学标注与声学分析系统 V{__version__} - 命令行批处理工作台
 你好，我是 PhonTracer 命令行控制台，支持自动化批处理与工程脚本交互。
@@ -191,7 +219,7 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
         super().__init__()
         self.speaker_manager = SpeakerManager()
         self.lang = 'en'
-        self.executor = concurrent.futures.ProcessPoolExecutor(max_workers=min(os.cpu_count() or 4, 8))
+        self._executor = None
         self.log_file = None
         self.original_stdout = sys.stdout
 
@@ -208,8 +236,25 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
 
         self.project_manager = ProjectManager(self, workspace_dir=cli_ws)
 
+    @property
+    def executor(self):
+        """惰性初始化并发进程池，避免启动或单命令时无条件拉起 8 个进程造成冷启动卡顿"""
+        if self._executor is None:
+            self._executor = concurrent.futures.ProcessPoolExecutor(max_workers=min(os.cpu_count() or 4, 8))
+        return self._executor
+
+    @executor.setter
+    def executor(self, val):
+        self._executor = val
+
     def cleanup_workspace(self):
         """清理专属临时工作区"""
+        if getattr(self, "_executor", None) is not None:
+            try:
+                self._executor.shutdown(wait=False)
+            except Exception:
+                pass
+            self._executor = None
         if getattr(self, "_temp_workspace_dir", None) and os.path.exists(self._temp_workspace_dir):
             try:
                 if hasattr(self, "project_manager"):
@@ -1004,6 +1049,8 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
 
             pitch_xs = pitch_data['xs']
             pitch_freqs = pitch_data['freqs']
+            long_valid_indices = np.where(pitch_freqs > 0)[0]
+            long_valid_xs = pitch_xs[long_valid_indices] if len(long_valid_indices) > 0 else np.array([])
 
             tasks = []
             for item in tg_intervals:
@@ -1069,6 +1116,8 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                         results[orig_idx] = {'label': tasks[orig_idx]['word'], 'group': tasks[orig_idx]['group'], 'missing': True, 'error': str(e)}
 
             matched_count = 0
+            long_valid_indices = np.where(pitch_freqs > 0)[0]
+            long_valid_xs = pitch_xs[long_valid_indices] if len(long_valid_indices) > 0 else np.array([])
             for idx, res in enumerate(results):
                 iid = f"item_{idx}"
                 if res and res.get('success'):
@@ -1079,16 +1128,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                     res['voicing_threshold'] = self.params.get('voicing_threshold', 0.25)
 
                     preview_times = np.linspace(res['start'], res['end'], 11)
-                    preview_f0 = np.interp(preview_times, pitch_xs, pitch_freqs).tolist()
-                    for j, t in enumerate(preview_times):
-                        valid_indices = np.where(pitch_freqs > 0)[0]
-                        if len(valid_indices) == 0:
-                            preview_f0[j] = 0.0
-                            continue
-                        valid_xs = pitch_xs[valid_indices]
-                        if np.min(np.abs(valid_xs - t)) > 0.025:
-                            preview_f0[j] = 0.0
-                    res['preview_f0'] = preview_f0
+                    res['preview_f0'] = _calc_preview_f0(preview_times, pitch_xs, pitch_freqs, long_valid_xs)
                     res['has_empty_data'] = any(f == 0.0 for f in res['preview_f0'])
 
                     self.items[iid] = res
@@ -1510,6 +1550,8 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
 
             pitch_xs = pitch_data['xs']
             pitch_freqs = pitch_data['freqs']
+            long_valid_indices = np.where(pitch_freqs > 0)[0]
+            long_valid_xs = pitch_xs[long_valid_indices] if len(long_valid_indices) > 0 else np.array([])
 
             word_idx = 0
             for grp in groups:
@@ -1539,15 +1581,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
 
                         # Preview
                         preview_times = np.linspace(mic_s, mic_e, 11)
-                        preview_f0 = np.interp(preview_times, pitch_xs, pitch_freqs).tolist()
-                        for j, t in enumerate(preview_times):
-                            valid_indices = np.where(pitch_freqs > 0)[0]
-                            if len(valid_indices) == 0:
-                                preview_f0[j] = 0.0
-                                continue
-                            valid_xs = pitch_xs[valid_indices]
-                            if np.min(np.abs(valid_xs - t)) > 0.025:
-                                preview_f0[j] = 0.0
+                        preview_f0 = _calc_preview_f0(preview_times, pitch_xs, pitch_freqs, long_valid_xs)
                         has_empty = any(f == 0.0 for f in preview_f0)
 
                         self.items[iid] = {
@@ -1766,15 +1800,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
             if item.get('pitch_data'):
                 p_xs = item['pitch_data']['xs']
                 p_freqs = item['pitch_data']['freqs']
-                preview_f0 = np.interp(preview_times, p_xs, p_freqs).tolist()
-                for j, t in enumerate(preview_times):
-                    valid_indices = np.where(p_freqs > 0)[0]
-                    if len(valid_indices) == 0:
-                        preview_f0[j] = 0.0
-                        continue
-                    valid_xs = p_xs[valid_indices]
-                    if np.min(np.abs(valid_xs - t)) > 0.025:
-                        preview_f0[j] = 0.0
+                preview_f0 = _calc_preview_f0(preview_times, p_xs, p_freqs)
             else:
                 preview_f0 = [item['pitch'].get_value_at_time(t) for t in preview_times]
                 preview_f0 = [0.0 if (np.isnan(hz) or hz <= 0) else hz for hz in preview_f0]
@@ -1855,16 +1881,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                 preview_times = np.linspace(item['start'], item['end'], 11)
                 p_xs = item['pitch_data']['xs']
                 p_freqs = item['pitch_data']['freqs']
-                preview_f0 = np.interp(preview_times, p_xs, p_freqs).tolist()
-                for j, t in enumerate(preview_times):
-                    valid_indices = np.where(p_freqs > 0)[0]
-                    if len(valid_indices) == 0:
-                        preview_f0[j] = 0.0
-                        continue
-                    valid_xs = p_xs[valid_indices]
-                    if np.min(np.abs(valid_xs - t)) > 0.025:
-                        preview_f0[j] = 0.0
-                item['preview_f0'] = preview_f0
+                item['preview_f0'] = _calc_preview_f0(preview_times, p_xs, p_freqs)
                 item['has_empty_data'] = any(f == 0.0 for f in item['preview_f0'])
             except Exception as e:
                 print(json.dumps({"success": False, "error": str(e)}))
@@ -1895,6 +1912,8 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
             pitch_data = extract_f0(self.long_snd, self.params)
             pitch_xs = pitch_data['xs']
             pitch_freqs = pitch_data['freqs']
+            long_valid_indices = np.where(pitch_freqs > 0)[0]
+            long_valid_xs = pitch_xs[long_valid_indices] if len(long_valid_indices) > 0 else np.array([])
 
             for iid, item in self.items.items():
                 if item.get('is_excluded', False):
@@ -1938,16 +1957,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                 item['raw_start'], item['raw_end'] = raw_s, raw_e
 
                 preview_times = np.linspace(mic_s, mic_e, 11)
-                preview_f0 = np.interp(preview_times, pitch_xs, pitch_freqs).tolist()
-                for j, t in enumerate(preview_times):
-                    valid_indices = np.where(pitch_freqs > 0)[0]
-                    if len(valid_indices) == 0:
-                        preview_f0[j] = 0.0
-                        continue
-                    valid_xs = pitch_xs[valid_indices]
-                    if np.min(np.abs(valid_xs - t)) > 0.025:
-                        preview_f0[j] = 0.0
-                item['preview_f0'] = preview_f0
+                item['preview_f0'] = _calc_preview_f0(preview_times, pitch_xs, pitch_freqs, long_valid_xs)
                 item['has_empty_data'] = any(f == 0.0 for f in item['preview_f0'])
 
                 if self.params.get('analysis_mode') == 'formant':
@@ -2035,6 +2045,8 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
             pitch_data = extract_f0(self.long_snd, self.params)
             pitch_xs = pitch_data['xs']
             pitch_freqs = pitch_data['freqs']
+            long_valid_indices = np.where(pitch_freqs > 0)[0]
+            long_valid_xs = pitch_xs[long_valid_indices] if len(long_valid_indices) > 0 else np.array([])
 
             for item in self.items.values():
                 if item.get('is_excluded', False):
@@ -2061,17 +2073,8 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                     continue
 
                 preview_times = np.linspace(start, end, 11)
-                preview_f0 = np.interp(preview_times, pitch_xs, pitch_freqs).tolist()
-                for j, t in enumerate(preview_times):
-                    valid_indices = np.where(pitch_freqs > 0)[0]
-                    if len(valid_indices) == 0:
-                        preview_f0[j] = 0.0
-                        continue
-                    valid_xs = pitch_xs[valid_indices]
-                    if np.min(np.abs(valid_xs - t)) > 0.025:
-                        preview_f0[j] = 0.0
-                item['preview_f0'] = preview_f0
-                item['has_empty_data'] = any(f == 0.0 for f in preview_f0)
+                item['preview_f0'] = _calc_preview_f0(preview_times, pitch_xs, pitch_freqs, long_valid_xs)
+                item['has_empty_data'] = any(f == 0.0 for f in item['preview_f0'])
                 updated += 1
         else:
             for item in self.items.values():
@@ -2115,17 +2118,8 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                 p_xs = item['pitch_data']['xs']
                 p_freqs = item['pitch_data']['freqs']
                 preview_times = np.linspace(start, end, 11)
-                preview_f0 = np.interp(preview_times, p_xs, p_freqs).tolist()
-                for j, t in enumerate(preview_times):
-                    valid_indices = np.where(p_freqs > 0)[0]
-                    if len(valid_indices) == 0:
-                        preview_f0[j] = 0.0
-                        continue
-                    valid_xs = p_xs[valid_indices]
-                    if np.min(np.abs(valid_xs - t)) > 0.025:
-                        preview_f0[j] = 0.0
-                item['preview_f0'] = preview_f0
-                item['has_empty_data'] = any(f == 0.0 for f in preview_f0)
+                item['preview_f0'] = _calc_preview_f0(preview_times, p_xs, p_freqs)
+                item['has_empty_data'] = any(f == 0.0 for f in item['preview_f0'])
                 updated += 1
 
         return updated, skipped
@@ -5004,7 +4998,9 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
             sys.stdout = self.original_stdout
             self.log_file.close()
             self.log_file = None
-        self.executor.shutdown(wait=False)
+        if getattr(self, "_executor", None) is not None:
+            self._executor.shutdown(wait=False)
+            self._executor = None
         return True
 
 

@@ -1168,9 +1168,11 @@ class ToolkitApp(ctk.CTk):
         return super().after(ms, func, *args)
 
     def process_gui_queue(self):
+        has_tasks = False
         try:
             while True:
                 task = self.gui_queue.get_nowait()
+                has_tasks = True
                 try:
                     task()
                 except Exception as e:
@@ -1179,7 +1181,9 @@ class ToolkitApp(ctk.CTk):
                     self.gui_queue.task_done()
         except queue.Empty:
             pass
-        super().after(10, self.process_gui_queue)
+        # 动态退避：空闲时降温至 150ms 轮询，消除 100Hz 空转占 CPU；有任务处理时加速至 15ms 保持流畅响应
+        delay = 15 if has_tasks else 150
+        super().after(delay, self.process_gui_queue)
 
     def setup_icons(self):
         icon_path = os.path.join("assets", "icons")
@@ -3735,13 +3739,7 @@ class ToolkitApp(ctk.CTk):
 
     def run_current_script(self):
         code = self.txt_script_code_preview.get("1.0", tk.END)
-
-        # 1. 构造快照数据
-        if hasattr(self, 'loaded_teproj_path') and self.loaded_teproj_path:
-            from modules.script_api import build_dataset_snapshot
-            dataset_items = build_dataset_snapshot(self.loaded_teproj_path)
-        else:
-            dataset_items = []
+        teproj_path = getattr(self, "loaded_teproj_path", None)
 
         self.is_script_running = True
         self.btn_run_script.configure(state="disabled")
@@ -3757,13 +3755,19 @@ class ToolkitApp(ctk.CTk):
 
         self.txt_script_log.configure(state="normal")
         self.txt_script_log.delete("1.0", tk.END)
-        self.txt_script_log.insert("1.0", "正在运行自定义脚本...\n")
+        self.txt_script_log.insert("1.0", "正在构建工程数据快照并运行自定义脚本...\n")
         self.txt_script_log.configure(state="disabled")
 
         self.run_cancel_event = threading.Event()
 
         def execute():
             try:
+                if teproj_path:
+                    from modules.script_api import build_dataset_snapshot
+                    dataset_items = build_dataset_snapshot(teproj_path)
+                else:
+                    dataset_items = []
+
                 from modules.script_runner import run_custom_script
                 import matplotlib.pyplot as plt
                 plt.close('all') # 运行前清理图表
@@ -3773,7 +3777,7 @@ class ToolkitApp(ctk.CTk):
                     dataset_items,
                     timeout=30,
                     cancel_event=self.run_cancel_event,
-                    teproj_path=getattr(self, "loaded_teproj_path", None),
+                    teproj_path=teproj_path,
                 )
                 self.after(0, lambda res=res, logs=logs, err=err: self.on_script_finished(res, logs, err))
             except Exception as e:
@@ -4073,88 +4077,30 @@ class ToolkitApp(ctk.CTk):
                 }]
             }
 
-            try:
-                summary = apply_project_patch_to_teproj(
-                    self.loaded_teproj_path,
-                    res,
-                    output_path,
-                    run_record=run_record
-                )
+            # 开启后台工作线程执行工程补丁应用与归档写回，彻底避免主线程假死未响应
+            self.append_script_log("\n正在后台解压工程、应用修改并重新打包，请稍候...\n")
+            if hasattr(self, 'set_loading'):
+                self.set_loading(True, "正在应用数据处理并重新生成工程归档...", indeterminate=True)
+            if hasattr(self, 'btn_run_script') and self.btn_run_script:
+                self.btn_run_script.configure(state="disabled")
 
-                # 打印执行摘要到日志
-                self.append_script_log(f"\n=== 数据处理应用结果 ===\n")
-                self.append_script_log(f"操作名称: {summary.get('title') or '未命名'}\n")
-                if summary.get('description'):
-                    self.append_script_log(f"操作说明: {summary.get('description')}\n")
+            def do_apply_patch():
+                try:
+                    summary = apply_project_patch_to_teproj(
+                        self.loaded_teproj_path,
+                        res,
+                        output_path,
+                        run_record=run_record
+                    )
+                    self.after(0, lambda: self._on_project_patch_complete(summary, output_path))
+                except Exception as e:
+                    import traceback
+                    tb = traceback.format_exc()
+                    self.after(0, lambda err=e, trace=tb: self._on_project_patch_failed(err, trace))
+                finally:
+                    self.after(0, lambda: self._on_project_patch_cleanup())
 
-                self.append_script_log(f"包含操作总数: {summary.get('operation_count', 0)}\n")
-
-                applied_ops = summary.get("applied_operations", [])
-                self.append_script_log(f"实际执行细节 (共 {len(applied_ops)} 项):\n")
-                for r in applied_ops:
-                    self.append_script_log(f"  - {r.get('message') or r.get('op')}\n")
-
-                # 输出路径
-                output_paths = summary.get("output_paths", [])
-                if output_paths:
-                    self.append_script_log("\n已成功拆分为以下子工程文件：\n")
-                    for path in output_paths:
-                        self.append_script_log(f"  - {path}\n")
-                else:
-                    self.append_script_log(f"\n已生成工程文件: {summary.get('output_path')}\n")
-
-                # 设置输出目录为保存位置，并启用“打开目录”按钮
-                self.script_output_dir = os.path.dirname(output_path)
-                if hasattr(self, "btn_open_script_output"):
-                    self.btn_open_script_output.configure(state="normal")
-
-                self._update_chart_preview("数据处理脚本运行成功，无图表输出。", None)
-                if hasattr(self, "script_preview_nav"):
-                    self.script_preview_nav.grid_remove()
-
-                # 将生成的文件展示在文件列表中，替代图片预览
-                output_paths = summary.get("output_paths", [])
-                if not output_paths:
-                    single_path = summary.get("output_path")
-                    if single_path:
-                        output_paths = [single_path]
-
-                if output_paths:
-                    if hasattr(self, "lbl_chart_preview") and self.lbl_chart_preview:
-                        self.lbl_chart_preview.grid_remove()
-                    if hasattr(self, "script_file_list_frame") and self.script_file_list_frame:
-                        self.script_file_list_frame.grid()
-                        for widget in self.script_file_list_frame.winfo_children():
-                            widget.destroy()
-
-                        for path in output_paths:
-                            file_name = os.path.basename(path)
-                            row_frame = ctk.CTkFrame(self.script_file_list_frame, fg_color="transparent")
-                            row_frame.pack(fill=tk.X, padx=5, pady=2)
-
-                            btn = ctk.CTkButton(
-                                row_frame,
-                                text=f"工程文件：{file_name}",
-                                anchor="w",
-                                fg_color="transparent",
-                                text_color=self.colors["primary"],
-                                hover_color=self.colors["surface_soft"],
-                                font=ctk.CTkFont(family=self.font_family, size=11),
-                                height=28,
-                                command=lambda p=path: self._open_file_safely(p)
-                            )
-                            btn.pack(side=tk.LEFT, fill=tk.X, expand=True)
-
-                messagebox.showinfo("成功", summary.get("message") or "操作成功应用！")
-
-            except Exception as e:
-                import traceback
-                self.append_script_log(f"应用数据处理操作失败：\n{e}\n\n{traceback.format_exc()}\n")
-                self._update_chart_preview("数据处理应用失败。", None)
-                if hasattr(self, "script_preview_nav"):
-                    self.script_preview_nav.grid_remove()
-                messagebox.showerror("错误", f"应用数据处理操作失败：{e}")
-
+            start_safe_thread(do_apply_patch)
             return
 
         figure_results = [r for r in results if isinstance(r, FigureResult)]
@@ -4314,6 +4260,86 @@ class ToolkitApp(ctk.CTk):
                     script_runs.pop()
                 self.append_script_log("本次脚本运行写入工程记录失败。\n")
 
+    def _on_project_patch_complete(self, summary, output_path):
+        # 打印执行摘要到日志
+        self.append_script_log(f"\n=== 数据处理应用结果 ===\n")
+        self.append_script_log(f"操作名称: {summary.get('title') or '未命名'}\n")
+        if summary.get('description'):
+            self.append_script_log(f"操作说明: {summary.get('description')}\n")
+
+        self.append_script_log(f"包含操作总数: {summary.get('operation_count', 0)}\n")
+
+        applied_ops = summary.get("applied_operations", [])
+        self.append_script_log(f"实际执行细节 (共 {len(applied_ops)} 项):\n")
+        for r in applied_ops:
+            self.append_script_log(f"  - {r.get('message') or r.get('op')}\n")
+
+        # 输出路径
+        output_paths = summary.get("output_paths", [])
+        if output_paths:
+            self.append_script_log("\n已成功拆分为以下子工程文件：\n")
+            for path in output_paths:
+                self.append_script_log(f"  - {path}\n")
+        else:
+            self.append_script_log(f"\n已生成工程文件: {summary.get('output_path')}\n")
+
+        # 设置输出目录为保存位置，并启用“打开目录”按钮
+        self.script_output_dir = os.path.dirname(output_path)
+        if hasattr(self, "btn_open_script_output") and self.btn_open_script_output:
+            self.btn_open_script_output.configure(state="normal")
+
+        self._update_chart_preview("数据处理脚本运行成功，无图表输出。", None)
+        if hasattr(self, "script_preview_nav") and self.script_preview_nav:
+            self.script_preview_nav.grid_remove()
+
+        # 将生成的文件展示在文件列表中，替代图片预览
+        output_paths = summary.get("output_paths", [])
+        if not output_paths:
+            single_path = summary.get("output_path")
+            if single_path:
+                output_paths = [single_path]
+
+        if output_paths:
+            if hasattr(self, "lbl_chart_preview") and self.lbl_chart_preview:
+                self.lbl_chart_preview.grid_remove()
+            if hasattr(self, "script_file_list_frame") and self.script_file_list_frame:
+                self.script_file_list_frame.grid()
+                for widget in self.script_file_list_frame.winfo_children():
+                    widget.destroy()
+
+                for path in output_paths:
+                    file_name = os.path.basename(path)
+                    row_frame = ctk.CTkFrame(self.script_file_list_frame, fg_color="transparent")
+                    row_frame.pack(fill=tk.X, padx=5, pady=2)
+
+                    btn = ctk.CTkButton(
+                        row_frame,
+                        text=f"工程文件：{file_name}",
+                        anchor="w",
+                        fg_color="transparent",
+                        text_color=self.colors["primary"],
+                        hover_color=self.colors["surface_soft"],
+                        font=ctk.CTkFont(family=self.font_family, size=11),
+                        height=28,
+                        command=lambda p=path: self._open_file_safely(p)
+                    )
+                    btn.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        messagebox.showinfo("成功", summary.get("message") or "操作成功应用！")
+
+    def _on_project_patch_failed(self, e, tb):
+        self.append_script_log(f"应用数据处理操作失败：\n{e}\n\n{tb}\n")
+        self._update_chart_preview("数据处理应用失败。", None)
+        if hasattr(self, "script_preview_nav") and self.script_preview_nav:
+            self.script_preview_nav.grid_remove()
+        messagebox.showerror("错误", f"应用数据处理操作失败：{e}")
+
+    def _on_project_patch_cleanup(self):
+        if hasattr(self, 'set_loading'):
+            self.set_loading(False)
+        if hasattr(self, 'btn_run_script') and self.btn_run_script:
+            self.btn_run_script.configure(state="normal")
+
     def save_project_data_back_to_teproj(self):
         if not hasattr(self, 'loaded_teproj_path') or not self.loaded_teproj_path:
             return False
@@ -4326,12 +4352,17 @@ class ToolkitApp(ctk.CTk):
         temp_fd, temp_path = tempfile.mkstemp(prefix=".script_update_", suffix=".teproj", dir=zip_dir)
         os.close(temp_fd)
         try:
+            import shutil
             with zipfile.ZipFile(zip_path, 'r') as yin:
                 with zipfile.ZipFile(temp_path, 'w', zipfile.ZIP_DEFLATED) as yout:
                     for item in yin.infolist():
                         if item.filename == 'project.json':
                             continue
-                        yout.writestr(item, yin.read(item.filename))
+                        if item.is_dir():
+                            yout.writestr(item, b'')
+                            continue
+                        with yin.open(item, 'r') as src, yout.open(item, 'w') as dst:
+                            shutil.copyfileobj(src, dst, length=1024 * 1024)
                     # 写入更新后的 project.json
                     json_bytes = json.dumps(self.project_data, ensure_ascii=False, indent=2).encode('utf-8')
                     yout.writestr('project.json', json_bytes)
@@ -5065,27 +5096,34 @@ class ToolkitApp(ctk.CTk):
             return
 
         target_dir = self._make_project_extract_dir(output_dir)
-        try:
-            raw_dir = os.path.join(target_dir, "原始工程结构")
-            named_dir = os.path.join(target_dir, "按名称整理")
-            index_path = os.path.join(target_dir, "文件索引.csv")
-            project_data, _namelist = read_project_metadata_from_archive(self.loaded_teproj_path)
-            extracted_count = self._safe_extract_project_archive(self.loaded_teproj_path, raw_dir)
-            named_count, index_count = self._export_named_project_files(project_data, raw_dir, named_dir, index_path)
-            messagebox.showinfo(
-                "提取成功",
-                f"工程文件已提取到：\n{target_dir}\n\n"
-                f"原始工程结构：{extracted_count} 个文件\n"
-                f"按名称整理：{named_count} 个文件\n"
-                f"文件索引：{index_count} 条记录"
-            )
-        except Exception as e:
+        self.set_loading(True, "正在提取工程文件与解压资源...", indeterminate=True)
+
+        def do_extract():
             try:
-                import shutil
-                shutil.rmtree(target_dir, ignore_errors=True)
-            except Exception:
-                pass
-            messagebox.showerror("错误", f"提取工程文件失败：\n{str(e)}")
+                raw_dir = os.path.join(target_dir, "原始工程结构")
+                named_dir = os.path.join(target_dir, "按名称整理")
+                index_path = os.path.join(target_dir, "文件索引.csv")
+                project_data, _namelist = read_project_metadata_from_archive(self.loaded_teproj_path)
+                extracted_count = self._safe_extract_project_archive(self.loaded_teproj_path, raw_dir)
+                named_count, index_count = self._export_named_project_files(project_data, raw_dir, named_dir, index_path)
+                msg = (
+                    f"工程文件已提取到：\n{target_dir}\n\n"
+                    f"原始工程结构：{extracted_count} 个文件\n"
+                    f"按名称整理：{named_count} 个文件\n"
+                    f"文件索引：{index_count} 条记录"
+                )
+                self.after(0, lambda: messagebox.showinfo("提取成功", msg))
+            except Exception as e:
+                try:
+                    import shutil
+                    shutil.rmtree(target_dir, ignore_errors=True)
+                except Exception:
+                    pass
+                self.after(0, lambda err=str(e): messagebox.showerror("错误", f"提取工程文件失败：\n{err}"))
+            finally:
+                self.after(0, lambda: self.set_loading(False))
+
+        start_safe_thread(do_extract)
 
     def show_export_report_dialog(self):
         if not hasattr(self, 'loaded_teproj_path') or not self.loaded_teproj_path:

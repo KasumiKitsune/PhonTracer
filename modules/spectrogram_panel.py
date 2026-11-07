@@ -556,11 +556,26 @@ class SpectrogramPanel:
         except Exception:
             pass
 
-        spectrogram = part.to_spectrogram(window_length=0.005, maximum_frequency=spec_max_freq)
-        X = spectrogram.x_grid() + view_s
-        Y = spectrogram.y_grid()
-        vals = np.where(spectrogram.values > 0, spectrogram.values, 1e-10)
-        sg_db = 10 * np.log10(vals)
+        # 轻量缓存 STFT 频谱矩阵，避免微调边界线或触发重绘时重复进行昂贵的科学计算
+        cache_key = (id(snd), round(view_s, 6), round(view_e, 6), round(spec_max_freq, 2))
+        cached_spec = getattr(self, '_spectrogram_cache', None)
+        if cached_spec and cached_spec.get('snd') is snd and cached_spec.get('key') == cache_key:
+            X = cached_spec['X']
+            Y = cached_spec['Y']
+            sg_db = cached_spec['sg_db']
+        else:
+            spectrogram = part.to_spectrogram(window_length=0.005, maximum_frequency=spec_max_freq)
+            X = spectrogram.x_grid() + view_s
+            Y = spectrogram.y_grid()
+            vals = np.where(spectrogram.values > 0, spectrogram.values, 1e-10)
+            sg_db = 10 * np.log10(vals)
+            self._spectrogram_cache = {
+                'snd': snd,
+                'key': cache_key,
+                'X': X,
+                'Y': Y,
+                'sg_db': sg_db,
+            }
 
         self.ax.pcolormesh(X, Y, sg_db, vmin=sg_db.max()-50, vmax=sg_db.max(), cmap='Greys')
 

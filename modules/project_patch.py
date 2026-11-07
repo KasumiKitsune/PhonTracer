@@ -151,13 +151,13 @@ def _extract_project(teproj_path, workspace_dir):
                 shutil.copyfileobj(source, dest)
 
 
-def _project_manager_for_validation():
-    return ProjectManager(app=None)
+def _project_manager_for_validation(workspace_dir=None):
+    return ProjectManager(app=None, workspace_dir=workspace_dir)
 
 
 def _validate_project_workspace_for_import(workspace_dir):
     state = _load_project_state(workspace_dir)
-    _project_manager_for_validation()._validate_project_resources(state, workspace_dir)
+    _project_manager_for_validation(workspace_dir)._validate_project_resources(state, workspace_dir)
     return state
 
 
@@ -188,7 +188,13 @@ def _write_project_archive(workspace_dir, output_path):
                     file_path = os.path.join(root, filename)
                     rel_path = os.path.relpath(file_path, workspace_dir).replace(os.sep, "/")
                     zf.write(file_path, rel_path)
-        _validate_project_archive_for_import(temp_zip)
+        # 完整性自检，避免全量重新解包
+        with zipfile.ZipFile(temp_zip, "r") as zf:
+            bad_member = zf.testzip()
+            if bad_member is not None:
+                raise ProjectPatchError(f"生成的工程压缩包校验损坏：{bad_member}")
+        # 快速核验元数据，无需解包整个工程
+        read_project_metadata_from_archive(temp_zip)
         os.replace(temp_zip, abs_output)
     finally:
         if os.path.exists(temp_zip):
@@ -309,16 +315,28 @@ def _item_params(spk, item, override):
     return params
 
 
-def _load_item_sound(workspace_dir, spk, item):
-    import parselmouth
+def _load_item_sound(workspace_dir, spk, item, long_audio_cache=None):
+    from .audio_core import load_compatible_sound
 
     item_path = item.get("path")
     if item_path:
-        return parselmouth.Sound(_resolve_resource(workspace_dir, item_path)), "item"
+        res_path = _resolve_resource(workspace_dir, item_path)
+        if long_audio_cache is not None and res_path in long_audio_cache:
+            return long_audio_cache[res_path], "item"
+        snd = load_compatible_sound(res_path)
+        if long_audio_cache is not None:
+            long_audio_cache[res_path] = snd
+        return snd, "item"
 
     long_audio_path = spk.get("long_audio_path")
     if long_audio_path:
-        return parselmouth.Sound(_resolve_resource(workspace_dir, long_audio_path)), "long"
+        res_path = _resolve_resource(workspace_dir, long_audio_path)
+        if long_audio_cache is not None and res_path in long_audio_cache:
+            return long_audio_cache[res_path], "long"
+        snd = load_compatible_sound(res_path)
+        if long_audio_cache is not None:
+            long_audio_cache[res_path] = snd
+        return snd, "long"
 
     raise ProjectPatchError(f"条目 {item.get('label', '')} 缺少可用音频资源。")
 
@@ -355,7 +373,7 @@ def _restore_global_xs(data, source_kind, offset, segment_duration):
     return data
 
 
-def _apply_set_item_fields(state, _workspace_dir, op, records):
+def _apply_set_item_fields(state, _workspace_dir, op, records, **kwargs):
     _spk_id, _spk, _item_id, item = _find_item(state, op.get("target"))
     fields = op.get("fields")
     if not isinstance(fields, dict):
@@ -372,11 +390,11 @@ def _apply_set_item_fields(state, _workspace_dir, op, records):
     records.append({"op": "set_item_fields", "label": item.get("label", ""), "field_count": len(fields)})
 
 
-def _apply_recompute_pitch(state, workspace_dir, op, records):
+def _apply_recompute_pitch(state, workspace_dir, op, records, long_audio_cache=None, **kwargs):
     from .audio_core import extract_f0
 
     spk_id, spk, item_id, item = _find_item(state, op.get("target"))
-    snd, source_kind = _load_item_sound(workspace_dir, spk, item)
+    snd, source_kind = _load_item_sound(workspace_dir, spk, item, long_audio_cache=long_audio_cache)
     part, offset = _segment_sound_for_item(snd, source_kind, item, with_offset=True)
     params = _item_params(spk, item, op.get("params"))
     pitch_data = extract_f0(part, params)
@@ -391,11 +409,11 @@ def _apply_recompute_pitch(state, workspace_dir, op, records):
     records.append({"op": "recompute_pitch", "label": item.get("label", ""), "resource": rel_name})
 
 
-def _apply_recompute_formant(state, workspace_dir, op, records):
+def _apply_recompute_formant(state, workspace_dir, op, records, long_audio_cache=None, **kwargs):
     from .audio_core import extract_formants
 
     spk_id, spk, item_id, item = _find_item(state, op.get("target"))
-    snd, source_kind = _load_item_sound(workspace_dir, spk, item)
+    snd, source_kind = _load_item_sound(workspace_dir, spk, item, long_audio_cache=long_audio_cache)
     part, offset = _segment_sound_for_item(snd, source_kind, item, with_offset=True)
     params = _item_params(spk, item, op.get("params"))
     formant_data = extract_formants(part, params)
@@ -413,9 +431,9 @@ def _apply_recompute_formant(state, workspace_dir, op, records):
     records.append({"op": "recompute_formant", "label": item.get("label", ""), "resource": rel_name})
 
 
-def _apply_trim_item_audio(state, workspace_dir, op, records):
+def _apply_trim_item_audio(state, workspace_dir, op, records, long_audio_cache=None, **kwargs):
     spk_id, spk, item_id, item = _find_item(state, op.get("target"))
-    snd, source_kind = _load_item_sound(workspace_dir, spk, item)
+    snd, source_kind = _load_item_sound(workspace_dir, spk, item, long_audio_cache=long_audio_cache)
     part = _segment_sound_for_item(
         snd,
         source_kind,
@@ -428,6 +446,8 @@ def _apply_trim_item_audio(state, workspace_dir, op, records):
     out_path = _resolve_resource(workspace_dir, rel_name)
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     part.save(out_path, "WAV")
+    if long_audio_cache is not None:
+        long_audio_cache[out_path] = part
 
     old_item_path = item.get("path")
     item["path"] = rel_name
@@ -448,7 +468,7 @@ def _apply_trim_item_audio(state, workspace_dir, op, records):
     records.append({"op": "trim_item_audio", "label": item.get("label", ""), "resource": rel_name})
 
 
-def _apply_split_project(state, _workspace_dir, op, records):
+def _apply_split_project(state, _workspace_dir, op, records, **kwargs):
     item_ids = {str(v) for v in op.get("item_ids", []) if str(v)}
     speaker_ids = {str(v) for v in op.get("speaker_ids", []) if str(v)}
     if not item_ids and not speaker_ids:
@@ -512,7 +532,7 @@ def _apply_mapped_field(item, field_name, value):
         item[field_name] = value
 
 
-def _apply_import_csv_metadata(state, _workspace_dir, op, records):
+def _apply_import_csv_metadata(state, _workspace_dir, op, records, **kwargs):
     rows = op.get("rows") or []
     if not isinstance(rows, list):
         raise ProjectPatchError("import_csv_metadata 的 rows 必须是列表。")
@@ -584,16 +604,20 @@ def apply_project_patch_to_teproj(teproj_path, patch_result, output_path, run_re
     temp_dir = tempfile.mkdtemp(prefix="phontracer_patch_")
     records = []
     try:
-        _validate_project_archive_for_import(teproj_path)
+        read_project_metadata_from_archive(teproj_path)
         _extract_project(teproj_path, temp_dir)
-        base_state = _load_project_state(temp_dir)
+        base_state = _validate_project_workspace_for_import(temp_dir)
 
-        # 1. 先生效所有的非拆分操作，得到基础状态
+        # 1. 先生效所有的非拆分操作，得到基础状态（带长音频解码缓存）
+        long_audio_cache = {}
         for idx, op in enumerate(non_split_ops, start=1):
             applier = APPLIERS.get(op.get("op"))
             if applier is None:
                 raise ProjectPatchError(f"操作类型不受支持：{op.get('op')}")
-            applier(base_state, temp_dir, op, records)
+            try:
+                applier(base_state, temp_dir, op, records, long_audio_cache=long_audio_cache)
+            except TypeError:
+                applier(base_state, temp_dir, op, records)
 
         # 2. 根据拆分操作数量决定写入逻辑
         if not split_ops:

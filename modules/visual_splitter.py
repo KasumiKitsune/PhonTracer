@@ -329,15 +329,15 @@ class VisualSplitter(ctk.CTkToplevel):
                 
                 line_color = "#D1D5DB" if is_deleted else "#EF4444"
                 line_dash = (4, 4) if is_deleted else ()
-                self.canvas.create_line(x1, 0, x1, self.canvas_height, fill=line_color, width=2, dash=line_dash)
-                self.canvas.create_line(x2, 0, x2, self.canvas_height, fill=line_color, width=2, dash=line_dash)
+                self.canvas.create_line(x1, 0, x1, self.canvas_height, fill=line_color, width=2, dash=line_dash, tags=f"seg_start_line_{i}")
+                self.canvas.create_line(x2, 0, x2, self.canvas_height, fill=line_color, width=2, dash=line_dash, tags=f"seg_end_line_{i}")
                 
                 # --- 词语模式：绘制蓝线 ---
                 inner_splits = seg.get('inner_splits', [])
                 if not is_deleted and inner_splits:
-                    for s_t in inner_splits:
+                    for split_idx, s_t in enumerate(inner_splits):
                         s_x = s_t * self.px_per_sec
-                        self.canvas.create_line(s_x, 0, s_x, self.canvas_height, fill="#3B82F6", width=2, dash=(4, 4))
+                        self.canvas.create_line(s_x, 0, s_x, self.canvas_height, fill="#3B82F6", width=2, dash=(4, 4), tags=f"seg_inner_line_{i}_{split_idx}")
                 
                 tag_y = 25
                 display_label = seg.get('dyn_label', seg['label'])
@@ -523,19 +523,47 @@ class VisualSplitter(ctk.CTkToplevel):
             if bound == 'start':
                 max_limit = splits[0] if splits else seg['end']
                 seg['start'] = min(time_sec, max_limit - 0.01)
+                cur_t = seg['start']
+                tag = f"seg_start_line_{idx}"
             elif bound == 'end':
                 min_limit = splits[-1] if splits else seg['start']
                 seg['end'] = max(time_sec, min_limit + 0.01)
+                cur_t = seg['end']
+                tag = f"seg_end_line_{idx}"
             elif bound == 'inner':
                 inner_idx = self.dragging['inner_idx']
                 min_limit = seg['start'] if inner_idx == 0 else splits[inner_idx - 1]
                 max_limit = seg['end'] if inner_idx == len(splits) - 1 else splits[inner_idx + 1]
                 splits[inner_idx] = max(min_limit + 0.01, min(time_sec, max_limit - 0.01))
-                
-            self.render_canvas()
+                cur_t = splits[inner_idx]
+                tag = f"seg_inner_line_{idx}_{inner_idx}"
+            else:
+                cur_t = time_sec
+                tag = None
+
+            # 拖拽移动过程中仅轻量更新指示线与边界线坐标，禁止全量 delete("all") 与波形文字重绘
+            cur_x = cur_t * self.px_per_sec
+            if tag and self.canvas.find_withtag(tag):
+                self.canvas.coords(tag, cur_x, 0, cur_x, self.canvas_height)
+
+            if not self.canvas.find_withtag("drag_indicator"):
+                color = "#EF4444" if bound in ('start', 'end') else "#3B82F6"
+                self.canvas.create_line(cur_x, 0, cur_x, self.canvas_height, fill=color, width=2, dash=(2, 2), tags="drag_indicator")
+                self.canvas.create_text(cur_x + 5, 20, text=f"{cur_t:.3f}s", anchor=tk.W, fill=color, font=("Arial", 10, "bold"), tags="drag_indicator_text")
+            else:
+                self.canvas.coords("drag_indicator", cur_x, 0, cur_x, self.canvas_height)
+                self.canvas.coords("drag_indicator_text", cur_x + 5, 20)
+                self.canvas.itemconfigure("drag_indicator_text", text=f"{cur_t:.3f}s")
+                self.canvas.tag_raise("drag_indicator")
+                self.canvas.tag_raise("drag_indicator_text")
 
     def on_release(self, event):
-        self.dragging = None
+        if self.dragging:
+            self.canvas.delete("drag_indicator")
+            self.canvas.delete("drag_indicator_text")
+            self.dragging = None
+            self.update_dynamic_labels()
+            self.render_canvas()
 
     def on_right_click(self, event):
         canvas_x = self.canvas.canvasx(event.x)

@@ -1729,13 +1729,13 @@ class ProjectTreePanel:
 
         return False
 
-    def _schedule_rebuild(self):
+    def _schedule_rebuild(self, delay=10, reanalyze=True):
         if self._rebuild_timer:
             self.parent.after_cancel(self._rebuild_timer)
-        self._rebuild_timer = self.parent.after(10, self.rebuild_tree)
+        self._rebuild_timer = self.parent.after(delay, lambda: self.rebuild_tree(reanalyze=reanalyze))
 
-    def filter_tree(self):
-        self._schedule_rebuild()
+    def filter_tree(self, delay=250):
+        self._schedule_rebuild(delay=delay, reanalyze=False)
 
     def _on_filter_btn_click(self, mode):
         current_mode = self.filter_var.get()
@@ -1758,7 +1758,7 @@ class ProjectTreePanel:
         else:
             self.filter_var.set(mode)
         self._update_filter_buttons()
-        self.filter_tree()
+        self._schedule_rebuild(delay=10, reanalyze=False)
 
     def _update_filter_buttons(self):
         current_mode = self.filter_var.get()
@@ -2294,29 +2294,7 @@ class ProjectTreePanel:
                 short_warns.append(short_w)
         return self._format_tree_info_labels(short_warns)
 
-    def rebuild_tree(self):
-        # 1. 保存当前选择和展开状态
-        sel = self.tree.selection()
-        mapped_sel = []
-        for s in sel:
-            if str(s).startswith('warning_'):
-                mapped_sel.append(s[8:])
-            else:
-                mapped_sel.append(s)
-        expanded_groups = set()
-        for g_name, gid in self.group_nodes.items():
-            try:
-                if self.tree.exists(gid) and self.tree.item(gid, 'open'):
-                    expanded_groups.add(g_name)
-            except tk.TclError:
-                pass
-        if self.warning_group_id:
-            try:
-                if self.tree.exists(self.warning_group_id) and self.tree.item(self.warning_group_id, 'open'):
-                    expanded_groups.add('__warning__')
-            except tk.TclError:
-                pass
-
+    def _compute_group_and_speaker_stats(self):
         # 计算项目统计信息以用于离群值检测
         group_stats = {}
         groups_items_features = {}
@@ -2391,6 +2369,33 @@ class ProjectTreePanel:
                     if abs(mean_f0 - med_spk) / mad_spk > 4.0:
                         speaker_stats[spk_id]['mean_f0_outlier'] = True
 
+        return group_stats, speaker_stats
+
+    def rebuild_tree(self, force_reanalyze=None, reanalyze=True):
+        if force_reanalyze is not None:
+            reanalyze = bool(force_reanalyze)
+        # 1. 保存当前选择和展开状态
+        sel = self.tree.selection()
+        mapped_sel = []
+        for s in sel:
+            if str(s).startswith('warning_'):
+                mapped_sel.append(s[8:])
+            else:
+                mapped_sel.append(s)
+        expanded_groups = set()
+        for g_name, gid in self.group_nodes.items():
+            try:
+                if self.tree.exists(gid) and self.tree.item(gid, 'open'):
+                    expanded_groups.add(g_name)
+            except tk.TclError:
+                pass
+        if self.warning_group_id:
+            try:
+                if self.tree.exists(self.warning_group_id) and self.tree.item(self.warning_group_id, 'open'):
+                    expanded_groups.add('__warning__')
+            except tk.TclError:
+                pass
+
         # 2. 清空 Tree
         for node in list(self.tree.get_children()):
             self.tree.delete(node)
@@ -2416,13 +2421,23 @@ class ProjectTreePanel:
 
         group_items = {g: [] for g in groups_in_use}
         warning_items = []
+        group_stats = None
+        speaker_stats = None
 
         for iid, item in self.items.items():
             lbl = item.get('label', '')
             if search_query and search_query not in lbl.lower():
                 continue
 
-            item['warnings'] = self.analyze_item_anomalies(item, group_stats, speaker_stats)
+            # 搜索与状态过滤(reanalyze=False)优先复用已有缓存；数据变更重建(reanalyze=True)则重算
+            if not reanalyze and item.get('warnings') is not None:
+                warnings = item['warnings']
+            else:
+                if group_stats is None:
+                    group_stats, speaker_stats = self._compute_group_and_speaker_stats()
+                warnings = self.analyze_item_anomalies(item, group_stats, speaker_stats)
+                item['warnings'] = warnings
+
             needs_check = any(w.startswith("[致命]") or w.startswith("[警告]") for w in item['warnings']) and not item.get('is_excluded', False)
             if status_filter == "已忽略" and not item.get('is_excluded', False):
                 continue
@@ -2526,8 +2541,9 @@ class ProjectTreePanel:
         item = self.items.get(iid)
         if not item or item.get('start') is None: return
 
+        item.pop('warnings', None)
         self._check_item_has_empty_data(item)
-        self._schedule_rebuild()
+        self._schedule_rebuild(delay=10, reanalyze=True)
 
     def export_project(self):
         if self.app and hasattr(self.app, 'flush_eraser_changes'):
