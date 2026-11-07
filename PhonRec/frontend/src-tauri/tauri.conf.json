@@ -13,11 +13,11 @@
     "windows": [
       {
         "label": "main",
-        "title": "PhonTracer语音学标注与声学分析系统 V1.0",
-        "width": 1080,
-        "height": 720,
-        "minWidth": 560,
-        "minHeight": 600,
+        "title": "PhonRec 语音采集与质量监控系统 V1.0",
+        "width": 1200,
+        "height": 780,
+        "minWidth": 720,
+        "minHeight": 580,
         "backgroundColor": "#f6f7fb",
         "dragDropEnabled": false
       }

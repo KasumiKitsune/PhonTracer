@@ -58,6 +58,13 @@ const TrashIcon = () => (
   </svg>
 );
 
+const EditIcon = () => (
+  <svg style={{ width: '13px', height: '13px' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 20h9" />
+    <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
+  </svg>
+);
+
 const BookIcon = () => (
   <svg style={{ width: '16px', height: '16px' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
@@ -75,9 +82,16 @@ const SweepIcon = () => (
 
 const CheckIcon = () => (
   <svg style={{ width: '16px', height: '16px' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="12" r="10" />
-    <line x1="12" y1="8" x2="12" y2="12" />
-    <line x1="12" y1="16" x2="12.01" y2="16" />
+    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+    <polyline points="9 12 11 14 15 10" />
+  </svg>
+);
+
+const SaveIcon = () => (
+  <svg style={{ width: '15px', height: '15px' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+    <polyline points="17 21 17 13 7 13 7 21" />
+    <polyline points="7 3 7 8 15 8" />
   </svg>
 );
 
@@ -414,6 +428,9 @@ export default function App() {
   // Navigation index & active group (can be index or 'all')
   const [activeGroupIndex, setActiveGroupIndex] = useState('all'); // default to All
   const [activeItemIndex, setActiveItemIndex] = useState(0);
+  const [wordFilter, setWordFilter] = useState('all'); // 'all' | 'unrecorded' | 'review'
+  const [editingSpeakerId, setEditingSpeakerId] = useState('');
+  const [editingSpeakerName, setEditingSpeakerName] = useState('');
 
   // Settings
   const [recordingMode, setRecordingMode] = useState('click');
@@ -465,7 +482,7 @@ export default function App() {
 
   // Shuffled items computed state
   const [displayedItems, setDisplayedItems] = useState([]);
-  const [isSmallScreen, setIsSmallScreen] = useState(window.innerWidth <= 768);
+  const [isSmallScreen, setIsSmallScreen] = useState(window.innerWidth <= 760);
 
   const [visualizerTab, setVisualizerTab] = useState('waveform');
   const effectiveVisualizerTab = capabilities.spectrogram ? visualizerTab : 'waveform';
@@ -475,6 +492,7 @@ export default function App() {
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [spectrogramUrl, setSpectrogramUrl] = useState('');
+  const [isSpectrogramLoading, setIsSpectrogramLoading] = useState(false);
   const [qualityResults, setQualityResults] = useState(null);
 
   // Inline Speaker states
@@ -762,18 +780,15 @@ export default function App() {
         ? updates.realtime_quality
         : hasRuntimeQualityRule(updates.quality_rules);
     } else if (updates.realtime_quality !== undefined) {
-      nextSnapshot.quality_rules = Object.fromEntries(
-        Object.entries(previousSnapshot.quality_rules).map(([key, rule]) => [
-          key,
-          {
-            ...rule,
-            enabled: !isStandalone || key === 'volume' || key === 'clipping'
-              ? updates.realtime_quality
-              : rule.enabled,
-          }
-        ])
-      );
-      nextSnapshot.realtime_quality = updates.realtime_quality;
+      if (!updates.realtime_quality) {
+        nextSnapshot.quality_rules = previousSnapshot.quality_rules;
+        nextSnapshot.realtime_quality = false;
+      } else {
+        nextSnapshot.quality_rules = hasRuntimeQualityRule(previousSnapshot.quality_rules)
+          ? previousSnapshot.quality_rules
+          : createDefaultQualityRules(true);
+        nextSnapshot.realtime_quality = true;
+      }
     }
 
     settingsSnapshotRef.current = nextSnapshot;
@@ -1559,7 +1574,7 @@ export default function App() {
   // Handle window resize for small screen detection
   useEffect(() => {
     const handleResize = () => {
-      setIsSmallScreen(window.innerWidth <= 768);
+      setIsSmallScreen(window.innerWidth <= 760);
     };
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
@@ -1568,12 +1583,14 @@ export default function App() {
   // Compute displayed items whenever groups, active group select, or randomize order changes
   useEffect(() => {
     let baseItems = [];
-    if (isSmallScreen || activeGroupIndex === 'all') {
+    if (activeGroupIndex === 'all') {
       baseItems = groups.flatMap(g => g.items || []);
     } else {
       const idx = parseInt(activeGroupIndex);
       if (!isNaN(idx) && groups[idx]) {
         baseItems = groups[idx].items || [];
+      } else {
+        baseItems = groups.flatMap(g => g.items || []);
       }
     }
 
@@ -1607,31 +1624,36 @@ export default function App() {
   }, [groups, activeGroupIndex, randomizeOrder, isSmallScreen]);
 
   // Load static waveform / spectrogram on active item change or visualizer tab change
+  const activeItemForEffect = displayedItems[activeItemIndex] || null;
+  const activeRecordPath = activeItemForEffect ? (speakers[activeSpeakerId]?.items?.[activeItemForEffect.id]?.path || '') : '';
+
   useEffect(() => {
     const activeItem = getActiveItem();
     if (!activeItem || !activeSpeakerId) {
       setSpectrogramUrl('');
+      setIsSpectrogramLoading(false);
       setQualityResults(null);
       clearCanvas();
       return;
     }
 
     const recordMeta = speakers[activeSpeakerId]?.items?.[activeItem.id];
-    if (recordMeta) {
-      // Retrieve quality from state if present, or query analysis
-      if (recordMeta.quality) {
-        setQualityResults(recordMeta.quality);
-      }
-      if (effectiveVisualizerTab === 'spectrogram') {
+    if (recordMeta && recordMeta.path) {
+      setQualityResults(recordMeta.quality || null);
+      setSpectrogramUrl('');
+      if (effectiveVisualizerTab === 'spectrogram' || !recordMeta.quality) {
         analyzeAudio(activeSpeakerId, activeItem.id);
+      } else {
+        setIsSpectrogramLoading(false);
       }
       drawStaticWaveformFromUrl();
     } else {
       setSpectrogramUrl('');
+      setIsSpectrogramLoading(false);
       setQualityResults(null);
       clearCanvas();
     }
-  }, [activeItemIndex, activeSpeakerId, displayedItems, effectiveVisualizerTab, themeSetting, accentColorSetting]);
+  }, [activeItemIndex, activeSpeakerId, displayedItems, effectiveVisualizerTab, themeSetting, accentColorSetting, activeRecordPath]);
 
   // Auto-scroll word list to center active item
   useEffect(() => {
@@ -1885,6 +1907,27 @@ export default function App() {
     }
   };
 
+  const handleSaveSpeakerRename = async () => {
+    const id = editingSpeakerId;
+    const newName = editingSpeakerName.trim();
+    setEditingSpeakerId('');
+    if (!id || !newName || !speakers[id] || speakers[id].name === newName) return;
+
+    const updated = {
+      ...speakers,
+      [id]: {
+        ...speakers[id],
+        name: newName
+      }
+    };
+    setSpeakers(updated);
+    try {
+      await saveProjectState(updated, groupsRef.current, activeSpeakerId);
+    } catch (err) {
+      console.error('Failed to save speaker rename:', err);
+    }
+  };
+
   // --- Upload Files ---
   const triggerWordlistUpload = () => fileInputRef.current.click();
   const triggerProjectUpload = () => projectInputRef.current.click();
@@ -2070,18 +2113,24 @@ export default function App() {
       if (!selected) return;
 
       setIsProcessing(true);
-      const res = await apiFetch('/project/import_folder', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folder_path: selected })
-      });
+      let data;
+      if (typeof runtime.importProjectFolder === 'function') {
+        data = await runtime.importProjectFolder({ folder_path: selected });
+      } else {
+        const res = await apiFetch('/project/import_folder', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ folder_path: selected })
+        });
 
-      if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData.detail || '导入文件夹失败');
+        if (!res.ok) {
+          const errData = await res.json();
+          throw new Error(errData.detail || '导入文件夹失败');
+        }
+
+        data = await res.json();
       }
 
-      const data = await res.json();
       resetPlayback();
       setSpectrogramUrl('');
       setQualityResults(null);
@@ -2138,7 +2187,7 @@ export default function App() {
   const handleProjectExport = async () => {
     if (isRecordingRef.current || isProcessingRef.current || isStartingRef.current) return;
     if (Object.keys(speakers).length === 0) {
-      await customAlert('当前工程尚未添加任何发音人，禁止导出工程！');
+      await customAlert('请先添加至少一位发音人后再导出工程');
       return;
     }
 
@@ -2152,7 +2201,7 @@ export default function App() {
       setIsProcessing(false);
     }
 
-    if (!isStandalone && saveFormatSetting === 'folder') {
+    if (saveFormatSetting === 'folder') {
       let path = folderPathSetting;
       if (!path) {
         const selected = await open({ directory: true, multiple: false });
@@ -2163,14 +2212,18 @@ export default function App() {
 
       try {
         setIsProcessing(true);
-        const res = await apiFetch('/project/export_folder', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ folder_path: path })
-        });
-        if (!res.ok) {
-          const errData = await res.json();
-          throw new Error(errData.detail || '导出文件夹失败');
+        if (typeof runtime.exportProjectFolder === 'function') {
+          await runtime.exportProjectFolder({ destination_dir: path, project_name: defaultProjectNameSetting });
+        } else {
+          const res = await apiFetch('/project/export_folder', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ folder_path: path, project_name: defaultProjectNameSetting })
+          });
+          if (!res.ok) {
+            const errData = await res.json();
+            throw new Error(errData.detail || '导出文件夹失败');
+          }
         }
         await customAlert('工程已成功导出到文件夹：' + path);
       } catch (error) {
@@ -2600,6 +2653,7 @@ export default function App() {
   const analyzeAudio = async (speakerId, wordId) => {
     if (!capabilities.fullQuality) return;
 
+    setIsSpectrogramLoading(true);
     try {
       const data = await runtime.analyzeAudio({
         speakerId,
@@ -2608,11 +2662,18 @@ export default function App() {
       });
       if (!data) return;
 
-      if (data.spectrogram) setSpectrogramUrl(data.spectrogram);
+      const currentItem = displayedItemsRef.current[activeItemIndexRef.current];
+      const isStillActive = activeSpeakerIdRef.current === speakerId && currentItem?.id === wordId;
+
+      if (isStillActive && data.spectrogram) {
+        setSpectrogramUrl(data.spectrogram);
+      }
 
       // If backend analysis returns quality checks, sync them back into speakers state
       if (data.quality) {
-        setQualityResults(data.quality);
+        if (isStillActive) {
+          setQualityResults(data.quality);
+        }
         const recordMeta = speakersRef.current[speakerId]?.items?.[wordId];
         if (recordMeta && !recordMeta.quality) {
           const updated = { ...speakersRef.current };
@@ -2629,6 +2690,11 @@ export default function App() {
       }
     } catch (err) {
       console.error(err);
+    } finally {
+      const currentItem = displayedItemsRef.current[activeItemIndexRef.current];
+      if (activeSpeakerIdRef.current === speakerId && currentItem?.id === wordId) {
+        setIsSpectrogramLoading(false);
+      }
     }
   };
 
@@ -2939,6 +3005,11 @@ export default function App() {
 
   // Compute active item for use in JSX
   const activeItem = getActiveItem();
+  const activeRecordMeta = activeItem ? speakers[activeSpeakerId]?.items?.[activeItem.id] : null;
+  const isCurrentPlaybackItem = playbackState.currentSpeakerId === activeSpeakerId && playbackState.currentWordId === activeItem?.id;
+  const knownDurationSec = (activeRecordMeta?.duration_ms || activeRecordMeta?.quality?.metrics?.duration_ms || 0) / 1000;
+  const displayDuration = (isCurrentPlaybackItem && playbackState.duration > 0) ? playbackState.duration : knownDurationSec;
+  const displayCurrentTime = isCurrentPlaybackItem ? playbackState.currentTime : 0;
   const noteFontSize = Math.max(18, Math.round(charFontSize * 0.24));
 
   if (!settingsLoaded) {
@@ -3155,8 +3226,8 @@ export default function App() {
                   </span>
                 </div>
                 <div className="info-row">
-                  <span>总词数:</span>
-                  <span className="info-value">{wordlistInfo.count} 字</span>
+                  <span>词条总数:</span>
+                  <span className="info-value">{wordlistInfo.count} 条</span>
                 </div>
               </div>
             </div>
@@ -3175,7 +3246,7 @@ export default function App() {
                     onChange={updateBadgeMetaKey}
                     options={[
                       { value: 'none', label: '无' },
-                      { value: 'note', label: '提示信息 (note)' },
+                      { value: 'note', label: '备注提示' },
                       ...getAvailableMetaKeys().map(k => ({ value: k, label: k }))
                     ]}
                     style={{ width: '100%' }}
@@ -3188,7 +3259,7 @@ export default function App() {
                     onChange={updatePrimaryMetaKey}
                     options={[
                       { value: 'none', label: '无' },
-                      { value: 'note', label: '提示信息 (note)' },
+                      { value: 'note', label: '备注提示' },
                       ...getAvailableMetaKeys().map(k => ({ value: k, label: k }))
                     ]}
                     style={{ width: '100%' }}
@@ -3209,31 +3280,91 @@ export default function App() {
               </div>
 
               <div className="speaker-list">
-                {Object.values(speakers).map(spk => (
-                  <div
-                    key={spk.id}
-                    className={`speaker-item ${activeSpeakerId === spk.id ? 'active' : ''}`}
-                    onClick={async () => {
-                      if (isRecordingRef.current || isProcessingRef.current || isStartingRef.current) return;
-                      clearAutoAdvanceTimer();
-                      setActiveSpeakerId(spk.id);
-                      try {
-                        await saveProjectState(speakers, groupsRef.current, spk.id);
-                      } catch (err) {
-                        console.error('Failed to switch speaker / save project state:', err);
-                      }
-                    }}
-                  >
-                    <span className="speaker-name">
-                      <UserIcon /> {spk.name}
-                    </span>
-                    <span className="speaker-actions">
-                      <button className="btn-icon" disabled={isRecording || isProcessing} onClick={(e) => handleDeleteSpeaker(spk.id, e)}>
-                        <TrashIcon />
-                      </button>
-                    </span>
-                  </div>
-                ))}
+                {Object.values(speakers).map(spk => {
+                  const spkRecordedCount = spk.items ? Object.values(spk.items).filter(i => Boolean(i?.path)).length : 0;
+                  const totalWordCount = groups.reduce((acc, g) => acc + (g.items?.length || 0), 0);
+                  const isEditing = editingSpeakerId === spk.id;
+
+                  return (
+                    <div
+                      key={spk.id}
+                      className={`speaker-item ${activeSpeakerId === spk.id ? 'active' : ''}`}
+                      onDoubleClick={(e) => {
+                        e.stopPropagation();
+                        if (isRecordingRef.current || isProcessingRef.current || isStartingRef.current) return;
+                        setEditingSpeakerId(spk.id);
+                        setEditingSpeakerName(spk.name);
+                      }}
+                      onClick={async () => {
+                        if (isEditing) return;
+                        if (isRecordingRef.current || isProcessingRef.current || isStartingRef.current) return;
+                        clearAutoAdvanceTimer();
+                        setActiveSpeakerId(spk.id);
+                        try {
+                          await saveProjectState(speakers, groupsRef.current, spk.id);
+                        } catch (err) {
+                          console.error('Failed to switch speaker / save project state:', err);
+                        }
+                      }}
+                    >
+                      {isEditing ? (
+                        <span className="speaker-name" style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                          <UserIcon />
+                          <input
+                            type="text"
+                            className="speaker-inline-input"
+                            value={editingSpeakerName}
+                            onChange={(e) => setEditingSpeakerName(e.target.value)}
+                            onBlur={handleSaveSpeakerRename}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') handleSaveSpeakerRename();
+                              if (e.key === 'Escape') setEditingSpeakerId('');
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                            autoFocus
+                            style={{
+                              background: 'transparent',
+                              border: 'none',
+                              outline: 'none',
+                              color: 'var(--text-primary)',
+                              fontSize: '0.85rem',
+                              fontWeight: 500,
+                              width: '100%',
+                              padding: 0
+                            }}
+                          />
+                        </span>
+                      ) : (
+                        <span className="speaker-name">
+                          <UserIcon /> {spk.name}
+                          <span className="speaker-progress-badge" title={`已录制 ${spkRecordedCount} / ${totalWordCount} 条`}>
+                            {spkRecordedCount}/{totalWordCount}
+                          </span>
+                        </span>
+                      )}
+                      <span className="speaker-actions">
+                        {!isEditing && (
+                          <button
+                            className="btn-icon"
+                            disabled={isRecording || isProcessing}
+                            title="重命名发音人"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (isRecordingRef.current || isProcessingRef.current || isStartingRef.current) return;
+                              setEditingSpeakerId(spk.id);
+                              setEditingSpeakerName(spk.name);
+                            }}
+                          >
+                            <EditIcon />
+                          </button>
+                        )}
+                        <button className="btn-icon" disabled={isRecording || isProcessing} title="删除发音人" onClick={(e) => handleDeleteSpeaker(spk.id, e)}>
+                          <TrashIcon />
+                        </button>
+                      </span>
+                    </div>
+                  );
+                })}
                 {isAddingSpeaker && (
                   <div className="speaker-item active" style={{ padding: '0.35rem 0.8rem' }}>
                     <span className="speaker-name" style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
@@ -3292,24 +3423,26 @@ export default function App() {
         <section className="glass-panel main-recording-card" style={{ display: 'flex', flexDirection: 'row', padding: 0, minHeight: 0 }}>
 
           {/* Left side: Big Word display & Buttons */}
-          <div className="center-column" style={{ padding: '1.25rem', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+          <div className="center-column">
           {activeItem ? (
             <div className="character-card">
-              <span className="char-group-indicator">
-                当前: {activeItemIndex + 1} / {displayedItems.length}
-              </span>
+              <div className="character-top-toolbar">
+                <span className="char-group-indicator">
+                  当前: {activeItemIndex + 1} / {displayedItems.length}
+                </span>
 
-              <div className="font-size-slider-container" title="调整字号大小">
-                <span style={{ fontSize: '0.75rem' }}>A</span>
-                <input
-                  type="range"
-                  min="60"
-                  max="200"
-                  value={charFontSize}
-                  onChange={(e) => updateCharFontSize(Number(e.target.value))}
-                  className="font-size-slider"
-                />
-                <span style={{ fontSize: '1.05rem', fontWeight: 700 }}>A</span>
+                <div className="font-size-slider-container" title="调整字号大小">
+                  <span style={{ fontSize: '0.75rem' }}>A</span>
+                  <input
+                    type="range"
+                    min="60"
+                    max="200"
+                    value={charFontSize}
+                    onChange={(e) => updateCharFontSize(Number(e.target.value))}
+                    className="font-size-slider"
+                  />
+                  <span style={{ fontSize: '1.05rem', fontWeight: 700 }}>A</span>
+                </div>
               </div>
               <div className="char-display-container">
                 <span className="char-display" style={{ fontSize: `${charFontSize}px`, transition: 'font-size 0.1s ease' }}>{activeItem.label}</span>
@@ -3324,7 +3457,7 @@ export default function App() {
               </div>
             </div>
           ) : (
-            <div className="character-card" style={{ color: 'var(--text-muted)', fontSize: '1rem', textAlign: 'center' }}>
+            <div className="character-card" style={{ color: 'var(--text-muted)', fontSize: '1rem', textAlign: 'center', justifyContent: 'center' }}>
               请导入字表（支持拖拽）或选择发音人
             </div>
           )}
@@ -3332,15 +3465,15 @@ export default function App() {
           {/* Controls Panel Wrapper */}
           <div className="recording-controls-wrapper" style={{ position: 'relative', width: '100%' }}>
             {/* Playback Seek Bar */}
-            {activeItem && speakers[activeSpeakerId]?.items?.[activeItem.id]?.path && (
+            {activeItem && activeRecordMeta?.path && (
               <div className="playback-progress-container">
                 <input
                   type="range"
                   className="playback-slider"
                   min="0"
-                  max={playbackState.duration || 100}
+                  max={displayDuration || 100}
                   step="0.01"
-                  value={playbackState.currentTime}
+                  value={displayCurrentTime}
                   onChange={handleSeekChange}
                   onMouseDown={handleSeekStart}
                   onMouseUp={handleSeekEnd}
@@ -3349,18 +3482,17 @@ export default function App() {
                   onMouseMove={handleProgressBarMouseMove}
                   onMouseLeave={handleProgressBarMouseLeave}
                   style={{
-                    '--progress-percent': `${playbackState.duration ? (playbackState.currentTime / playbackState.duration) * 100 : 0}%`,
+                    '--progress-percent': `${displayDuration ? (displayCurrentTime / displayDuration) * 100 : 0}%`,
                     '--hover-percent': `${hoverPercent}%`
                   }}
                   disabled={
                     isRecording
                     || isProcessing
-                    || playbackState.currentSpeakerId !== activeSpeakerId
-                    || playbackState.currentWordId !== activeItem.id
+                    || !isCurrentPlaybackItem
                   }
                 />
                 <div className="playback-time">
-                  {formatPlaybackTime(playbackState.currentTime)} / {formatPlaybackTime(playbackState.duration)}
+                  {formatPlaybackTime(displayCurrentTime)} / {formatPlaybackTime(displayDuration)}
                 </div>
               </div>
             )}
@@ -3373,7 +3505,7 @@ export default function App() {
 
               {/* VAD progress visualizer */}
               {recordingMode === 'vad' && (
-                <div style={{ width: '240px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                <div style={{ width: '100%', maxWidth: '240px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
                   <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                     <MicIcon active={vadSpeaking} /> {vadSpeaking ? '说话中 (静音自动跳转)' : '静音中 (请发音)'}
                   </span>
@@ -3392,7 +3524,7 @@ export default function App() {
                   className="nav-arrow play-btn"
                   onClick={playRecordedAudio}
                   disabled={isRecording || isProcessing || !activeItem || !speakers[activeSpeakerId]?.items?.[activeItem.id]?.path}
-                  title="播放录音 (R键)"
+                  title="播放录音"
                 >
                   {playbackState.isPlaying && playbackState.currentSpeakerId === activeSpeakerId && playbackState.currentWordId === activeItem?.id ? (
                     <PauseIcon />
@@ -3406,7 +3538,7 @@ export default function App() {
                   className="nav-arrow prev-btn"
                   onClick={() => navigateItem(-1)}
                   disabled={isRecording || isProcessing || activeItemIndex === 0}
-                  title="上一个 (左方向键)"
+                  title="上一条"
                 >
                   <ChevronLeft />
                 </button>
@@ -3445,7 +3577,7 @@ export default function App() {
                       }
                     } : null}
                     disabled={isProcessing}
-                    title={recordingMode === 'hold' ? '按住录音，松开停止' : '点击录音，再次点击停止 (空格键)'}
+                    title={recordingMode === 'hold' ? '按住录音，松开停止' : '点击录音，再次点击停止'}
                   >
                     <div className="record-core"></div>
                   </button>
@@ -3456,7 +3588,7 @@ export default function App() {
                   className="nav-arrow next-btn"
                   onClick={() => navigateItem(1)}
                   disabled={isRecording || isProcessing || activeItemIndex === displayedItems.length - 1}
-                  title="下一个 (右方向键)"
+                  title="下一条"
                 >
                   <ChevronRight />
                 </button>
@@ -3473,17 +3605,23 @@ export default function App() {
               </div>
 
               {/* Keyboard hints at the bottom of controls card */}
-              {showShortcutHintsSetting && (
-                <div className="keyboard-hints" style={{ display: 'flex', flexWrap: 'wrap', width: '100%', justifyContent: 'center', alignItems: 'center', gap: '1rem', fontSize: '0.75rem', color: 'var(--text-secondary)', borderTop: '1px solid var(--border-color)', paddingTop: '0.75rem', marginTop: '0.5rem' }}>
-                  <span><KeyboardIcon /> [空格] 录音/停止</span>
-                  <span>[← / →] 切换字表词条</span>
-                  {activeItem && speakers[activeSpeakerId]?.items?.[activeItem.id]?.path && (
-                    <span style={{ color: 'var(--color-accent)', cursor: 'pointer', fontWeight: 'bold' }} onClick={playRecordedAudio}>
-                      [R] 播放录音
-                    </span>
-                  )}
-                </div>
-              )}
+              {showShortcutHintsSetting && shortcutPresetSetting !== 'disabled' && (() => {
+                const recordKeyLabel = shortcutPresetSetting === 'right' ? '回车' : '空格';
+                const navKeyLabel = shortcutPresetSetting === 'left' ? 'A / D' : (shortcutPresetSetting === 'right' ? 'J / L' : '← / →');
+                const playKeyLabel = shortcutPresetSetting === 'left' ? 'S' : (shortcutPresetSetting === 'right' ? 'K' : 'R');
+                const recordActionLabel = recordingMode === 'hold' ? '长按录音' : '录音/停止';
+                return (
+                  <div className="keyboard-hints" style={{ display: 'flex', flexWrap: 'wrap', width: '100%', justifyContent: 'center', alignItems: 'center', gap: '0.65rem 1rem', fontSize: '0.75rem', color: 'var(--text-secondary)', borderTop: '1px solid var(--border-color)', paddingTop: '0.65rem', marginTop: '0.35rem' }}>
+                    <span><KeyboardIcon /> [{recordKeyLabel}] {recordActionLabel}</span>
+                    <span>[{navKeyLabel}] 切换词条</span>
+                    {activeItem && speakers[activeSpeakerId]?.items?.[activeItem.id]?.path && (
+                      <span style={{ color: 'var(--color-accent)', cursor: 'pointer', fontWeight: 'bold' }} onClick={playRecordedAudio}>
+                        [{playKeyLabel}] 播放录音
+                      </span>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
           </div>
           
@@ -3503,8 +3641,8 @@ export default function App() {
             </div>
 
             <div className="center-bottom-actions">
-              <button className="btn-secondary" disabled={isRecording || isProcessing} style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }} onClick={handleImportButtonClick}>
-                <ExportIcon /> 导入
+              <button className="btn-secondary" aria-label="导入" disabled={isRecording || isProcessing} onClick={handleImportButtonClick} title="导入已有工程文件或目录">
+                <ImportIcon /> 导入工程
               </button>
               <input
                 type="file"
@@ -3514,21 +3652,20 @@ export default function App() {
                 onChange={handleProjectUpload}
               />
               {capabilities.wavFolderExport && (
-                <button className="btn-secondary" disabled={isRecording || isProcessing} style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }} onClick={handleWavExport}>
-                  <ImportIcon /> 导出 WAV
+                <button className="btn-secondary" disabled={isRecording || isProcessing} onClick={handleWavExport} title="将已录制音频批量导出为 WAV 文件夹">
+                  <ExportIcon /> 导出 WAV
                 </button>
               )}
               <button
                 className="btn-secondary"
                 disabled={isRecording || isProcessing}
-                style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }}
                 onClick={handleOpenInPhonTracer}
-                title="在 PhonTracer 中打开工程进行标注精修"
+                title="在 PhonTracer 中打开当前工程进行标注与声学分析"
               >
-                在 PhonTracer 中打开精修
+                在 PhonTracer 中打开
               </button>
-              <button className="btn-primary" disabled={isRecording || isProcessing} style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }} onClick={handleProjectExport}>
-                <ImportIcon /> 保存工程
+              <button className="btn-primary" disabled={isRecording || isProcessing} onClick={handleProjectExport} title="保存当前录音工程">
+                <SaveIcon /> 保存工程
               </button>
             </div>
           </div>
@@ -3536,10 +3673,33 @@ export default function App() {
 
           {/* Right side: Word scroll list */}
           <div className="word-scroll-panel" style={{ borderLeft: '1px solid var(--border-color)', background: 'transparent' }}>
-          <div className="panel-header" style={{ padding: '0.75rem 1rem' }}>
+          <div className="panel-header" style={{ padding: '0.75rem 1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span className="panel-title" style={{ fontSize: '0.8rem' }}>
               <BookIcon /> 字表词条
             </span>
+            <button
+              type="button"
+              className="btn-secondary"
+              style={{ padding: '0.2rem 0.55rem', fontSize: '0.72rem', borderRadius: '4px' }}
+              disabled={isRecording || isProcessing || displayedItems.length === 0}
+              onClick={() => {
+                if (!displayedItems.length || !activeSpeakerId) return;
+                const speakerItems = speakers[activeSpeakerId]?.items || {};
+                const total = displayedItems.length;
+                for (let step = 1; step <= total; step++) {
+                  const checkIdx = (activeItemIndex + step) % total;
+                  const targetItem = displayedItems[checkIdx];
+                  if (!speakerItems[targetItem.id]?.path) {
+                    setActiveItemIndex(checkIdx);
+                    activeItemIndexRef.current = checkIdx;
+                    return;
+                  }
+                }
+              }}
+              title="跳转到下一个未录制的词条"
+            >
+              下一未录
+            </button>
           </div>
 
           <div className="panel-body" style={{ padding: '0.75rem' }}>
@@ -3556,22 +3716,86 @@ export default function App() {
                   { value: 'all', label: '【全部发音组】' },
                   ...groups.map((g, idx) => ({
                     value: String(idx),
-                    label: `${g.name} (${g.items.length}字)`
+                    label: `${g.name} (${g.items.length}条)`
                   }))
                 ]}
               />
             </div>
 
+            {/* Filter tabs */}
+            {(() => {
+              const currentSpeakerItems = speakers[activeSpeakerId]?.items || {};
+              let unrecordedCount = 0;
+              let reviewCount = 0;
+              for (const it of displayedItems) {
+                const meta = currentSpeakerItems[it.id];
+                if (!meta?.path) {
+                  unrecordedCount++;
+                } else {
+                  const q = meta.quality;
+                  const isReview = q && (
+                    q.decision === 'review' ||
+                    q.decision === 'retry' ||
+                    q.clipping?.abnormal ||
+                    q.creak?.abnormal ||
+                    (q.volume?.status && q.volume.status !== 'normal')
+                  );
+                  if (isReview) {
+                    reviewCount++;
+                  }
+                }
+              }
+
+              return (
+                <div className="word-filter-tabs">
+                  <button
+                    type="button"
+                    className={`word-filter-tab ${wordFilter === 'all' ? 'active' : ''}`}
+                    onClick={() => setWordFilter('all')}
+                  >
+                    全部 ({displayedItems.length})
+                  </button>
+                  <button
+                    type="button"
+                    className={`word-filter-tab ${wordFilter === 'unrecorded' ? 'active' : ''}`}
+                    onClick={() => setWordFilter('unrecorded')}
+                  >
+                    未录 ({unrecordedCount})
+                  </button>
+                  <button
+                    type="button"
+                    className={`word-filter-tab ${wordFilter === 'review' ? 'active' : ''}`}
+                    onClick={() => setWordFilter('review')}
+                  >
+                    需复核 ({reviewCount})
+                  </button>
+                </div>
+              );
+            })()}
+
             {/* Scroll list */}
             <div className="word-list-container">
               {displayedItems.map((item, idx) => {
-                const isActive = activeItemIndex === idx;
                 const recordMeta = speakers[activeSpeakerId]?.items?.[item.id];
                 const isRecorded = !!(recordMeta && recordMeta.path);
+                const isReview = isRecorded && recordMeta.quality && (
+                  recordMeta.quality.decision === 'review' ||
+                  recordMeta.quality.decision === 'retry' ||
+                  recordMeta.quality.clipping?.abnormal ||
+                  recordMeta.quality.creak?.abnormal ||
+                  (recordMeta.quality.volume?.status && recordMeta.quality.volume.status !== 'normal')
+                );
+
+                if (wordFilter === 'unrecorded' && isRecorded) return null;
+                if (wordFilter === 'review' && !isReview) return null;
+
+                const isActive = activeItemIndex === idx;
+                const isActivelyRecording = isActive && isRecording;
 
                 let itemClass = 'word-item';
                 if (isActive) itemClass += ' active';
                 if (isRecorded) itemClass += ' recorded';
+                if (isActivelyRecording) itemClass += ' recording';
 
                 return (
                   <div
@@ -3607,27 +3831,41 @@ export default function App() {
                       <div className="word-item-status-wrapper">
                         <span className="word-item-status-dot"></span>
                         <span className="word-item-status-text">
-                          {isActive ? '录制中' : (isRecorded ? '已录制' : '未录制')}
+                          {isActivelyRecording ? '录音中' : (isRecorded ? '已录制' : (isActive ? '待录制' : '未录制'))}
                         </span>
                       </div>
 
                       {/* Detailed quality labels */}
                       {isRecorded && recordMeta.quality && (
                         <div className="word-item-quality-tags">
-                          {recordMeta.quality.clipping.abnormal && (
+                          {recordMeta.quality.clipping?.abnormal && (
                             <span className="quality-tag abnormal">截断</span>
                           )}
-                          {(recordMeta.quality.volume.status === 'too_quiet' || recordMeta.quality.volume.status === 'too_loud') && (
+                          {(recordMeta.quality.volume?.status === 'too_quiet' || recordMeta.quality.volume?.status === 'too_loud') && (
                             <span className="quality-tag warning">
                               {recordMeta.quality.volume.status === 'too_quiet' ? '偏小' : '偏大'}
                             </span>
                           )}
-                          {recordMeta.quality.creak.abnormal && (
+                          {recordMeta.quality.creak?.abnormal && (
                             <span className="quality-tag warning">嘎裂</span>
                           )}
-                          {!recordMeta.quality.clipping.abnormal &&
-                           recordMeta.quality.volume.status === 'normal' &&
-                           !recordMeta.quality.creak.abnormal && (
+                          {recordMeta.quality.speech?.abnormal && (
+                            <span className="quality-tag warning">语音少</span>
+                          )}
+                          {recordMeta.quality.noise?.abnormal && (
+                            <span className="quality-tag warning">噪大</span>
+                          )}
+                          {recordMeta.quality.dc_offset?.abnormal && (
+                            <span className="quality-tag warning">偏移</span>
+                          )}
+                          {!recordMeta.quality.clipping?.abnormal &&
+                           recordMeta.quality.volume?.status === 'normal' &&
+                           !recordMeta.quality.creak?.abnormal &&
+                           !recordMeta.quality.speech?.abnormal &&
+                           !recordMeta.quality.noise?.abnormal &&
+                           !recordMeta.quality.dc_offset?.abnormal &&
+                           recordMeta.quality.decision !== 'retry' &&
+                           recordMeta.quality.decision !== 'review' && (
                             <span className="quality-tag normal">优质</span>
                           )}
                         </div>
@@ -3639,6 +3877,25 @@ export default function App() {
               {displayedItems.length === 0 && (
                 <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem', textAlign: 'center', padding: '2rem 1rem' }}>
                   字表为空，请导入
+                </div>
+              )}
+              {wordFilter === 'unrecorded' && displayedItems.length > 0 && !displayedItems.some(item => !speakers[activeSpeakerId]?.items?.[item.id]?.path) && (
+                <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem', textAlign: 'center', padding: '1.5rem 1rem' }}>
+                  当前分组已全部录制完成
+                </div>
+              )}
+              {wordFilter === 'review' && displayedItems.length > 0 && !displayedItems.some(item => {
+                const rm = speakers[activeSpeakerId]?.items?.[item.id];
+                return rm?.path && rm.quality && (
+                  rm.quality.decision === 'review' ||
+                  rm.quality.decision === 'retry' ||
+                  rm.quality.clipping?.abnormal ||
+                  rm.quality.creak?.abnormal ||
+                  (rm.quality.volume?.status && rm.quality.volume.status !== 'normal')
+                );
+              }) && (
+                <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem', textAlign: 'center', padding: '1.5rem 1rem' }}>
+                  暂无需要复核的词条
                 </div>
               )}
             </div>
@@ -3666,7 +3923,7 @@ export default function App() {
             <div className="info-card quality-card" style={{ padding: '0.75rem' }}>
               <div className="switch-container" style={{ marginBottom: '0.5rem' }}>
                 <span style={{ fontWeight: 600, fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                  <CheckIcon /> 实时质量检测
+                  <CheckIcon /> 自动音质检测
                 </span>
                 <label className="switch">
                   <input
@@ -3682,7 +3939,7 @@ export default function App() {
               {qualityChecksEnabled && (
                 <div className="live-volume-container" style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', margin: '0.25rem 0 0.75rem 0' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                    <span>实时音量检测:</span>
+                    <span>麦克风输入电平:</span>
                     <span>{liveVolume}%</span>
                   </div>
                   <div className="live-volume-bar">
@@ -3710,7 +3967,10 @@ export default function App() {
 
               <div className="quality-grid">
                 {qualityRules.volume?.enabled !== false && (
-                  <div className="quality-item">
+                  <div
+                    className="quality-item"
+                    title={qualityResults?.metrics ? `有效音量: ${qualityResults.metrics.active_rms_dbfs.toFixed(1)} dBFS (峰值: ${qualityResults.metrics.peak_dbfs.toFixed(1)} dBFS)` : '有效音量 (dBFS)'}
+                  >
                     <span>音量检测</span>
                     <div className="quality-indicator">
                       <span className={`indicator-led ${
@@ -3724,7 +3984,10 @@ export default function App() {
                   </div>
                 )}
                 {capabilities.fullQuality && qualityRules.creak?.enabled !== false && (
-                  <div className="quality-item">
+                  <div
+                    className="quality-item"
+                    title={qualityResults?.creak?.score !== undefined ? `嘎裂声占比: ${(qualityResults.creak.score * 100).toFixed(1)}%` : '嘎裂声占比'}
+                  >
                     <span>嘎裂声</span>
                     <div className="quality-indicator">
                       <span className={`indicator-led ${
@@ -3738,7 +4001,10 @@ export default function App() {
                   </div>
                 )}
                 {qualityRules.clipping?.enabled !== false && (
-                  <div className="quality-item">
+                  <div
+                    className="quality-item"
+                    title={qualityResults?.metrics ? `削波比例: ${(qualityResults.metrics.clipping_ratio * 100).toFixed(2)}%` : '削波比例'}
+                  >
                     <span>音频截断</span>
                     <div className="quality-indicator">
                       <span className={`indicator-led ${
@@ -3752,13 +4018,16 @@ export default function App() {
                   </div>
                 )}
                 {!isStandalone && !capabilities.fullQuality && ['有效语音', '背景噪声', '嘎裂声', '直流偏移'].map(label => (
-                  <div className="quality-item" key={label} style={{ opacity: 0.65 }}>
+                  <div className="quality-item" key={label} style={{ opacity: 0.65 }} title="需要 PhonTracer 完整分析引擎支持">
                     <span>{label}</span>
                     <span style={{ color: 'var(--text-secondary)', fontSize: '0.72rem' }}>完整模式可用</span>
                   </div>
                 ))}
                 {capabilities.fullQuality && qualityRules.speech?.enabled !== false && (
-                  <div className="quality-item">
+                  <div
+                    className="quality-item"
+                    title={qualityResults?.metrics ? `有效语音占比: ${Math.round(qualityResults.metrics.speech_ratio * 100)}% (${qualityResults.metrics.speech_ms} ms)` : '有效语音占比'}
+                  >
                     <span>有效语音</span>
                     <div className="quality-indicator">
                       <span className={`indicator-led ${qualityResults?.speech?.enabled === false ? '' : (qualityResults?.speech?.abnormal ? 'red' : (qualityResults?.speech ? 'green' : ''))}`}></span>
@@ -3769,7 +4038,10 @@ export default function App() {
                   </div>
                 )}
                 {capabilities.fullQuality && qualityRules.noise?.enabled !== false && (
-                  <div className="quality-item">
+                  <div
+                    className="quality-item"
+                    title={qualityResults?.metrics ? `信噪比: ${qualityResults.metrics.snr_db.toFixed(1)} dB` : '信噪比 (dB)'}
+                  >
                     <span>背景噪声</span>
                     <div className="quality-indicator">
                       <span className={`indicator-led ${qualityResults?.noise?.enabled === false ? '' : (qualityResults?.noise?.abnormal ? 'red' : (qualityResults?.noise ? 'green' : ''))}`}></span>
@@ -3780,7 +4052,10 @@ export default function App() {
                   </div>
                 )}
                 {capabilities.fullQuality && qualityRules.dc_offset?.enabled !== false && (
-                  <div className="quality-item">
+                  <div
+                    className="quality-item"
+                    title={qualityResults?.metrics ? `直流偏移: ${qualityResults.metrics.dc_offset.toFixed(4)}` : '直流偏移'}
+                  >
                     <span>直流偏移</span>
                     <div className="quality-indicator">
                       <span className={`indicator-led ${qualityResults?.dc_offset?.enabled === false ? '' : (qualityResults?.dc_offset?.abnormal ? 'red' : (qualityResults?.dc_offset ? 'green' : ''))}`}></span>
@@ -3848,7 +4123,11 @@ export default function App() {
                     </div>
                   ) : (
                     <div className="visualizer-placeholder">
-                      语谱图将在录制结束后生成
+                      {isSpectrogramLoading
+                        ? '正在加载语谱图...'
+                        : (activeItem && speakers[activeSpeakerId]?.items?.[activeItem.id]?.path
+                          ? '语谱图暂不可用'
+                          : '录制后自动生成语谱图')}
                     </div>
                   )
                 )}
@@ -3962,7 +4241,7 @@ export default function App() {
         capabilities={capabilities}
         metaKeyOptions={[
           { value: 'none', label: '无' },
-          { value: 'note', label: '提示信息 (note)' },
+          { value: 'note', label: '备注提示' },
           ...getAvailableMetaKeys().map(k => ({ value: k, label: k }))
         ]}
       />
@@ -3973,7 +4252,7 @@ export default function App() {
           <div className="modal-content" style={{ maxWidth: '380px' }}>
             <div className="modal-header">
               <span style={{ fontWeight: 650, fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <ExportIcon /> 导入工程
+                <ImportIcon /> 导入工程
               </span>
             </div>
             <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', padding: '1.25rem 1rem' }}>

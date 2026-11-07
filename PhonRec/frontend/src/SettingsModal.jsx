@@ -39,9 +39,8 @@ const SaveIcon = () => (
 
 const CheckIcon = () => (
   <svg style={{ width: '16px', height: '16px' }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="12" r="10" />
-    <line x1="12" y1="8" x2="12" y2="12" />
-    <line x1="12" y1="16" x2="12.01" y2="16" />
+    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+    <polyline points="9 12 11 14 15 10" />
   </svg>
 );
 
@@ -306,7 +305,7 @@ export default function SettingsModal({
       <div className="modal-content settings-modal" role="dialog" aria-modal="true" aria-label="设置中心">
         <div className="modal-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span style={{ fontWeight: 650, fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <GearIcon /> PhonTracer语音学标注与声学分析系统 V1.0 - 设置中心
+            <GearIcon /> PhonRec 语音采集与质量监控系统 V1.0 - 设置中心
           </span>
           <button className="btn-icon" onClick={onClose} style={{ fontSize: '1.2rem' }}>
             &times;
@@ -448,7 +447,7 @@ export default function SettingsModal({
                       />
                     </div>
                     <div className="form-group">
-                      <label className="form-label">界面过度动效</label>
+                      <label className="form-label">界面过渡动效</label>
                       <div style={{ display: 'flex', alignItems: 'center', height: '36px' }}>
                         <label className="switch">
                           <input
@@ -1011,7 +1010,7 @@ export default function SettingsModal({
                     />
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                        <h2 style={{ margin: 0, fontSize: '1.35rem', fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1 }}>PhonTracer语音学标注与声学分析系统 V1.0</h2>
+                        <h2 style={{ margin: 0, fontSize: '1.35rem', fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1 }}>PhonRec 语音采集与质量监控系统 V1.0</h2>
                         <span className={`table-status-badge ${isStandalone ? 'badge-special' : 'badge-yes'}`} style={{ padding: '0.12rem 0.45rem', fontSize: '0.68rem', borderRadius: '4px', fontWeight: 600 }}>
                           {isStandalone ? '独立模式' : '完整模式'}
                         </span>

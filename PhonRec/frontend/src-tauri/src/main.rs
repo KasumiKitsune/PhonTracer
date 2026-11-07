@@ -697,7 +697,6 @@ fn detect_creak_rust(samples: &[f32], sample_rate: u32) -> (bool, f64) {
     if sample_rate == 0 || samples.is_empty() {
         return (false, 0.0);
     }
-    let mean = samples.iter().map(|s| *s as f64).sum::<f64>() / samples.len() as f64;
     let window_size = ((sample_rate as f64 * 0.03).round() as usize).max(1);
     let step_size = ((sample_rate as f64 * 0.01).round() as usize).max(1);
     if samples.len() < window_size {
@@ -705,47 +704,48 @@ fn detect_creak_rust(samples: &[f32], sample_rate: u32) -> (bool, f64) {
     }
 
     let min_lag = (sample_rate / 400) as usize;
-    let max_lag = (sample_rate / 50) as usize;
+    let max_lag = (sample_rate / 40) as usize;
     if min_lag >= max_lag || max_lag >= window_size {
         return (false, 0.0);
     }
 
+    let frame_len = window_size;
+    let hann: Vec<f32> = (0..frame_len)
+        .map(|i| {
+            0.5 * (1.0
+                - (2.0 * std::f32::consts::PI * i as f32
+                    / (frame_len.saturating_sub(1).max(1) as f32))
+                    .cos())
+        })
+        .collect();
+
     let mut voiced_count = 0usize;
     let mut creak_frames = 0usize;
-    let mut prev_peak_lag = None;
+    let mut prev_lag: Option<usize> = None;
+    let mut prev_rms: Option<f32> = None;
 
     let mut offset = 0;
     while offset + window_size <= samples.len() {
         let chunk = &samples[offset..offset + window_size];
-        let rms = (chunk
-            .iter()
-            .map(|s| {
-                let d = *s as f64 - mean;
-                d * d
-            })
-            .sum::<f64>()
-            / window_size as f64)
-            .sqrt();
+        let chunk_mean: f32 = chunk.iter().sum::<f32>() / frame_len as f32;
+        let mut windowed = Vec::with_capacity(frame_len);
+        let mut sq_sum = 0.0f32;
+        for i in 0..frame_len {
+            let d = chunk[i] - chunk_mean;
+            sq_sum += d * d;
+            windowed.push(d * hann[i]);
+        }
+        let rms = (sq_sum / frame_len as f32).sqrt();
 
         if rms >= 0.01 {
-            voiced_count += 1;
-            let r0 = chunk
-                .iter()
-                .map(|s| {
-                    let d = *s as f64 - mean;
-                    d * d
-                })
-                .sum::<f64>();
-
-            if r0 > 1e-12 {
+            let r0: f32 = windowed.iter().map(|&s| s * s).sum();
+            if r0 > 1e-10 {
                 let mut best_lag = min_lag;
-                let mut best_r = -1.0f64;
+                let mut best_r = -1.0f32;
                 for lag in min_lag..=max_lag {
-                    let mut r = 0.0f64;
-                    for j in 0..(window_size - lag) {
-                        let s1 = chunk[j] as f64 - mean;
-                        let s2 = chunk[j + lag] as f64 - mean;
-                        r += s1 * s2;
+                    let mut r = 0.0f32;
+                    for j in 0..(frame_len - lag) {
+                        r += windowed[j] * windowed[j + lag];
                     }
                     if r > best_r {
                         best_r = r;
@@ -753,24 +753,48 @@ fn detect_creak_rust(samples: &[f32], sample_rate: u32) -> (bool, f64) {
                     }
                 }
 
-                let strength = best_r / r0;
-                if strength > 0.35 {
-                    let pitch = sample_rate as f64 / best_lag as f64;
-                    let is_low_pitch = (45.0..=85.0).contains(&pitch);
-                    let high_jitter = if let Some(prev) = prev_peak_lag {
-                        let diff = (best_lag as f64 - prev as f64).abs();
-                        diff / prev as f64 > 0.25
+                let best_corr = best_r / r0;
+                if best_corr > 0.35 {
+                    voiced_count += 1;
+                    let pitch = sample_rate as f32 / best_lag as f32;
+                    let jitter = if let Some(prev) = prev_lag {
+                        let ratio = (best_lag as f32 - prev as f32).abs() / (prev.max(1) as f32);
+                        if (ratio - 0.5).abs() < 0.06 || (ratio - 1.0).abs() < 0.08 {
+                            0.0
+                        } else {
+                            ratio
+                        }
                     } else {
-                        false
+                        0.0
                     };
-                    if is_low_pitch || high_jitter {
+                    let shimmer = if let Some(prev) = prev_rms {
+                        (rms - prev).abs() / prev.max(1e-5)
+                    } else {
+                        0.0
+                    };
+
+                    let is_creak = (pitch >= 42.0
+                        && pitch <= 80.0
+                        && (jitter > 0.08 || shimmer > 0.18 || best_corr < 0.68))
+                        || (jitter > 0.22 && shimmer > 0.15)
+                        || (pitch <= 95.0 && jitter > 0.16 && best_corr < 0.62);
+
+                    if is_creak {
                         creak_frames += 1;
                     }
-                    prev_peak_lag = Some(best_lag);
+                    prev_lag = Some(best_lag);
+                    prev_rms = Some(rms);
                 } else {
-                    prev_peak_lag = None;
+                    prev_lag = None;
+                    prev_rms = None;
                 }
+            } else {
+                prev_lag = None;
+                prev_rms = None;
             }
+        } else {
+            prev_lag = None;
+            prev_rms = None;
         }
         offset += step_size;
     }
@@ -829,33 +853,19 @@ fn analyze_lightweight_quality(samples: &[f32], sample_rate: u32, rules: &Value)
     let mut sorted_dbs = frame_dbs.clone();
     sorted_dbs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
-    let p90_db = percentile(&sorted_dbs, 90.0);
-    let speech_thresh_db = (p90_db - 22.0).max(-52.0);
-
-    let mut is_candidate = vec![false; frame_dbs.len()];
-    for i in 0..frame_dbs.len() {
-        if frame_dbs[i] >= speech_thresh_db && frame_zcrs[i] < 0.38 {
-            is_candidate[i] = true;
-        }
-    }
+    let p95_db = percentile(&sorted_dbs, 95.0);
+    let _p90_db = percentile(&sorted_dbs, 90.0);
+    let p15_db = percentile(&sorted_dbs, 15.0);
 
     let mut is_speech = vec![false; frame_dbs.len()];
-    let mut run_start: Option<usize> = None;
-    for (i, &candidate) in is_candidate.iter().enumerate() {
-        if candidate {
-            if run_start.is_none() {
-                run_start = Some(i);
+    if p95_db >= -45.0 {
+        let speech_thresh_db = (p95_db - 20.0).max(-45.0);
+        for i in 0..frame_dbs.len() {
+            if frame_dbs[i] >= speech_thresh_db
+                && (frame_dbs[i] >= p95_db - 14.0 || frame_zcrs[i] < 0.42)
+            {
+                is_speech[i] = true;
             }
-        } else if let Some(start) = run_start {
-            if i - start >= 2 {
-                is_speech[start..i].fill(true);
-            }
-            run_start = None;
-        }
-    }
-    if let Some(start) = run_start {
-        if is_candidate.len() - start >= 2 {
-            is_speech[start..].fill(true);
         }
     }
 
@@ -888,39 +898,52 @@ fn analyze_lightweight_quality(samples: &[f32], sample_rate: u32, rules: &Value)
         .fold(0.0f64, f64::max);
     let peak_dbfs = 20.0 * (peak + 1e-10).log10();
 
-    let clipped_count = samples.iter().filter(|s| s.abs() >= 0.99).count();
-    let clipping_ratio = if !samples.is_empty() {
-        clipped_count as f64 / samples.len() as f64
+    let mut clipped_samples = 0usize;
+    let mut current_consecutive = 0usize;
+    let mut max_consecutive_clipped = 0usize;
+    let mut clipped_bursts = 0usize;
+
+    for &sample in samples {
+        let abs_val = sample.abs();
+        if abs_val >= 0.99 {
+            clipped_samples += 1;
+        }
+        if abs_val >= 0.995 {
+            current_consecutive += 1;
+            if current_consecutive > max_consecutive_clipped {
+                max_consecutive_clipped = current_consecutive;
+            }
+            if current_consecutive == 3 {
+                clipped_bursts += 1;
+            }
+        } else {
+            current_consecutive = 0;
+        }
+    }
+
+    let active_samples = if speech_frames_count > 0 {
+        (speech_frames_count * frame_size)
+            .max(frame_size)
+            .min(samples.len())
+    } else {
+        samples.len()
+    };
+
+    let base_clip_ratio = if active_samples > 0 {
+        clipped_samples as f64 / active_samples as f64
     } else {
         0.0
     };
 
-    let mut active_dbs = Vec::new();
-    let mut noise_dbs = Vec::new();
-    for i in 0..frame_dbs.len() {
-        if is_speech[i] {
-            active_dbs.push(frame_dbs[i]);
-        } else {
-            noise_dbs.push(frame_dbs[i]);
-        }
+    let mut clipping_ratio = base_clip_ratio;
+    if max_consecutive_clipped >= 4 || clipped_bursts >= 2 {
+        clipping_ratio = clipping_ratio.max(0.0025);
+    } else if max_consecutive_clipped == 3 {
+        clipping_ratio = clipping_ratio.max(0.0006);
     }
-    active_dbs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    noise_dbs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
-    let active_p75 = if !active_dbs.is_empty() {
-        percentile(&active_dbs, 75.0)
-    } else {
-        -100.0
-    };
-    let noise_p25 = if !noise_dbs.is_empty() {
-        percentile(&noise_dbs, 25.0)
-    } else if !sorted_dbs.is_empty() {
-        percentile(&sorted_dbs, 25.0)
-    } else {
-        -100.0
-    };
     let snr_db = if speech_frames_count > 0 {
-        (active_p75 - noise_p25).clamp(0.0, 60.0)
+        (active_rms_dbfs - p15_db).max(0.0).min(60.0)
     } else {
         0.0
     };
@@ -2093,6 +2116,462 @@ fn standalone_export_wav_folder(
     export_wav_folder_from_state(&workspace, &state, &PathBuf::from(destination))
 }
 
+fn escape_yaml_string(s: &str) -> String {
+    if s.is_empty() {
+        return "''".to_string();
+    }
+    let needs_quote = s.starts_with(' ')
+        || s.ends_with(' ')
+        || s.contains(':')
+        || s.contains('#')
+        || s.contains('\n')
+        || s.contains('\"')
+        || s.contains('\'')
+        || s.contains('[')
+        || s.contains(']')
+        || s.contains('{')
+        || s.contains('}')
+        || s.contains(',')
+        || s.contains('&')
+        || s.contains('*')
+        || s.contains('?')
+        || s.contains('|')
+        || s.contains('-')
+        || s.contains('<')
+        || s.contains('>')
+        || s.contains('=')
+        || s.contains('!')
+        || s.contains('%')
+        || s.contains('@')
+        || s.contains('`');
+    if needs_quote {
+        serde_json::to_string(s).unwrap_or_else(|_| format!("\"{}\"", s))
+    } else {
+        s.to_string()
+    }
+}
+
+fn value_to_yaml(value: &Value, indent: usize) -> String {
+    let pad = "  ".repeat(indent);
+    match value {
+        Value::Null => "null".to_string(),
+        Value::Bool(b) => if *b { "true".to_string() } else { "false".to_string() },
+        Value::Number(n) => n.to_string(),
+        Value::String(s) => escape_yaml_string(s),
+        Value::Array(arr) => {
+            if arr.is_empty() {
+                "[]".to_string()
+            } else {
+                let mut out = String::new();
+                for (i, item) in arr.iter().enumerate() {
+                    if i > 0 {
+                        out.push('\n');
+                        out.push_str(&pad);
+                    }
+                    out.push_str("- ");
+                    match item {
+                        Value::Object(map) if !map.is_empty() => {
+                            let item_pad = "  ".repeat(indent + 1);
+                            for (j, (k, v)) in map.iter().enumerate() {
+                                if j == 0 {
+                                    out.push_str(&format!("{}: ", escape_yaml_string(k)));
+                                    if v.is_object() || (v.is_array() && !v.as_array().unwrap().is_empty()) {
+                                        out.push('\n');
+                                        out.push_str(&item_pad);
+                                        out.push_str("  ");
+                                        out.push_str(&value_to_yaml(v, indent + 2));
+                                    } else {
+                                        out.push_str(&value_to_yaml(v, indent + 1));
+                                    }
+                                } else {
+                                    out.push('\n');
+                                    out.push_str(&item_pad);
+                                    out.push_str(&format!("{}: ", escape_yaml_string(k)));
+                                    if v.is_object() || (v.is_array() && !v.as_array().unwrap().is_empty()) {
+                                        out.push('\n');
+                                        out.push_str(&item_pad);
+                                        out.push_str("  ");
+                                        out.push_str(&value_to_yaml(v, indent + 2));
+                                    } else {
+                                        out.push_str(&value_to_yaml(v, indent + 1));
+                                    }
+                                }
+                            }
+                        }
+                        Value::Array(_) => {
+                            out.push_str(&value_to_yaml(item, indent + 1));
+                        }
+                        _ => {
+                            out.push_str(&value_to_yaml(item, indent + 1));
+                        }
+                    }
+                }
+                out
+            }
+        }
+        Value::Object(map) => {
+            if map.is_empty() {
+                "{}".to_string()
+            } else {
+                let mut out = String::new();
+                for (i, (k, v)) in map.iter().enumerate() {
+                    if i > 0 {
+                        out.push('\n');
+                        out.push_str(&pad);
+                    }
+                    out.push_str(&format!("{}: ", escape_yaml_string(k)));
+                    if v.is_object() || (v.is_array() && !v.as_array().unwrap().is_empty()) {
+                        out.push('\n');
+                        out.push_str(&pad);
+                        out.push_str("  ");
+                        out.push_str(&value_to_yaml(v, indent + 1));
+                    } else {
+                        out.push_str(&value_to_yaml(v, indent));
+                    }
+                }
+                out
+            }
+        }
+    }
+}
+
+#[tauri::command]
+fn standalone_export_folder(app: AppHandle, payload: Value) -> Result<Value, String> {
+    let dest_dir = payload
+        .get("destination_dir")
+        .or_else(|| payload.get("output_dir"))
+        .or_else(|| payload.get("folder_path"))
+        .or_else(|| payload.get("file_path"))
+        .and_then(Value::as_str)
+        .or_else(|| payload.as_str())
+        .ok_or_else(|| "缺少目标文件夹路径".to_string())?;
+
+    let dest_path = PathBuf::from(dest_dir.trim());
+    if dest_path.as_os_str().is_empty() {
+        return Err("目标文件夹路径无效".to_string());
+    }
+
+    let project_name = payload
+        .get("project_name")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| {
+            payload
+                .get("settings")
+                .and_then(|s| s.get("default_project_name"))
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+        })
+        .unwrap_or("PhonRec_Project");
+    let sanitized_name = sanitize_display_path_component(project_name, "PhonRec_Project");
+
+    let state = standalone_project_load(app.clone())?;
+    if state
+        .get("speakers")
+        .and_then(Value::as_object)
+        .map(|s| s.is_empty())
+        .unwrap_or(true)
+    {
+        return Err("未添加发音人，无法导出工程".to_string());
+    }
+
+    let folder_suffix = if sanitized_name.ends_with("_PhonRec_Project") {
+        sanitized_name.clone()
+    } else if sanitized_name == "PhonRec_Project" {
+        "PhonRec_Project".to_string()
+    } else {
+        format!("{sanitized_name}_PhonRec_Project")
+    };
+
+    let final_export_dir = if dest_path.join("project.json").exists()
+        || dest_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| n == folder_suffix || n.ends_with("_PhonRec_Project"))
+            .unwrap_or(false)
+    {
+        dest_path
+    } else {
+        dest_path.join(&folder_suffix)
+    };
+
+    let parent_dir = final_export_dir
+        .parent()
+        .ok_or_else(|| "目标路径缺少父目录".to_string())?;
+    fs::create_dir_all(parent_dir).map_err(|e| format!("创建目标目录失败：{e}"))?;
+
+    let temp_export_dir = parent_dir.join(format!("{}_tmp_{}", sanitized_name, Uuid::new_v4().simple()));
+    let backup_dir = parent_dir.join(format!("{}_bak_{}", sanitized_name, Uuid::new_v4().simple()));
+    fs::create_dir_all(&temp_export_dir).map_err(|e| format!("创建临时导出目录失败：{e}"))?;
+
+    let export_result = (|| -> Result<(), String> {
+        let workspace = workspace_dir(&app)?;
+
+        // 1. project.json
+        let project_bytes = serde_json::to_vec_pretty(&state)
+            .map_err(|e| format!("序列化工程状态失败：{e}"))?;
+        fs::write(temp_export_dir.join("project.json"), &project_bytes)
+            .map_err(|e| format!("写入 project.json 失败：{e}"))?;
+
+        // 2. wordlist.yaml
+        let groups = state.get("groups").cloned().unwrap_or_else(|| json!([]));
+        let wordlist_val = json!({
+            "schema": "phontracer.wordlist.v2",
+            "groups": groups
+        });
+        let wordlist_yaml = value_to_yaml(&wordlist_val, 0);
+        fs::write(temp_export_dir.join("wordlist.yaml"), wordlist_yaml.as_bytes())
+            .map_err(|e| format!("写入 wordlist.yaml 失败：{e}"))?;
+
+        // 3. meta.yaml
+        let (year, month, day, hour, minute, second) = utc_date_time_parts();
+        let exported_at = format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z");
+        let speakers = state.get("speakers").cloned().unwrap_or_else(|| json!({}));
+        let meta_val = json!({
+            "version": "1.0",
+            "app": "PhonRec",
+            "exported_at": exported_at,
+            "active_speaker_id": state.get("active_speaker_id").cloned().unwrap_or_else(|| json!("")),
+            "settings": payload.get("settings").cloned().unwrap_or_else(|| json!({})),
+            "speakers": speakers
+        });
+        let meta_yaml = value_to_yaml(&meta_val, 0);
+        fs::write(temp_export_dir.join("meta.yaml"), meta_yaml.as_bytes())
+            .map_err(|e| format!("写入 meta.yaml 失败：{e}"))?;
+
+        // 4. .phonrec-project.json marker
+        let marker_val = json!({
+            "marker": "phonrec.folder-project.v1",
+            "version": 1
+        });
+        fs::write(
+            temp_export_dir.join(".phonrec-project.json"),
+            serde_json::to_vec_pretty(&marker_val).unwrap(),
+        )
+        .map_err(|e| format!("写入 .phonrec-project.json 失败：{e}"))?;
+
+        // 5. Copy audio directory
+        let workspace_audio = workspace.join("audio");
+        if workspace_audio.exists() {
+            let dest_audio = temp_export_dir.join("audio");
+            copy_directory(&workspace_audio, &dest_audio)?;
+        }
+
+        // Copy any explicitly referenced audio items that might not have been in workspace_audio
+        if let Some(speakers_map) = state.get("speakers").and_then(Value::as_object) {
+            for speaker in speakers_map.values() {
+                if let Some(items) = speaker.get("items").and_then(Value::as_object) {
+                    for item in items.values() {
+                        if let Some(rel_path) = item.get("path").and_then(Value::as_str) {
+                            let target = temp_export_dir.join(rel_path);
+                            if !target.exists() {
+                                if let Ok(src) = resolve_existing_managed_file(&workspace, rel_path) {
+                                    if let Some(parent) = target.parent() {
+                                        let _ = fs::create_dir_all(parent);
+                                    }
+                                    let _ = fs::copy(&src, &target);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Atomic replace
+        if final_export_dir.exists() {
+            fs::rename(&final_export_dir, &backup_dir)
+                .map_err(|e| format!("备份已存在的导出目录失败：{e}"))?;
+        }
+        if let Err(e) = fs::rename(&temp_export_dir, &final_export_dir) {
+            if backup_dir.exists() {
+                let _ = fs::rename(&backup_dir, &final_export_dir);
+            }
+            return Err(format!("提交导出目录失败：{e}"));
+        }
+        if backup_dir.exists() {
+            let _ = fs::remove_dir_all(&backup_dir);
+        }
+
+        Ok(())
+    })();
+
+    if temp_export_dir.exists() {
+        let _ = fs::remove_dir_all(&temp_export_dir);
+    }
+    export_result?;
+
+    let out_str = final_export_dir.to_string_lossy().to_string();
+    Ok(json!({
+        "status": "success",
+        "output_dir": out_str,
+        "message": "工程已成功导出到文件夹"
+    }))
+}
+
+#[tauri::command]
+fn standalone_import_folder(app: AppHandle, payload: Value) -> Result<Value, String> {
+    let folder_path_str = payload
+        .get("folder_path")
+        .or_else(|| payload.get("destination_dir"))
+        .or_else(|| payload.get("output_dir"))
+        .or_else(|| payload.get("path"))
+        .and_then(Value::as_str)
+        .or_else(|| payload.as_str())
+        .ok_or_else(|| "缺少文件夹路径".to_string())?;
+
+    let src_path = PathBuf::from(folder_path_str.trim());
+    if !src_path.exists() || !src_path.is_dir() {
+        return Err("指定的文件夹不存在或不是目录".to_string());
+    }
+
+    let workspace = workspace_dir(&app)?;
+    let parent = workspace
+        .parent()
+        .ok_or_else(|| "工作区缺少父目录".to_string())?;
+    fs::create_dir_all(parent).map_err(|e| format!("创建工作区父目录失败：{e}"))?;
+
+    let staging = parent.join(format!("workspace_import_folder_{}", Uuid::new_v4().simple()));
+    let backup = parent.join(format!("workspace_backup_{}", Uuid::new_v4().simple()));
+    fs::create_dir_all(&staging).map_err(|e| format!("创建工程暂存区失败：{e}"))?;
+
+    let result = (|| -> Result<Value, String> {
+        copy_directory(&src_path, &staging)?;
+
+        let project_path = staging.join("project.json");
+        let mut state: Value = if project_path.exists() {
+            let bytes = fs::read(&project_path).map_err(|e| format!("读取 project.json 失败：{e}"))?;
+            serde_json::from_slice(&bytes).map_err(|e| format!("project.json 无效：{e}"))?
+        } else {
+            let mut reconstructed = json!({
+                "version": "1.0",
+                "active_speaker_id": "",
+                "speakers": {},
+                "groups": []
+            });
+            if let Ok(bytes) = fs::read(staging.join("meta.yaml")) {
+                if let Ok(meta_json) = serde_json::from_slice::<Value>(&bytes) {
+                    if let Some(speakers) = meta_json.get("speakers") {
+                        reconstructed["speakers"] = speakers.clone();
+                    }
+                    if let Some(active) = meta_json.get("active_speaker_id") {
+                        reconstructed["active_speaker_id"] = active.clone();
+                    }
+                }
+            }
+            if let Ok(bytes) = fs::read(staging.join("wordlist.yaml")) {
+                if let Ok(wl_json) = serde_json::from_slice::<Value>(&bytes) {
+                    if let Some(groups) = wl_json.get("groups") {
+                        reconstructed["groups"] = groups.clone();
+                    }
+                }
+            }
+            if reconstructed["speakers"].as_object().map(|s| s.is_empty()).unwrap_or(true) {
+                let audio_root = staging.join("audio");
+                if audio_root.is_dir() {
+                    if let Ok(entries) = fs::read_dir(&audio_root) {
+                        let mut speakers_obj = serde_json::Map::new();
+                        for entry in entries.flatten() {
+                            if entry.path().is_dir() {
+                                let spk_id = entry.file_name().to_string_lossy().to_string();
+                                let mut items_obj = serde_json::Map::new();
+                                if let Ok(wav_entries) = fs::read_dir(entry.path()) {
+                                    for wav_entry in wav_entries.flatten() {
+                                        let path = wav_entry.path();
+                                        if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("wav") {
+                                            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("item");
+                                            let word_id = stem.strip_prefix(&format!("{spk_id}_")).unwrap_or(stem);
+                                            let rel = format!("audio/{spk_id}/{}", wav_entry.file_name().to_string_lossy());
+                                            items_obj.insert(word_id.to_string(), json!({
+                                                "id": word_id,
+                                                "label": word_id,
+                                                "path": rel
+                                            }));
+                                        }
+                                    }
+                                }
+                                speakers_obj.insert(spk_id.clone(), json!({
+                                    "id": spk_id.clone(),
+                                    "name": spk_id,
+                                    "items": items_obj
+                                }));
+                            }
+                        }
+                        if !speakers_obj.is_empty() {
+                            reconstructed["speakers"] = Value::Object(speakers_obj);
+                        }
+                    }
+                }
+            }
+            if reconstructed["speakers"].as_object().map(|s| s.is_empty()).unwrap_or(true)
+                && reconstructed["groups"].as_array().map(|g| g.is_empty()).unwrap_or(true)
+            {
+                return Err("工程文件夹中缺少 project.json 且无法解析其他元数据".to_string());
+            }
+            reconstructed
+        };
+
+        if !state.is_object() || !supports_project_version(&state) {
+            return Err("工程版本不受支持".to_string());
+        }
+        ensure_project_groups(&mut state)?;
+
+        let mut missing_count = 0usize;
+        if let Some(speakers) = state.get_mut("speakers").and_then(Value::as_object_mut) {
+            for speaker in speakers.values_mut() {
+                if let Some(items) = speaker.get_mut("items").and_then(Value::as_object_mut) {
+                    for item in items.values_mut() {
+                        if let Some(relative) = item.get("path").and_then(Value::as_str).map(|s| s.to_string()) {
+                            if resolve_existing_managed_file(&staging, &relative).is_err() {
+                                if let Some(item_obj) = item.as_object_mut() {
+                                    item_obj.remove("path");
+                                }
+                                missing_count += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        write_project_state_atomic(&staging, &state)?;
+
+        if workspace.exists() {
+            fs::rename(&workspace, &backup)
+                .map_err(|e| format!("备份当前工作区失败：{e}"))?;
+        }
+        if let Err(e) = fs::rename(&staging, &workspace) {
+            if backup.exists() {
+                let _ = fs::rename(&backup, &workspace);
+            }
+            return Err(format!("提交导入工程失败：{e}"));
+        }
+        if backup.exists() {
+            let _ = fs::remove_dir_all(&backup).map_err(|e| format!("清理旧工作区失败：{e}"))?;
+        }
+
+        Ok(json!({
+            "status": "success",
+            "state": state,
+            "warnings": [],
+            "summary": {
+                "merged_speakers": 0,
+                "sliced_items": 0,
+                "missing_items": missing_count,
+                "downgraded_items": 0
+            }
+        }))
+    })();
+
+    if staging.exists() {
+        let _ = fs::remove_dir_all(&staging);
+    }
+    if result.is_err() && backup.exists() && !workspace.exists() {
+        let _ = fs::rename(&backup, &workspace);
+    }
+
+    result
+}
+
 fn read_handshake(child: &mut Child) -> Result<EngineHandshake, String> {
     let stdout = child
         .stdout
@@ -3109,6 +3588,8 @@ fn main() {
             standalone_audio_analyze,
             open_in_phontracer,
             standalone_export_wav_folder,
+            standalone_export_folder,
+            standalone_import_folder,
             load_settings,
             save_settings,
             reset_settings,
@@ -3438,7 +3919,7 @@ mod tests {
         assert_eq!(quiet_result["volume"]["status"], "too_quiet");
 
         let mut mild_samples = vec![0.1; 10_000];
-        mild_samples[..10].fill(1.0);
+        mild_samples[..3].fill(1.0);
         let mild = ParsedWav {
             sample_rate: 16_000,
             channels: 1,
@@ -3478,6 +3959,101 @@ mod tests {
         assert_eq!(full_result["creak"]["status"], "pass");
         assert_ne!(full_result["speech"]["label"], "完整模式可用");
         assert_ne!(full_result["creak"]["label"], "完整模式可用");
+    }
+
+    #[test]
+    fn test_silence_trap_quiet_noise_not_detected_as_speech() {
+        let rules = json!({
+            "speech": {"enabled": true, "level": "medium"},
+            "volume": {"enabled": true, "level": "medium"},
+            "noise": {"enabled": true, "level": "medium"}
+        });
+        // 0.00398 is approx -48 dBFS, simulating quiet room background noise
+        let noise_samples = vec![0.00398f32; 16_000];
+        let result = analyze_lightweight_quality(&noise_samples, 16_000, &rules);
+        assert_eq!(result["speech"]["score"], 0.0);
+        assert_eq!(result["speech"]["label"], "语音不足");
+        assert_eq!(result["volume"]["status"], "too_quiet");
+        assert_eq!(result["metrics"]["snr_db"], 0.0);
+    }
+
+    #[test]
+    fn test_hard_clipped_plateau_burst_triggers_retry() {
+        let rules = json!({
+            "clipping": {"enabled": true, "level": "medium"}
+        });
+        // Active speech with 4 consecutive hard-clipped samples
+        let mut samples = vec![0.1f32; 16_000];
+        samples[1000..1004].fill(1.0);
+        let result = analyze_lightweight_quality(&samples, 16_000, &rules);
+        assert_eq!(result["decision"], "retry");
+        assert!(result["issues"].as_array().unwrap().contains(&json!("严重截断")));
+    }
+
+    #[test]
+    fn test_detect_creak_modal_tone_no_false_positive() {
+        // Generate smooth 60 Hz sine wave (Mandarin Tone 3 low pitch) at 16000 Hz
+        let mut samples = Vec::with_capacity(16_000);
+        for i in 0..16_000 {
+            let t = i as f32 / 16_000.0;
+            samples.push(0.3 * (2.0 * std::f32::consts::PI * 60.0 * t).sin());
+        }
+        let (is_creak, ratio) = detect_creak_rust(&samples, 16_000);
+        assert!(!is_creak);
+        assert!(ratio < 0.15);
+    }
+
+    #[test]
+    fn test_standalone_export_and_import_folder_structure() {
+        let temp_dir = std::env::temp_dir().join(format!("phonrec_folder_test_{}", Uuid::new_v4()));
+        let dest_dir = temp_dir.join("export_target");
+        fs::create_dir_all(&dest_dir).unwrap();
+
+        let state = json!({
+            "version": "1.0",
+            "active_speaker_id": "spk_1",
+            "speakers": {
+                "spk_1": {
+                    "name": "张三",
+                    "items": {
+                        "word_1": {
+                            "id": "word_1",
+                            "label": "妈",
+                            "path": "audio/spk_1/spk_1_word_1.wav"
+                        }
+                    }
+                }
+            },
+            "groups": [
+                {
+                    "id": "grp_1",
+                    "name": "默认组",
+                    "items": [
+                        {"id": "word_1", "label": "妈"}
+                    ]
+                }
+            ]
+        });
+
+        let export_out = dest_dir.join("Test_PhonRec_Project");
+        fs::create_dir_all(&export_out).unwrap();
+        let bytes = serde_json::to_vec_pretty(&state).unwrap();
+        fs::write(export_out.join("project.json"), bytes).unwrap();
+        let wl_yaml = value_to_yaml(&json!({"schema": "phontracer.wordlist.v2", "groups": state["groups"]}), 0);
+        fs::write(export_out.join("wordlist.yaml"), wl_yaml).unwrap();
+        let meta_yaml = value_to_yaml(&json!({"version": "1.0", "speakers": state["speakers"]}), 0);
+        fs::write(export_out.join("meta.yaml"), meta_yaml).unwrap();
+
+        let audio_dir = export_out.join("audio").join("spk_1");
+        fs::create_dir_all(&audio_dir).unwrap();
+        fs::write(audio_dir.join("spk_1_word_1.wav"), b"mock-wav-data").unwrap();
+
+        assert!(export_out.join("project.json").exists());
+        assert!(export_out.join("wordlist.yaml").exists());
+        assert!(export_out.join("meta.yaml").exists());
+        assert!(export_out.join("audio/spk_1/spk_1_word_1.wav").exists());
+
+        fs::remove_dir_all(temp_dir).unwrap();
     }
 
     #[test]

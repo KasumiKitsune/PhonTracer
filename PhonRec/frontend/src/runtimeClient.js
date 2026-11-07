@@ -38,6 +38,14 @@ function createNativeRuntimeClient(mode = 'standalone') {
       const bytes = await invoke('standalone_project_export');
       return new Blob([new Uint8Array(bytes)], { type: 'application/zip' });
     },
+    exportProjectFolder: (payload) =>
+      invoke('standalone_export_folder', {
+        payload: typeof payload === 'string' ? { folder_path: payload } : (payload || {}),
+      }),
+    importProjectFolder: (payload) =>
+      invoke('standalone_import_folder', {
+        payload: typeof payload === 'string' ? { folder_path: payload } : (payload || {}),
+      }),
     async saveAudio({ blob, speakerId, wordId, source, qualityRules }) {
       const wavBytes = Array.from(new Uint8Array(await blob.arrayBuffer()));
       const res = await invoke('standalone_audio_save', {
@@ -59,11 +67,16 @@ function createNativeRuntimeClient(mode = 'standalone') {
       return new Blob([new Uint8Array(bytes)], { type: 'audio/wav' });
     },
     async analyzeAudio({ speakerId, wordId, qualityRules }) {
-      const res = await invoke('standalone_audio_analyze', {
-        speakerId,
-        wordId,
-        qualityRules,
-      });
+      let res = null;
+      try {
+        res = await invoke('standalone_audio_analyze', {
+          speakerId,
+          wordId,
+          qualityRules,
+        });
+      } catch (err) {
+        console.warn('音频质量分析跳过:', err);
+      }
       let spectrogramUrl = '';
       try {
         const bytes = await invoke('standalone_audio_read', { speakerId, wordId });
