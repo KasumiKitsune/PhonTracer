@@ -18,10 +18,12 @@ from .data_utils import parse_wordlist, fuzzy_match_word_to_path, split_into_syl
 from .wordlist_v2 import (
     ADVANCED_WORDLIST_AGENT_PROMPT,
     apply_record_metadata,
+    build_document_from_csv_text,
     build_document_from_structured_text,
     document_to_v1_text,
     flatten_wordlist_document,
     load_wordlist_document,
+    looks_like_csv_wordlist_text,
     looks_like_structured_wordlist_text,
     validate_wordlist_document,
 )
@@ -3020,6 +3022,17 @@ class PhoneticsApp:
         messagebox.showinfo("提示", f"手动微调已应用，时间边界已更新。{deleted_msg}")
 
     def _prepare_wordlist_payload(self, raw_text="", wordlist_document=None):
+        if wordlist_document is None and raw_text:
+            if looks_like_structured_wordlist_text(raw_text):
+                try:
+                    wordlist_document = build_document_from_structured_text(raw_text)
+                except Exception:
+                    wordlist_document = None
+            elif looks_like_csv_wordlist_text(raw_text):
+                try:
+                    wordlist_document = build_document_from_csv_text(raw_text)
+                except Exception:
+                    wordlist_document = None
         if wordlist_document is not None:
             return flatten_wordlist_document(wordlist_document)
         groups, flat_words = parse_wordlist(raw_text or "")
@@ -3564,7 +3577,21 @@ class PhoneticsApp:
             update_stats()
 
         def copy_prompt():
-            prompt = "请帮我把下面这段字表转换成特定格式：\n1. 每个组别名称用【】包裹并独占一行\n2. 组别下的词/字跟在组别名称下面，可以一行一个，也可以用空格或逗号分隔\n3. 去除所有不相关的序号、拼音 and 多余的空行\n\n示例输出格式：\n【阴平】\n八 扒 吧\n【双音节】\n音频 视频\n\n以下是我的原始字表，请直接返回转换后的结果即可：\n\n[在此处粘贴你的字表]"
+            prompt = (
+                "请帮我将下方的原始字表整理为 PhonTracer 标准字表格式，严格遵守以下规则：\n"
+                "1. 组别行：每个组别名称用【】包裹并独占一行，例如：【阴平】。\n"
+                "2. 词项行：组别下方的词或字可以一行一个，也可以用空格、逗号或分号分隔。\n"
+                "3. 多音节非汉字词：纯汉字词无需加分隔符；若包含英语、拼音或国际音标等多音节非汉字词，请用斜杠 / 标注音节分界（例如：bro/ther、ma1/ma0）。\n"
+                "4. 清理杂项：去除所有序号、题号、解释性说明及多余空行。\n"
+                "5. 纯文本输出：直接输出整理后的字表正文，不要输出任何开场白、解释文字，也不要使用 ``` 代码块包裹。\n\n"
+                "示例输出：\n"
+                "【阴平】\n"
+                "八 扒 吧\n"
+                "【双音节】\n"
+                "音频 视频\n\n"
+                "以下是我的原始字表：\n"
+                "[在此处粘贴你的字表]"
+            )
             self.root.clipboard_clear()
             self.root.clipboard_append(prompt)
             messagebox.showinfo("成功", "AI 整理提示词已复制！\n您可以前往 ChatGPT / 豆包 / DeepSeek 等平台粘贴使用。", parent=dlg)
@@ -3674,9 +3701,14 @@ class PhoneticsApp:
 
 
         btn_prompt = ctk.CTkButton(toolbar, text=" 复制 AI 整理提示词", image=self.icons.get("copy_white"), compound="left",
-                                   width=150, height=28, corner_radius=14, fg_color="#F59E0B", text_color="white",
+                                   width=142, height=28, corner_radius=14, fg_color="#F59E0B", text_color="white",
                                    hover_color="#D97706", command=copy_prompt)
-        btn_prompt.pack(side=tk.LEFT, padx=10)
+        btn_prompt.pack(side=tk.LEFT, padx=6)
+
+        btn_v2_prompt = ctk.CTkButton(toolbar, text=" AI 高级字表提示词", image=self.icons.get("copy_white"), compound="left",
+                                      width=142, height=28, corner_radius=14, fg_color="#0D9488", text_color="white",
+                                      hover_color="#0F766E", command=lambda: self._copy_v2_agent_prompt(dlg))
+        btn_v2_prompt.pack(side=tk.LEFT)
 
         # 2. 文本输入区
         # 创建一个容器来包裹 Textbox 和 浮动占位符
@@ -3740,6 +3772,12 @@ class PhoneticsApp:
                     groups, flat_words, _ = flatten_wordlist_document(doc)
                 except Exception:
                     groups, flat_words = parse_wordlist(raw_text)
+            elif looks_like_csv_wordlist_text(raw_text):
+                try:
+                    doc = build_document_from_csv_text(raw_text)
+                    groups, flat_words, _ = flatten_wordlist_document(doc)
+                except Exception:
+                    groups, flat_words = parse_wordlist(raw_text)
             else:
                 groups, flat_words = parse_wordlist(raw_text)
             color = "#10B981" if flat_words else "#6B7280"
@@ -3776,7 +3814,7 @@ class PhoneticsApp:
                 if stripped.startswith('【') or stripped.startswith('[') or stripped.startswith('［') or stripped.startswith('#'):
                     text_box.tag_add("group_title", f"{current_line_idx}.0", f"{current_line_idx}.end")
                 else:
-                    words = [w for w in re.split(r'[\s,，、]+', stripped) if w]
+                    words = [w for w in re.split(r'[\s,，、;；]+', stripped) if w]
                     start_char = 0
                     for w in words:
                         idx = line.find(w, start_char)
@@ -3832,6 +3870,12 @@ class PhoneticsApp:
             if wordlist_document is None and looks_like_structured_wordlist_text(raw_text):
                 try:
                     wordlist_document = build_document_from_structured_text(raw_text)
+                    active_wordlist_document["doc"] = wordlist_document
+                except Exception:
+                    wordlist_document = None
+            elif wordlist_document is None and looks_like_csv_wordlist_text(raw_text):
+                try:
+                    wordlist_document = build_document_from_csv_text(raw_text)
                     active_wordlist_document["doc"] = wordlist_document
                 except Exception:
                     wordlist_document = None

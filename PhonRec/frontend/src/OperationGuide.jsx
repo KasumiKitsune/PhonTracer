@@ -89,7 +89,7 @@ export default function OperationGuide({ isOpen, onClose } = {}) {
   const sections = [
     { id: 'part1', title: '定位与运行环境', icon: <EnvironmentIcon />, keywords: '定位 环境 架构 rust 引擎 phontracer 权限 macos windows 隐私 本地 声卡 枚举' },
     { id: 'part2', title: '界面与硬件接入', icon: <HardwareIcon />, keywords: '界面 布局 硬件 麦克风 回环 监听 设备 声卡 抽屉 电平 四栏 待机' },
-    { id: 'part3', title: '字表与发音人', icon: <UserIcon />, keywords: '字表 词表 格式 csv txt xlsx json 表头 发音人 进度 替换 随机排序 word ipa pinyin group note 重命名' },
+    { id: 'part3', title: '字表与发音人', icon: <UserIcon />, keywords: '字表 词表 格式 csv txt ptwl 表头 发音人 进度 替换 随机排序 word ipa pinyin group note 重命名' },
     { id: 'part4', title: '录音与导航操控', icon: <NavigationIcon />, keywords: '录音 模式 点击 按住 对讲机 vad 快捷键 space enter 方向键 波形图 语谱图 fft 共振峰 筛选 下一未录' },
     { id: 'part5', title: '质检与参数解析', icon: <QualityIcon />, keywords: '质量 质检 音量 截断 削波 嘎裂声 有效语音 噪声 snr 直流偏移 阈值 评分 重录 复核 dbfs 防喷罩 爆音' },
     { id: 'part6', title: '归档导出与应急', icon: <ArchiveIcon />, keywords: '导出 保存 工程 teproj wav 文件夹 phontracer 清空工作区 faq 排错 故障 textgrid' }
@@ -320,7 +320,7 @@ export default function OperationGuide({ isOpen, onClose } = {}) {
           {/* Part 3 */}
           <section id="part3" className="help-section" style={{ display: isVisible('part3') ? 'block' : 'none' }}>
             <h3><UserIcon /> 第三部分：字表与发音人</h3>
-            <p>字表规范决定了词条展示与声学标记的完整度。支持 Excel、CSV 与纯文本一键导入。</p>
+            <p>字表规范决定了词条展示与声学标记的完整度。支持 PTWL 高级字表、CSV 表格与 TXT 纯文本一键导入。</p>
 
             <h4>1. 支持的字表格式与推荐表头</h4>
             <table className="help-table">
@@ -334,18 +334,18 @@ export default function OperationGuide({ isOpen, onClose } = {}) {
               <tbody>
                 <tr>
                   <td><strong>CSV 表格字表</strong><br /><code>.csv</code></td>
-                  <td>推荐表头：<br /><code>word, ipa, pinyin, group, note</code><br />亦兼容中文表头：<br /><code>词项, 音标, 拼音, 组名, 词项备注</code></td>
-                  <td>必须包含 <code>word</code> 或 <code>词项</code> 列。若有 <code>ipa</code>、<code>pinyin</code> 会自动在大字下方展示；未知自定义列会保存在条目元数据中随工程导出。</td>
+                  <td>推荐表头：<br /><code>word, ipa, pinyin, group, note</code><br />亦兼容中文表头：<br /><code>词项, 音标, 拼音, 组名, 词项备注, 词项标签</code></td>
+                  <td>必须包含 <code>word</code> 或 <code>词项</code> 列。若有 <code>ipa</code>、<code>pinyin</code> 会自动在大字下方展示；<code>note</code> / <code>发音提示</code> / <code>词项备注</code> 作为备注展示；未知自定义列会保存在条目元数据中随工程导出。</td>
                 </tr>
                 <tr>
                   <td><strong>TXT 纯文本字表</strong><br /><code>.txt</code></td>
-                  <td>一行一词；<br />使用 <code>【组名】</code>、<code>[组名]</code> 或 <code>#组名</code> 分组</td>
-                  <td>轻量快捷格式，未加组名标记的词条归入“未分组”。词内斜杠（如 <code>北/京</code>）会被保留作为发音边界提示，不会拆分为两行。</td>
+                  <td>一行一词或多词（空格、逗号、分号分隔）；<br />使用 <code>【组名】</code>、<code>[组名]</code> 或 <code>#组名</code> 分组</td>
+                  <td>轻量快捷格式，未加组名标记的词条归入“未分组”。词内斜杠（如 <code>北/京</code>、<code>bro/ther</code>）会被保留作为多音节分界提示，不会拆分为两行。</td>
                 </tr>
                 <tr>
-                  <td><strong>PTWL / JSON 高级字表</strong><br /><code>.ptwl / .json</code></td>
-                  <td>PhonTracer 标准字表规范（含 <code>groups</code> 分组结构）</td>
-                  <td>完整保留词条全局唯一 ID、多音节切分、实验条件标注与扩展字段。亦支持词条列表或分组映射格式。</td>
+                  <td><strong>PTWL 高级字表</strong><br /><code>.ptwl</code></td>
+                  <td>PhonTracer 标准高级字表规范（含 <code>groups</code> 分组与元数据）</td>
+                  <td>完整保留词条全局唯一 ID、多音节切分、组/词项标签、备注、别名与扩展研究字段。</td>
                 </tr>
               </tbody>
             </table>

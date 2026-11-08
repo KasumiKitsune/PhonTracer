@@ -40,7 +40,7 @@ def _as_text_list(value, limit_each=32):
     if isinstance(value, (list, tuple, set)):
         raw_values = value
     else:
-        raw_values = str(value).replace("，", ",").split(",")
+        raw_values = str(value).replace("，", ",").replace("；", ",").replace(";", ",").split(",")
     result = []
     for item in raw_values:
         text = _truncate_text(item, limit_each)
@@ -86,16 +86,24 @@ def _wordlist_row_key(item):
     )
 
 
-def _build_detailed_wordlist_summary(items, max_groups=36, max_items_per_group=48):
+def _build_detailed_wordlist_summary(items, max_groups=8, max_items_per_group=5):
+    """
+    输出全局与各分组的字段 Schema 枚举分布 + 每组前 5 个代表词示例，
+    避免在大工程下逐词展开导致 Token 膨胀。
+    """
     buckets = {}
     v2_item_count = 0
+    global_group_tags = Counter()
+    global_item_tags = Counter()
+    global_meta_key_values = {}
+    global_statuses = Counter()
 
     for item in items:
         if not _looks_like_v2_wordlist_item(item):
             continue
         v2_item_count += 1
-        title = _truncate_text(item.get("wordlist_title") or "未命名高级字表", 48)
-        group_name = _truncate_text(item.get("group") or "未分组", 48)
+        title = _truncate_text(item.get("wordlist_title") or "未命名高级字表", 36)
+        group_name = _truncate_text(item.get("group") or "未分组", 36)
         key = (title, group_name)
         if key not in buckets:
             buckets[key] = {
@@ -106,11 +114,24 @@ def _build_detailed_wordlist_summary(items, max_groups=36, max_items_per_group=4
             }
         bucket = buckets[key]
         bucket["occurrences"] += 1
-        group_note = _truncate_text(item.get("group_note"), 80)
+        group_note = _truncate_text(item.get("group_note"), 48)
         if group_note:
             bucket["group_notes"][group_note] += 1
         for tag in _as_text_list(item.get("group_tags")):
             bucket["group_tags"][tag] += 1
+            global_group_tags[tag] += 1
+        for tag in _as_text_list(item.get("item_tags")):
+            global_item_tags[tag] += 1
+        meta = item.get("item_meta") or {}
+        if isinstance(meta, dict):
+            for mk, mv in meta.items():
+                k_text = _truncate_text(mk, 20)
+                v_text = _truncate_text(mv, 24)
+                if k_text and v_text:
+                    global_meta_key_values.setdefault(k_text, Counter())[v_text] += 1
+        status_text = _truncate_text(item.get("metadata_source"), 32)
+        if status_text:
+            global_statuses[status_text] += 1
 
         row_key = _wordlist_row_key(item)
         if row_key not in bucket["rows"]:
@@ -120,16 +141,32 @@ def _build_detailed_wordlist_summary(items, max_groups=36, max_items_per_group=4
     if not v2_item_count:
         return "- 详细字表信息: 当前工程没有可展开的 v2 高级字表词项。"
 
+    schema_parts = []
+    if global_group_tags:
+        schema_parts.append(f"组标签枚举={{{_format_counter(global_group_tags, limit=10)}}}")
+    if global_item_tags:
+        schema_parts.append(f"词项标签枚举={{{_format_counter(global_item_tags, limit=12)}}}")
+    if global_meta_key_values:
+        meta_schema_strs = []
+        for mk in sorted(global_meta_key_values.keys()):
+            val_dist = _format_counter(global_meta_key_values[mk], limit=6)
+            meta_schema_strs.append(f"{mk}: [{val_dist}]")
+        schema_parts.append("自定义字段(item_meta)枚举={" + "；".join(meta_schema_strs[:8]) + "}")
+    if global_statuses:
+        schema_parts.append(f"复核状态分布={{{_format_counter(global_statuses, limit=4)}}}")
+
     lines = [
-        "- 详细字表信息: 以下按“字表 / 组”压缩展示；相同词项在多位发音人中重复出现时只列一次。"
+        "- 详细字表信息（Schema 枚举分布 + 每组前 5 个代表词示例；运行期请通过 `ctx.dataset.included_items()` 动态遍历）:"
     ]
+    if schema_parts:
+        lines.append("  - 全局字段 Schema 分布: " + "；".join(schema_parts))
+
     sorted_keys = sorted(buckets.keys(), key=lambda pair: (pair[0], pair[1]))
     for title, group_name in sorted_keys[:max_groups]:
         bucket = buckets[(title, group_name)]
         rows = list(bucket["rows"].values())
         item_tags = Counter()
         meta_values = Counter()
-        statuses = Counter()
 
         for row in rows:
             item = row["item"]
@@ -138,62 +175,35 @@ def _build_detailed_wordlist_summary(items, max_groups=36, max_items_per_group=4
             meta = item.get("item_meta") or {}
             if isinstance(meta, dict):
                 for meta_key, meta_value in meta.items():
-                    key_text = _truncate_text(meta_key, 24)
-                    value_text = _truncate_text(meta_value, 32)
+                    key_text = _truncate_text(meta_key, 20)
+                    value_text = _truncate_text(meta_value, 24)
                     if key_text and value_text:
                         meta_values[f"{key_text}={value_text}"] += 1
-            status = _truncate_text(item.get("metadata_source"), 48)
-            if status:
-                statuses[status] += 1
-
-        lines.append(
-            f"  - {title} / {group_name}: 去重词项 {len(rows)}，工程条目 {bucket['occurrences']}"
-        )
-        if bucket["group_notes"]:
-            lines.append(f"    组备注: {_format_counter(bucket['group_notes'], limit=2)}")
-        if bucket["group_tags"]:
-            lines.append(f"    组标签: {_format_counter(bucket['group_tags'], limit=8)}")
-        if item_tags:
-            lines.append(f"    词项标签汇总: {_format_counter(item_tags, limit=12)}")
-        if meta_values:
-            lines.append(f"    自定义字段值汇总: {_format_counter(meta_values, limit=14)}")
-        if statuses:
-            lines.append(f"    复核状态汇总: {_format_counter(statuses, limit=8)}")
 
         entries = []
         for row in rows[:max_items_per_group]:
             item = row["item"]
-            label = _truncate_text(item.get("label") or item.get("text") or item.get("name") or "未命名词项", 24)
-            details = []
+            label = _truncate_text(item.get("label") or item.get("text") or item.get("name") or "未命名词项", 20)
             tags = _as_text_list(item.get("item_tags"))
-            aliases = _as_text_list(item.get("item_aliases"))
             meta = item.get("item_meta") or {}
-            note = _truncate_text(item.get("item_note"), 60)
-            status = _truncate_text(item.get("metadata_source"), 32)
+            short_parts = []
             if tags:
-                details.append(f"标签:{_format_value_list(tags, limit=5)}")
-            if aliases:
-                details.append(f"别名:{_format_value_list(aliases, limit=4)}")
+                short_parts.append("/".join(tags[:2]))
             if isinstance(meta, dict) and meta:
-                details.append(f"字段:{_format_meta_pairs(meta, limit=5)}")
-            if note:
-                details.append(f"备注:{note}")
-            if status and status != "人工填写":
-                details.append(f"状态:{status}")
-            if details:
-                entries.append(f"{label}[{'; '.join(details)}]")
-            else:
-                entries.append(label)
+                short_parts.append(_format_meta_pairs(meta, limit=2))
+            entries.append(f"{label}({'; '.join(short_parts)})" if short_parts else label)
 
         omitted_items = len(rows) - min(len(rows), max_items_per_group)
-        item_line = _format_sequence(entries, empty="无")
-        if omitted_items > 0:
-            item_line += f"，其余 {omitted_items} 个去重词项已省略"
-        lines.append(f"    词项: {item_line}")
+        sample_str = ", ".join(entries) + (f" 等{len(rows)}词" if omitted_items > 0 else "")
+        grp_parts = [f"n={bucket['occurrences']}"]
+        if bucket["group_tags"]:
+            grp_parts.append(f"组标签:{_format_value_list(bucket['group_tags'].keys(), limit=3)}")
+        grp_parts.append(f"代表词:[{sample_str}]")
+        lines.append(f"  - {group_name} ({' | '.join(grp_parts)})")
 
     omitted_groups = len(sorted_keys) - min(len(sorted_keys), max_groups)
     if omitted_groups > 0:
-        lines.append(f"  - 其余 {omitted_groups} 个字表组已省略；如需完整逐词清单，请让用户在 Toolkit 中导出 CSV。")
+        lines.append(f"  - 其余 {omitted_groups} 个分组已省略（运行期通过 ctx.dataset.included_items() 读取全部组与词项）。")
 
     return "\n".join(lines)
 
@@ -293,10 +303,10 @@ def _build_wordlist_metadata_summary(items, limit=16):
 
 def _build_project_summary(
     project_data,
-    max_speaker_names=None,
-    max_speakers=12,
-    max_groups=None,
-    max_speaker_groups=None,
+    max_speaker_names=8,
+    max_speakers=8,
+    max_groups=16,
+    max_speaker_groups=8,
     wordlist_detail="compact",
 ):
     spk_count = 0
@@ -387,147 +397,135 @@ REFERENCE_CHART_RULE = (
 )
 
 
-SPECTROGRAM_SCRIPT_GUIDE = """语谱图与 Parselmouth：
-- 可用 `ctx.parselmouth`，也可 `import parselmouth`。
-- 脚本不能自行读取本地音频路径；如需真实音频，必须调用 `ctx.load_item_sound(item, padding=0.0)` 读取当前 `.teproj` 内受控音频。
-- 可用 `ctx.spectrogram_data(sound, max_frequency=5000.0, window_length=0.005, dynamic_range_db=50.0)` 取得 dB 语谱图矩阵。
-- 可用 `ctx.plot_spectrogram_grid(items, columns=4, max_items=8, show_formant_arrows=True, label_field="auto", max_frequency=4000.0)` 生成参考图式多宫格灰度语谱图；标签优先使用 `item_meta["IPA"]` / `item_aliases` / `label`。
-- 如果复刻参考语谱图，只复刻布局、灰度底图、标签和箭头标注风格；不要复制参考图中的具体数据或结论。"""
+SPECTROGRAM_SCRIPT_GUIDE = """语谱图与 Parselmouth 受控接口：
+- 可用 `ctx.parselmouth`（或 `import parselmouth`），但**严禁导入或调用 `parselmouth.praat`**（AST 安全检查会拦截）。
+- 脚本不能自行读取本地音频路径；必须调用 `sound = ctx.load_item_sound(item, padding=0.0)` 读取当前 `.teproj` 内受控音频（返回 `parselmouth.Sound`）。
+- 调用 `spec = ctx.spectrogram_data(sound, max_frequency=5000.0, window_length=0.005, dynamic_range_db=70.0)` 返回字典包含 **8 个精确键**：
+  `x` (1D时间轴秒 `np.ndarray`)、`y` (1D频率轴Hz `np.ndarray`)、`db` (2D能量矩阵，形状 `(len(y), len(x))`)、`vmin`、`vmax`、`max_frequency`、`window_length`、`dynamic_range_db`。
+- 调用 `ctx.plot_spectrogram_grid(items, columns=4, max_items=8, show_formant_arrows=True, label_field="auto", max_frequency=4000.0)` 直接返回多宫格灰度语谱图 `Figure`；其中 `label_field` 支持 `"auto"`、`"label"`、`"item_id"` 以及 `"item_meta.<字段名>"`（如 `"item_meta.IPA"` 或 `"item_meta.国际音标"`）。"""
+
+
+CORE_CHART_API_CONTRACT = f"""### 运行沙箱与硬性 API 契约（违反任一条将直接报错）
+1. **入口与返回**：
+   - 脚本开头前两行必须固定为：`# 脚本名称：<简短中文名>` 与 `# 功能说明：<一句话说明>`。
+   - 必须定义 `def run(ctx):` 作为唯一入口。
+   - 返回 `ctx.figure(fig, filename="xxx.png", title="图表标题")`（支持 `.png/.svg/.pdf/.jpg`，系统自动 300 DPI 保存）、`ctx.table(rows, columns, title="表格标题")`，或同时返回 `[ctx.figure(...), ctx.table(...)]`。
+2. **预置库与字体环境**：
+   - 已注入 `ctx.np` (`numpy`)、`ctx.plt` (`matplotlib.pyplot`)、`ctx.scipy` (`scipy`)、`ctx.parselmouth` (`parselmouth`)；也可导入标准库 `math, statistics, collections, itertools, re, time, warnings`。
+   - Matplotlib 中文字体与负号显示已由系统自动预配置，**严禁脚本自行修改 `plt.rcParams['font.sans-serif']`**（以免覆盖为不存在的字体导致中文乱码）。
+   - 沙箱中 `print(...)` 已自动重定向至 `ctx.log(...)`；长循环中请定期检查 `if ctx.is_cancelled(): break`。
+3. **沙箱安全禁令（AST 静态拦截）**：
+   - **禁止第三方与系统库**：严禁导入 `pandas, seaborn, plotly, requests, os, sys, subprocess`（仅内置只读受控 `os.path`）。
+   - **禁止直接输出与文件写入**：严禁调用任何名为 `.save(), .savefig(), .imsave(), .savetxt(), .savez(), .dump(), .to_csv(), .to_excel(), .to_file(), .write(), .write_bytes(), .write_text(), open(), eval(), exec()` 的函数或方法（**哪怕向 `BytesIO` 调用 `fig.savefig()` 也会被 AST 静态拦截**，请始终通过 `ctx.figure(fig, ...)` 返回）。
+   - **禁止反射与高危属性**：严禁使用 `getattr, hasattr, setattr, delattr, globals, locals, vars` 及访问 `_` 开头的私有属性（只读内置函数 `isinstance, issubclass, type, callable, chr, ord, format, iter, next` 及字典 `.get()` 已放行）。
+   - **禁止 `parselmouth.praat` 与 `scipy.stats.gaussian_kde`**：运行器 AST 检查会直接拦截（点数多时易阻塞后台线程）；核密度或平滑请改用 `np.histogram` / `np.histogram2d` + `scipy.ndimage.gaussian_filter`，或 `ax.hist2d` / `ax.hexbin`。
+4. **核心上下文辅助方法**：
+   - `ctx.dataset.included_items()`：获取所有未排除条目（已过滤 `is_excluded=True`；若需全部条目用 `ctx.dataset.items`）。
+   - `ctx.dataset.groups()` / `ctx.dataset.speakers()`：获取排序后的分组列表 / 发音人列表。
+   - `ctx.dataset.pitch_points(item)` / `ctx.dataset.formant_points(item)`：获取原始轨迹字典。
+   - `ctx.get_f0_bounds(f0_values)`：计算发音人稳健五度值调域上下限 `[s_min, s_max]`（1.5×IQR 剔除八度跳变离群值 + P5/P95 分位数）。
+   - {SPECTROGRAM_SCRIPT_GUIDE}
+
+### 条目数据结构与关键防坑规则
+每个 `item` 字典包含：
+- **基础与边界信息**：`speaker_id`, `speaker_name`, `item_id`, `label`, `group`（分组真相，勿从 `label` 末尾数字猜声调）, `is_excluded`, `analysis_mode` (`"f0"` 或 `"formant"`), `start`, `end`, `duration`。
+- **高级字表 v2 元数据**：`wordlist_version`, `wordlist_title`, `group_note`, `group_tags` (`list[str]`), `item_note`, `item_tags` (`list[str]`), `item_aliases` (`list[str]`), `item_meta` (`dict`，如 `(item.get("item_meta") or {{}}).get("结构")`), `metadata_source`（如 `"人工填写"`、`"AI推断，需人工复核"`）。
+- **声调/基频字段（必读区别）**：
+  - `syl_t_values`：`list[list[float]]`，每个音节 11 个对齐后的五度值（`0~5`），**无效点已是 `np.nan`**（跨发音人声调比较首选）。
+  - `syl_data`：`list[tuple[float, list[float]]]`，每个元素为 `(有声段时长秒, 11点Hz列表)`。**关键防坑：其中 `>25ms` 静音间隙被赋值为 `0.0`（而非 `np.nan`），对 `syl_data` 求均值/标准差前必须先将 `<= 0` 替换为 `np.nan`（如 `arr = np.where(arr > 0, arr, np.nan)`）！**
+  - `pitch`：`{{"xs": [...], "freqs": [...], "t_values": [...]}}` 原始帧序列，不同条目长度不同且未按音节对齐，严禁直接整段线性插值求均值。
+- **共振峰字段（必读区别）**：
+  - `formant`（及 `ctx.dataset.formant_points(item)`）：**始终包含 4 个键** `{{"xs": [...], "f1": [...], "f2": [...], "f3": [...]}}`。
+  - `syl_formants`：`list[dict]`，每个音节字典含 `syllable_index, char, bounds, times` 及 11 点 `f1, f2`（**仅当工程开启 `show_f3=True` 时包含 `"f3"`**）。绘图前需过滤 `np.isfinite(f1) & np.isfinite(f2) & (f1 > 0) & (f2 > f1)`；传统元音空间图横轴为 `F2`、纵轴为 `F1` 且双轴反转（`ax.invert_xaxis()`, `ax.invert_yaxis()`）。"""
 
 
 def _build_agent_detail_appendix():
-    return """文档级脚本说明（详细模式必须完整遵守）：
+    """
+    详细模式的增量附录：绝不重复正文中已有的 API 契约与禁令，仅补充进阶分析范式与诊断建议。
+    """
+    return """### 进阶声学分析与绘图设计指南（详细模式增量参考）
+1. **多音节连读与时序拼接范式**：
+   - 单音节与多音节条目不宜混入同一条 `0~1` 归一化均值曲线；应按音节数（`len(item.get("syl_t_values") or [])`）分面或筛选。
+   - 多音节连读声调图可将各音节的 11 点串接为 `11 * N` 点序列，并在音节交界处（`x = 10.5, 21.5...`）绘制虚线分隔线，同时利用 `syl_data` 中的有声段时长标注平均音节时长比例。
+2. **二维密度背景与多子图色阶统一**：
+   - 使用 `np.histogram2d` + `scipy.ndimage.gaussian_filter(H, sigma=1.0)` 生成平滑声调轨迹热力背景时，若存在多个分组子图，必须先汇总计算全局统一的 `vmax`，禁止每个子图各自除以自身最大值，确保颜色深浅具备跨组可比性。
+3. **跨发音人元音空间归一化参考**：
+   - 当跨男女声比较元音空间时，除原始 Hz 外，可在脚本中使用 Lobanov (发音人内 Z-score) 归一化或 Bark 标度转换（`bark = 26.81 * f / (1960.0 + f) - 0.53`），并在均值中心外绘制 1 倍标准差协方差椭圆。
+4. **工程质量与元数据复核诊断**：
+   - 若工程含 `metadata_source == "AI推断，需人工复核"`，建议在 `ctx.log(...)` 或统计表中单独汇报已复核与待复核样本占比。
+   - 空数据兜底：若过滤后无有效样本，请勿抛出异常，应返回一张带居中提示文字 `"没有匹配当前筛选条件的可用数据"` 的空 `Figure` 并通过 `ctx.log` 说明原因。"""
 
-一、代码输出协议
-- 只有在用户确认目标和图表候选之后，才进入代码阶段。
-- 代码阶段只输出可以直接运行的 Python 代码，不要输出解释性文字，不要使用 Markdown 代码块。
-- 脚本源码开头必须先写两行注释，格式固定为 `# 脚本名称：...` 和 `# 功能说明：...`，方便 Toolkit 粘贴后自动填入脚本元信息。
-- 脚本必须定义 `def run(ctx):` 作为统一入口。
-- 推荐返回 `ctx.figure(fig, filename="xxx.png", title="中文标题")`。
-- 如果用户明确需要统计表，可返回 `[ctx.figure(...), ctx.table(...)]`。
-- 不要无故返回多个重复图表；只有用户明确要求 PNG 和 SVG 双格式时，才返回同一 figure 的两个格式结果。
 
-二、可用库
-- `ctx.np` 是 numpy 库。
-- `ctx.plt` 是 matplotlib.pyplot。
-- `ctx.scipy` 是 scipy 库。
-- `ctx.parselmouth` 是 praat-parselmouth 库。
-- 可导入并使用 numpy、matplotlib、scipy、parselmouth。
-- 可导入并使用标准库 math、statistics、collections、itertools、re、time、warnings。
+def _build_data_process_detail_appendix():
+    """
+    数据处理 Agent 详细模式的增量附录：补充边界修改后的声学重算流水线与多算子组合示例。
+    """
+    return """### 进阶算子组合与声学重算流程指南（详细模式增量参考）
+1. **边界微调/裁剪后的声学缓存重算闭环（极其重要）**：
+   - 底层写回器规定：只要对某条目执行了修改 `start, end, inner_splits, chars_bounds` 的 `ctx.set_item_fields`，或执行了 `ctx.trim_item_audio`，系统会**自动清空该条目的基频与共振峰缓存**。
+   - 因此，任何调整边界或裁剪音频的脚本，必须在同一条目的后续操作中紧接着追加 `ctx.recompute_pitch(item, params=..., reason="边界更新后同步重算F0")` 和/或 `ctx.recompute_formant(item, params=..., reason="边界更新后同步重算共振峰")`，确保生成的新 `.teproj` 打开即有完整声学曲线。
+2. **发音人自适应重算参数范式**：
+   - 可先遍历每位发音人的有效基频池，调用 `s_min, s_max = ctx.get_f0_bounds(f0_pool)` 评估其稳健调域；对高频女声/童声或低频男声自动构造定制化 `params={"pitch_floor": ..., "pitch_ceiling": ...}` 并调用 `ctx.recompute_pitch`。
+3. **单次批量拆分多个独立 `.teproj` 子工程示例**：
+   - 当用户需要按发音人、声调组或实验条件拆分工程时，只需在同一个 `operations` 列表中放入多个 `ctx.split_project`：
+     ```python
+     for spk_id in sorted_speaker_ids:
+         operations.append(ctx.split_project(
+             name=f"speaker_{spk_id}",
+             speaker_ids=[spk_id],
+             reason=f"拆出发音人 {spk_id} 独立子工程"
+         ))
+     ```
+     Toolkit 会在保存目录一次性导出全部独立子工程文件。"""
 
-三、禁止使用
-- 禁止 pandas、seaborn、plotly、requests、os、sys、subprocess。
-- 禁止 open、eval、exec、input、globals、locals、vars、__import__ 等系统能力。
-- 禁止自行使用任何本机绝对路径、网络请求、外部进程和额外文件读写；如需音频，必须使用 ctx 的受控音频 API。
-- 禁止 scipy.stats.gaussian_kde；它在点数较多时容易长时间占用后台线程，运行器也会拦截。
-- 如果需要密度感，优先使用 ax.hexbin、ax.hist2d、低分辨率分箱均值、抽样散点或均值/置信区间曲线。
 
-四、项目数据说明与数据来源
-数据来自只读快照列表 `ctx.dataset.items`。脚本不能自行访问工程文件路径或读取本地文件；如需当前工程内音频，必须通过 `ctx.load_item_sound(...)` 受控读取。
-
-每个条目（item）代表一个被切分/分析的字词条目，包含以下字段：
-- speaker_id: 发音人 ID (str)
-- speaker_name: 发音人姓名 (str)
-- item_id: 条目唯一 ID (str)
-- label: 音节/字词标签 (str，例如 'ma1')
-- group: 所在声调组/分类 (str，例如 '阴平')
-- is_excluded: 是否已被标记排除 (bool)
-- analysis_mode: 分析模式 ('f0' 或 'formant')
-- start: 采样起点时间 (float，单位: 秒)
-- end: 采样终点时间 (float，单位: 秒)
-- duration: 条目时长 (float，单位: 秒)
-- pitch: 基频数据字典，包含 xs、freqs、t_values
-- formant: 共振峰数据字典，包含 xs、f1、f2
-- syl_data: F0 的音节级 11 点采样结果，list，每个元素形如 (duration, f0_values)
-- syl_t_values: F0 的音节级 11 点五度标度结果，list，每个元素为当前音节内对齐后的 11 个 T 值
-- syl_formants: 共振峰的音节级采样结果，常见键包括 syllable_index、char、bounds、times、f1、f2
-- wordlist_version: 字表版本，v2 表示来自高级字表
-- wordlist_title: 高级字表名称
-- group_note / item_note: 组备注、词项备注
-- group_tags / item_tags: 高级字表标签列表，适合筛选“目标词”“填充词”“对照组”“变调”等条件
-- item_aliases: 词项别名列表，可用于图上显示名或兼容不同命名
-- item_meta: 高级字表自定义字段字典，例如 item.get("item_meta", {}).get("结构")
-- metadata_source: 元数据来源或复核状态，例如“人工填写”“AI推断，需人工复核”“已人工复核”
-
-五、字段语义和常见陷阱
-- pitch.xs / pitch.freqs / pitch.t_values 是原始基频轨迹点，时间轴不保证已经按音节对齐，也不保证不同条目之间长度相同。
-- 严禁为了比较声调/F0走势，直接把整段 pitch.xs 归一化到 0-100 后对不同条目求均值或画 KDE。这样会把多音节、停顿、断续基频点压扁到同一横轴，极容易画出每组都一样或锯齿严重的伪结果。
-- 如果目标是比较声调、连读、分组 F0 走势，优先使用 syl_t_values（五度标度）或 syl_data（Hz），因为它们已经按每个音节 11 点对齐。
-- 如果目标是比较原始 F0 Hz，用 syl_data；如果目标是跨发音人比较声调走势，用 syl_t_values 更稳。
-- 如果目标是画元音空间或共振峰图，优先使用 syl_formants 或 ctx.dataset.formant_points(item)，并过滤非有限值、F1<=0、F2<=0、F2<=F1 的点。
-- item.group 是分组真相；不要根据 label 末尾数字自行推断声调，除非用户明确要求。
-- item.is_excluded 为 True 的条目默认不参与分析，除非用户明确选择“使用全部条目”或要做质量检查。
-- v2 高级字表字段是用户的实验设计元数据；如果用户要求按“标签、结构、实验条件、目标词/填充词、是否复核”分析，优先使用 group_tags、item_tags、item_meta 和 metadata_source。
-- 如果 metadata_source 是“AI推断，需人工复核”，默认应在日志或图表注释中说明，必要时先询问用户是否排除未复核条目。
-- 如果用户给出参考图表，请只复刻图表类型、变量关系、统计口径、布局和视觉表达方式；严禁照抄参考图里的数值、样本标签、数据点或结论。
-
-六、推荐分析范式
-1. F0/声调分组均值曲线：
-   - items = ctx.dataset.included_items()
-   - 过滤 analysis_mode == "f0"
-   - 按 item["group"] 分组
-   - 使用 item["syl_t_values"] 或 item["syl_data"]
-   - 对每个条目，把每个音节的 11 点串接成一条曲线；不同音节数量不要混在同一个均值里，除非明确使用“时序展开”并在图上标出音节分隔线
-   - 对每组计算 mean、std 或 95% CI，并标注样本数 n
-   - 图形优先用均值曲线 + 阴影区间 + 少量浅色个体曲线，不要把热力图当作主要统计结论
-2. F0 热力/密度感图：
-   - 不要使用 scipy.stats.gaussian_kde
-   - 可以用 ax.hist2d、ax.hexbin 或低分辨率二维直方图模拟密度
-   - 如果比较多个分组，所有子图必须共享同一套颜色归一化范围；不要每个分组单独除以自己的最大值，否则颜色深浅不能横向比较
-   - 热力背景只作为辅助，必须同时画均值曲线和样本数
-3. 元音空间 / F1-F2 图：
-   - 横轴通常用 F2，纵轴用 F1，传统元音空间图通常反转 x 轴和 y 轴
-   - 只画有限且合理的点：np.isfinite(f1)、np.isfinite(f2)、f1>0、f2>0、f2>f1
-   - 可以按 group 或 speaker 着色，推荐同时标出均值中心
-4. 多发音人比较：
-   - 如果跨男女声比较原始 Hz，必须谨慎；更推荐 T 值或分发音人子图
-   - 如果使用 Hz，请至少按 speaker_name 分面或在图例中区分发音人
-5. 参考图式语谱图：
-   - 如果用户要复刻类似论文中的多宫格语谱图，优先使用 `ctx.plot_spectrogram_grid(...)`
-   - 如果需要更细控制，使用 `ctx.load_item_sound(item)` 加 `ctx.spectrogram_data(sound, ...)`，再用 `ax.pcolormesh(..., cmap="Greys")` 绘制
-   - 箭头可标注当前条目缓存中的 F1/F2/F3 位置；不要手动写入或读取任何音频文件
-6. 结构类图表：
-   - 优先检查 item["item_meta"] 是否存在“结构”“实验条件”“词频等级”“语义类”等字段
-   - 如果工程快照没有相应字段，必须请用户提供分类映射，不要在脚本里硬编码 Demo 词表
-7. 高级字表标签图表：
-   - 如果用户想只分析目标词，可过滤 `"目标词" in item.get("item_tags", [])`
-   - 如果用户想比较实验组/对照组，可优先看 group_tags 或 item_tags
-   - 如果用户想按自定义字段分组，可用 `(item.get("item_meta") or {}).get("字段名")`
-   - 如果含有未复核 AI 推断字段，应把 metadata_source 纳入日志或统计表
-
-七、ctx 提供的辅助方法
-- ctx.dataset.items: 获取所有条目快照
-- ctx.dataset.groups(): 获取当前所有不重复的分组列表
-- ctx.dataset.speakers(): 获取当前所有发音人列表
-- ctx.dataset.included_items(): 仅获取未排除的分析条目
-- ctx.dataset.pitch_points(item): 获取指定条目的基频点数据
-- ctx.dataset.formant_points(item): 获取指定条目的共振峰点数据
-- ctx.parselmouth: praat-parselmouth 库
-- ctx.load_item_sound(item, padding=0.0): 从当前工程内受控读取条目音频，返回 parselmouth.Sound
-- ctx.spectrogram_data(sound, max_frequency=5000.0, window_length=0.005, dynamic_range_db=50.0): 返回语谱图绘图矩阵
-- ctx.plot_spectrogram_grid(items, columns=4, max_items=8, show_formant_arrows=True, label_field="auto", max_frequency=4000.0): 返回多宫格语谱图 Figure
-- ctx.log("日志内容"): 记录一条日志，方便在结果界面中查看
-- ctx.is_cancelled(): 长循环中可定期检查，返回 True 时请尽快结束脚本
-- ctx.figure(fig, filename="xxx.png", title="图表标题"): 包装并返回 Matplotlib figure 对象
-- ctx.table(rows, columns, title="表格标题"): 包装并返回数据表格
-
-八、合法返回值
-- return ctx.figure(...)
-- return ctx.table(...)
-- return [ctx.figure(...), ctx.table(...)]
-- return [ctx.figure(fig, filename="xxx.png", title="..."), ctx.figure(fig, filename="xxx.svg", title="...")] 仅在用户明确要求双格式时使用
-
-九、推荐代码骨架（按目标改写，不要机械照抄无关部分）
-
-# 脚本名称：自定义图表
-# 功能说明：用当前工程数据生成目标图表并记录统计口径
+def _build_code_skeleton(title, user_goal, filename, is_formant=False):
+    if is_formant:
+        return f"""# 脚本名称：{title}
+# 功能说明：{user_goal}
 def run(ctx):
     np = ctx.np
     plt = ctx.plt
     items = ctx.dataset.included_items()
-    # 如果用户明确要求全部条目，才改用 ctx.dataset.items
 
-    groups = {}
+    groups = {{}}
+    for item in items:
+        if ctx.is_cancelled():
+            ctx.log("用户取消，提前结束")
+            break
+        if item.get("analysis_mode") != "formant":
+            continue
+        group = item.get("group") or "未分组"
+        syl_formants = item.get("syl_formants") or []
+        for syl in syl_formants:
+            f1 = np.asarray(syl.get("f1", []), dtype=float)
+            f2 = np.asarray(syl.get("f2", []), dtype=float)
+            if f1.size == 11 and f2.size == 11:
+                # 取元音中段 (索引 4:7) 稳健均值
+                m_f1 = float(np.nanmean(f1[4:7]))
+                m_f2 = float(np.nanmean(f2[4:7]))
+                if np.isfinite(m_f1) and np.isfinite(m_f2) and m_f1 > 0 and m_f2 > m_f1:
+                    groups.setdefault(group, []).append((m_f2, m_f1))
+
+    fig, ax = plt.subplots(figsize=(6.5, 5.5))
+    if not groups:
+        ax.text(0.5, 0.5, "没有可用共振峰数据", ha="center", va="center")
+        ax.axis("off")
+        return ctx.figure(fig, filename="{filename}", title="{title}")
+
+    # 后续按分组绘制 F2-F1 散点/均值椭圆，并反转坐标轴：
+    # ax.invert_xaxis()
+    # ax.invert_yaxis()
+    return ctx.figure(fig, filename="{filename}", title="{title}")"""
+
+    return f"""# 脚本名称：{title}
+# 功能说明：{user_goal}
+def run(ctx):
+    np = ctx.np
+    plt = ctx.plt
+    items = ctx.dataset.included_items()
+
+    groups = {{}}
     for item in items:
         if ctx.is_cancelled():
             ctx.log("用户取消，提前结束")
@@ -536,6 +534,8 @@ def run(ctx):
             continue
         group = item.get("group") or "未分组"
 
+        # 跨发音人声调比较优先用 syl_t_values（无效点为 np.nan）；
+        # 若用 syl_data (Hz)，需先将 <= 0 的静音点替换为 np.nan
         syl_t_values = item.get("syl_t_values") or []
         if not syl_t_values:
             continue
@@ -543,34 +543,20 @@ def run(ctx):
         curve = []
         for syl_vals in syl_t_values:
             arr = np.asarray(syl_vals, dtype=float)
-            if arr.size != 11:
-                continue
-            curve.extend(arr.tolist())
+            if arr.size == 11:
+                curve.extend(arr.tolist())
         if len(curve) < 2 or np.all(np.isnan(curve)):
             continue
-
         groups.setdefault(group, []).append(curve)
 
+    fig, ax = plt.subplots(figsize=(7, 4.5))
     if not groups:
-        fig, ax = plt.subplots(figsize=(6, 4))
-        ax.text(0.5, 0.5, "没有可用数据", ha="center", va="center")
+        ax.text(0.5, 0.5, "没有可用基频数据", ha="center", va="center")
         ax.axis("off")
-        return ctx.figure(fig, filename="custom_chart.png", title="自定义图表")
+        return ctx.figure(fig, filename="{filename}", title="{title}")
 
-    # 后续应按分组计算均值/标准差，绘制曲线，并标注每组样本数。
-    # 不要直接对 raw pitch.xs 做整段归一化求均值。
-
-十、额外设计准则
-- 如果没有数据或匹配不到任何条目，脚本不要崩溃报错。请生成一张包含“没有可用数据”说明文字的空 Matplotlib Figure 返回，或者调用 ctx.log 记录空说明。
-- 图表标题、坐标轴名称、图例文字必须使用中文。
-- 图上必须标注关键统计口径，例如“使用 T 值/Hz”“每个音节 11 点对齐”“n=样本数”“阴影含义为标准差或置信区间”。
-- 如果脚本存在较长循环，请在循环中定期调用 ctx.is_cancelled()，为 True 时记录日志并提前返回当前可用结果或空图。
-- 避免高成本密度估计和大网格计算。不要使用 scipy.stats.gaussian_kde；如果需要密度感，请优先使用 ax.hexbin、ax.hist2d、低分辨率分箱均值、抽样散点或均值/置信区间曲线。
-- 不要对每个分组构造 100x100 或更大的二维网格反复计算密度；每组绘图应尽量控制在几千个点以内，数据很多时先按时间或随机抽样。
-- 不要生成“看起来每组一样”的图：如果每个分组曲线完全相同或高度相似，通常说明你把全体数据重复画进每个子图，或错误使用了未按 group 过滤的数据。
-- 不要把每个子图的热力密度单独归一化后再用于横向比较；需要横向比较时必须共享颜色范围，或明确说明颜色只表示组内相对密度。
-- 脚本应使用 ctx.log 输出数据诊断信息：纳入条目数、实际绘制分组、每组样本数、被跳过条目数、使用的数据字段。
-- 代码应尽量简洁稳健，避免使用复杂的类结构，优先使用面向过程的清晰绘图逻辑。"""
+    # 后续按分组计算均值与标准差/置信区间并绘图，标注样本量 n
+    return ctx.figure(fig, filename="{filename}", title="{title}")"""
 
 
 def _build_agent_prompt(project_data, selections):
@@ -604,109 +590,26 @@ def _build_agent_prompt(project_data, selections):
     else:
         project_summary = "- 用户选择不附带当前工程摘要。请在首轮询问用户希望分析的数据范围。"
 
-    extra_section = f"\n用户额外说明：\n{custom_desc}\n" if custom_desc else ""
+    extra_section = f"\n### 用户额外要求\n{custom_desc}\n" if custom_desc else ""
     is_detailed = detail_level == "详细"
-    detail_instruction = (
-        "使用文档级说明：首轮推荐仍要清晰克制；进入代码阶段时必须完整遵守后面的文档级脚本说明。"
-        if is_detailed
-        else "使用精简说明：推荐图表时给出字段、统计口径、风险和适用场景，但仍避免逐条复述工程数据。"
-    )
-    if summary_mode == "包含详细工程摘要":
-        detail_instruction += " 当前附带详细工程摘要，优先利用其中的字表标签、备注和自定义字段，不要要求用户重复粘贴字表。"
     detail_appendix = f"\n\n{_build_agent_detail_appendix()}" if is_detailed else ""
 
-    return f"""你现在是 PhonTracer语音学标注与声学分析系统 V1.0 的自定义图表脚本 Agent。
+    return f"""你现在是 PhonTracer 语音学标注与声学分析系统 V1.0 的自定义图表脚本 Agent。
 
-你的任务不是立刻写代码，而是先和用户澄清研究目的，再推荐合适图表，最后在用户确认后生成可直接放进 Toolkit 的 Python 自定义脚本。
+### 一、 协作工作流协议
+- **快速直通规则（Fast-Track）**：如果用户在下方的【用户额外要求】中已经明确指定了具体图表方案并要求直接生成代码，请**跳过阶段 1 提问，直接进入阶段 2** 输出纯 Python 代码。
+- **阶段 1（澄清与方案推荐，默认首轮）**：若用户尚未敲定具体图表：
+  1. 第一轮回复**不要直接输出代码**；先用 1~2 句话概括你从【当前工程摘要】中看到的数据特征。
+  2. 提出最多 3 个简短精准的确认问题（如研究焦点、分组/对比维度、是否按高级字表标签或 `item_meta` 筛选、统计口径）。
+  3. 推荐 **{chart_count_int}** 个编号候选图表方案，每个方案写明：适用研究问题、使用字段、统计口径、潜在误用风险。
+- **阶段 2（代码生成）**：当用户选定方案或要求直接生成后，**只输出可直接运行的纯 Python 代码**（不要输出任何解释文字，不要使用 ```python 代码块包裹）。代码前两行必须为 `# 脚本名称：...` 和 `# 功能说明：...`。
+- **参考图复刻准则**：{REFERENCE_CHART_RULE}
 
-重要工作流程：
-1. 第一轮回复不要直接输出代码。
-2. 第一轮先用 1-2 句话概括你从工程摘要中看见的数据状态。
-3. 主动猜测用户可能的目的，例如：比较声调走势、比较发音人差异、制作论文汇总图、检查异常/质量问题、探索共振峰或元音空间。
-4. 向用户询问真正目的。问题要少而准，最多 3 个。
-5. 同时推荐 {chart_count_int} 种图表候选，让用户按编号选择。每种候选都要说明：
-   - 适合回答什么问题；
-   - 建议使用哪些字段；
-   - 主要统计口径；
-   - 可能的误用风险。
-6. 用户选择图表或明确目标之后，再进入代码阶段。
-7. 代码阶段只输出可以直接运行的 Python 代码，不要输出解释文字，不要使用 Markdown 代码块；代码第一行必须是 `# 脚本名称：...`，第二行必须是 `# 功能说明：...`。
-8. {REFERENCE_CHART_RULE}
-
-回复风格：
-- 全程使用中文。
-- 先像研究助理一样帮用户把问题想清楚，再像工程 Agent 一样写稳健代码。
-- {detail_instruction}
-- 不要求用户粘贴工程数据；下面已经有当前工程摘要和 API 约束。
-
-当前工程摘要：
+### 二、 当前工程摘要
 {project_summary}
 {extra_section}
-Toolkit 自定义脚本硬性接口：
-- 最终脚本必须以两行元信息注释开头：`# 脚本名称：...`、`# 功能说明：...`。
-- 最终脚本必须定义 `def run(ctx):`。
-- 数据来自 `ctx.dataset.items`，通常优先使用 `ctx.dataset.included_items()`。
-- 图表用 `ctx.figure(fig, filename="xxx.png", title="中文标题")` 返回。
-- 表格用 `ctx.table(rows, columns, title="中文标题")` 返回。
-- 合法返回值：单个 figure、单个 table、或 `[ctx.figure(...), ctx.table(...)]`。
-- 脚本应使用 `ctx.log("...")` 记录纳入条目数、跳过条目数、实际分组、使用字段。
-- 长循环中要定期检查 `ctx.is_cancelled()`。
-
-可用库与禁止项：
-- 可用：`ctx.np`、`ctx.plt`、`ctx.scipy`、`ctx.parselmouth`，也可导入 numpy、matplotlib、scipy、parselmouth。
-- 可用标准库：math、statistics、collections、itertools、re、time、warnings。
-- 禁止：pandas、seaborn、plotly、requests、os、sys、subprocess。
-- 禁止：open/eval/exec/input/globals/locals/vars/__import__ 等系统能力。
-- 禁止：自行使用任何本机绝对路径、网络请求、额外文件读写；如需音频，必须使用 ctx 的受控音频 API。
-- 禁止：scipy.stats.gaussian_kde。需要密度感时使用 hexbin、hist2d、低分辨率分箱或抽样散点。
-
-{SPECTROGRAM_SCRIPT_GUIDE}
-
-可用数据字段：
-- `speaker_id`、`speaker_name`：发音人信息。
-- `item_id`、`label`、`group`：条目信息与用户分组。`group` 是分组真相，不要擅自从 label 末尾数字推断声调。
-- `is_excluded`：是否已排除。默认不要纳入，除非用户明确要求质量检查或全部条目。
-- `analysis_mode`：`f0` 或 `formant`。
-- `start`、`end`、`duration`：时间信息。
-- `pitch`：原始基频轨迹，包含 `xs`、`freqs`、`t_values`。它不保证按音节对齐，不适合直接跨条目整段归一化求均值。
-- `syl_data`：F0 的音节级 11 点 Hz 采样，适合画原始 Hz 走势。
-- `syl_t_values`：F0 的音节级 11 点五度标度，适合跨发音人比较声调走势。
-- `formant`：原始共振峰轨迹，包含 `xs`、`f1`、`f2`。
-- `syl_formants`：音节级共振峰采样，适合元音空间或 F1/F2 轨迹。
-- 高级字表字段：`wordlist_version`、`wordlist_title`、`group_note`、`group_tags`、`item_note`、`item_tags`、`item_aliases`、`item_meta`、`metadata_source`。
-- `item_tags` / `group_tags` 是标签列表，适合筛选目标词、填充词、对照组、变调等研究条件。
-- `item_meta` 是自定义字段字典，例如 `(item.get("item_meta") or {{}}).get("结构")`，适合按结构、实验条件、词频等级、语义类等字段分组。
-- `metadata_source` 标记元数据是否来自 AI 推断；如果是“AI推断，需人工复核”，默认提醒用户或在日志中说明。
-
-图表推荐规则：
-- 比较声调/F0 走势：优先推荐分组均值曲线，使用 `syl_t_values`；如果用户强调 Hz，再用 `syl_data`。
-- 比较组内离散程度：推荐均值曲线 + 标准差/置信区间，或箱线图/小提琴图。
-- 比较发音人差异：推荐分面图或按发音人分组，跨男女声优先使用 T 值。
-- 元音空间：推荐 F2-F1 散点或均值中心图，过滤非有限值、F1<=0、F2<=0、F2<=F1，并反转传统元音空间坐标轴。
-- 共振峰轨迹：优先用 `syl_formants`，标注音节位置或时间点。
-- 语谱图/声学截图复刻：优先推荐 `ctx.plot_spectrogram_grid(...)`；如需逐格定制，使用 `ctx.load_item_sound(...)` 和 `ctx.spectrogram_data(...)`。
-- 质量检查：推荐缺失率、异常值、时长/F0 范围、排除条目分布等诊断图。
-- 结构类图表：优先检查 `item_meta` 是否真的存在结构字段；否则必须先请用户提供结构分类映射，不要在代码里硬编码 Demo 词表。
-- 高级字表分析：如果工程摘要显示有词项标签、组标签或自定义字段，要主动推荐“按标签筛选”“按自定义字段分组”“未复核字段质量检查”等候选。
-- 参考图表：如果用户给出参考图表，先询问要复刻哪些方面，例如图形类型、变量关系、分面方式、配色、统计区间、标注风格；只能用当前工程数据重画，不能照抄参考图的数据和结论。
-
-最终写代码时必须遵守：
-- 代码开头必须先写两行注释：第一行 `# 脚本名称：简短中文脚本名`，第二行 `# 功能说明：一句话说明分析目的和输出`。
-- 没有数据时返回一张写有“没有可用数据”的空图，不要崩溃。
-- 图表标题、坐标轴、图例、日志都用中文。
-- 图上标注样本数 n、使用字段和统计口径。
-- 不要返回无关的多张重复图；除非用户明确要求，同时返回图表和统计表即可。
-- 控制计算成本，不做大网格密度估计；数据很多时先抽样或按时间分箱。
-- 代码保持过程式、清晰、短函数，不写复杂类。
-
-首轮回复建议格式：
-1. “我先看到当前工程大致是……”
-2. “我猜你可能想做的是……”
-3. “我建议先从下面几种图表里选：”
-4. 列出 {chart_count_int} 个编号候选。
-5. “请回复编号，或告诉我你的研究问题/论文图目标。”
-{detail_appendix}
-""".strip()
+{CORE_CHART_API_CONTRACT}
+{detail_appendix}""".strip()
 
 
 def _build_data_process_agent_prompt(project_data, selections):
@@ -740,145 +643,67 @@ def _build_data_process_agent_prompt(project_data, selections):
     else:
         project_summary = "- 用户选择不附带当前工程摘要。请在首轮询问用户希望处理哪类工程数据。"
 
-    extra_section = f"\n用户额外说明：\n{custom_desc}\n" if custom_desc else ""
-    detail_instruction = (
-        "使用文档级说明：首轮方案仍要克制，进入代码阶段时必须完整遵守下面的数据处理脚本接口。"
-        if detail_level == "详细"
-        else "使用精简说明：先帮助用户确认处理目的，再给出少量可执行方案。"
-    )
+    extra_section = f"\n### 用户额外要求\n{custom_desc}\n" if custom_desc else ""
+    is_detailed = detail_level == "详细"
+    detail_appendix = f"\n\n{_build_data_process_detail_appendix()}" if is_detailed else ""
 
-    return f"""你现在是 PhonTracer语音学标注与声学分析系统 V1.0 的数据处理脚本 Agent。
+    return f"""你现在是 PhonTracer 语音学标注与声学分析系统 V1.0 的数据处理脚本 Agent。
 
-你的任务不是立刻写代码，而是先和用户澄清工程再加工目的，再推荐合适的数据处理方案，最后在用户确认后生成可直接放进 Toolkit 的 Python 数据处理脚本。
+### 一、 协作工作流协议
+- **快速直通规则（Fast-Track）**：如果用户在下方的【用户额外要求】中已经明确指定了具体数据处理方案并要求直接生成代码，请**跳过阶段 1 提问，直接进入阶段 2** 输出纯 Python 代码。
+- **阶段 1（澄清与方案推荐，默认首轮）**：若用户尚未敲定具体方案：
+  1. 第一轮回复**不要直接输出代码**；先用 1~2 句话概括工程摘要中的数据状态。
+  2. 主动判断用户可能需要的工程再加工类型（批量重算声学参数、按条件拆分独立子工程、边界微调与音频裁剪、外部表格元数据合并、异常质检与标记），提出最多 3 个确认问题。
+  3. 推荐 **{plan_count_int}** 个编号候选处理方案，说明：解决什么问题、读取哪些字段、返回哪些受控算子、会产生哪些可复核变化。
+- **阶段 2（代码生成）**：当用户确认方案后，**只输出可直接运行的纯 Python 代码**（不要解释文字，不要使用 ```python 代码块包裹）。第一行必须是 `# 脚本名称：...`，第二行必须是 `# 功能说明：...`，并定义 `def run(ctx):`。
 
-重要工作流程：
-1. 第一轮回复不要直接输出代码。
-2. 第一轮先用 1-2 句话概括你从工程摘要中看见的数据状态。
-3. 主动判断用户可能需要哪类工程再加工：批量重分析、工程重组、音频再处理、外部表格元数据合并、质量检查后自动修复。
-4. 向用户询问真正目的。问题要少而准，最多 3 个。
-5. 同时推荐 {plan_count_int} 种处理方案候选。每种候选都要说明：
-   - 适合解决什么工程问题；
-   - 会使用哪些工程字段或资源；
-   - 会返回哪些受控操作；
-   - 可能造成哪些可复核变化。
-6. 用户确认方案后，再进入代码阶段。
-7. 代码阶段只输出可以直接运行的 Python 代码，不要输出解释文字，不要使用 Markdown 代码块。
-8. 最终代码第一行必须是 `# 脚本名称：...`，第二行必须是 `# 功能说明：...`，并且必须定义 `def run(ctx):`。
-
-回复风格：
-- 全程使用中文。
-- 先像研究助理一样帮助用户把工程处理目标想清楚，再像工程 Agent 一样写稳健代码。
-- {detail_instruction}
-- 不要求用户粘贴工程数据；下面已经有当前工程摘要和 API 约束。
-
-当前工程摘要：
+### 二、 当前工程摘要
 {project_summary}
 {extra_section}
-数据处理脚本的核心定位：
-- 数据处理脚本用于生成可复核的工程再加工流程，不是任意 Python 自动化。
-- 脚本不能直接修改 `.teproj`，不能读写本地文件，不能操作 ZIP 包。
-- 脚本只返回 `ctx.project_patch([...])`；Toolkit 会统一预览、校验、另存为新的 `.teproj`。
-- 新工程必须能够重新导入 PhonTracer 主程序。
-- 脚本应把危险动作表达为受控操作，让 Toolkit 去执行。
+### 三、 数据处理沙箱与受控算子契约
+- **核心定位**：脚本不直接修改本地 `.teproj` 或读写文件，而是返回 `ctx.project_patch(operations, title="...", description="...")`；由 Toolkit 统一校验并另存为新 `.teproj`。
+- **沙箱安全边界**：
+  - 严禁导入 `pandas, seaborn, plotly, requests, os, sys, subprocess`；严禁调用 `.save(), .savefig(), .to_csv(), .write(), open(), eval(), exec()`；严禁使用 `getattr, hasattr`（已放行 `isinstance, type, callable, chr, ord, format, iter, next`）及 `parselmouth.praat`、`scipy.stats.gaussian_kde`。
+  - `print(...)` 已自动重定向至 `ctx.log(...)`；长循环中请定期检查 `ctx.is_cancelled()`。
+- **6 大受控算子（放入 `operations` 列表）**：
+  1. `ctx.set_item_fields(item, fields, reason="...")`
+     - **完整合法字段白名单**：`label`, `group`, `group_note`, `group_tags`, `item_note`, `item_tags`, `item_aliases`, `item_meta`, `metadata_source`, `is_excluded`, `exclusion_reason`, `start`, `end`, `inner_splits`, `chars_bounds`（严禁传入白名单外的未知键）。
+     - **清空缓存副作用警告**：只要修改了 `start, end, inner_splits, chars_bounds` 中任一边界字段，系统会**自动清空该条目的基频与共振峰缓存**！若需保留声学数据，必须紧接着对该条目追加 `ctx.recompute_pitch(item, ...)` 和/或 `ctx.recompute_formant(item, ...)`。
+  2. `ctx.recompute_pitch(item, params={{...}}, reason="...")`
+     - 重算条目基频 F0 缓存。支持覆盖的 `params` 参数：`pitch_floor` (默认 75.0), `pitch_ceiling` (默认 600.0), `voicing_threshold` (默认 0.45), `very_accurate` (bool), `time_step`, `max_candidates`, `silence_threshold`, `method` (`"ac"` 或 `"cc"`), `pts` (默认 11)。
+  3. `ctx.recompute_formant(item, params={{...}}, reason="...")`
+     - 重算条目共振峰缓存。支持覆盖的 `params` 参数：`formant_max_hz` (默认 5500.0), `formant_count` (默认 5.0), `formant_window_length` (默认 0.025), `formant_pre_emphasis` (默认 50.0), `formant_sample_strategy` (`"整段11点"` 或 `"中段均值"`).
+  4. `ctx.trim_item_audio(item, start=..., end=..., padding=0.0, reason="...")`
+     - 裁剪条目音频并替换工程内引用。**同样会自动清空该条目的基频与共振峰缓存**，如需保留声学曲线请紧接着追加 `recompute_pitch` / `recompute_formant`。
+  5. `ctx.split_project(name, item_ids=[...], speaker_ids=[...], reason="...")`
+     - 从当前工程拆出干净子工程。**支持单次批量拆分为多个子工程**：`operations` 列表中可以包含**多个** `ctx.split_project(...)` 操作（例如按每位发音人或每个实验组各生成一个 `split_project`），Toolkit 会在目标目录一次性生成多个带不同后缀的独立 `.teproj` 文件。
+  6. `ctx.import_csv_metadata(rows, match_on="label", field_map={{...}}, reason="...")`
+     - 将结构化字典列表 `rows` 按 `match_on` 匹配合并进条目元数据（如 `field_map={{"实验条件": "item_meta.实验条件", "标签": "item_tags", "复核状态": "metadata_source"}}`）。
 
-硬性接口：
-- 最终脚本必须定义 `def run(ctx):`。
-- 数据来自 `ctx.dataset.items`，通常优先使用 `ctx.dataset.included_items()`。
-- 最终必须返回 `ctx.project_patch(operations, title="...", description="...")`。
-- 不要把 `ctx.figure(...)` 或 `ctx.table(...)` 作为主结果返回。
-- 脚本应使用 `ctx.log("...")` 记录处理依据、匹配条目数、跳过原因和建议复核点。
-- 长循环中要定期检查 `ctx.is_cancelled()`。
-
-可用受控操作：
-1. `ctx.set_item_fields(item, fields, reason="...")`
-   - 用于修改条目字段，例如 `group`、`item_note`、`item_tags`、`item_meta`、`metadata_source`、`is_excluded`、`exclusion_reason`、`start`、`end`、`inner_splits`、`chars_bounds`。
-   - 不要修改未知字段，不要伪造缓存路径。
-2. `ctx.recompute_pitch(item, params={{...}}, reason="...")`
-   - 用于让 Toolkit 对目标条目重算 F0。
-   - params 只写需要覆盖的参数，例如 `pitch_floor`、`pitch_ceiling`、`voicing_threshold`。
-3. `ctx.recompute_formant(item, params={{...}}, reason="...")`
-   - 用于让 Toolkit 对目标条目重算共振峰。
-   - params 可覆盖 `formant_max_hz`、`formant_count`、`formant_window_length` 等。
-4. `ctx.trim_item_audio(item, start=..., end=..., padding=0.0, reason="...")`
-   - 用于让 Toolkit 裁剪条目音频并替换工程内音频引用。
-   - 不要自己生成 WAV，不要自己写文件。
-5. `ctx.split_project(name, item_ids=[...], speaker_ids=[...], reason="...")`
-   - 用于让 Toolkit 从当前工程拆出一个干净子工程。
-   - 适合按发音人、实验条件、目标词或有效条目生成子工程。
-6. `ctx.import_csv_metadata(rows, match_on="label", field_map={{...}}, reason="...")`
-   - 用于合并外部表格元数据。
-   - 第一版脚本不能读取 CSV 文件；如果需要表格数据，应让用户或 Toolkit 把 CSV 内容转为结构化 rows 后再运行。
-   - field_map 示例：`{{"实验条件": "item_meta.实验条件", "复核状态": "metadata_source", "分组": "group"}}`。
-
-可用数据字段：
-- `speaker_id`、`speaker_name`、`item_id`、`label`、`group`。
-- `is_excluded`、`analysis_mode`、`start`、`end`、`duration`。
-- `pitch`、`syl_data`、`syl_t_values`、`formant`、`syl_formants`。
-- 高级字表字段：`wordlist_version`、`wordlist_title`、`group_note`、`group_tags`、`item_note`、`item_tags`、`item_aliases`、`item_meta`、`metadata_source`。
-
-常见高价值任务：
-- 批量重分析：找出 F0 缺失、范围异常或共振峰飘移的条目，对不同发音人或分组返回不同重算参数。
-- 工程重组：按目标词、填充词、实验条件、发音人或复核状态拆出干净工程。
-- 音频再处理：按当前条目边界裁剪短音频，或为明显过宽的条目生成裁剪操作。
-- 外部表格合并：把人工复核、词频、语义类、实验条件写入 `item_meta` 或 `metadata_source`。
-- 自动质检后修复：不要只标记异常，优先给出可复核的修复操作，例如重算、裁剪、排除并写明原因。
-
-禁止项：
-- 禁止导入 pandas、seaborn、plotly、requests、os、sys、subprocess。
-- 禁止调用 open/eval/exec/input/globals/locals/vars/__import__。
-- 禁止任何本机绝对路径、网络请求、额外文件读写。
-- 禁止直接修改 `.teproj`、ZIP、project.json 或缓存文件。
-- 禁止编造不存在的工程字段；如果工程摘要没有结构字段，不要硬编码 Demo 结构映射。
-
-推荐代码骨架：
-
+### 四、 推荐代码骨架
 # 脚本名称：批量工程再加工
 # 功能说明：根据质量规则生成可复核的数据处理操作
 def run(ctx):
     operations = []
     items = ctx.dataset.included_items()
-    skipped = 0
-
     for item in items:
         if ctx.is_cancelled():
             ctx.log("用户取消，提前结束")
             break
-
-        duration = item.get("duration") or 0
-        if duration <= 0:
-            skipped += 1
-            continue
-
-        # 示例：对过短条目写入排除原因。实际代码应按用户确认的目标改写。
-        if duration < 0.12:
+        duration = item.get("duration") or 0.0
+        if 0 < duration < 0.12:
             operations.append(ctx.set_item_fields(item, {{
                 "is_excluded": True,
-                "exclusion_reason": "数据处理脚本标记：时长过短，建议人工复核"
+                "exclusion_reason": "时长过短(<0.12s)，建议人工复核"
             }}, reason="时长过短"))
-
-    ctx.log(f"纳入条目 {{len(items)}} 个，生成操作 {{len(operations)}} 个，跳过 {{skipped}} 个。")
-    return ctx.project_patch(
-        operations,
-        title="批量工程再加工",
-        description="由 Toolkit 统一另存为新的 .teproj，并保留脚本运行记录。"
-    )
-
-首轮回复建议格式：
-1. “我先看到当前工程大致是……”
-2. “你真正想处理的可能是……”
-3. “我建议先从下面几种工程处理方案里选：”
-4. 列出 {plan_count_int} 个编号候选。
-5. “请回复编号，或告诉我你希望生成怎样的新工程。”
-""".strip()
+    ctx.log(f"扫描条目 {{len(items)}} 个，生成操作 {{len(operations)}} 项。")
+    return ctx.project_patch(operations, title="批量工程再加工", description="由 Toolkit 校验并另存为新 .teproj")
+{detail_appendix}""".strip()
 
 
 def generate_ai_prompt(project_data, selections):
     """
     根据用户在弹窗中选择的各项配置，以及当前工程摘要，生成给 AI 的提示词。
-
-    :param project_data: 当前工程的 JSON 数据字典（可为空）
-    :param selections: 包含用户选择偏好的字典
-    :return: 格式化后的完整提示词字符串
     """
     script_type = selections.get("script_type", "chart")
     prompt_mode = selections.get("prompt_mode", "参数选项")
@@ -887,8 +712,14 @@ def generate_ai_prompt(project_data, selections):
     if str(prompt_mode).replace(" ", "") in ("Agent协作", "Agent模式", "代理协作"):
         return _build_agent_prompt(project_data, selections)
 
-    # 1. 提取工程摘要信息
-    project_summary = _build_project_summary(project_data)
+    # 1. 提取工程摘要信息（带默认截断上限，防止大工程 Token 膨胀）
+    project_summary = _build_project_summary(
+        project_data,
+        max_speaker_names=8,
+        max_speakers=8,
+        max_groups=16,
+        max_speaker_groups=8,
+    )
 
     # 2. 整合用户偏好
     user_goal = selections.get("goal", "自定义图表")
@@ -904,10 +735,27 @@ def generate_ai_prompt(project_data, selections):
     title = selections.get("title", "自定义图表")
     filename = selections.get("filename", "custom_chart.png")
     img_format = selections.get("img_format", "png")
-    output_table = "是" if selections.get("output_table", False) else "否"
+    output_table_bool = bool(selections.get("output_table", False))
+    output_table = "是" if output_table_bool else "否"
     show_legend = "是" if selections.get("show_legend", True) else "否"
-    use_chinese = "是" if selections.get("use_chinese", True) else "否"
+
+    raw_use_chinese = selections.get("use_chinese", True)
+    if isinstance(raw_use_chinese, str):
+        use_chinese_bool = raw_use_chinese.strip() not in ("否", "False", "false", "0", "no")
+    else:
+        use_chinese_bool = bool(raw_use_chinese)
+    use_chinese = "是" if use_chinese_bool else "否"
     custom_desc = selections.get("custom_desc", "").strip()
+
+    language_rule = (
+        "图表的标题、坐标轴名称、图例文字必须使用中文。"
+        if use_chinese_bool
+        else "图表的标题、坐标轴名称、图例文字必须使用英文（English labels for publication），请勿在图面硬编码中文标签。"
+    )
+
+    combined_intent = f"{user_goal} {x_axis} {y_axis} {custom_desc}".lower()
+    is_formant_task = any(k in combined_intent for k in ("共振峰", "元音", "formant", "f1", "f2", "f3", "vowel"))
+    code_skeleton = _build_code_skeleton(title, user_goal, filename, is_formant=is_formant_task)
 
     # 3. 组装自然语言需求描述
     requirements = [
@@ -924,7 +772,7 @@ def generate_ai_prompt(project_data, selections):
         f"   - 输出文件名: {filename} (格式: {img_format})",
         f"   - 是否同时返回数据表: {output_table}",
         f"   - 是否显示图例: {show_legend}",
-        f"   - 是否使用中文标签: {use_chinese}"
+        f"   - 是否使用中文标签: {use_chinese}",
     ]
 
     if custom_desc:
@@ -932,218 +780,24 @@ def generate_ai_prompt(project_data, selections):
 
     requirements_text = "\n".join(requirements)
 
-    # 4. 生成完整提示词
-    prompt = f"""你正在为 PhonTracer语音学标注与声学分析系统 V1.0 编写一个自定义图表脚本。
+    # 4. 生成高密度无冗余提示词
+    prompt = f"""你正在为 PhonTracer 语音学标注与声学分析系统 V1.0 编写一个自定义图表脚本。
+请只输出可以直接运行的纯 Python 代码，不要输出任何解释文字，不要使用 ```python 代码块包裹。
 
-请只输出可以直接运行的 Python 代码，不要输出任何解释性的文字或 Markdown 标记（不要包裹在 ```python 中）。
+{CORE_CHART_API_CONTRACT}
 
-代码开头必须先写两行注释，第一行为脚本名称，第二行为功能说明，格式固定如下，便于 Toolkit 粘贴后自动解析：
-# 脚本名称：{title}
-# 功能说明：{user_goal}
-
-脚本必须定义 run(ctx) 函数作为统一入口：
-
-# 脚本名称：{title}
-# 功能说明：{user_goal}
-def run(ctx):
-    # 你的代码实现
-    ...
-    return ctx.figure(fig, filename="{filename}", title="{title}")
-
-可用库：
-- ctx.np 是 numpy 库
-- ctx.plt 是 matplotlib.pyplot
-- ctx.scipy 是 scipy 库
-- ctx.parselmouth 是 praat-parselmouth 库
-- 可导入并使用 numpy、matplotlib、scipy、parselmouth
-- 可导入并使用标准库 math、statistics、collections、itertools、re、time
-
-禁止使用：
-- pandas
-- seaborn
-- plotly
-- requests
-- os
-- sys
-- subprocess
-- scipy.stats.gaussian_kde（第一版运行器会拦截；它在点数较多时容易长时间占用后台线程）
-- 自行使用任何本机绝对路径
-- 自行进行任何文件读写操作，除非通过 ctx.figure 或 ctx.table 返回结果；如需音频，必须使用 ctx 的受控音频 API
-
-项目数据说明与数据来源：
-数据来自只读快照列表 ctx.dataset.items。脚本不能自行访问工程文件路径或读取本地文件；如需当前工程内音频，必须通过 ctx.load_item_sound(...) 受控读取。
-
-{SPECTROGRAM_SCRIPT_GUIDE}
-
-每个条目（item）代表一个被切分/分析的字词条目，包含以下字段：
-- speaker_id: 发音人 ID (str)
-- speaker_name: 发音人姓名 (str)
-- item_id: 条目唯一 ID (str)
-- label: 音节/字词标签 (str，例如 'ma1')
-- group: 所在声调组/分类 (str，例如 '阴平')
-- is_excluded: 是否已被标记排除 (bool)
-- analysis_mode: 分析模式 ('f0' 或 'formant')
-- start: 采样起点时间 (float，单位: 秒)
-- end: 采样终点时间 (float，单位: 秒)
-- duration: 条目时长 (float，单位: 秒)
-- pitch: 基频数据字典，包含：
-  - xs: 采样时间点序列 (list of float)
-  - freqs: 基频 F0 频率序列 (list of float)
-  - t_values: 五度标度归一化 T 值序列 (list of float)
-- formant: 共振峰数据字典，包含：
-  - xs: 采样时间点序列 (list of float)
-  - f1: F1 频率序列 (list of float)
-  - f2: F2 频率序列 (list of float)
-- syl_data: F0 的音节级 11 点采样结果，list，每个元素形如 (duration, f0_values)
-  - duration: 当前音节有效基频段持续时间
-  - f0_values: 当前音节内对齐后的 11 个 F0 Hz 采样点
-- syl_t_values: F0 的音节级 11 点五度标度结果，list，每个元素为当前音节内对齐后的 11 个 T 值
-- syl_formants: 共振峰的音节级采样结果，list，每个元素为 dict，常见键包括：
-  - syllable_index: 音节序号
-  - char: 当前音节/字
-  - bounds: 当前音节边界 [start, end]
-  - times: 当前音节采样时间点
-  - f1: 当前音节 F1 采样值
-  - f2: 当前音节 F2 采样值
-- 高级字表 v2 元数据字段：
-  - wordlist_version: 字表版本，v2 表示来自高级字表
-  - wordlist_title: 高级字表名称
-  - group_note / item_note: 组备注、词项备注
-  - group_tags / item_tags: 标签列表，可用于筛选目标词、填充词、对照组、变调等条件
-  - item_aliases: 词项别名列表
-  - item_meta: 自定义字段字典，例如 item.get("item_meta", {{}}).get("结构")
-  - metadata_source: 元数据来源或复核状态，例如“人工填写”“AI推断，需人工复核”“已人工复核”
-
-字段语义和常见陷阱：
-- pitch.xs / pitch.freqs / pitch.t_values 是原始基频轨迹点，时间轴不保证已经按音节对齐，也不保证不同条目之间长度相同。
-- 严禁为了比较声调/F0走势，直接把整段 pitch.xs 归一化到 0-100 后对不同条目求均值或画 KDE。这样会把多音节、停顿、断续基频点压扁到同一横轴，极容易画出每组都一样或锯齿严重的伪结果。
-- 如果目标是比较声调、连读、分组 F0 走势，优先使用 syl_t_values（五度标度）或 syl_data（Hz），因为它们已经按每个音节 11 点对齐。
-- 如果目标是比较原始 F0 Hz，用 syl_data；如果目标是跨发音人比较声调走势，用 syl_t_values 更稳。
-- 如果目标是画元音空间或共振峰图，优先使用 syl_formants 或 ctx.dataset.formant_points(item)，并过滤非有限值、F1<=0、F2<=0、F2<=F1 的点。
-- item.group 是分组真相；不要根据 label 末尾数字自行推断声调，除非用户明确要求。
-- item.is_excluded 为 True 的条目默认不参与分析，除非用户明确选择“使用全部条目”。
-- v2 高级字表字段是用户的实验设计元数据；如果用户要求按标签、结构、实验条件、目标词/填充词或复核状态分析，优先使用 group_tags、item_tags、item_meta、metadata_source。
-- 如果 metadata_source 是“AI推断，需人工复核”，默认在日志或图表注释中说明，必要时先提醒用户是否排除未复核条目。
-- {REFERENCE_CHART_RULE}
-
-推荐分析范式：
-1. F0/声调分组均值曲线：
-   - items = ctx.dataset.included_items()
-   - 过滤 analysis_mode == "f0"
-   - 按 item["group"] 分组
-   - 使用 item["syl_t_values"] 或 item["syl_data"]
-   - 对每个条目，把每个音节的 11 点串接成一条曲线；不同音节数量不要混在同一个均值里，除非明确使用“时序展开”并在图上标出音节分隔线
-   - 对每组计算 mean、std 或 95% CI，并标注样本数 n
-   - 图形优先用均值曲线 + 阴影区间 + 少量浅色个体曲线，不要把热力图当作主要统计结论
-2. F0 热力/密度感图：
-   - 不要使用 scipy.stats.gaussian_kde
-   - 可以用 ax.hist2d、ax.hexbin 或低分辨率二维直方图模拟密度
-   - 如果比较多个分组，所有子图必须共享同一套颜色归一化范围；不要每个分组单独除以自己的最大值，否则颜色深浅不能横向比较
-   - 热力背景只作为辅助，必须同时画均值曲线和样本数
-3. 元音空间 / F1-F2 图：
-   - 横轴通常用 F2，纵轴用 F1，传统元音空间图通常反转 x 轴和 y 轴
-   - 只画有限且合理的点：np.isfinite(f1)、np.isfinite(f2)、f1>0、f2>0、f2>f1
-   - 可以按 group 或 speaker 着色，推荐同时标出均值中心
-4. 多发音人比较：
-   - 如果跨男女声比较原始 Hz，必须谨慎；更推荐 T 值或分发音人子图
-   - 如果使用 Hz，请至少按 speaker_name 分面或在图例中区分发音人
-5. 参考图式语谱图：
-   - 如果用户要复刻类似论文中的多宫格语谱图，优先使用 `ctx.plot_spectrogram_grid(...)`
-   - 如果需要更细控制，使用 `ctx.load_item_sound(item)` 加 `ctx.spectrogram_data(sound, ...)`，再用 `ax.pcolormesh(..., cmap="Greys")` 绘制
-   - 箭头可标注当前条目缓存中的 F1/F2/F3 位置；不要手动写入或读取任何音频文件
-6. 高级字表字段分析：
-   - 只分析目标词：过滤 `"目标词" in item.get("item_tags", [])`
-   - 比较实验组/对照组：优先看 `group_tags` 或 `item_tags`
-   - 按结构、实验条件、词频等级、语义类分组：使用 `(item.get("item_meta") or {{}}).get("字段名")`
-   - 质量检查：统计 `metadata_source`，单独列出“AI推断，需人工复核”的条目比例
-7. 输出格式：
-   - 结构化选项里的文件名和格式优先级高于补充需求。
-   - 如果输出文件名是 png 且用户只要求“一张清晰图表”，只返回一个 ctx.figure(...png)。
-   - 只有当用户非常明确要求“同时导出 PNG 和 SVG”时，才返回同一 figure 的两个结果，并使用同一个基础文件名的 .png / .svg。
-   - 不要无故返回多个重复图表。
-
-ctx 提供的辅助方法：
-- ctx.dataset.items: 获取所有条目快照
-- ctx.dataset.groups(): 获取当前所有不重复的分组列表
-- ctx.dataset.speakers(): 获取当前所有发音人列表
-- ctx.dataset.included_items(): 仅获取未排除的分析条目
-- ctx.dataset.pitch_points(item): 获取指定条目的基频点数据
-- ctx.dataset.formant_points(item): 获取指定条目的共振峰点数据
-- ctx.parselmouth: praat-parselmouth 库
-- ctx.load_item_sound(item, padding=0.0): 从当前工程内受控读取条目音频，返回 parselmouth.Sound
-- ctx.spectrogram_data(sound, max_frequency=5000.0, window_length=0.005, dynamic_range_db=50.0): 返回语谱图绘图矩阵
-- ctx.plot_spectrogram_grid(items, columns=4, max_items=8, show_formant_arrows=True, label_field="auto", max_frequency=4000.0): 返回多宫格语谱图 Figure
-- ctx.log("日志内容"): 记录一条日志，方便在结果界面中查看
-- ctx.is_cancelled(): 长循环中可定期检查，返回 True 时请尽快结束脚本
-- ctx.figure(fig, filename="xxx.png", title="图表标题"): 包装并返回 Matplotlib figure 对象
-- ctx.table(rows, columns, title="表格标题"): 包装并返回数据表格（rows 为二维列表，columns 为表头列表）
-
-合法返回值：
-- return ctx.figure(...)
-- return ctx.table(...)
-- return [ctx.figure(...), ctx.table(...)]
-- return [ctx.figure(fig, filename="xxx.png", title="..."), ctx.figure(fig, filename="xxx.svg", title="...")] 仅在用户明确要求双格式时使用
-
-推荐代码骨架（请按目标改写，不要机械照抄无关部分）：
-
-# 脚本名称：{title}
-# 功能说明：{user_goal}
-def run(ctx):
-    np = ctx.np
-    plt = ctx.plt
-    items = ctx.dataset.included_items()
-    # 如果用户明确要求全部条目，才改用 ctx.dataset.items
-
-    groups = {{}}
-    for item in items:
-        if ctx.is_cancelled():
-            ctx.log("用户取消，提前结束")
-            break
-        if item.get("analysis_mode") != "f0":
-            continue
-        group = item.get("group") or "未分组"
-
-        # F0 声调比较优先使用 syl_t_values；如果要 Hz，则用 syl_data
-        syl_t_values = item.get("syl_t_values") or []
-        if not syl_t_values:
-            continue
-
-        curve = []
-        for syl_vals in syl_t_values:
-            arr = np.asarray(syl_vals, dtype=float)
-            if arr.size != 11:
-                continue
-            curve.extend(arr.tolist())
-        if len(curve) < 2 or np.all(np.isnan(curve)):
-            continue
-
-        groups.setdefault(group, []).append(curve)
-
-    if not groups:
-        fig, ax = plt.subplots(figsize=(6, 4))
-        ax.text(0.5, 0.5, "没有可用数据", ha="center", va="center")
-        ax.axis("off")
-        return ctx.figure(fig, filename="{filename}", title="{title}")
-
-    # 后续应按分组计算均值/标准差，绘制曲线，并标注每组样本数。
-    # 不要直接对 raw pitch.xs 做整段归一化求均值。
-
-当前工程摘要信息：
+### 当前工程摘要信息
 {project_summary}
 
-用户自定义脚本需求配置：
+### 用户自定义脚本需求配置
 {requirements_text}
 
-额外设计准则：
-- 如果没有数据或匹配不到任何条目，脚本不要崩溃报错。请生成一张包含“没有可用数据”说明文字的空 Matplotlib Figure 返回，或者调用 ctx.log 记录空说明。
-- 图表的标题、坐标轴名称、图例文字必须使用中文。
-- 图上必须标注关键统计口径，例如“使用 T 值/Hz”“每个音节 11 点对齐”“n=样本数”“阴影含义为标准差或置信区间”。
-- 如果脚本存在较长循环，请在循环中定期调用 ctx.is_cancelled()，为 True 时记录日志并提前返回当前可用结果或空图。
-- 避免高成本密度估计和大网格计算。不要使用 scipy.stats.gaussian_kde；如果需要密度感，请优先使用 ax.hexbin、ax.hist2d、低分辨率分箱均值、抽样散点或均值/置信区间曲线。
-- 不要对每个分组构造 100x100 或更大的二维网格反复计算密度；每组绘图应尽量控制在几千个点以内，数据很多时先按时间或随机抽样。
-- 不要生成“看起来每组一样”的图：如果每个分组曲线完全相同或高度相似，通常说明你把全体数据重复画进每个子图，或错误使用了未按 group 过滤的数据。
-- 不要把每个子图的热力密度单独归一化后再用于横向比较；需要横向比较时必须共享颜色范围，或明确说明颜色只表示组内相对密度。
-- 脚本应使用 ctx.log 输出数据诊断信息：纳入条目数、实际绘制分组、每组样本数、被跳过条目数、使用的数据字段。
-- 代码应尽量简洁稳健，避免使用复杂的类结构，优先使用面向过程的清晰绘图逻辑。
-"""
+### 推荐代码骨架（请按目标改写）
+{code_skeleton}
+
+### 绘图与设计准则
+- **语言要求**：{language_rule}
+- **空数据安全兜底**：若筛选后没有匹配数据，请勿崩溃报错，返回一张居中写明无可用数据的空 `Figure` 并调用 `ctx.log` 说明。
+- **统计可复现性**：图面或图例应清晰标注统计口径（如 `T值/Hz`、`11点对齐`、每组样本量 `n=...`、阴影代表标准差或 95% CI）；并通过 `ctx.log` 输出纳入条目数、跳过条目数与各组样本量。
+- **参考图复刻**：{REFERENCE_CHART_RULE}"""
     return prompt.strip()

@@ -1,16 +1,17 @@
-export const PLAIN_WORDLIST_AI_PROMPT = `请帮我把下面这段字表转换成特定格式：
-1. 每个组别名称用【】包裹并独占一行
-2. 组别下的词或字跟在组别名称下面，可以一行一个，也可以用空格或逗号分隔
-3. 去除所有不相关的序号、拼音和多余空行
+export const PLAIN_WORDLIST_AI_PROMPT = `请帮我将下方的原始字表整理为 PhonTracer 标准字表格式，严格遵守以下规则：
+1. 组别行：每个组别名称用【】包裹并独占一行，例如：【阴平】。
+2. 词项行：组别下方的词或字可以一行一个，也可以用空格、逗号或分号分隔。
+3. 多音节非汉字词：纯汉字词无需加分隔符；若包含英语、拼音或国际音标等多音节非汉字词，请用斜杠 / 标注音节分界（例如：bro/ther、ma1/ma0）。
+4. 清理杂项：去除所有序号、题号、解释性说明及多余空行。
+5. 纯文本输出：直接输出整理后的字表正文，不要输出任何开场白、解释文字，也不要使用 \`\`\` 代码块包裹。
 
-示例输出格式：
+示例输出：
 【阴平】
 八 扒 吧
 【双音节】
 音频 视频
 
-以下是我的原始字表，请直接返回转换后的结果即可：
-
+以下是我的原始字表：
 [在此处粘贴你的字表]`;
 
 const defaultIdFactory = () => {
@@ -55,13 +56,13 @@ export function parsePlainWordlist(rawText, idFactory = defaultIdFactory) {
 
   for (const sourceLine of String(rawText || '').replace(/^\ufeff/, '').split(/\r?\n/u)) {
     const line = sourceLine.trim();
-    if (!line) continue;
+    if (!line || line.startsWith('```')) continue;
     if (line.startsWith('【') || line.startsWith('[') || line.startsWith('［') || line.startsWith('#')) {
       flushGroup();
       currentName = groupNameFromHeader(line) || '未分组';
       continue;
     }
-    const words = line.split(/[,\s\t，、]+/u).map(word => word.trim()).filter(Boolean);
+    const words = line.split(/[,\s\t，、;；]+/u).map(word => word.trim()).filter(Boolean);
     for (const word of words) {
       currentItems.push({
         id: idFactory(),
@@ -187,7 +188,7 @@ export function parseCsvWordlist(rawText, idFactory = defaultIdFactory) {
   const groupIndex = indexOf('组名', '组别', 'group', 'group_name');
   const labelIndex = indexOf('词项', '字词', 'word', 'label', 'item');
   if (labelIndex < 0) throw new Error('CSV 字表缺少“词项”列');
-  const reserved = new Set(['组名', '组别', 'group', 'group_name', '组备注', 'group_note', '组标签', 'group_tags', '词项', '字词', 'word', 'label', 'item', '词项备注', '备注', 'item_note', '标签', 'tags', '别名', 'aliases', '复核状态', 'metadata_source']);
+  const reserved = new Set(['组名', '组别', 'group', 'group_name', '组备注', 'group_note', '组标签', '组tag', 'group_tags', '词项', '字词', 'word', 'label', 'item', '词项备注', '备注', 'item_note', 'note', '发音提示', '标签', '词项标签', '词项tag', 'tags', 'tag', '别名', 'aliases', 'alias', '复核状态', 'review_status', '自动补全状态', 'metadata_source']);
   const grouped = new Map();
   for (const row of rows.slice(1)) {
     const label = String(row[labelIndex] || '').trim();
@@ -204,14 +205,14 @@ export function parseCsvWordlist(rawText, idFactory = defaultIdFactory) {
     });
     const group = grouped.get(groupName);
     group.note ||= String(read('组备注', 'group_note'));
-    group.tags = mergeLists(group.tags, read('组标签', 'group_tags'));
+    group.tags = mergeLists(group.tags, read('组标签', '组tag', 'group_tags'));
     group.items.push({
       label,
-      note: String(read('词项备注', '备注', 'item_note')),
-      tags: splitList(read('标签', 'tags')),
-      aliases: splitList(read('别名', 'aliases')),
+      note: String(read('词项备注', '备注', 'item_note', 'note', '发音提示')),
+      tags: splitList(read('词项标签', '词项tag', '标签', 'tags', 'tag')),
+      aliases: splitList(read('别名', 'aliases', 'alias')),
       meta,
-      metadata_source: String(read('复核状态', 'metadata_source') || '导入CSV'),
+      metadata_source: String(read('复核状态', 'review_status', '自动补全状态', 'metadata_source') || '导入CSV'),
     });
   }
   return normalizeAdvancedWordlist({ groups: [...grouped.values()] }, idFactory);

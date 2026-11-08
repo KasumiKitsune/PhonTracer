@@ -159,7 +159,7 @@ class DatasetSnapshot:
 
     def formant_points(self, item):
         """获取指定条目的共振峰点数据"""
-        return item.get("formant", {"xs": [], "f1": [], "f2": []})
+        return item.get("formant", {"xs": [], "f1": [], "f2": [], "f3": []})
 
 
 def _build_zip_member_lookup(zf):
@@ -256,6 +256,11 @@ class ScriptContext:
     def table(self, rows, columns, title="自定义表格"):
         """返回表格结果对象"""
         return TableResult(rows, columns, title)
+
+    def get_f0_bounds(self, f0_values):
+        """计算发音人稳健五度值调域上下限 [s_min, s_max]（1.5×IQR 剔除离群值 + P5/P95 分位数）"""
+        s_min, s_max = get_f0_normalization_bounds(f0_values)
+        return [s_min, s_max]
 
     def _read_audio_resource(self, rel_path):
         if not self._teproj_path or not os.path.exists(self._teproj_path):

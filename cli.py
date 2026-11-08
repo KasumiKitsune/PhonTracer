@@ -5069,7 +5069,9 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                 "items": {}
             }
             for item_id, item in spk.items.items():
-                item_dict = {
+                item_dict = {k: v for k, v in item.items() if k != "snd"} if isinstance(item, dict) else {}
+                item_dict.update({
+                    "item_id": item.get("item_id", item_id),
                     "label": item.get("label"),
                     "group": item.get("group"),
                     "is_excluded": item.get("is_excluded", False),
@@ -5078,7 +5080,21 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                     "formant_data": item.get("formant_data"),
                     "pitch_data_file": item.get("pitch_data_file"),
                     "formant_data_file": item.get("formant_data_file"),
-                }
+                    "wordlist_version": item.get("wordlist_version"),
+                    "wordlist_title": item.get("wordlist_title"),
+                    "item_note": item.get("item_note"),
+                    "item_tags": item.get("item_tags", []) or [],
+                    "item_aliases": item.get("item_aliases", []) or [],
+                    "item_meta": item.get("item_meta", {}) or {},
+                    "group_note": item.get("group_note"),
+                    "group_tags": item.get("group_tags", []) or [],
+                    "metadata_source": item.get("metadata_source"),
+                    "start": item.get("start"),
+                    "end": item.get("end"),
+                    "inner_splits": item.get("inner_splits", []) or [],
+                    "chars_bounds": item.get("chars_bounds", []) or [],
+                    "syllables": item.get("syllables", []) or [],
+                })
                 spk_data["items"][item_id] = item_dict
             project_data["speakers"][spk_id] = spk_data
         return project_data
@@ -5136,7 +5152,12 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                     selections['stats'] = [s.strip() for s in v.split(',') if s.strip()]
                 elif k in ('output_table', 'show_legend', 'use_chinese'):
                     selections[k] = v.lower() in ('true', '1', 'yes')
-                elif k in ('script_type', 'prompt_mode', 'data_range', 'group_by', 'chart_style', 'x_axis', 'y_axis', 'title', 'filename', 'custom_desc', 'agent_detail_level', 'agent_plan_count', 'agent_project_summary_mode'):
+                elif k in ('agent_chart_count', 'agent_plan_count'):
+                    try:
+                        selections[k] = int(v)
+                    except ValueError:
+                        selections[k] = v
+                elif k in ('script_type', 'prompt_mode', 'goal', 'data_range', 'group_by', 'chart_style', 'x_axis', 'y_axis', 'title', 'filename', 'img_format', 'custom_desc', 'agent_detail_level', 'agent_project_summary_mode'):
                     selections[k] = v
                 else:
                     self._emit(False, error=f"Unknown key: {k}")

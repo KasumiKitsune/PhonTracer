@@ -45,20 +45,26 @@ ALLOWED_BUILTINS = {
     "all": all,
     "any": any,
     "bool": bool,
+    "callable": callable,
+    "chr": chr,
     "dict": dict,
     "divmod": divmod,
     "enumerate": enumerate,
     "filter": filter,
     "float": float,
+    "format": format,
     "int": int,
     "isinstance": isinstance,
     "issubclass": issubclass,
+    "iter": iter,
     "len": len,
     "list": list,
     "map": map,
     "max": max,
     "min": min,
+    "next": next,
     "object": object,
+    "ord": ord,
     "pow": pow,
     "range": range,
     "repr": repr,
@@ -70,11 +76,13 @@ ALLOWED_BUILTINS = {
     "str": str,
     "sum": sum,
     "tuple": tuple,
+    "type": type,
     "zip": zip,
 }
 
-# 明确移除 getattr 以免通过 getattr(obj, "__subclasses__") 逃逸沙箱
+# 明确移除 getattr / hasattr 以免通过反射逃逸沙箱
 ALLOWED_BUILTINS.pop("getattr", None)
+ALLOWED_BUILTINS.pop("hasattr", None)
 SAFE_BUILTINS = dict(ALLOWED_BUILTINS)
 
 
@@ -126,10 +134,40 @@ def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
         raise ImportError(f"安全检查拦截：禁止在第一版脚本中导入库 '{name}'")
     return builtins.__import__(name, globals, locals, fromlist, level)
 
+
+def strip_markdown_code_fence(code: str) -> str:
+    """
+    自动剥离首尾的 ```python ... ``` 或 ``` ... ``` Markdown 代码围栏。
+    """
+    if not isinstance(code, str):
+        return "" if code is None else str(code)
+    text = code.strip()
+    if not text:
+        return ""
+    lines = text.splitlines()
+    if len(lines) >= 2 and lines[0].strip().startswith("```") and lines[-1].strip() == "```":
+        return "\n".join(lines[1:-1]).strip("\r\n")
+    if lines and lines[0].strip().startswith("```"):
+        body = lines[1:]
+        if body and body[-1].strip() == "```":
+            body = body[:-1]
+        return "\n".join(body).strip("\r\n")
+    if lines and lines[-1].strip() == "```":
+        return "\n".join(lines[:-1]).strip("\r\n")
+    return code
+
+
+GAUSSIAN_KDE_ERROR_MSG = (
+    "安全检查拦截：禁止使用 scipy.stats.gaussian_kde（点数较多时易长时间占用后台线程）；"
+    "请改用 np.histogram + scipy.ndimage.gaussian_filter，或使用 ax.hist2d / ax.hexbin。"
+)
+
+
 def check_script_safety(code):
     """
     通过 AST 抽象语法树检查脚本是否包含危险的 import 或函数调用。
     """
+    code = strip_markdown_code_fence(code)
     try:
         tree = ast.parse(code)
     except SyntaxError as e:
@@ -141,6 +179,7 @@ def check_script_safety(code):
         "eval",
         "exec",
         "getattr",
+        "hasattr",
         "globals",
         "input",
         "locals",
@@ -179,11 +218,15 @@ def check_script_safety(code):
         if isinstance(node, ast.Attribute):
             if node.attr.startswith("_"):
                 raise ValueError(f"安全限制: 禁止访问私有或双下划线属性 '{node.attr}'")
+            if node.attr == "gaussian_kde":
+                raise ValueError(GAUSSIAN_KDE_ERROR_MSG)
         elif isinstance(node, ast.Import):
             for alias in node.names:
                 name = alias.name.split('.')[0]
                 if name not in ALLOWED_IMPORT_ROOTS:
                     raise ValueError(f"安全检查拦截：禁止在第一版脚本中导入库 '{alias.name}'")
+                if "gaussian_kde" in alias.name.split('.'):
+                    raise ValueError(GAUSSIAN_KDE_ERROR_MSG)
         elif isinstance(node, ast.ImportFrom):
             if node.module:
                 name = node.module.split('.')[0]
@@ -191,9 +234,16 @@ def check_script_safety(code):
                     raise ValueError(f"安全检查拦截：禁止在第一版脚本中导入库 '{node.module}'")
                 if node.module.startswith("parselmouth.praat"):
                     raise ValueError("安全检查拦截：第一版脚本不允许导入 parselmouth.praat；请使用 ctx.load_item_sound 和 Sound.to_spectrogram 等受控接口。")
+                if "gaussian_kde" in node.module.split('.'):
+                    raise ValueError(GAUSSIAN_KDE_ERROR_MSG)
+            for alias in node.names:
+                if alias.name == "gaussian_kde":
+                    raise ValueError(GAUSSIAN_KDE_ERROR_MSG)
         elif isinstance(node, ast.Call):
             name = call_name(node.func)
             short_name = name.split(".")[-1] if name else ""
+            if short_name == "gaussian_kde" or "gaussian_kde" in name.split("."):
+                raise ValueError(GAUSSIAN_KDE_ERROR_MSG)
             if short_name in forbidden_funcs:
                 raise ValueError(f"安全检查拦截：禁止在第一版脚本中调用系统函数 '{short_name}'")
             if short_name in forbidden_output_calls:
@@ -213,6 +263,7 @@ def run_custom_script(code, dataset_items, timeout=30, cancel_event=None, teproj
     :return: (result, logs, error_message)
     """
     logs = []
+    code = strip_markdown_code_fence(code)
 
     # 1. 静态安全检查
     try:

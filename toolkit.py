@@ -42,9 +42,29 @@ def _parse_script_meta_comment_line(line):
     return None, ""
 
 
+def strip_markdown_code_fence(code):
+    """自动剥离脚本首尾可能附带的 ```python ... ``` 或 ``` ... ``` 代码块围栏。"""
+    if not isinstance(code, str):
+        return "" if code is None else str(code)
+    text = code.strip()
+    if not text:
+        return ""
+    lines = text.splitlines()
+    if len(lines) >= 2 and lines[0].strip().startswith("```") and lines[-1].strip() == "```":
+        return "\n".join(lines[1:-1]).strip("\r\n")
+    if lines and lines[0].strip().startswith("```"):
+        body = lines[1:]
+        if body and body[-1].strip() == "```":
+            body = body[:-1]
+        return "\n".join(body).strip("\r\n")
+    if lines and lines[-1].strip() == "```":
+        return "\n".join(lines[:-1]).strip("\r\n")
+    return code
+
+
 def parse_script_metadata_comments(code):
     """
-    从脚本开头两行元信息注释中解析脚本名称和功能说明。
+    从脚本头部注释中解析脚本名称和功能说明（自动剥离 Markdown 代码围栏，并兼容首行编码声明）。
     期望格式：
     # 脚本名称：声调均值曲线
     # 功能说明：按分组绘制 F0 均值和离散区间
@@ -53,18 +73,22 @@ def parse_script_metadata_comments(code):
     if not code:
         return metadata
 
-    seen_comment_count = 0
-    for raw_line in code.splitlines():
-        if not raw_line.strip() and seen_comment_count == 0:
+    clean_code = strip_markdown_code_fence(code)
+    for idx, raw_line in enumerate(clean_code.splitlines()):
+        if idx >= 15:
+            break
+        stripped = raw_line.strip()
+        if not stripped:
             continue
-        if seen_comment_count >= 2:
+        if not stripped.startswith("#"):
             break
-        key, value = _parse_script_meta_comment_line(raw_line)
+        key, value = _parse_script_meta_comment_line(stripped)
         if key is None:
-            break
-        if value:
+            continue
+        if value and not metadata.get(key):
             metadata[key] = value
-        seen_comment_count += 1
+        if metadata["name"] and metadata["description"]:
+            break
 
     return metadata
 
@@ -282,7 +306,7 @@ def parse_wordlist(raw_text: str):
         if not line: continue
         if line.startswith('【') or line.startswith('[') or line.startswith('［') or line.startswith('#'):
             continue
-        words = [w.strip() for w in re.split(r'[,\s\t，、]+', line) if w.strip()]
+        words = [w.strip() for w in re.split(r'[,\s\t，、;；]+', line) if w.strip()]
         flat_words.extend(words)
     return flat_words
 
@@ -3135,7 +3159,7 @@ class ToolkitApp(ctk.CTk):
                 messagebox.showerror("错误", f"导出失败：{e}")
 
     def run_current_script(self):
-        code = self.txt_script_code_preview.get("1.0", tk.END)
+        code = strip_markdown_code_fence(self.txt_script_code_preview.get("1.0", tk.END))
         teproj_path = getattr(self, "loaded_teproj_path", None)
 
         self.is_script_running = True
@@ -4853,6 +4877,12 @@ class ScriptEditorDialog(ctk.CTkToplevel):
     def _autofill_metadata_from_code(self):
         self._metadata_parse_after_id = None
         code = self.txt_code.get("1.0", tk.END)
+        stripped_code = strip_markdown_code_fence(code)
+        if stripped_code != code.strip() and code.strip().startswith("```"):
+            self.txt_code.delete("1.0", tk.END)
+            self.txt_code.insert("1.0", stripped_code)
+            self._refresh_code_line_numbers()
+            code = stripped_code
         metadata = parse_script_metadata_comments(code)
 
         name = metadata.get("name", "").strip()
@@ -4868,7 +4898,7 @@ class ScriptEditorDialog(ctk.CTkToplevel):
     def save_script(self):
         name = self.entry_name.get().strip()
         desc = self.entry_desc.get().strip()
-        code = self.txt_code.get("1.0", tk.END)
+        code = strip_markdown_code_fence(self.txt_code.get("1.0", tk.END))
 
         if not name:
             return messagebox.showwarning("提示", "请输入脚本名称")
@@ -5608,7 +5638,7 @@ class AIPromptDialog(ctk.CTkToplevel):
                 "stats": ["由 AI 根据目标选择合适统计处理"],
                 "title": target_goal,
                 "filename": "goal_oriented_chart.png",
-                "output_table": target_output in ("图表和统计表都要", "论文风格高分辨率图"),
+                "output_table": target_output == "图表和统计表都要",
                 "show_legend": True,
                 "use_chinese": True,
                 "custom_desc": "\n".join(custom_lines),

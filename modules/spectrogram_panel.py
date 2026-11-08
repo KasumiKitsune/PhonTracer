@@ -936,6 +936,7 @@ class SpectrogramPanel:
             if chars_bounds:
                 item['start'] = chars_bounds[0][0]
                 item['end'] = chars_bounds[-1][1]
+                self._sync_inner_splits_from_chars_bounds(item)
                 item['is_manual_edited'] = True
 
             # Update the cursor line and text coordinates in real-time
@@ -948,6 +949,19 @@ class SpectrogramPanel:
             return
 
         self.update_lines()
+
+    def _sync_inner_splits_from_chars_bounds(self, item=None):
+        item = item or self.current_item
+        if not item:
+            return
+        cb = item.get('chars_bounds', [])
+        if len(cb) > 1:
+            item['inner_splits'] = [
+                round((cb[i][1] + cb[i + 1][0]) / 2.0, 6)
+                for i in range(len(cb) - 1)
+            ]
+        else:
+            item['inner_splits'] = []
 
     def on_release(self, event):
         if self.eraser_mode:
@@ -976,6 +990,7 @@ class SpectrogramPanel:
                     self._clear_playback_selection(redraw=False)
                 self.update_cursor_graphics()
             else:
+                self._sync_inner_splits_from_chars_bounds()
                 self.plot_item_spectrogram()
                 self.update_ui_times()
             self.canvas.get_tk_widget().config(cursor="arrow")
@@ -1040,9 +1055,11 @@ class SpectrogramPanel:
                     chars_bounds[i] = [new_s + (c_s - old_s) * ratio, new_s + (c_e - old_s) * ratio]
                 item['start'] = chars_bounds[0][0]
                 item['end'] = chars_bounds[-1][1]
+                self._sync_inner_splits_from_chars_bounds(item)
             else:
                 item['start'] = new_s
                 item['end'] = new_e
+                item['inner_splits'] = []
 
             item['is_manual_edited'] = True
             panel = None
@@ -1375,6 +1392,58 @@ class SpectrogramPanel:
         self.plot_item_spectrogram()
 
     def discard_eraser_changes(self):
+        item = self.current_item
+        restored_pitch = False
+        restored_formant = False
+        if item:
+            pitch_points = getattr(self, 'session_erased_pitch_points', {}) or {}
+            if pitch_points and item.get('pitch_data') and 'freqs' in item['pitch_data']:
+                freqs = item['pitch_data']['freqs']
+                for idx, (_t, orig_freq) in pitch_points.items():
+                    if 0 <= idx < len(freqs):
+                        freqs[idx] = orig_freq
+                        restored_pitch = True
+
+            formant_points = getattr(self, 'session_erased_formant_points', {}) or {}
+            if formant_points and item.get('formant_data'):
+                for curve, curve_points in formant_points.items():
+                    arr = item['formant_data'].get(curve)
+                    if arr is None or not curve_points:
+                        continue
+                    for idx, (_t, orig_val) in curve_points.items():
+                        if 0 <= idx < len(arr):
+                            arr[idx] = orig_val
+                            restored_formant = True
+
+            if restored_pitch or restored_formant:
+                item.pop('preview_f0', None)
+                item.pop('preview_formants', None)
+                item.pop('has_empty_data', None)
+                if self.app:
+                    app_params = getattr(self.app, 'last_params', {}) if self.app else {}
+                    if restored_formant:
+                        pts = int(app_params.get('pts', 11))
+                        strategy = app_params.get('formant_sample_strategy', '整段11点')
+                        show_f3 = bool(item.get("show_f3", app_params.get("show_f3", False)))
+                        try:
+                            if show_f3:
+                                res = self.app.sample_formant_points_with_f3(item, pts, strategy)
+                                if isinstance(res, (tuple, list)) and len(res) == 4:
+                                    _, preview_f1, preview_f2, preview_f3 = res
+                                    item['preview_formants'] = {"f1": preview_f1, "f2": preview_f2, "f3": preview_f3}
+                            else:
+                                res = self.app.sample_formant_points(item, pts, strategy)
+                                if isinstance(res, (tuple, list)) and len(res) == 3:
+                                    _, preview_f1, preview_f2 = res
+                                    item['preview_formants'] = {"f1": preview_f1, "f2": preview_f2}
+                        except Exception:
+                            pass
+                    panel = getattr(self.app, 'tree_panel', None) or getattr(self.app, 'project_panel', None)
+                    if panel:
+                        panel.update_item_icon(self.current_item_iid)
+                        if hasattr(panel, 'update_preview'):
+                            panel.update_preview()
+
         self._reset_eraser_session()
 
         # 清空待擦除点图层
@@ -1387,7 +1456,10 @@ class SpectrogramPanel:
         if hasattr(self, 'erased_f3_layer') and self.erased_f3_layer:
             self.erased_f3_layer.set_offsets(np.empty((0, 2)))
 
-        self.canvas.draw_idle()
+        if restored_pitch or restored_formant:
+            self.plot_item_spectrogram()
+        else:
+            self.canvas.draw_idle()
 
     def toggle_eraser_mode(self):
         self.eraser_mode = not self.eraser_mode
@@ -1522,6 +1594,10 @@ class SpectrogramPanel:
                 if self.background is not None:
                     try:
                         self.canvas.restore_region(self.background)
+                        if self.ax and self.cursor_line is not None and self.cursor_line.get_visible():
+                            self.ax.draw_artist(self.cursor_line)
+                        if self.ax and self.cursor_text is not None and self.cursor_text.get_visible():
+                            self.ax.draw_artist(self.cursor_text)
                         self.canvas.blit(self.fig.bbox)
                     except Exception:
                         self.canvas.draw_idle()
@@ -1533,6 +1609,10 @@ class SpectrogramPanel:
                 if self.background is not None:
                     try:
                         self.canvas.restore_region(self.background)
+                        if self.ax and self.cursor_line is not None and self.cursor_line.get_visible():
+                            self.ax.draw_artist(self.cursor_line)
+                        if self.ax and self.cursor_text is not None and self.cursor_text.get_visible():
+                            self.ax.draw_artist(self.cursor_text)
                         self.canvas.blit(self.fig.bbox)
                     except Exception:
                         self.canvas.draw_idle()
@@ -1561,6 +1641,10 @@ class SpectrogramPanel:
         if self.background is not None:
             try:
                 self.canvas.restore_region(self.background)
+                if self.ax and self.cursor_line is not None and self.cursor_line.get_visible():
+                    self.ax.draw_artist(self.cursor_line)
+                if self.ax and self.cursor_text is not None and self.cursor_text.get_visible():
+                    self.ax.draw_artist(self.cursor_text)
                 target_ax.draw_artist(self.eraser_circle)
                 self.canvas.blit(self.fig.bbox)
             except Exception:

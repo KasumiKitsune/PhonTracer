@@ -43,6 +43,7 @@ class VisualSplitter(ctk.CTkToplevel):
                 seg['orig_start'] = seg['start']
                 seg['orig_end'] = seg['end']
                 seg['orig_inner_splits'] = list(seg.get('inner_splits', []))
+                self._cache_seg_splits_by_count(seg)
             source_words = word_items if word_items is not None else existing_items
             self.original_words = [
                 {'id': s['id'], 'label': s['label']}
@@ -237,10 +238,41 @@ class VisualSplitter(ctk.CTkToplevel):
         self.update_zoom_label()
         self.render_canvas()
 
+    def _cache_seg_splits_by_count(self, seg):
+        splits = seg.get('inner_splits', [])
+        if not splits:
+            return
+        start = seg.get('start', 0.0)
+        end = seg.get('end', 0.0)
+        dur = end - start
+        if dur <= 0:
+            return
+        ratios = [(s - start) / dur for s in splits if start < s < end]
+        if len(ratios) == len(splits):
+            n_syls = len(splits) + 1
+            seg.setdefault('_splits_by_count', {})[n_syls] = ratios
+
+    def _apply_syl_splits_with_cache(self, seg, n_syls):
+        self._cache_seg_splits_by_count(seg)
+        if n_syls > 1:
+            target_splits = n_syls - 1
+            splits = seg.get('inner_splits', [])
+            if len(splits) != target_splits:
+                dur = seg['end'] - seg['start']
+                cached_ratios = seg.get('_splits_by_count', {}).get(n_syls)
+                if cached_ratios and len(cached_ratios) == target_splits and dur > 0:
+                    seg['inner_splits'] = [seg['start'] + dur * r for r in cached_ratios]
+                else:
+                    seg['inner_splits'] = [seg['start'] + dur * j / n_syls for j in range(1, n_syls)]
+                    self._cache_seg_splits_by_count(seg)
+        else:
+            seg['inner_splits'] = []
+
     def update_dynamic_labels(self):
         word_idx = 0
         for i, seg in enumerate(self.segments):
             if i in self.deleted_indices:
+                self._cache_seg_splits_by_count(seg)
                 seg['dyn_label'] = "已剔除"
                 seg['dyn_id'] = None
             else:
@@ -249,33 +281,20 @@ class VisualSplitter(ctk.CTkToplevel):
                     seg['dyn_label'] = dyn_lbl
                     seg['dyn_id'] = word_idx
                     syls = split_into_syllables(dyn_lbl)
-                    if len(syls) > 1:
-                        target_splits = len(syls) - 1
-                        splits = seg.get('inner_splits', [])
-                        if len(splits) != target_splits:
-                            dur = seg['end'] - seg['start']
-                            seg['inner_splits'] = [seg['start'] + dur * j / len(syls) for j in range(1, len(syls))]
-                    else:
-                        seg['inner_splits'] = []
+                    self._apply_syl_splits_with_cache(seg, len(syls))
                     word_idx += 1
                 elif hasattr(self, 'original_words') and word_idx < len(self.original_words):
                     dyn_lbl = self.original_words[word_idx]['label']
                     seg['dyn_label'] = dyn_lbl
                     seg['dyn_id'] = self.original_words[word_idx]['id']
-                    
-                    # 词语模式：初始化或补齐内部分割点
+
+                    # 词语模式：初始化或补齐内部分割点（优先从缓存还原已微调的蓝线比例）
                     syls = split_into_syllables(dyn_lbl)
-                    if len(syls) > 1:
-                        target_splits = len(syls) - 1
-                        splits = seg.get('inner_splits', [])
-                        if len(splits) != target_splits:
-                            dur = seg['end'] - seg['start']
-                            seg['inner_splits'] = [seg['start'] + dur * j / len(syls) for j in range(1, len(syls))]
-                    else:
-                        seg['inner_splits'] = []
-                        
+                    self._apply_syl_splits_with_cache(seg, len(syls))
+
                     word_idx += 1
                 else:
+                    self._cache_seg_splits_by_count(seg)
                     seg['dyn_label'] = f"#{word_idx + 1}" if self.mode == 'review' else "【未分配段】"
                     seg['dyn_id'] = None
                     seg['inner_splits'] = []
@@ -548,6 +567,7 @@ class VisualSplitter(ctk.CTkToplevel):
                 min_limit = seg['start'] if inner_idx == 0 else splits[inner_idx - 1]
                 max_limit = seg['end'] if inner_idx == len(splits) - 1 else splits[inner_idx + 1]
                 splits[inner_idx] = max(min_limit + 0.01, min(time_sec, max_limit - 0.01))
+                self._cache_seg_splits_by_count(seg)
                 cur_t = splits[inner_idx]
                 tag = f"seg_inner_line_{idx}_{inner_idx}"
             else:
@@ -572,6 +592,9 @@ class VisualSplitter(ctk.CTkToplevel):
 
     def on_release(self, event):
         if self.dragging:
+            seg_idx = self.dragging.get('seg_idx')
+            if seg_idx is not None and 0 <= seg_idx < len(self.segments):
+                self._cache_seg_splits_by_count(self.segments[seg_idx])
             self.canvas.delete("drag_indicator")
             self.canvas.delete("drag_indicator_text")
             self.dragging = None

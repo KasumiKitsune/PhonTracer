@@ -37,6 +37,8 @@ SUPPORTED_PATCH_OPS = {
 ALLOWED_ITEM_FIELDS = {
     "label",
     "group",
+    "group_note",
+    "group_tags",
     "item_note",
     "item_tags",
     "item_aliases",
@@ -628,6 +630,15 @@ def _apply_split_project(state, _workspace_dir, op, records, **kwargs):
     records.append({"op": "split_project", "name": op.get("name") or "拆分工程", "kept_items": kept_items})
 
 
+def _split_csv_list_value(value):
+    if isinstance(value, (list, tuple)):
+        return [str(v).strip() for v in value if str(v).strip()]
+    text = str(value or "").strip()
+    if not text:
+        return []
+    return [v.strip() for v in re.split(r"[,，;；]+", text) if v.strip()]
+
+
 def _apply_mapped_field(item, field_name, value):
     if field_name.startswith("item_meta."):
         meta_key = field_name.split(".", 1)[1].strip()
@@ -637,11 +648,11 @@ def _apply_mapped_field(item, field_name, value):
         if isinstance(item["item_meta"], dict):
             item["item_meta"][meta_key] = value
         return
-    if field_name == "item_tags":
-        if isinstance(value, list):
-            item["item_tags"] = value
-        else:
-            item["item_tags"] = [v.strip() for v in str(value).replace("，", ",").split(",") if v.strip()]
+    if field_name in ("item_tags", "group_tags", "item_aliases"):
+        item[field_name] = _split_csv_list_value(value)
+        return
+    if field_name == "group_note":
+        item["group_note"] = "" if value is None else str(value).strip()
         return
     if field_name in ALLOWED_ITEM_FIELDS:
         item[field_name] = value
@@ -659,9 +670,22 @@ def _apply_import_csv_metadata(state, _workspace_dir, op, records, **kwargs):
         raise ProjectPatchError("import_csv_metadata 必须提供 field_map。")
 
     index = {}
-    for spk in state.get("speakers", {}).values():
-        for item in (spk.get("items", {}) or {}).values():
-            key = str(item.get(match_on, "")).strip()
+    for spk_id, spk in (state.get("speakers", {}) or {}).items():
+        if not isinstance(spk, dict):
+            continue
+        spk_name = str(spk.get("name") or spk.get("speaker_name") or spk_id).strip()
+        for item_id, item in (spk.get("items", {}) or {}).items():
+            if not isinstance(item, dict):
+                continue
+            if match_on == "item_id":
+                raw_val = item.get("item_id") or item_id
+            elif match_on == "speaker_name":
+                raw_val = item.get("speaker_name") or spk_name
+            elif match_on == "speaker_id":
+                raw_val = item.get("speaker_id") or spk_id
+            else:
+                raw_val = item.get(match_on, "")
+            key = str(raw_val or "").strip()
             if key:
                 index.setdefault(key, []).append(item)
 

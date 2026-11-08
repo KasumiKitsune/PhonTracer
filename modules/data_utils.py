@@ -13,14 +13,14 @@ def parse_wordlist(raw_text: str) -> Tuple[List[Dict[str, Any]], List[str]]:
     raw_text = raw_text.lstrip('\ufeff')
     for line in raw_text.split('\n'):
         line = line.strip()
-        if not line: continue
+        if not line or line.startswith('```'): continue
         if line.startswith('【') or line.startswith('[') or line.startswith('［') or line.startswith('#'):
             if curr_items:
                 groups.append({"group": curr_group, "items": curr_items})
                 curr_items = []
             curr_group = line.replace('【', '').replace('】', '').replace('[', '').replace(']', '').replace('［', '').replace('］', '').replace('#', '').strip()
         else:
-            words = [w.strip() for w in re.split(r'[,\s\t，、]+', line) if w.strip()]
+            words = [w.strip() for w in re.split(r'[,\s\t，、;；]+', line) if w.strip()]
             curr_items.extend(words)
             flat_words.extend(words)
 

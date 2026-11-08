@@ -27,7 +27,8 @@ ADVANCED_WORDLIST_AGENT_PROMPT = """你现在是 PhonTracer 高级字表整理 A
 
 你的任务不是立刻输出表格，而是先像研究助理一样和用户确认实验设计，再把材料整理成可导入 PhonTracer Toolkit 的高级字表内容。
 
-工作流程必须分两阶段：
+工作流程默认分两阶段（快速直通规则除外）：
+- 快速直通规则：如果用户明确要求“直接生成”，则无需提问，跳过第一阶段直接进入第二阶段，仅使用原始材料中已有的信息（如组名、词项、明显可识别的同义词或备注）直接生成结果，严禁编造原文不存在的自定义字段。
 
 第一阶段：先提问，不要直接生成字表
 请先用简短中文向用户确认以下信息。问题最多 6 个，优先问真正影响字表结构的问题：
@@ -84,7 +85,7 @@ AI 自动补全规则：
 - 同一组内避免重复词项；若必须重复，请在词项备注说明原因。
 - 组名、标签和自定义字段要保持命名一致，不要一会儿写“目标”，一会儿写“目标词”。
 - 如果用户给的是乱序材料，你可以按研究逻辑重新分组，但要先征得用户同意。
-- 如果用户要求你“直接生成”，但信息明显不足，仍然先问 2-4 个关键问题。
+- 如果用户明确要求“直接生成”，则无需提问，仅使用原始材料中已有的信息（如组名、词项、明显可识别的同义词或备注）直接生成结果，严禁编造原文不存在的自定义字段。
 
 最终结构化字表文本示例，只作为格式参考，不要照抄内容：
 # title: 普通话声调实验
@@ -244,7 +245,7 @@ def build_document_from_v1_text(raw_text: str, title: str = "从普通字表导�
 def looks_like_structured_wordlist_text(text: str) -> bool:
     for raw_line in (text or "").splitlines():
         line = raw_line.strip()
-        if not line:
+        if not line or line.startswith("```"):
             continue
         lowered = line.lower()
         if lowered.startswith("@group") or lowered.startswith("@defaults") or TITLE_DIRECTIVE_RE.match(line):
@@ -355,7 +356,7 @@ def build_document_from_structured_text(text: str, title: str = "从结构化文
 
     for raw_line in (text or "").splitlines():
         line = raw_line.strip()
-        if not line:
+        if not line or line.startswith("```"):
             continue
         title_match = TITLE_DIRECTIVE_RE.match(line)
         if title_match:
@@ -364,18 +365,19 @@ def build_document_from_structured_text(text: str, title: str = "从结构化文
         if line.startswith("#"):
             continue
 
+        if line.lower().startswith("@title"):
+            title_val = _as_text(line[len("@title"):].lstrip(":： "))
+            if title_val:
+                doc["title"] = title_val
+            continue
+
         parts = [part.strip() for part in line.split("|")]
         head = parts[0] if parts else ""
         attrs = _parse_structured_attrs(parts[1:])
         lowered = head.lower()
 
-        if lowered.startswith("@title"):
-            title_val = _as_text(head[len("@title"):].lstrip(":： "))
-            if title_val:
-                doc["title"] = title_val
-            continue
-
         if lowered.startswith("@group"):
+            defaults = {}
             group_name = _as_text(head[len("@group"):]) or "未分组"
             current_group = {
                 "id": "",
@@ -424,22 +426,26 @@ def flatten_wordlist_document(doc: Dict[str, Any]) -> Tuple[List[Dict[str, Any]]
     records: List[Dict[str, Any]] = []
     for group in normalized.get("groups", []):
         group_items = []
+        group_meta = dict(group.get("meta", {}) or {})
         for item in group.get("items", []):
             label = _as_text(item.get("label"))
             if not label:
                 continue
             group_items.append(label)
             flat_words.append(label)
+            merged_meta = dict(group_meta)
+            merged_meta.update(item.get("meta", {}) or {})
             records.append({
                 "word": label,
                 "label": label,
                 "group": group.get("name", "未分组"),
                 "group_note": group.get("note", ""),
                 "group_tags": list(group.get("tags", [])),
+                "group_meta": dict(group_meta),
                 "item_note": item.get("note", ""),
                 "item_tags": list(item.get("tags", [])),
                 "item_aliases": list(item.get("aliases", [])),
-                "item_meta": dict(item.get("meta", {})),
+                "item_meta": merged_meta,
                 "metadata_source": item.get("metadata_source", DEFAULT_REVIEW_STATUS),
                 "wordlist_version": "v2",
                 "wordlist_title": normalized.get("title", ""),
@@ -450,6 +456,7 @@ def flatten_wordlist_document(doc: Dict[str, Any]) -> Tuple[List[Dict[str, Any]]
                 "items": group_items,
                 "note": group.get("note", ""),
                 "tags": list(group.get("tags", [])),
+                "meta": dict(group_meta),
             })
     return groups, flat_words, records
 
@@ -558,8 +565,11 @@ def document_to_csv_text(doc: Dict[str, Any]) -> str:
     normalized = normalize_wordlist_document(doc)
     meta_keys = []
     for group in normalized.get("groups", []):
+        for key in (group.get("meta", {}) or {}).keys():
+            if key not in meta_keys:
+                meta_keys.append(key)
         for item in group.get("items", []):
-            for key in item.get("meta", {}).keys():
+            for key in (item.get("meta", {}) or {}).keys():
                 if key not in meta_keys:
                     meta_keys.append(key)
 
@@ -572,8 +582,10 @@ def document_to_csv_text(doc: Dict[str, Any]) -> str:
     writer = csv.DictWriter(stream, fieldnames=headers, lineterminator="\n")
     writer.writeheader()
     for group in normalized.get("groups", []):
+        group_meta = dict(group.get("meta", {}) or {})
         for item in group.get("items", []):
-            meta = item.get("meta", {})
+            meta = dict(group_meta)
+            meta.update(item.get("meta", {}) or {})
             row = {
                 "组别": group.get("name", ""),
                 "组备注": group.get("note", ""),
