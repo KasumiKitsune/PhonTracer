@@ -501,15 +501,15 @@ class ExclusionReasonDialog(ctk.CTkToplevel):
             self.result = None
             self.destroy()
 
-        _btn_kw = dict(
+        _cancel_kw = dict(
             height=38, corner_radius=19, font=self.font_main,
-            fg_color=("#EFF6FF", "#1E3A5F"),
-            text_color=("#1D4ED8", "#93C5FD"),
-            hover_color=("#DBEAFE", "#1E3A8A"),
-            border_width=1.5, border_color=("#3B82F6", "#2563EB"),
+            fg_color=("#F1F5F9", "#334155"),
+            text_color=("#475569", "#E2E8F0"),
+            hover_color=("#E2E8F0", "#475569"),
+            border_width=1, border_color=("#CBD5E1", "#475569"),
         )
         ctk.CTkButton(
-            btn_frame, text="取消", width=100, command=on_cancel, **_btn_kw
+            btn_frame, text="取消", width=100, command=on_cancel, **_cancel_kw
         ).pack(side=tk.LEFT)
         ctk.CTkButton(
             btn_frame, text="确定", width=100, command=on_confirm,
@@ -797,12 +797,12 @@ class ProjectTreePanel:
 
         self._tree_style = ttk.Style()
         self._tree_style.theme_use("default")
-        self._tree_style.configure("Treeview", background="white", foreground="#374151", rowheight=34, fieldbackground="white", borderwidth=0, font=("Microsoft YaHei", 14))
+        self._tree_style.configure("Treeview", background="white", foreground="#374151", rowheight=30, fieldbackground="white", borderwidth=0, font=("Microsoft YaHei", 12))
         self._tree_style.map('Treeview', background=[('selected', '#DBEAFE')], foreground=[('selected', '#1E3A8A')])
 
         frame_list = ctk.CTkFrame(right_sidebar, fg_color="white", corner_radius=10)
         frame_list.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(0, 5))
-        ctk.CTkLabel(frame_list, text="项目目录", font=self.font_title, text_color="#111827").pack(pady=(15, 5))
+        ctk.CTkLabel(frame_list, text="项目目录", font=self.font_title, text_color="#111827", anchor="w").pack(fill=tk.X, padx=15, pady=(15, 5))
 
         # 1. 展开/折叠/新增组 药丸型按钮行
         ctrl_bar = ctk.CTkFrame(frame_list, fg_color="transparent")
@@ -909,7 +909,7 @@ class ProjectTreePanel:
 
         frame_preview = ctk.CTkFrame(right_sidebar, fg_color="white", corner_radius=10)
         frame_preview.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True, pady=(5, 0))
-        ctk.CTkLabel(frame_preview, text="数据预览", font=self.font_title, text_color="#111827").pack(pady=(15, 0))
+        ctk.CTkLabel(frame_preview, text="数据预览", font=self.font_title, text_color="#111827", anchor="w").pack(fill=tk.X, padx=15, pady=(15, 0))
         self.text_preview = ctk.CTkTextbox(frame_preview, font=self.font_code, corner_radius=8, fg_color="#F9FAFB", text_color="#1F2937", border_width=1, border_color="#E5E7EB")
         self.text_preview.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
         self.text_preview.configure(state='disabled')
@@ -1017,48 +1017,58 @@ class ProjectTreePanel:
         edit_entry.focus_set()
         edit_entry.place(x=x, y=y, width=w, height=h)
 
+        saving_lock = [False]
+
         def save_edit(event=None):
-            new_name = edit_entry.get().strip()
-            if not edit_entry.winfo_exists(): return
-
-            if not new_name or new_name == old_name:
-                edit_entry.destroy()
+            if saving_lock[0]:
                 return
+            saving_lock[0] = True
+            try:
+                if not edit_entry.winfo_exists(): return
+                new_name = edit_entry.get().strip()
 
-            was_selected = (iid in self.tree.selection())
-
-            if is_group:
-                if new_name in self.project_groups:
-                    messagebox.showwarning("错误", "组名已存在")
+                if not new_name or new_name == old_name:
                     edit_entry.destroy()
                     return
-                idx = self.project_groups.index(old_name)
-                self.project_groups[idx] = new_name
-                self.group_nodes[new_name] = self.group_nodes.pop(old_name)
-                self.tree.item(iid, text=new_name)
-                for item in self.items.values():
-                    if item.get('group') == old_name:
-                        item['group'] = new_name
-            else:
-                real_iid = iid[8:] if str(iid).startswith('warning_') else iid
-                w_iid = f"warning_{real_iid}"
-                if self.tree.exists(real_iid):
-                    self.tree.item(real_iid, text=new_name)
-                if self.tree.exists(w_iid):
-                    self.tree.item(w_iid, text=new_name)
-                self.items[real_iid]['label'] = new_name
 
-            if self.app:
-                self.app.mark_modified()
-            self.rebuild_tree()
-            if was_selected:
-                new_gid = f"group_node_{new_name}" if is_group else iid
-                if self.tree.exists(new_gid):
-                    self.tree.selection_set(new_gid)
-                    self.tree.see(new_gid)
-            self.update_preview()
-            self._debounce_zebra_stripes()
-            edit_entry.destroy()
+                was_selected = (iid in self.tree.selection())
+
+                if is_group:
+                    if new_name in self.project_groups:
+                        messagebox.showwarning("错误", "组名已存在")
+                        if edit_entry.winfo_exists():
+                            edit_entry.destroy()
+                        return
+                    idx = self.project_groups.index(old_name)
+                    self.project_groups[idx] = new_name
+                    self.group_nodes[new_name] = self.group_nodes.pop(old_name)
+                    self.tree.item(iid, text=new_name)
+                    for item in self.items.values():
+                        if item.get('group') == old_name:
+                            item['group'] = new_name
+                else:
+                    real_iid = iid[8:] if str(iid).startswith('warning_') else iid
+                    w_iid = f"warning_{real_iid}"
+                    if self.tree.exists(real_iid):
+                        self.tree.item(real_iid, text=new_name)
+                    if self.tree.exists(w_iid):
+                        self.tree.item(w_iid, text=new_name)
+                    self.items[real_iid]['label'] = new_name
+
+                if self.app:
+                    self.app.mark_modified()
+                self.rebuild_tree()
+                if was_selected:
+                    new_gid = f"group_node_{new_name}" if is_group else iid
+                    if self.tree.exists(new_gid):
+                        self.tree.selection_set(new_gid)
+                        self.tree.see(new_gid)
+                self.update_preview()
+                self._debounce_zebra_stripes()
+                if edit_entry.winfo_exists():
+                    edit_entry.destroy()
+            finally:
+                saving_lock[0] = False
 
         edit_entry.bind("<Return>", save_edit)
         edit_entry.bind("<FocusOut>", save_edit)
@@ -1280,7 +1290,20 @@ class ProjectTreePanel:
 
         if not self.tree_drag_items: return
 
+        # Auto scroll when mouse is within 20px of top/bottom edges
+        try:
+            tree_h = self.tree.winfo_height()
+            if event.y < 20:
+                self.tree.yview_scroll(-1, "units")
+            elif event.y > tree_h - 20:
+                self.tree.yview_scroll(1, "units")
+        except Exception:
+            pass
+
         target = self.tree.identify_row(event.y)
+        if target == self.warning_group_id or (target and self.tree.parent(target) == self.warning_group_id):
+            target = None
+
         if target:
             bbox = self.tree.bbox(target)
             if bbox:
@@ -1313,6 +1336,9 @@ class ProjectTreePanel:
         if not getattr(self, 'tree_drag_items', None): return
 
         target = self.tree.identify_row(event.y)
+        if target == self.warning_group_id or (target and self.tree.parent(target) == self.warning_group_id):
+            target = None
+
         if target and target not in self.tree_drag_items:
             after_target = False
             if 'group' in self.tree.item(target, 'tags'):
@@ -1344,25 +1370,31 @@ class ProjectTreePanel:
                         self.items[drag_item]['group'] = group_name
 
                 # 同步按组与树节点顺序全局重整 import_index，防止 rebuild_tree 抹除拖拽顺序或跨组索引碰撞
-                try:
-                    next_idx = 0
-                    seen_cids = set()
-                    for grp_key in getattr(self, 'project_groups', []):
-                        grp_node = getattr(self, 'group_nodes', {}).get(grp_key)
-                        if grp_node and self.tree.exists(grp_node):
-                            for cid in self.tree.get_children(grp_node):
-                                if cid in self.items:
+                # 当搜索或状态过滤激活时，禁止重写 import_index
+                is_filtered = bool(
+                    (getattr(self, 'search_var', None) and self.search_var.get().strip()) or
+                    (getattr(self, 'filter_var', None) and self.filter_var.get() != "全部")
+                )
+                if not is_filtered:
+                    try:
+                        next_idx = 0
+                        seen_cids = set()
+                        for grp_key in getattr(self, 'project_groups', []):
+                            grp_node = getattr(self, 'group_nodes', {}).get(grp_key)
+                            if grp_node and self.tree.exists(grp_node):
+                                for cid in self.tree.get_children(grp_node):
+                                    if cid in self.items:
+                                        self.items[cid]['import_index'] = next_idx
+                                        seen_cids.add(cid)
+                                        next_idx += 1
+                        if self.tree.exists(parent_grp):
+                            for cid in self.tree.get_children(parent_grp):
+                                if cid in self.items and cid not in seen_cids:
                                     self.items[cid]['import_index'] = next_idx
                                     seen_cids.add(cid)
                                     next_idx += 1
-                    if self.tree.exists(parent_grp):
-                        for cid in self.tree.get_children(parent_grp):
-                            if cid in self.items and cid not in seen_cids:
-                                self.items[cid]['import_index'] = next_idx
-                                seen_cids.add(cid)
-                                next_idx += 1
-                except Exception:
-                    pass
+                    except Exception:
+                        pass
                 if self.app:
                     self.app.mark_modified()
                 self.rebuild_tree()
@@ -1518,17 +1550,30 @@ class ProjectTreePanel:
 
         formatted_lines = []
         for line in lines:
+            parts = line.split()
             if mode != 'formant':
-                parts = line.split()
                 if len(parts) == 2:
                     try:
                         t_val = float(parts[0])
                         f0_val = float(parts[1])
-                        # Format line to align the second column at exactly character index 12
-                        # parts[0] is time (formatted to left-aligned width 10)
-                        # parts[1] is F0 (formatted to left-aligned width 12)
                         formatted_line = f"{parts[0]:<10}  {parts[1]:<12}"
                         formatted_lines.append(formatted_line)
+                        continue
+                    except ValueError:
+                        pass
+                elif len(parts) == 1:
+                    try:
+                        dur_val = float(parts[0])
+                        formatted_lines.append(f"时长: {dur_val:.3f} s")
+                        formatted_lines.append(f"{'时间 (s)':<10}  {'F0 (Hz)':<12}")
+                        continue
+                    except ValueError:
+                        pass
+            else:
+                if len(parts) == 1:
+                    try:
+                        dur_val = float(parts[0])
+                        formatted_lines.append(f"时长: {dur_val:.3f} s")
                         continue
                     except ValueError:
                         pass
@@ -1539,33 +1584,40 @@ class ProjectTreePanel:
         self.text_preview.delete('1.0', tk.END)
         self.text_preview.insert(tk.END, text)
 
-        self.text_preview.tag_config("zero", foreground="#EF4444")
+        self.text_preview.tag_config("zero", background="#FEE2E2", foreground="#DC2626")
         self.text_preview.tag_config("fatal_msg", foreground="#EF4444")
         self.text_preview.tag_config("warning_msg", foreground="#F59E0B")
         self.text_preview.tag_config("tip_msg", foreground="#3B82F6")
+        self.text_preview.tag_config("table_header", foreground="#64748B")
+        self.text_preview.tag_config("duration_line", foreground="#475569")
+        if hasattr(self.text_preview, "_textbox"):
+            try:
+                self.text_preview._textbox.tag_config("table_header", font=("Microsoft YaHei", 10, "bold"))
+                self.text_preview._textbox.tag_config("duration_line", font=("Microsoft YaHei", 10, "bold"))
+            except Exception:
+                pass
 
-        # Configure the 21-step red-blue-gray gradient palette
+        # Configure the 21-step Pastel Heatmap gradient palette
+        # Low pitch: light blue #EFF6FF (239, 246, 255) -> Mid: light cyan #F0FDF4 (240, 253, 244) -> High: light amber #FEF3C7 (254, 243, 199)
+        # Text foreground unified dark gray #1E293B
         if mode != 'formant':
-            blue_rgb = (30, 64, 175)
-            gray_rgb = (243, 244, 246)
-            red_rgb = (185, 28, 28)
+            blue_rgb = (239, 246, 255)
+            cyan_rgb = (240, 253, 244)
+            amber_rgb = (254, 243, 199)
             for i in range(21):
                 r = i / 20.0
                 if r < 0.5:
                     t = r * 2.0
-                    bg_r = int(blue_rgb[0] + t * (gray_rgb[0] - blue_rgb[0]))
-                    bg_g = int(blue_rgb[1] + t * (gray_rgb[1] - blue_rgb[1]))
-                    bg_b = int(blue_rgb[2] + t * (gray_rgb[2] - blue_rgb[2]))
+                    bg_r = int(blue_rgb[0] + t * (cyan_rgb[0] - blue_rgb[0]))
+                    bg_g = int(blue_rgb[1] + t * (cyan_rgb[1] - blue_rgb[1]))
+                    bg_b = int(blue_rgb[2] + t * (cyan_rgb[2] - blue_rgb[2]))
                 else:
                     t = (r - 0.5) * 2.0
-                    bg_r = int(gray_rgb[0] + t * (red_rgb[0] - gray_rgb[0]))
-                    bg_g = int(gray_rgb[1] + t * (red_rgb[1] - gray_rgb[1]))
-                    bg_b = int(gray_rgb[2] + t * (red_rgb[2] - gray_rgb[2]))
+                    bg_r = int(cyan_rgb[0] + t * (amber_rgb[0] - cyan_rgb[0]))
+                    bg_g = int(cyan_rgb[1] + t * (amber_rgb[1] - cyan_rgb[1]))
+                    bg_b = int(cyan_rgb[2] + t * (amber_rgb[2] - cyan_rgb[2]))
                 bg_hex = f"#{bg_r:02X}{bg_g:02X}{bg_b:02X}"
-                # Calculate relative luminance to decide foreground color (white or dark gray)
-                lum = 0.299 * bg_r + 0.587 * bg_g + 0.114 * bg_b
-                fg_hex = "#FFFFFF" if lum < 130 else "#1F2937"
-                self.text_preview.tag_config(f"f0_grad_{i}", background=bg_hex, foreground=fg_hex)
+                self.text_preview.tag_config(f"f0_grad_{i}", background=bg_hex, foreground="#1E293B")
 
         lines = text.splitlines()
         for line_idx, line in enumerate(lines, start=1):
@@ -1575,6 +1627,10 @@ class ProjectTreePanel:
                 self.text_preview.tag_add("warning_msg", f"{line_idx}.0", f"{line_idx}.end")
             elif line.startswith("[提示]"):
                 self.text_preview.tag_add("tip_msg", f"{line_idx}.0", f"{line_idx}.end")
+            elif line.startswith("时长:"):
+                self.text_preview.tag_add("duration_line", f"{line_idx}.0", f"{line_idx}.end")
+            elif line.startswith("时间 (s)") or line.startswith("时间(s)"):
+                self.text_preview.tag_add("table_header", f"{line_idx}.0", f"{line_idx}.end")
             else:
                 if mode == 'formant':
                     start_offset = 0
@@ -1596,9 +1652,9 @@ class ProjectTreePanel:
                                 ratio = (f0_val - f0_min) / (f0_max - f0_min)
                                 ratio = max(0.0, min(1.0, ratio))
                                 grad_idx = int(ratio * 20.0 + 0.5)
-                                self.text_preview.tag_add(f"f0_grad_{grad_idx}", f"{line_idx}.12", f"{line_idx}.24")
+                                self.text_preview.tag_add(f"f0_grad_{grad_idx}", f"{line_idx}.12", f"{line_idx}.end")
                             else:
-                                self.text_preview.tag_add("zero", f"{line_idx}.12", f"{line_idx}.20")
+                                self.text_preview.tag_add("zero", f"{line_idx}.12", f"{line_idx}.end")
                         except ValueError:
                             pass
 
@@ -1869,7 +1925,7 @@ class ProjectTreePanel:
             if iid not in sel:
                 self.tree.selection_set(iid)
 
-        menu = make_context_menu(self.tree, font_size=15)
+        menu = make_context_menu(self.tree)
 
         if iid and self.tree.exists(iid):
             tags = self.tree.item(iid, 'tags')
@@ -1892,7 +1948,7 @@ class ProjectTreePanel:
                     menu.add_command(label="属性", command=lambda: self.show_item_properties(real_iid))
 
                     menu.add_separator()
-                    adv_menu = make_context_menu(menu, font_size=15)
+                    adv_menu = make_context_menu(menu)
                     adv_menu.add_command(label="彻底删除此项...", command=lambda: self.permanently_delete_selected_items())
                     menu.add_cascade(label="高级操作", menu=adv_menu)
             elif 'group' in tags and iid != self.warning_group_id:
@@ -2726,14 +2782,14 @@ class ProjectTreePanel:
         dlg = ctk.CTkToplevel(self.parent)
         dlg.title("PhonTracer语音学标注与声学分析系统 V1.0 - 选择导出格式")
         dlg.configure(fg_color=("#FFFFFF", "#1A1D24"))
-        dlg.geometry("320x315")
+        dlg.geometry("340x385")
         dlg.resizable(False, False)
         dlg.transient(self.parent)
         dlg.grab_set()
         dlg.update_idletasks()
         main_win = self.parent.winfo_toplevel()
-        x = main_win.winfo_rootx() + (main_win.winfo_width() - 320) // 2
-        y = main_win.winfo_rooty() + (main_win.winfo_height() - 315) // 2
+        x = main_win.winfo_rootx() + (main_win.winfo_width() - 340) // 2
+        y = main_win.winfo_rooty() + (main_win.winfo_height() - 385) // 2
         dlg.geometry(f"+{x}+{y}")
         ctk.CTkLabel(dlg, text="请选择导出格式", font=self.font_title, text_color=("#111827", "#F9FAFB")).pack(pady=(20, 15))
         btn_kwargs = {"corner_radius": 8, "height": 44, "font": self.font_main, "anchor": "w", "compound": "left", "border_width": 1.5}
@@ -2883,7 +2939,22 @@ class ProjectTreePanel:
         ctk.CTkButton(dlg, text="  📊  Excel 表格 (.xlsx)", command=lambda: do_export('xlsx'),
                       fg_color=("#ECFDF5", "#022C22"), text_color=("#047857", "#D1FAE5"), hover_color=("#D1FAE5", "#065F46"), border_color=("#34D399", "#10B981"), **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
         ctk.CTkButton(dlg, text="  📈  声学图表可视化导出", command=lambda: do_export('line_chart'),
-                      fg_color=("#EFF6FF", "#172554"), text_color=("#1E40AF", "#DBEAFE"), hover_color=("#DBEAFE", "#1E40AF"), border_color=("#60A5FA", "#3B82F6"), **btn_kwargs).pack(fill=tk.X, padx=25, pady=(4, 25))
+                      fg_color=("#EFF6FF", "#172554"), text_color=("#1E40AF", "#DBEAFE"), hover_color=("#DBEAFE", "#1E40AF"), border_color=("#60A5FA", "#3B82F6"), **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
+
+        btn_cancel = ctk.CTkButton(
+            dlg,
+            text="取消",
+            height=36,
+            corner_radius=18,
+            fg_color=("#F3F4F6", "#374151"),
+            text_color=("#4B5563", "#D1D5DB"),
+            hover_color=("#E5E7EB", "#4B5563"),
+            border_width=1,
+            border_color=("#D1D5DB", "#475569"),
+            font=self.font_main,
+            command=dlg.destroy
+        )
+        btn_cancel.pack(fill=tk.X, padx=25, pady=(10, 20))
         # 时序密度热力图已整合至声学图表导出中
 
     def _ensure_item_loaded(self, item):

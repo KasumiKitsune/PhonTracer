@@ -17,7 +17,7 @@ class FormantDetectionDialog(ctk.CTkToplevel):
         self.resizable(False, False)
 
         # 居中显示
-        width, height = 620, 640
+        width, height = 620, 610
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         x = (screen_width - width) // 2
@@ -32,7 +32,7 @@ class FormantDetectionDialog(ctk.CTkToplevel):
         self.focus_set()
 
         # 顶部装饰线条
-        accent_strip = ctk.CTkFrame(self, height=4, fg_color="#10B981", corner_radius=0)
+        accent_strip = ctk.CTkFrame(self, height=4, fg_color="#2563EB", corner_radius=0)
         accent_strip.pack(fill="x", side="top")
 
         self.font_title = ctk.CTkFont(family="Microsoft YaHei", size=15, weight="bold")
@@ -45,7 +45,7 @@ class FormantDetectionDialog(ctk.CTkToplevel):
     def setup_ui(self):
         # 主卡片容器
         card = ctk.CTkFrame(self, fg_color="transparent")
-        card.pack(fill="both", expand=True, padx=20, pady=(15, 15))
+        card.pack(fill="both", expand=True, padx=20, pady=(12, 12))
 
         # 头部标题
         lbl_title = ctk.CTkLabel(
@@ -54,7 +54,7 @@ class FormantDetectionDialog(ctk.CTkToplevel):
             font=self.font_title,
             text_color=("#111827", "#F9FAFB")
         )
-        lbl_title.pack(pady=(12, 10))
+        lbl_title.pack(pady=(6, 10))
 
         # 基本统计数据
         features_frame = ctk.CTkFrame(card, fg_color=("#F9FAFB", "#262930"), corner_radius=8, border_width=1, border_color=("#E5E7EB", "#374151"))
@@ -67,7 +67,7 @@ class FormantDetectionDialog(ctk.CTkToplevel):
 
         # 建议与简短理由横条
         reason_frame = ctk.CTkFrame(card, fg_color=("#ECFDF5", "#064E3B"), corner_radius=8, border_width=1, border_color=("#A7F3D0", "#047857"))
-        reason_frame.pack(fill="x", padx=15, pady=(0, 15))
+        reason_frame.pack(fill="x", padx=15, pady=(0, 12))
         
         if self.insufficient_data:
             reason_text = "提示：当前条目有效时长短于 0.5s，建议结合同发音人更多样本综合确定参数。"
@@ -131,7 +131,7 @@ class FormantDetectionDialog(ctk.CTkToplevel):
                 info_frame,
                 text=opt["name"],
                 font=self.font_subtitle,
-                text_color=("#1F2937", "#E5E7EB") if not opt["is_primary"] else ("#10B981", "#34D399")
+                text_color=("#1F2937", "#E5E7EB") if not opt["is_primary"] else ("#2563EB", "#60A5FA")
             )
             lbl_opt_title.pack(anchor="w")
 
@@ -156,8 +156,8 @@ class FormantDetectionDialog(ctk.CTkToplevel):
 
             # 右侧应用按钮：在网格第1列
             if opt["is_primary"]:
-                btn_color = "#10B981"
-                hover_color = "#059669"
+                btn_color = "#2563EB"
+                hover_color = "#1D4ED8"
                 text_color = "white"
                 btn_text = "应用此参数"
             else:
@@ -190,7 +190,7 @@ class FormantDetectionDialog(ctk.CTkToplevel):
         )
         lbl_notice.pack(fill="x", padx=20, pady=(8, 0))
 
-        # 底部取消按钮
+        # 底部取消按钮 (优先 side="bottom" 保证不被压缩)
         btn_cancel = ctk.CTkButton(
             card,
             text="取消",
@@ -203,9 +203,19 @@ class FormantDetectionDialog(ctk.CTkToplevel):
             hover_color=("#E5E7EB", "#4B5563"),
             command=self.destroy
         )
-        btn_cancel.pack(pady=(12, 10))
+        btn_cancel.pack(side="bottom", pady=(10, 8))
 
-
+        # 动态自适应高度并居中
+        self.update_idletasks()
+        scaling = self._get_window_scaling() if hasattr(self, "_get_window_scaling") else 1.0
+        width = 620
+        req_logical_h = int((card.winfo_reqheight() + 28) / max(1.0, scaling))
+        height = max(595, min(690, req_logical_h))
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        x = (screen_width - width) // 2
+        y = max(0, (screen_height - height) // 2)
+        self.geometry(f"{width}x{height}+{x}+{y}")
 
     def apply_and_close(self, max_hz, count, window_length, pre_emphasis):
         self.destroy()

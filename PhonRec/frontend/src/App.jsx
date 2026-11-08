@@ -2334,10 +2334,10 @@ export default function App() {
       const filename = file.name.toLowerCase();
       if (filename.endsWith('.teproj')) {
         await uploadProjectFile(file);
-      } else if (filename.endsWith('.ptwl') || filename.endsWith('.txt') || filename.endsWith('.csv')) {
+      } else if (filename.endsWith('.ptwl') || filename.endsWith('.txt') || filename.endsWith('.csv') || filename.endsWith('.json')) {
         await uploadWordlistFile(file);
       } else {
-        await customAlert('不支持的文件格式！请拖入 .ptwl/.txt/.csv 字表文件或 .teproj 工程文件。');
+        await customAlert('不支持的文件格式！请拖入 .ptwl/.txt/.csv/.json 字表文件或 .teproj 工程文件。');
       }
     }
   };

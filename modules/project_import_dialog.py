@@ -24,7 +24,7 @@ class ProjectImportPreviewDialog(ctk.CTkToplevel):
         self.focus_set()
         
         # Top Accent Strip (Blue)
-        accent_strip = ctk.CTkFrame(self, height=4, fg_color="#3B82F6", corner_radius=0)
+        accent_strip = ctk.CTkFrame(self, height=4, fg_color="#2563EB", corner_radius=0)
         accent_strip.pack(fill="x", side="top")
         
         self.font_title = ctk.CTkFont(family="Microsoft YaHei", size=18, weight="bold")
@@ -32,6 +32,7 @@ class ProjectImportPreviewDialog(ctk.CTkToplevel):
         self.font_main = ctk.CTkFont(family="Microsoft YaHei", size=13)
         self.font_small = ctk.CTkFont(family="Microsoft YaHei", size=12)
         self.font_mono = ctk.CTkFont(family="Consolas", size=12)
+        self.font_detail = ctk.CTkFont(family="Microsoft YaHei", size=12, weight="bold")
         
         self._metadata_queue = queue.Queue()
         self._show_loading_ui()
@@ -51,7 +52,12 @@ class ProjectImportPreviewDialog(ctk.CTkToplevel):
             font=self.font_subtitle,
             text_color=("#374151", "#E5E7EB")
         ).pack(expand=True)
-        self.geometry("460x180")
+        load_w, load_h = 460, 180
+        sw = self.winfo_screenwidth()
+        sh = self.winfo_screenheight()
+        cx = (sw - load_w) // 2
+        cy = (sh - load_h) // 2
+        self.geometry(f"{load_w}x{load_h}+{cx}+{cy}")
 
     def _load_metadata(self):
         try:
@@ -82,9 +88,42 @@ class ProjectImportPreviewDialog(ctk.CTkToplevel):
 
     def setup_ui(self):
         # Main container
-        main_frame = ctk.CTkFrame(self, fg_color="transparent")
-        main_frame.pack(fill="both", expand=True, padx=24, pady=(10, 16))
-        
+        self.main_frame = ctk.CTkFrame(self, fg_color="transparent")
+        main_frame = self.main_frame
+        main_frame.pack(fill="both", expand=True, padx=24, pady=(10, 18))
+
+        # Footer Action Buttons (优先 pack side="bottom"，保证在任何窗口尺寸下底部按钮永远拥有完整高度且不被挤压)
+        btn_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        btn_frame.pack(side="bottom", fill="x", padx=5, pady=(12, 2))
+
+        btn_cancel = ctk.CTkButton(
+            btn_frame,
+            text="取消",
+            font=self.font_subtitle,
+            width=100,
+            height=36,
+            corner_radius=18,
+            fg_color=("#F3F4F6", "#374151"),
+            text_color=("#4B5563", "#D1D5DB"),
+            hover_color=("#E5E7EB", "#4B5563"),
+            command=self.destroy
+        )
+        btn_cancel.pack(side="right", padx=(10, 0))
+
+        btn_confirm = ctk.CTkButton(
+            btn_frame,
+            text="确认导入",
+            font=self.font_subtitle,
+            width=120,
+            height=36,
+            corner_radius=18,
+            fg_color="#2563EB",
+            hover_color="#1D4ED8",
+            text_color="white",
+            command=self.confirm_import
+        )
+        btn_confirm.pack(side="right")
+
         # Title
         lbl_title = ctk.CTkLabel(
             main_frame,
@@ -107,7 +146,8 @@ class ProjectImportPreviewDialog(ctk.CTkToplevel):
         for spk in speakers.values():
             total_items += len(spk.get("items", {}))
             
-        info_card.grid_columnconfigure((0, 1, 2, 3), weight=1)
+        info_card.grid_columnconfigure((0, 2), weight=0)
+        info_card.grid_columnconfigure((1, 3), weight=1)
         
         # Row 0: File Name
         lbl_fn_title = ctk.CTkLabel(info_card, text="工程名称: ", font=self.font_small, text_color=("#6B7280", "#9CA3AF"))
@@ -136,17 +176,23 @@ class ProjectImportPreviewDialog(ctk.CTkToplevel):
         lbl_list_title = ctk.CTkLabel(main_frame, text="包含发音人及音频详情: ", font=self.font_subtitle, text_color=("#4B5563", "#9CA3AF"))
         lbl_list_title.pack(anchor="w", padx=5, pady=(4, 2))
         
-        scroll_frame = ctk.CTkScrollableFrame(main_frame, height=90, fg_color=("#F9FAFB", "#20232A"), corner_radius=8, border_width=1, border_color=("#E5E7EB", "#2D3139"))
+        # 自适应列表高度：保证 1~3 位发音人完整展示不截断且无冗余空白
+        spk_cnt = len(speakers)
+        self._scroll_frame_height = min(150, max(84, 32 + spk_cnt * 30))
+        scroll_frame = ctk.CTkScrollableFrame(main_frame, height=self._scroll_frame_height, fg_color=("#F9FAFB", "#20232A"), corner_radius=8, border_width=1, border_color=("#E5E7EB", "#2D3139"))
         scroll_frame.pack(fill="x", padx=5, pady=2)
+        self.scroll_frame = scroll_frame
+        if hasattr(self.app, "_make_scrollable_auto"):
+            self.app._make_scrollable_auto(scroll_frame)
         
         scroll_frame.grid_columnconfigure((0, 1, 2), weight=1)
         
         # Headers
-        h_name = ctk.CTkLabel(scroll_frame, text="发音人名称", font=self.font_small, text_color="#A3A3A3", anchor="w")
+        h_name = ctk.CTkLabel(scroll_frame, text="发音人名称", font=self.font_small, text_color="#64748B", anchor="w")
         h_name.grid(row=0, column=0, padx=8, pady=2, sticky="ew")
-        h_mode = ctk.CTkLabel(scroll_frame, text="音频工作模式", font=self.font_small, text_color="#A3A3A3", anchor="w")
+        h_mode = ctk.CTkLabel(scroll_frame, text="音频工作模式", font=self.font_small, text_color="#64748B", anchor="w")
         h_mode.grid(row=0, column=1, padx=8, pady=2, sticky="ew")
-        h_detail = ctk.CTkLabel(scroll_frame, text="详情信息 (分析项 / 音频)", font=self.font_small, text_color="#A3A3A3", anchor="w")
+        h_detail = ctk.CTkLabel(scroll_frame, text="详情信息 (分析项 / 音频)", font=self.font_small, text_color="#64748B", anchor="w")
         h_detail.grid(row=0, column=2, padx=8, pady=2, sticky="ew")
         
         sep = ctk.CTkFrame(scroll_frame, height=1, fg_color=("#E5E7EB", "#374151"))
@@ -171,7 +217,7 @@ class ProjectImportPreviewDialog(ctk.CTkToplevel):
             lbl_mode = ctk.CTkLabel(scroll_frame, text=mode_str, font=self.font_main, text_color=("#4B5563", "#9CA3AF"), anchor="w")
             lbl_mode.grid(row=row_idx, column=1, padx=8, pady=3, sticky="w")
             
-            lbl_detail = ctk.CTkLabel(scroll_frame, text=f"{item_cnt} 项 / {audios_str}", font=self.font_mono, text_color=("#10B981", "#34D399"), anchor="w")
+            lbl_detail = ctk.CTkLabel(scroll_frame, text=f"{item_cnt} 项 / {audios_str}", font=self.font_detail, text_color=("#10B981", "#34D399"), anchor="w")
             lbl_detail.grid(row=row_idx, column=2, padx=8, pady=3, sticky="w")
             
             row_idx += 1
@@ -236,41 +282,10 @@ class ProjectImportPreviewDialog(ctk.CTkToplevel):
                 justify="left"
             )
             lbl_info.pack(padx=15, pady=8, fill="x")
-        
-        # Footer Action Buttons
-        btn_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
-        btn_frame.pack(side="bottom", fill="x", padx=5, pady=(10, 0))
-        
-        btn_cancel = ctk.CTkButton(
-            btn_frame,
-            text="取消",
-            font=self.font_subtitle,
-            width=100,
-            height=34,
-            corner_radius=17,
-            fg_color=("#F3F4F6", "#374151"),
-            text_color=("#4B5563", "#D1D5DB"),
-            hover_color=("#E5E7EB", "#4B5563"),
-            command=self.destroy
-        )
-        btn_cancel.pack(side="right", padx=(8, 0))
 
-        btn_confirm = ctk.CTkButton(
-            btn_frame,
-            text="确认导入",
-            font=self.font_subtitle,
-            width=120,
-            height=34,
-            corner_radius=17,
-            fg_color="#3B82F6",
-            hover_color="#2563EB",
-            text_color="white",
-            command=self.confirm_import
-        )
-        btn_confirm.pack(side="right")
-        
         # Calculate and apply final window size after all widgets are laid out
-        self.after(10, self._fit_window_size)
+        self._fit_window_size()
+        self.after(20, self._fit_window_size)
 
     def _on_mode_changed(self):
         self._update_warning_text()
@@ -293,21 +308,26 @@ class ProjectImportPreviewDialog(ctk.CTkToplevel):
         self.after(10, self._fit_window_size)
 
     def _fit_window_size(self):
-        """Apply window size and allow resizing."""
+        """Apply dynamic window size and center on screen."""
+        self.update_idletasks()
+        scaling = self._get_window_scaling() if hasattr(self, "_get_window_scaling") else 1.0
         width = 580
+
+        # 精确动态计算弹窗逻辑高度，杜绝高分屏下的底部大面积空白
+        table_h = getattr(self, "_scroll_frame_height", 116)
         if self.is_empty:
-            height = 560
+            target_h = 240 + table_h + 46
         else:
             mode = self.import_mode_var.get()
-            if mode == "overwrite":
-                height = 680
-            else:
-                height = 700
-        
+            warn_h = 82 if mode == "overlay" else 56
+            target_h = 240 + table_h + 84 + warn_h
+
+        height = max(420, min(640, int(target_h)))
+
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         x = (screen_width - width) // 2
-        y = (screen_height - height) // 2
+        y = max(0, (screen_height - height) // 2)
         self.geometry(f"{width}x{height}+{x}+{y}")
 
     def confirm_import(self):

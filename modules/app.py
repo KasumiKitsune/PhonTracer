@@ -91,6 +91,7 @@ class PhoneticsApp:
         self._window_guard_job = None
         self._schedule_drop_queue_check(self._drop_queue_idle_delay)
         self.debounce_timer = None
+        self._progress_hide_timer = None
         self.speaker_manager = SpeakerManager()
         self.project_manager = ProjectManager(self)
         self.export_numbering_rule_value = "continuous"
@@ -145,6 +146,12 @@ class PhoneticsApp:
                 except Exception:
                     pass
                 self._window_guard_job = None
+            if getattr(self, '_progress_hide_timer', None) is not None:
+                try:
+                    self.root.after_cancel(self._progress_hide_timer)
+                except Exception:
+                    pass
+                self._progress_hide_timer = None
 
             # Clean up workspace on normal exit
             try:
@@ -743,16 +750,36 @@ class PhoneticsApp:
             if os.path.exists(path):
                 img = Image.open(path)
 
-                # 将 自动识别 (bulb) 的黑色图标染色为对应红色（#DC2626），与删除按钮风格高度统一
-                if key in ["bulb", "save_black", "gray_dot"]:
+                # 将 自动识别 (bulb) 的黑色图标染色为智能辅助靛紫（浅色 #4338CA，深色 #A5B4FC），与按钮文字和主题统一
+                if key == "bulb":
+                    try:
+                        img_rgba = img.convert("RGBA")
+                        data_arr = np.array(img_rgba)
+                        mask = data_arr[:, :, 3] > 0
+                        # 浅色模式: #4338CA (67, 56, 202)
+                        data_light = data_arr.copy()
+                        data_light[mask, 0] = 67
+                        data_light[mask, 1] = 56
+                        data_light[mask, 2] = 202
+                        img_light = Image.fromarray(data_light)
+                        # 深色模式: #A5B4FC (165, 180, 252)
+                        data_dark = data_arr.copy()
+                        data_dark[mask, 0] = 165
+                        data_dark[mask, 1] = 180
+                        data_dark[mask, 2] = 252
+                        img_dark = Image.fromarray(data_dark)
+
+                        img = img_light
+                        self.icons[key] = ctk.CTkImage(light_image=img_light, dark_image=img_dark, size=(20, 20))
+                        self.tk_icons[key] = ImageTk.PhotoImage(img_light.resize((16, 16), Image.Resampling.LANCZOS))
+                        continue
+                    except Exception:
+                        pass
+                elif key in ["save_black", "gray_dot"]:
                     try:
                         img_rgba = img.convert("RGBA")
                         data = np.array(img_rgba)
-                        if key == "bulb":
-                            data[:,:,0] = 220 # R
-                            data[:,:,1] = 38  # G
-                            data[:,:,2] = 38  # B
-                        elif key == "save_black":
+                        if key == "save_black":
                             mask = data[:,:,3] > 0
                             data[mask, 0] = 31
                             data[mask, 1] = 41
@@ -763,6 +790,23 @@ class PhoneticsApp:
                             data[mask, 1] = 163
                             data[mask, 2] = 175
                         img = Image.fromarray(data)
+                    except Exception:
+                        pass
+
+                if key in ["tab_single", "tab_batch"]:
+                    try:
+                        img_rgba = img.convert("RGBA")
+                        data_dark = np.array(img_rgba)
+                        mask = data_dark[:, :, 3] > 0
+                        data_dark[mask, 0] = 51   # #334155
+                        data_dark[mask, 1] = 65
+                        data_dark[mask, 2] = 85
+                        img_dark = Image.fromarray(data_dark)
+                        img_tk_dark = img_dark.resize((16, 16), Image.Resampling.LANCZOS)
+                        self.icons[f"{key}_dark"] = ctk.CTkImage(light_image=img_dark, dark_image=img, size=(20, 20))
+                        self.icons[f"{key}_white"] = ctk.CTkImage(light_image=img, dark_image=img, size=(20, 20))
+                        self.tk_icons[f"{key}_dark"] = ImageTk.PhotoImage(img_tk_dark)
+                        self.tk_icons[f"{key}_white"] = ImageTk.PhotoImage(img.resize((16, 16), Image.Resampling.LANCZOS))
                     except Exception:
                         pass
 
@@ -810,14 +854,15 @@ class PhoneticsApp:
 
     def setup_ui(self):
         # --- Sidebar Container ---
-        sidebar_frame = ctk.CTkFrame(self.root, width=320, fg_color="transparent")
+        sidebar_frame = ctk.CTkFrame(self.root, width=336, fg_color="transparent")
+        self.left_panel = sidebar_frame
         sidebar_frame.pack(side=tk.LEFT, fill=tk.Y, padx=10, pady=(10, 5))
 
         # --- Header (Fixed at top) ---
         header_frame = ctk.CTkFrame(sidebar_frame, fg_color="transparent")
         header_frame.pack(side=tk.TOP, fill=tk.X, pady=(5, 10))
 
-        left_scrollable = ctk.CTkScrollableFrame(sidebar_frame, width=320, fg_color="transparent")
+        left_scrollable = ctk.CTkScrollableFrame(sidebar_frame, width=336, fg_color="transparent")
         left_scrollable.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         self._make_scrollable_auto(left_scrollable)
 
@@ -926,17 +971,22 @@ class PhoneticsApp:
             left_scrollable, height=170, corner_radius=12, fg_color="white",
             segmented_button_selected_color="#2563EB",
             segmented_button_selected_hover_color="#1D4ED8",
-            segmented_button_fg_color="#F3F4F6"
+            segmented_button_fg_color="#F3F4F6",
+            command=self._update_tabview_colors_and_icons
         )
         self.tabview.pack(fill=tk.X, pady=(0, 10))
-        self.tabview._segmented_button.configure(corner_radius=20)
+        self.tabview._segmented_button.configure(
+            corner_radius=20,
+            unselected_color="#F3F4F6",
+            unselected_hover_color="#E5E7EB"
+        )
 
         # 分析模式 (药丸型按钮)
         self.mode_frame = ctk.CTkFrame(left_scrollable, fg_color="white", corner_radius=10)
         self.mode_frame.pack(fill=tk.X, pady=(0, 10))
 
         lbl_mode_title = ctk.CTkLabel(self.mode_frame, text="分析模式", font=self.font_title, text_color="#111827")
-        lbl_mode_title.pack(side=tk.LEFT, padx=15, pady=10)
+        lbl_mode_title.pack(side=tk.LEFT, padx=(12, 4), pady=10)
 
         self.mode_button = ctk.CTkSegmentedButton(
             self.mode_frame,
@@ -949,33 +999,38 @@ class PhoneticsApp:
             unselected_hover_color="#E5E7EB",
             text_color="#1F2937",
             corner_radius=20,  # Pill shaped!
-            height=32
+            height=32,
+            font=ctk.CTkFont(family="Microsoft YaHei", size=11, weight="bold")
         )
-        self.mode_button.pack(side=tk.RIGHT, padx=15, pady=10)
+        self.mode_button.pack(side=tk.RIGHT, padx=(4, 12), pady=10)
         initial_mode = "声调/F0" if self.last_params.get('analysis_mode', 'f0') == 'f0' else "共振峰/F1-F2"
         self.mode_button.set(initial_mode)
         self._update_mode_button_text_colors()
         tab_long = self.tabview.add("单条长音频")
         tab_batch = self.tabview.add("多条独立音频")
 
-        self.tabview._segmented_button._buttons_dict["单条长音频"].configure(image=self.icons.get("tab_single"), compound="left")
-        self.tabview._segmented_button._buttons_dict["多条独立音频"].configure(image=self.icons.get("tab_batch"), compound="left")
+        orig_tabview_set = self.tabview.set
+        def safe_tabview_set(name):
+            orig_tabview_set(name)
+            self._update_tabview_colors_and_icons()
+        self.tabview.set = safe_tabview_set
+        self._update_tabview_colors_and_icons()
 
         CTkReleaseButton(tab_long, text=" 导入长音频", image=self.icons.get("audio"), compound="left", command=self.load_long_audio, **btn_kwargs_primary).pack(fill=tk.X, padx=10, pady=(15, 2))
         self.lbl_long_file = ctk.CTkLabel(tab_long, text="未选择", font=self.font_main, text_color="#6B7280")
         self.lbl_long_file.pack(pady=(0, 10))
         row_mode1_btns = ctk.CTkFrame(tab_long, fg_color="transparent")
-        row_mode1_btns.pack(fill=tk.X, padx=10, pady=(0, 15))
-        CTkReleaseButton(row_mode1_btns, text="导入字表", image=self.icons.get("cut"), compound="left", command=lambda: self.open_text_dialog('long'), **btn_kwargs_secondary, width=110).pack(side=tk.LEFT, expand=True, padx=(0, 5))
-        CTkReleaseButton(row_mode1_btns, text="段落编辑器", image=self.icons.get("eye"), compound="left", command=self.open_visual_splitter, **btn_kwargs_secondary, width=110).pack(side=tk.RIGHT, expand=True, padx=(5, 0))
+        row_mode1_btns.pack(fill=tk.X, padx=6, pady=(0, 15))
+        CTkReleaseButton(row_mode1_btns, text=" 导入字表", image=self.icons.get("cut"), compound="left", command=lambda: self.open_text_dialog('long'), **btn_kwargs_secondary, width=110).pack(side=tk.LEFT, expand=True, padx=(0, 4))
+        CTkReleaseButton(row_mode1_btns, text=" 段落编辑器", image=self.icons.get("eye"), compound="left", command=self.open_visual_splitter, **btn_kwargs_secondary, width=110).pack(side=tk.RIGHT, expand=True, padx=(4, 0))
 
         CTkReleaseButton(tab_batch, text=" 选择多个音频文件", image=self.icons.get("batch"), compound="left", command=self.load_batch_audio, **btn_kwargs_primary).pack(fill=tk.X, padx=10, pady=(15, 2))
         self.lbl_batch_files = ctk.CTkLabel(tab_batch, text="未选择", font=self.font_main, text_color="#6B7280")
         self.lbl_batch_files.pack(pady=(0, 10))
         row_mode2_btns = ctk.CTkFrame(tab_batch, fg_color="transparent")
-        row_mode2_btns.pack(fill=tk.X, padx=10, pady=(0, 15))
-        CTkReleaseButton(row_mode2_btns, text="文件名提取", image=self.icons.get("tag"), compound="left", command=self.process_batch_direct, **btn_kwargs_secondary, width=110).pack(side=tk.LEFT, expand=True, padx=(0, 5))
-        CTkReleaseButton(row_mode2_btns, text="导入字表", image=self.icons.get("list"), compound="left", command=lambda: self.open_text_dialog('batch'), **btn_kwargs_secondary, width=110).pack(side=tk.RIGHT, expand=True, padx=(5, 0))
+        row_mode2_btns.pack(fill=tk.X, padx=6, pady=(0, 15))
+        CTkReleaseButton(row_mode2_btns, text=" 文件名提取", image=self.icons.get("tag"), compound="left", command=self.process_batch_direct, **btn_kwargs_secondary, width=110).pack(side=tk.LEFT, expand=True, padx=(0, 4))
+        CTkReleaseButton(row_mode2_btns, text=" 导入字表", image=self.icons.get("list"), compound="left", command=lambda: self.open_text_dialog('batch'), **btn_kwargs_secondary, width=110).pack(side=tk.RIGHT, expand=True, padx=(4, 0))
 
         card_params = ctk.CTkFrame(left_scrollable, fg_color="white", corner_radius=10)
         card_params.pack(fill=tk.X, pady=(0, 10))
@@ -1533,15 +1588,27 @@ class PhoneticsApp:
         self.progress_bar.set(val)
 
     def start_loading(self, text="正在处理..."):
+        if getattr(self, '_progress_hide_timer', None) is not None:
+            try:
+                self.root.after_cancel(self._progress_hide_timer)
+            except Exception:
+                pass
+            self._progress_hide_timer = None
         self.set_status(text, "#2563EB", "status_loading")
         self.progress_bar.set(0)
         if self.progress_bar.winfo_manager() == "":
             self.progress_bar.pack(fill=tk.X, padx=(0, 15), pady=(0, 8))
 
     def stop_loading(self, text="完成"):
+        if getattr(self, '_progress_hide_timer', None) is not None:
+            try:
+                self.root.after_cancel(self._progress_hide_timer)
+            except Exception:
+                pass
+            self._progress_hide_timer = None
         self.set_progress(1.0)
         self.set_status(text, "#10B981", "status_success")
-        self.root.after(1500, lambda: self.progress_bar.pack_forget())
+        self._progress_hide_timer = self.root.after(1500, lambda: self.progress_bar.pack_forget())
 
 
     def _make_audio_cache_key(self, path, params=None):
@@ -1752,18 +1819,25 @@ class PhoneticsApp:
         orig_set = scrollbar.set
 
         def auto_set(low, high):
-            # 使用更严谨的判断，并加入 update 以防止布局死循环
+            if not scrollbar.winfo_exists():
+                return
             if float(low) <= 0.0 and float(high) >= 1.0:
-                if scrollbar.winfo_ismapped():
+                if bool(scrollbar.winfo_manager()):
                     scrollbar.grid_remove()
             else:
-                if not scrollbar.winfo_ismapped():
+                if not bool(scrollbar.winfo_manager()):
                     scrollbar.grid()
             orig_set(low, high)
 
         scrollbar.set = auto_set
-        # 初始检查一次
-        self.root.after(100, lambda: scrollbar.set(*scrollbar.get()))
+        # 初始检查一次，增加 winfo_exists 保护
+        def check_initial():
+            if scrollbar.winfo_exists():
+                try:
+                    scrollbar.set(*scrollbar.get())
+                except Exception:
+                    pass
+        self.root.after(100, check_initial)
 
     def setup_entry_behavior(self, entry, param_key):
         def on_enter(e): entry.configure(border_color="#2563EB", border_width=2)
@@ -1787,6 +1861,8 @@ class PhoneticsApp:
 
     def setup_numeric_wheel_stepper(self, entry, param_key, step, value_type=int, min_value=None, max_value=None, formatter=None):
         def on_wheel(event):
+            if self.root.focus_get() not in (entry, getattr(entry, '_entry', None)):
+                return
             event_num = getattr(event, "num", None)
             if event_num == 4:
                 direction = 1
@@ -2161,7 +2237,7 @@ class PhoneticsApp:
     def on_analysis_mode_change(self, value):
         self.flush_eraser_changes()
         old_mode = self.last_params.get('analysis_mode', 'f0')
-        mode = 'f0' if value == "声调/F0" else 'formant'
+        mode = 'f0' if ("声调" in value or "F0" in value) else 'formant'
         if mode == old_mode:
             return
         self.last_params['analysis_mode'] = mode
@@ -2197,6 +2273,29 @@ class PhoneticsApp:
             self.tree_panel.update_preview()
         self.mark_modified()
 
+    def _update_tabview_colors_and_icons(self):
+        try:
+            current_tab = self.tabview.get()
+            if hasattr(self.tabview, "_segmented_button") and hasattr(self.tabview._segmented_button, "_buttons_dict"):
+                icons_map = {
+                    "单条长音频": ("tab_single_white", "tab_single_dark"),
+                    "多条独立音频": ("tab_batch_white", "tab_batch_dark"),
+                }
+                for name, btn in self.tabview._segmented_button._buttons_dict.items():
+                    white_key, dark_key = icons_map.get(name, ("tab_single_white", "tab_single_dark"))
+                    if name == current_tab:
+                        btn.configure(
+                            text_color="white",
+                            image=self.icons.get(white_key) or self.icons.get("tab_single")
+                        )
+                    else:
+                        btn.configure(
+                            text_color=("#334155", "#E2E8F0"),
+                            image=self.icons.get(dark_key) or self.icons.get("tab_batch")
+                        )
+        except Exception:
+            pass
+
     def _update_mode_button_text_colors(self):
         current_val = self.mode_button.get()
         if hasattr(self.mode_button, "_buttons_dict"):
@@ -2204,7 +2303,7 @@ class PhoneticsApp:
                 if val == current_val:
                     btn.configure(text_color="white")
                 else:
-                    btn.configure(text_color="#1F2937")
+                    btn.configure(text_color=("#334155", "#E2E8F0"))
 
     def update_param_containers_visibility(self):
         mode = self.last_params.get('analysis_mode', 'f0')
@@ -2974,34 +3073,60 @@ class PhoneticsApp:
                 continue
 
             seg = mapped_segs[iid]
+            old_macro_s = item.get('macro_start')
+            old_macro_e = item.get('macro_end')
+            macro_unchanged = (
+                old_macro_s is not None and old_macro_e is not None and
+                abs(seg['start'] - old_macro_s) <= 1e-4 and
+                abs(seg['end'] - old_macro_e) <= 1e-4
+            )
             item['macro_start'] = seg['start']
             item['macro_end'] = seg['end']
 
             if not item.get('snd'):
                 item['snd'] = self.pending_long_snd
-                if global_pitch_cache is None:
-                    global_pitch_cache = extract_f0(self.pending_long_snd, self.last_params)
-                ms = max(0.0, float(item.get('macro_start', 0.0)) - 0.05)
-                me = float(item.get('macro_end', self.pending_long_snd.get_total_duration())) + 0.05
-                pxs = global_pitch_cache['xs']
-                pfreqs = global_pitch_cache['freqs']
-                mask = (pxs >= ms) & (pxs <= me)
-                item['pitch_data'] = {'xs': pxs[mask].copy(), 'freqs': pfreqs[mask].copy()}
-                item['_dirty_pitch'] = True
-                if 'pitch' in item:
-                    del item['pitch']
 
-            if not seg.get('is_modified') and seg.get('old_id') and seg['old_id'] in old_micro_bounds:
+            syls = split_into_syllables(item.get('label', ''))
+            can_reuse_micro = (
+                not seg.get('is_modified') and
+                macro_unchanged and
+                seg.get('old_id') is not None and
+                seg.get('old_id') == item.get('id') and
+                seg['old_id'] in old_micro_bounds and
+                len(old_micro_bounds[seg['old_id']].get('chars_bounds', [])) == len(syls)
+            )
+
+            # VS-NEW-02: 仅当区段发生修改/顺延或缺少基频缓存时，才基于新的 macro 边界重新切片 pitch_data 并清空过期共振峰，保护未修改词条的橡皮擦精修数据
+            if not can_reuse_micro or not item.get('pitch_data'):
+                if global_pitch_cache is None and self.pending_long_snd is not None:
+                    global_pitch_cache = extract_f0(self.pending_long_snd, self.last_params)
+                if global_pitch_cache is not None:
+                    total_dur = self.pending_long_snd.get_total_duration() if self.pending_long_snd else 999999.0
+                    ms = max(0.0, float(item.get('macro_start', 0.0)) - 0.05)
+                    me = float(item.get('macro_end', total_dur)) + 0.05
+                    pxs = global_pitch_cache['xs']
+                    pfreqs = global_pitch_cache['freqs']
+                    mask = (pxs >= ms) & (pxs <= me)
+                    item['pitch_data'] = {'xs': pxs[mask].copy(), 'freqs': pfreqs[mask].copy()}
+                    item['_dirty_pitch'] = True
+                    item.pop('pitch', None)
+                    item['formant_data'] = None
+                    item.pop('preview_f0', None)
+                    item.pop('preview_formants', None)
+
+            if can_reuse_micro:
                 old_bounds = old_micro_bounds[seg['old_id']]
                 item['start'] = old_bounds['start']
                 item['end'] = old_bounds['end']
                 item['inner_splits'] = copy.deepcopy(old_bounds['inner_splits'])
                 item['chars_bounds'] = copy.deepcopy(old_bounds['chars_bounds'])
-                if old_bounds['raw_start'] is not None:
+                if old_bounds.get('raw_start') is not None:
                     item['raw_start'] = old_bounds['raw_start']
                     item['raw_end'] = old_bounds['raw_end']
             elif seg.get('is_modified'):
                 self._apply_modified_segment(item, seg)
+                item['split_warnings'] = []
+                item['split_confidence'] = 1.0
             else:
                 self._apply_new_segment(item)
 
@@ -3510,7 +3635,7 @@ class PhoneticsApp:
 
         dlg = ctk.CTkToplevel(self.root)
         dlg.title(f"{APP_NAME}语音学标注与声学分析系统 V{__version__} - 导入字表")
-        w, h = 480, (700 if mode == 'batch' else 620)
+        w, h = 540, (700 if mode == 'batch' else 620)
         # 居中计算
         sw = dlg.winfo_screenwidth()
         sh = dlg.winfo_screenheight()
@@ -3700,13 +3825,13 @@ class PhoneticsApp:
 
 
 
-        btn_prompt = ctk.CTkButton(toolbar, text=" 复制 AI 整理提示词", image=self.icons.get("copy_white"), compound="left",
-                                   width=142, height=28, corner_radius=14, fg_color="#F59E0B", text_color="white",
+        btn_prompt = ctk.CTkButton(toolbar, text=" 复制整理提示词", image=self.icons.get("copy_white"), compound="left",
+                                   width=132, height=28, corner_radius=14, fg_color="#F59E0B", text_color="white",
                                    hover_color="#D97706", command=copy_prompt)
         btn_prompt.pack(side=tk.LEFT, padx=6)
 
-        btn_v2_prompt = ctk.CTkButton(toolbar, text=" AI 高级字表提示词", image=self.icons.get("copy_white"), compound="left",
-                                      width=142, height=28, corner_radius=14, fg_color="#0D9488", text_color="white",
+        btn_v2_prompt = ctk.CTkButton(toolbar, text=" 高级字表提示词", image=self.icons.get("copy_white"), compound="left",
+                                      width=132, height=28, corner_radius=14, fg_color="#0D9488", text_color="white",
                                       hover_color="#0F766E", command=lambda: self._copy_v2_agent_prompt(dlg))
         btn_v2_prompt.pack(side=tk.LEFT)
 

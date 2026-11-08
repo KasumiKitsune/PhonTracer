@@ -594,6 +594,19 @@ def build_dataset_snapshot(teproj_path):
             except KeyError:
                 return []
             project_data = json.loads(raw.decode("utf-8"))
+            raw_groups = project_data.get("groups", []) if isinstance(project_data, dict) else []
+            if isinstance(raw_groups, dict):
+                groups_map = raw_groups
+            elif isinstance(raw_groups, list):
+                groups_map = {
+                    (g.get("name") or g.get("group")): g
+                    for g in raw_groups
+                    if isinstance(g, dict) and (g.get("name") or g.get("group"))
+                }
+            else:
+                groups_map = {}
+            wl_meta = project_data.get("wordlist_meta", {}) if isinstance(project_data, dict) else {}
+            default_wl_title = wl_meta.get("title", "") if isinstance(wl_meta, dict) else ""
 
             # Create a lookup mapping from decoded (correct) filenames to original ZIP members
             namelist_map = {}
@@ -797,22 +810,40 @@ def build_dataset_snapshot(teproj_path):
                     except Exception as ex:
                         print(f"Error extracting syllable data in snapshot: {ex}")
 
+                    grp_name = item.get("group", "默认组")
+                    grp_info = groups_map.get(grp_name, {}) if isinstance(groups_map, dict) else {}
                     snapshot_item = {
                         "speaker_id": spk_id,
                         "speaker_name": spk_name,
                         "item_id": item_id,
                         "label": item.get("label", ""),
-                        "group": item.get("group", "默认组"),
-                        "wordlist_version": item.get("wordlist_version", "v1"),
-                        "wordlist_title": item.get("wordlist_title", ""),
-                        "item_note": item.get("item_note", ""),
-                        "item_tags": item.get("item_tags", []) or [],
-                        "item_aliases": item.get("item_aliases", []) or [],
-                        "item_meta": item.get("item_meta", {}) or {},
-                        "group_note": item.get("group_note", ""),
-                        "group_tags": item.get("group_tags", []) or [],
+                        "group": grp_name,
+                        "wordlist_version": "v2" if (
+                            item.get("wordlist_version") == "v2"
+                            or item.get("wordlist_title")
+                            or default_wl_title
+                            or item.get("item_tags") or item.get("tags")
+                            or item.get("item_meta") or item.get("meta")
+                            or item.get("item_note") or item.get("note")
+                            or item.get("item_aliases") or item.get("aliases")
+                            or item.get("group_tags") or grp_info.get("tags")
+                            or item.get("group_note") or grp_info.get("note")
+                        ) else item.get("wordlist_version", "v1"),
+                        "wordlist_title": item.get("wordlist_title") or default_wl_title or "",
+                        "item_note": item.get("item_note") or item.get("note") or "",
+                        "item_tags": list(item.get("item_tags") or item.get("tags") or []),
+                        "item_aliases": list(item.get("item_aliases") or item.get("aliases") or []),
+                        "item_meta": dict(item.get("item_meta") or item.get("meta") or {}),
+                        "group_note": item.get("group_note") or grp_info.get("note") or "",
+                        "group_tags": list(item.get("group_tags") or grp_info.get("tags") or []),
                         "metadata_source": item.get("metadata_source", ""),
                         "is_excluded": item.get("is_excluded", False),
+                        "exclusion_reason": item.get("exclusion_reason", ""),
+                        "param_overrides": dict(item.get("param_overrides", {}) or {}),
+                        "inner_splits": list(item.get("inner_splits", []) or []),
+                        "chars_bounds": list(item.get("chars_bounds", []) or []),
+                        "split_warnings": list(item.get("split_warnings", []) or []),
+                        "split_confidence": float(item.get("split_confidence", 1.0)),
                         "analysis_mode": item.get("analysis_mode", spk.get("last_params", {}).get("analysis_mode", "f0")),
                         "start": start,
                         "end": end,

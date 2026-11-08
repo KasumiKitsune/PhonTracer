@@ -22,7 +22,7 @@ class F0DetectionDialog(ctk.CTkToplevel):
         self.resizable(False, False)
 
         # 居中显示
-        width, height = 600, 600
+        width, height = 580, 545
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         x = (screen_width - width) // 2
@@ -37,7 +37,7 @@ class F0DetectionDialog(ctk.CTkToplevel):
         self.focus_set()
 
         # 顶部装饰线条
-        accent_strip = ctk.CTkFrame(self, height=4, fg_color="#3B82F6", corner_radius=0)
+        accent_strip = ctk.CTkFrame(self, height=4, fg_color="#2563EB", corner_radius=0)
         accent_strip.pack(fill="x", side="top")
 
         self.font_title = ctk.CTkFont(family="Microsoft YaHei", size=15, weight="bold")
@@ -50,7 +50,7 @@ class F0DetectionDialog(ctk.CTkToplevel):
     def setup_ui(self):
         # 主卡片容器
         card = ctk.CTkFrame(self, fg_color="transparent")
-        card.pack(fill="both", expand=True, padx=20, pady=(15, 15))
+        card.pack(fill="both", expand=True, padx=20, pady=(12, 12))
 
         # 头部标题
         lbl_title = ctk.CTkLabel(
@@ -59,7 +59,7 @@ class F0DetectionDialog(ctk.CTkToplevel):
             font=self.font_title,
             text_color=("#111827", "#F9FAFB")
         )
-        lbl_title.pack(pady=(12, 10))
+        lbl_title.pack(pady=(6, 10))
 
         # F0 主要特征网格
         features_frame = ctk.CTkFrame(card, fg_color=("#F9FAFB", "#262930"), corner_radius=8, border_width=1, border_color=("#E5E7EB", "#374151"))
@@ -86,7 +86,7 @@ class F0DetectionDialog(ctk.CTkToplevel):
 
         # 建议与简短理由横条
         reason_frame = ctk.CTkFrame(card, fg_color=("#EFF6FF", "#1E293B"), corner_radius=8, border_width=1, border_color=("#DBEAFE", "#2563EB"))
-        reason_frame.pack(fill="x", padx=15, pady=(0, 15))
+        reason_frame.pack(fill="x", padx=15, pady=(0, 12))
         
         reason_text = (
             f"检测到该发音人稳定 F0 主要分布在 {int(round(self.p5))}~{int(round(self.p95))} Hz，\n"
@@ -167,8 +167,8 @@ class F0DetectionDialog(ctk.CTkToplevel):
 
             # 右侧：应用按钮，在网格第1列
             if opt["is_primary"]:
-                btn_color = "#3B82F6"
-                hover_color = "#2563EB"
+                btn_color = "#2563EB"
+                hover_color = "#1D4ED8"
                 text_color = "white"
                 btn_text = "应用此范围"
             else:
@@ -191,7 +191,7 @@ class F0DetectionDialog(ctk.CTkToplevel):
             )
             btn_apply.grid(row=0, column=1, sticky="e", padx=15, pady=15)
 
-        # 底部取消按钮
+        # 底部取消按钮 (优先 side="bottom" 保证不被压缩)
         btn_cancel = ctk.CTkButton(
             card,
             text="取消",
@@ -204,7 +204,19 @@ class F0DetectionDialog(ctk.CTkToplevel):
             hover_color=("#E5E7EB", "#4B5563"),
             command=self.destroy
         )
-        btn_cancel.pack(pady=(12, 10))
+        btn_cancel.pack(side="bottom", pady=(10, 8))
+
+        # 动态自适应高度并居中
+        self.update_idletasks()
+        scaling = self._get_window_scaling() if hasattr(self, "_get_window_scaling") else 1.0
+        width = 580
+        req_logical_h = int((card.winfo_reqheight() + 28) / max(1.0, scaling))
+        height = max(530, min(620, req_logical_h))
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        x = (screen_width - width) // 2
+        y = max(0, (screen_height - height) // 2)
+        self.geometry(f"{width}x{height}+{x}+{y}")
 
     def apply_and_close(self, floor, ceiling):
         self.destroy()

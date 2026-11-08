@@ -1,6 +1,61 @@
 import tkinter as tk
 import customtkinter as ctk
 
+PHONTRACER_THEME = {
+    "bg_app": ("#F1F5F9", "#0F172A"),
+    "surface_card": ("#FFFFFF", "#1E293B"),
+    "surface_subtle": ("#F8FAFC", "#263244"),
+    "border_subtle": ("#E2E8F0", "#334155"),
+    "border_strong": ("#CBD5E1", "#475569"),
+    "text_primary": ("#0F172A", "#F8FAFC"),
+    "text_secondary": ("#334155", "#E2E8F0"),
+    "text_muted": ("#64748B", "#94A3B8"),
+    "primary": ("#2563EB", "#3B82F6"),
+    "primary_hover": ("#1D4ED8", "#2563EB"),
+    "success": ("#10B981", "#059669"),
+    "success_hover": ("#059669", "#047857"),
+    "accent_soft": ("#EEF2FF", "#312E81"),
+    "accent_text": ("#4338CA", "#A5B4FC"),
+    "accent_hover": ("#E0E7FF", "#3730A3"),
+    "warning": ("#F59E0B", "#D97706"),
+    "warning_soft": ("#FFFBEB", "#451A03"),
+    "danger_soft": ("#FEE2E2", "#450A0A"),
+    "danger_text": ("#DC2626", "#FCA5A5"),
+    "danger": ("#EF4444", "#DC2626"),
+    "danger_hover": ("#DC2626", "#B91C1C"),
+}
+
+
+def _apply_custom_arrow(dropdown):
+    """统一修复 Windows 高分屏下 CTkOptionMenu / CTkComboBox 下拉箭头绘制模糊或变形问题。"""
+    try:
+        orig_draw_arrow = dropdown._draw_engine.draw_dropdown_arrow
+
+        def custom_draw_arrow(*args, **kwargs):
+            old_method = dropdown._draw_engine.preferred_drawing_method
+            try:
+                dropdown._draw_engine.preferred_drawing_method = "polygon_shapes"
+                res = orig_draw_arrow(*args, **kwargs)
+                try:
+                    dropdown._canvas.itemconfigure("dropdown_arrow", width=2)
+                except Exception:
+                    pass
+                return res
+            finally:
+                dropdown._draw_engine.preferred_drawing_method = old_method
+
+        dropdown._draw_engine.draw_dropdown_arrow = custom_draw_arrow
+        dropdown._canvas.delete("dropdown_arrow")
+        if hasattr(dropdown, "_draw"):
+            dropdown._draw(no_color_updates=False)
+    except Exception:
+        pass
+
+
+apply_custom_arrow = _apply_custom_arrow
+apply_custom_dropdown_arrow = _apply_custom_arrow
+
+
 class CTkReleaseButton(ctk.CTkButton):
     """
     自定义按钮类，将 command 触发时机从“按下”改为“松开且在按钮范围内”。
@@ -47,6 +102,7 @@ class CTkReleaseButton(ctk.CTkButton):
         if btn_x <= x <= btn_x + btn_w and btn_y <= y <= btn_y + btn_h:
             if self._release_command:
                 self._release_command()
+
 
 class ToolTip:
     active_tip = None       # 类变量：追踪当前正在显示的 ToolTip 实例，确保全局同时仅有一个 ToolTip 处于显示状态
@@ -143,16 +199,34 @@ class ToolTip:
             ToolTip.active_tip.hidetip()
 
         ToolTip.active_tip = self
-        x, y, cx, cy = self.widget.bbox("insert") or (0,0,0,0)
-        x += self.widget.winfo_rootx() + 25
-        y += self.widget.winfo_rooty() + 25
+        px, py = 0, 0
+        try:
+            px, py = self.widget.winfo_pointerxy()
+            x = px + 12
+            y = py + 16
+        except Exception:
+            x = self.widget.winfo_rootx() + 25
+            y = self.widget.winfo_rooty() + 25
+
         self.tipwindow = tw = tk.Toplevel(self.widget)
         tw.wm_overrideredirect(True)
-        tw.wm_geometry(f"+{x}+{y}")
         label = tk.Label(tw, text=self.text, justify=tk.LEFT,
                          background="#374151", foreground="white", relief=tk.FLAT,
                          borderwidth=0, font=("Microsoft YaHei", 10), padx=8, pady=5)
         label.pack(ipadx=1)
+        try:
+            tw.update_idletasks()
+            tip_w = tw.winfo_reqwidth()
+            tip_h = tw.winfo_reqheight()
+            screen_w = self.widget.winfo_screenwidth()
+            screen_h = self.widget.winfo_screenheight()
+            if x + tip_w + 8 > screen_w:
+                x = max(8, screen_w - tip_w - 8)
+            if y + tip_h + 8 > screen_h:
+                y = max(8, (py - tip_h - 8) if py else (screen_h - tip_h - 8))
+        except Exception:
+            pass
+        tw.wm_geometry(f"+{x}+{y}")
 
     def hidetip(self):
         tw = self.tipwindow
@@ -162,20 +236,59 @@ class ToolTip:
         if ToolTip.active_tip == self:
             ToolTip.active_tip = None
 
+
 class AutoScrollbar(ctk.CTkScrollbar):
     """
-    仅在内容溢出（需要滚动）时才显示的滚动条。
+    仅在内容溢出（需要滚动）时才显示的滚动条，同时兼容 grid 与 pack 布局管理器。
     """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._layout_manager = None
+        self._pack_kwargs = {}
+
+    def grid(self, *args, **kwargs):
+        self._layout_manager = "grid"
+        return super().grid(*args, **kwargs)
+
+    def pack(self, *args, **kwargs):
+        self._layout_manager = "pack"
+        if kwargs:
+            self._pack_kwargs = dict(kwargs)
+        return super().pack(*args, **kwargs)
+
     def set(self, low, high):
+        if not self.winfo_exists():
+            return
+        manager = self._layout_manager or self.winfo_manager()
+        is_managed = bool(self.winfo_manager())
         if float(low) <= 0.0 and float(high) >= 1.0:
-            if self.winfo_ismapped():
-                self.grid_remove()
+            if is_managed:
+                if manager == "pack":
+                    self._layout_manager = "pack"
+                    if not self._pack_kwargs:
+                        try:
+                            info = self.pack_info()
+                            self._pack_kwargs = {
+                                k: info[k]
+                                for k in ("side", "fill", "expand", "padx", "pady", "ipadx", "ipady", "anchor")
+                                if k in info
+                            }
+                        except Exception:
+                            pass
+                    self.pack_forget()
+                else:
+                    self._layout_manager = "grid"
+                    self.grid_remove()
         else:
-            if not self.winfo_ismapped():
-                self.grid()
+            if not is_managed:
+                if (self._layout_manager or manager) == "pack":
+                    super().pack(**self._pack_kwargs)
+                else:
+                    super().grid()
         super().set(low, high)
 
-def make_context_menu(parent, font_size=10):
+
+def make_context_menu(parent, font_size=11):
     """
     统一创建右键菜单，带有系统统一的样式。
     """
@@ -191,6 +304,7 @@ def make_context_menu(parent, font_size=10):
         bd=1,
         relief="solid",
     )
+
 
 def post_context_menu(menu, event):
     """

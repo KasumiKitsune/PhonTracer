@@ -38,6 +38,26 @@ export function parsePlainWordlist(rawText, idFactory = defaultIdFactory) {
       // fallback to plain text parsing if JSON parse fails
     }
   }
+  const firstLine = trimmed.split(/\r?\n/u)[0] || '';
+  if (firstLine.includes(',')) {
+    const headers = firstLine.split(',').map(h => h.trim().replace(/^["']|["']$/gu, '').toLowerCase());
+    const wordHeaders = new Set(['词项', '字词', 'word', 'label', 'item']);
+    const metaHeaders = new Set([
+      '组名', '组别', 'group', 'group_name', '组备注', 'group_note',
+      '组标签', '组tag', 'group_tags', '词项备注', '备注', 'item_note', 'note',
+      '发音提示', '标签', '词项标签', '词项tag', 'tags', 'tag',
+      '别名', 'aliases', 'alias', '拼音', 'pinyin', '国际音标', 'ipa',
+      '声调', 'tone', '韵母', 'rhyme', '复核状态', 'review_status',
+      '自动补全状态', 'metadata_source',
+    ]);
+    if (headers.some(h => wordHeaders.has(h)) && headers.some(h => metaHeaders.has(h) || h.startsWith('meta.'))) {
+      try {
+        return parseCsvWordlist(trimmed, idFactory);
+      } catch (_) {
+        // fallback to plain text parsing if CSV parse fails
+      }
+    }
+  }
   const groups = [];
   let currentName = '未分组';
   let currentItems = [];
@@ -137,8 +157,11 @@ const parseCsvRows = (text) => {
 
 const uniqueId = (candidate, used, idFactory) => {
   let value = String(candidate || '').trim();
-  if (!value || used.has(value)) {
-    do value = idFactory(); while (used.has(value));
+  let attempts = 0;
+  while (!value || used.has(value)) {
+    const generated = String(idFactory() || '').trim() || 'id';
+    value = attempts === 0 ? generated : `${generated}_${attempts}`;
+    attempts += 1;
   }
   used.add(value);
   return value;
@@ -184,7 +207,10 @@ export function parseCsvWordlist(rawText, idFactory = defaultIdFactory) {
   const rows = parseCsvRows(rawText);
   if (rows.length < 2) throw new Error('CSV 字表没有数据行');
   const headers = rows[0].map(value => value.trim());
-  const indexOf = (...names) => headers.findIndex(header => names.includes(header));
+  const indexOf = (...names) => {
+    const lowered = names.map(n => String(n).toLowerCase());
+    return headers.findIndex(header => lowered.includes(header.toLowerCase()));
+  };
   const groupIndex = indexOf('组名', '组别', 'group', 'group_name');
   const labelIndex = indexOf('词项', '字词', 'word', 'label', 'item');
   if (labelIndex < 0) throw new Error('CSV 字表缺少“词项”列');

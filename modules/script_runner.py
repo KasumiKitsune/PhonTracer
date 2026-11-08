@@ -6,6 +6,7 @@ PhonTracer语音学标注与声学分析系统 V1.0 自定义脚本运行器
 import ast
 import builtins
 import os
+import re
 import threading
 import traceback
 import matplotlib
@@ -138,6 +139,7 @@ def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
 def strip_markdown_code_fence(code: str) -> str:
     """
     自动剥离首尾的 ```python ... ``` 或 ``` ... ``` Markdown 代码围栏。
+    若包含自然语言开场白，且代码被包裹在 ```python ... ``` 中，亦自动提取代码块。
     """
     if not isinstance(code, str):
         return "" if code is None else str(code)
@@ -154,6 +156,14 @@ def strip_markdown_code_fence(code: str) -> str:
         return "\n".join(body).strip("\r\n")
     if lines and lines[-1].strip() == "```":
         return "\n".join(lines[:-1]).strip("\r\n")
+    m = re.search(r"```(?:python)?\s*\r?\n(.*?)\r?\n```", text, re.DOTALL)
+    if m:
+        extracted = m.group(1).strip("\r\n")
+        try:
+            compile(extracted, "<extracted_check>", "exec")
+            return extracted
+        except SyntaxError:
+            pass
     return code
 
 

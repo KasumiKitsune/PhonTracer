@@ -34,7 +34,7 @@ class UpdateDialog(ctk.CTkToplevel):
         self.focus_set()
         
         # 顶部装饰线条（主程序用的红/蓝偏现代科技风）
-        accent_strip = ctk.CTkFrame(self, height=4, fg_color="#FF2A6D", corner_radius=0)
+        accent_strip = ctk.CTkFrame(self, height=4, fg_color="#2563EB", corner_radius=0)
         accent_strip.pack(fill="x", side="top")
         
         self.setup_ui()
@@ -99,16 +99,18 @@ class UpdateDialog(ctk.CTkToplevel):
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
         btn_frame.pack(fill="x", padx=25, pady=(15, 25))
         
-        # 忽略此版本按钮 (只有在非手动触发时才显示“忽略”选项才有意义，或者手动也可以提供)
+        # 忽略此版本按钮 (低调幽灵按钮，突出右侧主次关系)
         btn_ignore = ctk.CTkButton(
             btn_frame,
             text="忽略此版本",
             width=100,
             height=36,
             corner_radius=18,
-            fg_color=("#E5E7EB", "#374151"),
-            text_color=("#4B5563", "#D1D5DB"),
-            hover_color=("#D1D5DB", "#4B5563"),
+            fg_color="transparent",
+            text_color=("#64748B", "#94A3B8"),
+            hover_color=("#F1F5F9", "#1E293B"),
+            border_width=1,
+            border_color=("#CBD5E1", "#334155"),
             font=ctk.CTkFont(family="Microsoft YaHei", size=13),
             command=self.ignore_version
         )
@@ -136,9 +138,9 @@ class UpdateDialog(ctk.CTkToplevel):
             width=150,
             height=36,
             corner_radius=18,
-            fg_color=("#3B82F6", "#2563EB"),
+            fg_color="#2563EB",
             text_color="white",
-            hover_color=("#2563EB", "#1D4ED8"),
+            hover_color="#1D4ED8",
             font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"),
             command=self.open_download_url
         )

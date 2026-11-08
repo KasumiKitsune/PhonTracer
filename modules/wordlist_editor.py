@@ -266,15 +266,35 @@ class VisualWordlistEditor(ctk.CTkFrame):
         widget.bind("<MouseWheel>", on_wheel, add="+")
 
     def _bind_fast_scroll_frame(self, frame):
+        is_active = [True]
+
         def on_wheel(event):
+            if not is_active[0]:
+                return None
             step = -1 if getattr(event, "delta", 0) > 0 else 1
             try:
                 frame._parent_canvas.yview_scroll(step * 56, "units")
                 return "break"
             except Exception:
                 return None
+
         def on_global_wheel(event):
+            if not is_active[0]:
+                return None
             try:
+                if not frame.winfo_exists() or not frame.winfo_ismapped():
+                    return None
+                widget = getattr(event, "widget", None)
+                if widget is not None:
+                    try:
+                        if widget.winfo_toplevel() != frame.winfo_toplevel():
+                            return None
+                    except Exception:
+                        return None
+                    if isinstance(widget, (ctk.CTkTextbox, tk.Text)):
+                        return None
+                    if isinstance(getattr(widget, "master", None), ctk.CTkTextbox):
+                        return None
                 x1 = frame.winfo_rootx()
                 y1 = frame.winfo_rooty()
                 x2 = x1 + frame.winfo_width()
@@ -284,13 +304,23 @@ class VisualWordlistEditor(ctk.CTkFrame):
             except Exception:
                 return None
             return None
+
+        def on_destroy(event):
+            if event.widget == frame:
+                is_active[0] = False
+
         frame._wordlist_fast_wheel = on_wheel
         frame.bind("<MouseWheel>", on_wheel, add="+")
+        frame.bind("<Destroy>", on_destroy, add="+")
         frame.bind_all("<MouseWheel>", on_global_wheel, add="+")
         if hasattr(frame, "_parent_canvas"):
             frame._parent_canvas.bind("<MouseWheel>", on_wheel, add="+")
 
     def _bind_child_to_scroll_frame(self, widget, frame):
+        if isinstance(widget, (ctk.CTkTextbox, tk.Text)):
+            return
+        if isinstance(getattr(widget, "master", None), ctk.CTkTextbox):
+            return
         on_wheel = getattr(frame, "_wordlist_fast_wheel", None)
         if not on_wheel:
             return
@@ -298,7 +328,7 @@ class VisualWordlistEditor(ctk.CTkFrame):
             widget.bind("<MouseWheel>", on_wheel, add="+")
         except Exception:
             pass
-        for child_name in ("_entry", "_textbox", "_canvas"):
+        for child_name in ("_entry", "_canvas"):
             child = getattr(widget, child_name, None)
             if child is not None:
                 try:
@@ -308,6 +338,10 @@ class VisualWordlistEditor(ctk.CTkFrame):
 
     def _bind_scroll_descendants(self, parent, frame):
         for child in parent.winfo_children():
+            if isinstance(child, (ctk.CTkTextbox, tk.Text)):
+                continue
+            if isinstance(getattr(child, "master", None), ctk.CTkTextbox):
+                continue
             self._bind_child_to_scroll_frame(child, frame)
             self._bind_scroll_descendants(child, frame)
 
@@ -320,17 +354,27 @@ class VisualWordlistEditor(ctk.CTkFrame):
         post_context_menu(menu, event)
 
     def show_more_actions(self):
-        popup = ctk.CTkToplevel(self.winfo_toplevel())
+        parent = self.winfo_toplevel()
+        popup = ctk.CTkToplevel(parent)
         popup.title("字表操作")
-        popup.geometry("420x390")
+        popup.geometry("420x394")
         popup.resizable(False, False)
         popup.configure(fg_color=self.colors.get("surface", "#FFFFFF"))
-        popup.transient(self.winfo_toplevel())
+        popup.transient(parent)
         popup.grab_set()
+
+        # 顶部 4px 品牌蓝装饰条
+        ctk.CTkFrame(popup, height=4, fg_color=self.colors.get("primary", "#2563EB"), corner_radius=0).pack(fill=tk.X, side=tk.TOP)
+
         popup.update_idletasks()
-        x = self.winfo_toplevel().winfo_rootx() + 80
-        y = self.winfo_toplevel().winfo_rooty() + 80
-        popup.geometry(f"+{x}+{y}")
+        pw = parent.winfo_width()
+        ph = parent.winfo_height()
+        px = parent.winfo_rootx()
+        py = parent.winfo_rooty()
+        w, h = 420, 394
+        x = px + max(0, (pw - w) // 2)
+        y = py + max(0, (ph - h) // 2)
+        popup.geometry(f"{w}x{h}+{x}+{y}")
 
         ctk.CTkLabel(popup, text="更多操作", font=ctk.CTkFont(family=self.font_family, size=16, weight="bold"), text_color=self.colors["text"]).pack(anchor="w", padx=22, pady=(18, 4))
         ctk.CTkLabel(popup, text="低频的导入、导出和删除操作集中放在这里。", font=self.font_small, text_color=self.colors["muted"]).pack(anchor="w", padx=22, pady=(0, 14))
@@ -383,7 +427,7 @@ class VisualWordlistEditor(ctk.CTkFrame):
         self._button(header, "添加组", self.add_group, "secondary", width=78).grid(row=0, column=3, padx=(0, 6), pady=10)
         self._button(header, "添加词项", self.add_item, "secondary", width=88).grid(row=0, column=4, padx=(0, 12), pady=10)
 
-        left = ctk.CTkFrame(self, fg_color=self.colors["surface"], corner_radius=8, border_width=1, border_color=self.colors["border"], width=170)
+        left = ctk.CTkFrame(self, fg_color=self.colors["surface"], corner_radius=8, border_width=1, border_color=self.colors["border"], width=200)
         left.grid(row=1, column=0, sticky="ns", padx=(0, 10))
         left.grid_propagate(False)
         ctk.CTkLabel(left, text="组", font=self.font_title, text_color=self.colors["text"]).pack(anchor="w", padx=12, pady=(12, 6))
@@ -485,26 +529,67 @@ class VisualWordlistEditor(ctk.CTkFrame):
         )
         self.custom_text.pack(fill=tk.X, padx=12, pady=(4, 8))
         self.custom_text.bind("<FocusOut>", lambda _e: self._sync_from_fields())
-        self._bind_child_to_scroll_frame(self.custom_text, right)
         self._button(right, "添加自定义字段", self.add_custom_field, "secondary").pack(fill=tk.X, padx=12, pady=(0, 12))
         self._bind_scroll_descendants(right, right)
 
         footer = ctk.CTkFrame(self, fg_color=self.colors["surface"], corner_radius=12, border_width=1, border_color=self.colors["border"])
         footer.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(10, 0))
-        footer_actions = [
-            ("打开 .ptwl", self.load_ptwl_dialog, "primary", 96),
-            ("保存", self.save_ptwl_dialog, "success", 76),
-            ("全部标记为已复核", self.mark_ai_reviewed, "secondary", 135),
+
+        doc_actions = [
+            ("打开 .ptwl", self.load_ptwl_dialog, "primary", 84),
+            ("保存", self.save_ptwl_dialog, "success", 68),
+            ("全部标记为已复核", self.mark_ai_reviewed, "secondary", 118),
         ]
-        footer_actions.extend([
-            (text, command, tone, 178 if "导入文本" in text else (96 if "Agent" in text else (135 if "同步" in text else 104)))
-            for text, command, tone in self.bottom_actions
-        ])
-        spacer_col = len(footer_actions)
-        footer.grid_columnconfigure(spacer_col, weight=1)
-        for idx, (text, command, tone, width) in enumerate(footer_actions):
-            self._button(footer, text, command, tone, width=width).grid(row=0, column=idx, padx=(10 if idx == 0 else 0, 8), pady=10, sticky="w")
-        self._button(footer, "更多", self.show_more_actions, "secondary", width=72).grid(row=0, column=spacer_col + 1, padx=(0, 10), pady=10, sticky="e")
+        extra_actions = []
+        for text, command, tone in self.bottom_actions:
+            disp_text = "导入文本并转换" if "导入文本" in text else ("复制Agent提示词" if "Agent" in text else text)
+            btn_w = 110 if "导入" in disp_text else (104 if "Agent" in disp_text else 96)
+            extra_actions.append((disp_text, command, tone, btn_w))
+
+        doc_btns = [self._button(footer, text, cmd, tone, width=w, height=30) for text, cmd, tone, w in doc_actions]
+        extra_btns = [self._button(footer, text, cmd, tone, width=w, height=30) for text, cmd, tone, w in extra_actions]
+        more_btn = self._button(footer, "更多", self.show_more_actions, "secondary", width=64, height=30)
+
+        layout_mode = [None]
+
+        def _relayout_footer(event=None):
+            w = event.width if event else footer.winfo_width()
+            if w <= 100:
+                mode = "single"
+            else:
+                mode = "single" if w >= 720 else "two_row"
+            if mode == layout_mode[0]:
+                return
+            layout_mode[0] = mode
+            for b in doc_btns + extra_btns + [more_btn]:
+                b.grid_forget()
+            for col in range(12):
+                footer.grid_columnconfigure(col, weight=0)
+
+            if mode == "single":
+                col = 0
+                for b in doc_btns:
+                    b.grid(row=0, column=col, padx=(10 if col == 0 else 0, 6), pady=8, sticky="w")
+                    col += 1
+                for b in extra_btns:
+                    b.grid(row=0, column=col, padx=(0, 6), pady=8, sticky="w")
+                    col += 1
+                footer.grid_columnconfigure(col, weight=1)
+                more_btn.grid(row=0, column=col + 1, padx=(0, 10), pady=8, sticky="e")
+            else:
+                col = 0
+                for b in doc_btns:
+                    b.grid(row=0, column=col, padx=(10 if col == 0 else 0, 6), pady=(8, 4), sticky="w")
+                    col += 1
+                footer.grid_columnconfigure(col, weight=1)
+                more_btn.grid(row=0, column=col + 1, padx=(0, 10), pady=(8, 4), sticky="e")
+                col = 0
+                for b in extra_btns:
+                    b.grid(row=1, column=col, padx=(10 if col == 0 else 0, 6), pady=(0, 8), sticky="w")
+                    col += 1
+
+        footer.bind("<Configure>", _relayout_footer)
+        _relayout_footer()
 
     def _property_entry(self, parent, label, variable):
         label_widget = ctk.CTkLabel(parent, text=label, font=self.font_small, text_color=self.colors["muted"])
@@ -1066,16 +1151,26 @@ class VisualWordlistEditor(ctk.CTkFrame):
             return None
 
     def import_csv_dialog(self):
-        popup = ctk.CTkToplevel(self)
+        parent = self.winfo_toplevel()
+        popup = ctk.CTkToplevel(parent)
         popup.title("导入字表文本")
-        popup.geometry("620x460")
+        popup.geometry("620x464")
         popup.configure(fg_color=self.colors.get("surface", "#FFFFFF"))
-        popup.transient(self.winfo_toplevel())
+        popup.transient(parent)
         popup.grab_set()
+
+        # 顶部 4px 品牌蓝装饰条
+        ctk.CTkFrame(popup, height=4, fg_color=self.colors.get("primary", "#2563EB"), corner_radius=0).pack(fill=tk.X, side=tk.TOP)
+
         popup.update_idletasks()
-        x = self.winfo_toplevel().winfo_rootx() + 90
-        y = self.winfo_toplevel().winfo_rooty() + 70
-        popup.geometry(f"+{x}+{y}")
+        pw = parent.winfo_width()
+        ph = parent.winfo_height()
+        px = parent.winfo_rootx()
+        py = parent.winfo_rooty()
+        w, h = 620, 464
+        x = px + max(0, (pw - w) // 2)
+        y = py + max(0, (ph - h) // 2)
+        popup.geometry(f"{w}x{h}+{x}+{y}")
 
         ctk.CTkLabel(
             popup,

@@ -80,7 +80,7 @@ class SpectrogramPanel:
         frame_tune = ctk.CTkFrame(top_bar, fg_color="#F9FAFB", corner_radius=8)
         frame_tune.pack(side=tk.TOP, fill=tk.X, pady=(0, 10))
         ctk.CTkLabel(frame_tune, text="区间(s):", font=self.font_title, text_color="#111827").pack(side=tk.LEFT, padx=(10, 10), pady=10)
-        ctk.CTkLabel(frame_tune, text=" 起:", image=self.icons.get("play"), compound="left").pack(side=tk.LEFT)
+        ctk.CTkLabel(frame_tune, text=" 起:").pack(side=tk.LEFT)
         self.var_t_start = ctk.StringVar(value="0.000")
         self.entry_t_start = ctk.CTkEntry(frame_tune, textvariable=self.var_t_start, width=70, corner_radius=20, height=28)
         self.entry_t_start.pack(side=tk.LEFT, padx=(5, 10))
@@ -110,7 +110,7 @@ class SpectrogramPanel:
         frame_actions = ctk.CTkFrame(top_bar, fg_color="transparent")
         frame_actions.pack(side=tk.TOP, fill=tk.X, pady=(5, 0))
 
-        CTkReleaseButton(frame_actions, text="自动识别", image=self.icons.get("bulb"), compound="left", command=self.apply_auto_detect, corner_radius=20, height=36, width=110, fg_color="#FEE2E2", text_color="#DC2626", hover_color="#FCA5A5").pack(side=tk.LEFT, padx=(0, 20))
+        CTkReleaseButton(frame_actions, text="自动识别", image=self.icons.get("bulb"), compound="left", command=self.apply_auto_detect, corner_radius=20, height=36, width=110, fg_color=("#EEF2FF", "#312E81"), text_color=("#4338CA", "#A5B4FC"), hover_color=("#E0E7FF", "#3730A3")).pack(side=tk.LEFT, padx=(0, 20))
 
         # 橡皮擦模式按钮
         self.btn_eraser = CTkReleaseButton(
@@ -134,16 +134,16 @@ class SpectrogramPanel:
         # 导出按钮 (使用 ctk.CTkButton，实现即时按键响应)
         ctk.CTkButton(frame_actions, text=" 导出", image=self.icons.get("save"), compound="left", command=self.on_export_callback, font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold"), corner_radius=20, height=36, width=60, fg_color="#10B981", hover_color="#059669").pack(side=tk.RIGHT)
 
+        status_frame = ctk.CTkFrame(frame_actions, fg_color=("#F1F5F9", "#1E293B"), corner_radius=15, height=30)
+        status_frame.pack(side=tk.RIGHT, padx=(0, 24), pady=3)
         ctk.CTkLabel(
-            frame_actions,
+            status_frame,
             textvariable=self.playback_status_var,
-            font=ctk.CTkFont(family="Consolas", size=12),
-            text_color="#334155",
-            fg_color="#F8FAFC",
-            corner_radius=14,
-            height=30,
-            width=210
-        ).pack(side=tk.RIGHT, padx=(0, 24), pady=3)
+            font=ctk.CTkFont(family="Microsoft YaHei", size=12),
+            text_color=("#334155", "#94A3B8"),
+            fg_color="transparent",
+            corner_radius=0
+        ).pack(padx=12, pady=3)
 
         self.fig = plt.Figure(figsize=(7, 5), facecolor='white')
         self.ax = self.fig.add_subplot(111)
@@ -160,13 +160,13 @@ class SpectrogramPanel:
         self.canvas.mpl_connect('draw_event', self.on_draw)
 
         # --- Bottom bar for Project Management ---
-        bottom_bar = ctk.CTkFrame(center_frame, fg_color="#F9FAFB", corner_radius=8, height=36)
+        bottom_bar = ctk.CTkFrame(center_frame, fg_color="#F9FAFB", corner_radius=12, height=36)
         bottom_bar.pack(side=tk.BOTTOM, fill=tk.X, padx=15, pady=(5, 5))
 
         CTkReleaseButton(bottom_bar, text=" 导入工程", image=self.icons.get("import"), compound="left", command=self.on_import_project_clicked, corner_radius=15, height=30, fg_color="#E5E7EB", text_color="#1F2937", hover_color="#D1D5DB").pack(side=tk.LEFT, padx=(10, 5), pady=5)
         CTkReleaseButton(bottom_bar, text=" 导出工程", image=self.icons.get("save_black"), compound="left", command=self.on_export_project_clicked, corner_radius=15, height=30, fg_color="#E5E7EB", text_color="#1F2937", hover_color="#D1D5DB").pack(side=tk.LEFT, padx=5, pady=5)
 
-        self.switch_auto_save = ctk.CTkSwitch(bottom_bar, text="自动保存", font=ctk.CTkFont(family="Microsoft YaHei", size=12), progress_color="#10B981", command=self.on_auto_save_toggled)
+        self.switch_auto_save = ctk.CTkSwitch(bottom_bar, text="自动保存", font=ctk.CTkFont(family="Microsoft YaHei", size=12), progress_color="#2563EB", command=self.on_auto_save_toggled)
         if self.app and getattr(self.app, 'project_manager', None) and self.app.project_manager.auto_save_enabled:
             self.switch_auto_save.select()
         else:
@@ -176,7 +176,7 @@ class SpectrogramPanel:
         self.setup_playback_controls(center_frame)
 
     def setup_playback_controls(self, center_frame):
-        playback_bar = ctk.CTkFrame(center_frame, fg_color="#F8FAFC", corner_radius=18, height=44)
+        playback_bar = ctk.CTkFrame(center_frame, fg_color="#F8FAFC", corner_radius=12, height=44)
         playback_bar.pack(side=tk.BOTTOM, fill=tk.X, padx=15, pady=(2, 5))
         playback_bar.pack_propagate(False)
 
@@ -695,7 +695,7 @@ class SpectrogramPanel:
 
             if i < len(syls):
                 cx = (c_start + c_end) / 2
-                txt = self.ax.text(cx, 4800, syls[i], color='#111827', fontsize=12, ha='center', va='top', fontweight='bold', bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.7))
+                txt = self.ax.text(cx, 0.94, syls[i], transform=self.ax.get_xaxis_transform(), color='#111827', fontsize=12, ha='center', va='top', fontweight='bold', bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.7))
                 self.char_texts.append(txt)
 
         if self.cursor_x is None:
@@ -710,13 +710,16 @@ class SpectrogramPanel:
         )
         self.cursor_text = self.ax.text(
             self.cursor_x,
-            5000,
+            0.98,
             f"{self.cursor_x:.3f}",
-            color='#1B5E20',
+            transform=self.ax.get_xaxis_transform(),
+            color='#065F46',
             fontsize=11,
             ha='center',
-            va='bottom',
+            va='top',
             fontweight='bold',
+            fontfamily="Microsoft YaHei",
+            bbox=dict(boxstyle="round,pad=0.2", fc="#ECFDF5", ec="#10B981", lw=0.8, alpha=0.92),
             zorder=10,
             animated=True
         )
@@ -812,7 +815,7 @@ class SpectrogramPanel:
     def update_cursor_graphics(self, prefer_blit=False):
         if not self.cursor_line or not self.cursor_text: return
         self.cursor_line.set_xdata([self.cursor_x, self.cursor_x])
-        self.cursor_text.set_position((self.cursor_x, 5000))
+        self.cursor_text.set_position((self.cursor_x, 0.98))
         self.cursor_text.set_text(f"{self.cursor_x:.3f}")
         self._update_playback_status()
         if prefer_blit or self.is_playing:
@@ -835,6 +838,10 @@ class SpectrogramPanel:
 
     def on_motion(self, event):
         if not self.ax or not self.current_item: return
+
+        if (self.dragging or self.erasing) and getattr(event, 'button', None) != 1:
+            self.on_release(event)
+            return
 
         if self.eraser_mode:
             self.canvas.get_tk_widget().config(cursor="crosshair")
@@ -905,11 +912,20 @@ class SpectrogramPanel:
                 self.canvas.draw_idle()
             return
 
-        if event.xdata is None:
+        xdata = event.xdata
+        if xdata is None and event.x is not None:
+            try:
+                calc_x = self.ax.transData.inverted().transform((event.x, 0))[0]
+                xlim = self.ax.get_xlim()
+                xdata = float(np.clip(calc_x, min(xlim), max(xlim)))
+            except Exception:
+                xdata = None
+
+        if xdata is None:
             return
 
         if self.dragging == 'play_select':
-            current_t = self._clamp_time_to_item(event.xdata)
+            current_t = self._clamp_time_to_item(xdata)
             if current_t is None:
                 return
             self._set_cursor_position(current_t)
@@ -925,11 +941,20 @@ class SpectrogramPanel:
                 self.dragging = None
                 return
             if bound_type == 'start':
-                chars_bounds[idx][0] = min(event.xdata, chars_bounds[idx][1] - 0.01)
+                min_val = chars_bounds[idx - 1][1] if idx > 0 else 0.0
+                max_val = chars_bounds[idx][1] - 0.01
+                if min_val > max_val:
+                    min_val = max_val
+                chars_bounds[idx][0] = float(np.clip(xdata, min_val, max_val))
                 self.cursor_x = chars_bounds[idx][0]
                 self.cursor_char_index = idx
             elif bound_type == 'end':
-                chars_bounds[idx][1] = max(event.xdata, chars_bounds[idx][0] + 0.01)
+                min_val = chars_bounds[idx][0] + 0.01
+                max_xlim = max(self.ax.get_xlim()) if self.ax else 999999.0
+                max_val = chars_bounds[idx + 1][0] if (idx + 1 < len(chars_bounds)) else max_xlim
+                if min_val > max_val:
+                    max_val = min_val
+                chars_bounds[idx][1] = float(np.clip(xdata, min_val, max_val))
                 self.cursor_x = chars_bounds[idx][1]
                 self.cursor_char_index = idx
 
@@ -942,10 +967,10 @@ class SpectrogramPanel:
             # Update the cursor line and text coordinates in real-time
             if self.cursor_line and self.cursor_text:
                 self.cursor_line.set_xdata([self.cursor_x, self.cursor_x])
-                self.cursor_text.set_position((self.cursor_x, 5000))
+                self.cursor_text.set_position((self.cursor_x, 0.98))
                 self.cursor_text.set_text(f"{self.cursor_x:.3f}")
         elif self.dragging == 'cursor':
-            self._set_cursor_position(event.xdata)
+            self._set_cursor_position(xdata)
             return
 
         self.update_lines()
@@ -1025,7 +1050,7 @@ class SpectrogramPanel:
 
             if i < len(self.char_texts):
                 cx = (c_s + c_e) / 2
-                self.char_texts[i].set_position((cx, 4800))
+                self.char_texts[i].set_position((cx, 0.94))
 
         self.canvas.draw_idle()
 

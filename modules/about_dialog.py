@@ -23,7 +23,7 @@ class AboutDialog(ctk.CTkToplevel):
         y = (screen_height - height) // 2
         self.geometry(f"{width}x{height}+{x}+{y}")
         
-        self.configure(fg_color=("#FFFFFF", "#1A1D24"))  # 浅色模式纯白，暗色模式深海蓝
+        self.configure(fg_color=("#F8FAFC", "#0F172A"))  # 浅色模式纯白，暗色模式深海蓝
         
         # 模态对话框
         self.transient(parent)
@@ -31,7 +31,7 @@ class AboutDialog(ctk.CTkToplevel):
         self.focus_set()
         
         # 顶部装饰线条
-        accent_strip = ctk.CTkFrame(self, height=4, fg_color="#3B82F6", corner_radius=0)
+        accent_strip = ctk.CTkFrame(self, height=4, fg_color="#2563EB", corner_radius=0)
         accent_strip.pack(fill="x", side="top")
         
         self.setup_ui()
@@ -68,7 +68,7 @@ class AboutDialog(ctk.CTkToplevel):
                 card, 
                 text=APP_NAME[0], 
                 font=ctk.CTkFont(family="Segoe UI Black", size=48, weight="bold"), 
-                text_color="#FF2A6D"
+                text_color="#2563EB"
             )
             lbl_logo.pack(pady=(15, 5))
             
@@ -187,9 +187,9 @@ class AboutDialog(ctk.CTkToplevel):
             width=110,
             height=32,
             corner_radius=16,
-            fg_color=("#3B82F6", "#2563EB"),
+            fg_color="#2563EB",
             text_color="white",
-            hover_color=("#2563EB", "#1D4ED8"),
+            hover_color="#1D4ED8",
             font=ctk.CTkFont(family="Microsoft YaHei", size=12, weight="bold"),
             command=self.check_update
         )

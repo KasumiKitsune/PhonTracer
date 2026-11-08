@@ -10,7 +10,10 @@ export default function PlainWordlistModal({ isOpen, initialText = '', initialTi
   const [sourceTitle, setSourceTitle] = useState(initialTitle);
   const [message, setMessage] = useState('');
   const fileInputRef = useRef(null);
-  const previewGroups = useMemo(() => parsePlainWordlist(text, () => 'preview'), [text]);
+  const previewGroups = useMemo(() => {
+    let seq = 0;
+    return parsePlainWordlist(text, () => `preview_${++seq}`);
+  }, [text]);
   const itemCount = countPlainWordlist(previewGroups);
 
   if (!isOpen) return null;

@@ -253,22 +253,38 @@ def looks_like_structured_wordlist_text(text: str) -> bool:
     return False
 
 
+def _strip_markdown_code_fence(text: str) -> str:
+    if not isinstance(text, str):
+        return "" if text is None else str(text)
+    t = text.strip()
+    if t.startswith("```"):
+        lines = t.splitlines()
+        if len(lines) >= 2 and lines[-1].strip() == "```":
+            return "\n".join(lines[1:-1]).strip()
+        elif len(lines) >= 1:
+            return "\n".join(lines[1:]).strip()
+    return t
+
+
 def looks_like_csv_wordlist_text(text: str) -> bool:
-    for raw_line in (text or "").splitlines():
+    clean_text = _strip_markdown_code_fence(text)
+    word_headers = {"label", "词项", "字词", "word", "item"}
+    meta_group_headers = {
+        "group", "组名", "组别", "group_name", "组备注", "group_note",
+        "tags", "tag", "标签", "词项标签", "组标签", "aliases", "别名",
+        "pinyin", "拼音", "ipa", "国际音标", "tone", "声调", "rhyme", "韵母",
+        "note", "备注", "词项备注"
+    }
+    for raw_line in (clean_text or "").splitlines():
         line = raw_line.strip().lstrip("\ufeff")
         if not line:
             continue
-        lower = line.lower()
         if "," not in line:
             return False
         headers = [part.strip().strip('"').strip("'").lower() for part in line.split(",")]
-        known_headers = {
-            "group", "组名", "组别", "group_name",
-            "label", "词项", "字词", "word", "item",
-            "tags", "tag", "标签", "词项标签", "组标签", "aliases", "别名",
-            "pinyin", "拼音", "tone", "声调", "rhyme", "韵母",
-        }
-        return any(header in known_headers or header.startswith("meta.") for header in headers) or "label" in lower or "词项" in line
+        has_word = any(h in word_headers for h in headers)
+        has_meta = any(h in meta_group_headers or h.startswith("meta.") for h in headers)
+        return has_word and has_meta
     return False
 
 
@@ -495,7 +511,8 @@ def document_to_v1_text(doc: Dict[str, Any]) -> str:
 
 
 def build_document_from_csv_text(csv_text: str, title: str = "从表格导入") -> Dict[str, Any]:
-    stream = io.StringIO(csv_text or "")
+    clean_csv = _strip_markdown_code_fence(csv_text)
+    stream = io.StringIO(clean_csv or "")
     reader = csv.DictReader(stream)
     doc = create_empty_wordlist_document(title=title)
     doc["groups"] = []

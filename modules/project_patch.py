@@ -43,6 +43,10 @@ ALLOWED_ITEM_FIELDS = {
     "item_tags",
     "item_aliases",
     "item_meta",
+    "note",
+    "tags",
+    "aliases",
+    "meta",
     "metadata_source",
     "is_excluded",
     "exclusion_reason",
@@ -246,6 +250,11 @@ def _sanitize_for_json(val):
 
 
 def _save_project_state(workspace_dir, state):
+    if isinstance(state.get("groups"), list) and isinstance(state.get("speakers"), dict):
+        try:
+            _project_manager_for_validation(workspace_dir)._sync_speakers_to_groups(state, state["speakers"])
+        except Exception:
+            pass
     project_json = os.path.join(workspace_dir, "project.json")
     tmp_path = project_json + ".tmp"
     sanitized = _sanitize_for_json(to_json_serializable(state))
@@ -443,6 +452,10 @@ def _apply_set_item_fields(state, _workspace_dir, op, records, **kwargs):
     boundary_changed = bool(set(fields) & {"start", "end", "inner_splits", "chars_bounds"})
     for key, value in fields.items():
         item[key] = copy.deepcopy(value)
+        if key in ("item_note", "item_tags", "item_aliases", "item_meta"):
+            item[key[5:]] = copy.deepcopy(value)
+        elif key in ("note", "tags", "aliases", "meta"):
+            item["item_" + key] = copy.deepcopy(value)
     if boundary_changed:
         _clear_analysis_cache_refs(item)
     records.append({"op": "set_item_fields", "label": item.get("label", ""), "field_count": len(fields)})
@@ -640,16 +653,32 @@ def _split_csv_list_value(value):
 
 
 def _apply_mapped_field(item, field_name, value):
-    if field_name.startswith("item_meta."):
+    if field_name.startswith("item_meta.") or field_name.startswith("meta."):
         meta_key = field_name.split(".", 1)[1].strip()
         if not meta_key:
             return
         item.setdefault("item_meta", {})
+        item.setdefault("meta", {})
         if isinstance(item["item_meta"], dict):
             item["item_meta"][meta_key] = value
+        if isinstance(item.get("meta"), dict):
+            item["meta"][meta_key] = value
         return
     if field_name in ("item_tags", "group_tags", "item_aliases"):
-        item[field_name] = _split_csv_list_value(value)
+        val_list = _split_csv_list_value(value)
+        item[field_name] = val_list
+        if field_name.startswith("item_"):
+            item[field_name[5:]] = copy.deepcopy(val_list)
+        return
+    if field_name in ("tags", "aliases"):
+        val_list = _split_csv_list_value(value)
+        item[field_name] = val_list
+        item["item_" + field_name] = copy.deepcopy(val_list)
+        return
+    if field_name in ("item_note", "note"):
+        s = "" if value is None else str(value).strip()
+        item["item_note"] = s
+        item["note"] = s
         return
     if field_name == "group_note":
         item["group_note"] = "" if value is None else str(value).strip()

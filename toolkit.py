@@ -43,7 +43,8 @@ def _parse_script_meta_comment_line(line):
 
 
 def strip_markdown_code_fence(code):
-    """自动剥离脚本首尾可能附带的 ```python ... ``` 或 ``` ... ``` 代码块围栏。"""
+    """自动剥离脚本首尾可能附带的 ```python ... ``` 或 ``` ... ``` 代码块围栏。
+    若包含自然语言开场白且包含 ```python ... ``` 围栏块，亦自动安全提取。"""
     if not isinstance(code, str):
         return "" if code is None else str(code)
     text = code.strip()
@@ -59,6 +60,14 @@ def strip_markdown_code_fence(code):
         return "\n".join(body).strip("\r\n")
     if lines and lines[-1].strip() == "```":
         return "\n".join(lines[:-1]).strip("\r\n")
+    m = re.search(r"```(?:python)?\s*\r?\n(.*?)\r?\n```", text, re.DOTALL)
+    if m:
+        extracted = m.group(1).strip("\r\n")
+        try:
+            compile(extracted, "<extracted_check>", "exec")
+            return extracted
+        except SyntaxError:
+            pass
     return code
 
 
@@ -627,33 +636,49 @@ class ToolkitApp(ctk.CTk):
             icon_path = os.path.join(os.path.dirname(__file__), "assets", "icons")
 
         self.icons = {}
+        self._icon_dark_map = {}
         icon_files = {
             "audio": "audio_file.png", "cut": "cut.png", "batch": "batch.png",
             "eye": "eye.png", "list": "list.png", "plus": "plus.png",
             "play": "play.png", "save": "save.png", "check": "check.png",
             "warning": "warning.png", "import": "import_file.png",
             "import_white": "import_white.png", "tab_batch": "tab_batch.png",
-            "pause": "pause.png", "copy": "copy_icon.png"
+            "pause": "pause.png", "copy": "copy_icon.png",
+            "folder": "folder_open.png", "refresh": "status_loading.png"
         }
 
         def make_white(img):
             img = img.convert("RGBA")
             data = np.array(img)
-            # 将所有非透明像素变为白色
             alpha = data[:, :, 3]
             data[alpha > 0, 0:3] = 255
+            return Image.fromarray(data)
+
+        def make_dark(img):
+            img = img.convert("RGBA")
+            data = np.array(img)
+            alpha = data[:, :, 3]
+            data[alpha > 0, 0] = 51   # 0x33
+            data[alpha > 0, 1] = 65   # 0x41
+            data[alpha > 0, 2] = 85   # 0x55 -> #334155
             return Image.fromarray(data)
 
         for key, filename in icon_files.items():
             path = os.path.join(icon_path, filename)
             if os.path.exists(path):
                 img = Image.open(path)
-                # 对于按钮上使用的图标，我们统一生成白色版本以确保协调
-                if key in ["plus", "save", "check", "warning", "audio", "eye", "import_white", "tab_batch", "list", "pause", "copy"]:
-                    img = make_white(img)
-                self.icons[key] = ctk.CTkImage(light_image=img, dark_image=img, size=(20, 20))
+                img_white = make_white(img)
+                img_dark = make_dark(img)
+                ctk_white = ctk.CTkImage(light_image=img_white, dark_image=img_white, size=(20, 20))
+                ctk_dark = ctk.CTkImage(light_image=img_dark, dark_image=img_dark, size=(20, 20))
+                self.icons[key] = ctk_white
+                self.icons[f"{key}_white"] = ctk_white
+                self.icons[f"{key}_dark"] = ctk_dark
+                self._icon_dark_map[ctk_white] = ctk_dark
             else:
                 self.icons[key] = None
+                self.icons[f"{key}_white"] = None
+                self.icons[f"{key}_dark"] = None
 
         # 加载软件 Logo
         logo_path = os.path.join(os.path.dirname(__file__), "assets", "toolkit.png")
@@ -679,6 +704,9 @@ class ToolkitApp(ctk.CTk):
 
     def _make_button(self, parent, text, command, tone="primary", image=None, width=None, height=42, **kwargs):
         fg, hover, text_color = self._button_colors(tone)
+        if tone in ("secondary", "ghost") and image is not None:
+            if hasattr(self, "_icon_dark_map") and image in self._icon_dark_map:
+                image = self._icon_dark_map[image]
         options = {
             "text": text,
             "command": command,
@@ -906,7 +934,7 @@ class ToolkitApp(ctk.CTk):
             segmented_button_selected_hover_color=self.colors["primary_hover"],
             segmented_button_unselected_color="#E2E8F0",
             segmented_button_unselected_hover_color="#CBD5E1",
-            text_color="#000000",
+            text_color="#334155",
             text_color_disabled=self.colors["muted_soft"],
         )
         self.tabview.grid(row=0, column=0, sticky="nsew")
@@ -931,7 +959,7 @@ class ToolkitApp(ctk.CTk):
         orig_sel = sb._select_button_by_value
         orig_unsel = sb._unselect_button_by_value
         sb._select_button_by_value = lambda v: (orig_sel(v), sb._buttons_dict[v].configure(text_color="#FFFFFF") if v in sb._buttons_dict else None)
-        sb._unselect_button_by_value = lambda v: (orig_unsel(v), sb._buttons_dict[v].configure(text_color="#000000") if v in sb._buttons_dict else None)
+        sb._unselect_button_by_value = lambda v: (orig_unsel(v), sb._buttons_dict[v].configure(text_color="#334155") if v in sb._buttons_dict else None)
 
         # Ensure initial tab text is white
         curr_val = sb.get()
@@ -1523,7 +1551,7 @@ class ToolkitApp(ctk.CTk):
 
         actions = ctk.CTkFrame(self.export_body, fg_color="transparent")
         actions.pack(side=tk.BOTTOM, fill=tk.X, padx=20, pady=20)
-        self._make_button(actions, "刷新预览", self.refresh_textgrid_preview, tone="secondary", height=36).pack(fill=tk.X)
+        self._make_button(actions, " 刷新预览", self.refresh_textgrid_preview, tone="secondary", image=self.icons.get("refresh_dark"), height=36).pack(fill=tk.X)
 
     def select_textgrid_source(self):
         paths = filedialog.askopenfilenames(
@@ -2844,7 +2872,7 @@ class ToolkitApp(ctk.CTk):
         self.btn_copy_prompt = self._make_button(control_frame, " 复制提示词", self.show_prompt_dialog, tone="purple", image=self.icons.get("copy"), height=36)
         self.btn_copy_prompt.pack(side=tk.LEFT, padx=(0, 10))
 
-        self.btn_open_script_output = self._make_button(control_frame, "打开目录", self.open_script_output_dir, tone="secondary", height=36)
+        self.btn_open_script_output = self._make_button(control_frame, " 打开目录", self.open_script_output_dir, tone="secondary", image=self.icons.get("folder_dark"), height=36)
         self.btn_open_script_output.pack(side=tk.LEFT, padx=(0, 10))
         self.btn_open_script_output.configure(state="disabled")
 
@@ -2918,14 +2946,14 @@ class ToolkitApp(ctk.CTk):
         log_title_lbl = ctk.CTkLabel(log_header_frame, text="运行日志:", font=ctk.CTkFont(family=self.font_family, size=11, weight="bold"), text_color=self.colors["muted"])
         log_title_lbl.pack(side=tk.LEFT, anchor="w")
 
-        # 复制按钮
+        # 复制按钮 (胶囊样式)
         self.btn_copy_log = ctk.CTkButton(
             log_header_frame,
             text="复制",
-            width=40,
-            height=20,
-            font=ctk.CTkFont(family=self.font_family, size=10),
-            corner_radius=4,
+            width=54,
+            height=24,
+            font=ctk.CTkFont(family=self.font_family, size=11),
+            corner_radius=12,
             fg_color=self.colors["primary_soft"],
             text_color=self.colors["primary"],
             hover_color=self.colors["border_strong"],
@@ -4878,12 +4906,7 @@ class ScriptEditorDialog(ctk.CTkToplevel):
         self._metadata_parse_after_id = None
         code = self.txt_code.get("1.0", tk.END)
         stripped_code = strip_markdown_code_fence(code)
-        if stripped_code != code.strip() and code.strip().startswith("```"):
-            self.txt_code.delete("1.0", tk.END)
-            self.txt_code.insert("1.0", stripped_code)
-            self._refresh_code_line_numbers()
-            code = stripped_code
-        metadata = parse_script_metadata_comments(code)
+        metadata = parse_script_metadata_comments(stripped_code)
 
         name = metadata.get("name", "").strip()
         if name and self._can_autofill_field(self.entry_name, SCRIPT_EDITOR_DEFAULT_NAME, self._auto_filled_name):
@@ -5093,10 +5116,10 @@ class AIPromptDialog(ctk.CTkToplevel):
         self.btn_copy_prompt_preview = ctk.CTkButton(
             preview_header,
             text="复制",
-            width=40,
-            height=20,
-            font=ctk.CTkFont(family=self.font_family, size=10),
-            corner_radius=4,
+            width=54,
+            height=24,
+            font=ctk.CTkFont(family=self.font_family, size=11),
+            corner_radius=12,
             fg_color=self.colors["primary_soft"],
             text_color=self.colors["primary"],
             hover_color=self.colors["border_strong"],
@@ -5366,10 +5389,10 @@ class AIPromptDialog(ctk.CTkToplevel):
         self.btn_copy_prompt_preview = ctk.CTkButton(
             preview_header,
             text="复制",
-            width=40,
-            height=20,
-            font=ctk.CTkFont(family=self.font_family, size=10),
-            corner_radius=4,
+            width=54,
+            height=24,
+            font=ctk.CTkFont(family=self.font_family, size=11),
+            corner_radius=12,
             fg_color=self.colors["primary_soft"],
             text_color=self.colors["primary"],
             hover_color=self.colors["border_strong"],

@@ -1015,20 +1015,7 @@ class AcousticChartExporter:
                 pass
 
         if truncated:
-            if getattr(self, 'is_minimized', False):
-                pass
-            else:
-                fig.subplots_adjust(top=0.88)
-                if is_paginated_heatmap:
-                    current_page_rows = pagination_state['pages'][P] if P < len(pagination_state['pages']) else []
-                    tg_name = current_page_rows[0]['group'] if current_page_rows else ""
-                    fig.text(0.56, 0.96, f"[预览提示] 附录图册模式已自动分页。当前第 {P+1}/{total_pages} 页 (组别: {tg_name}，包含 {len(current_page_rows)} 个词语)。",
-                         ha='center', va='center', fontsize=9, color='#991B1B', weight='bold',
-                             bbox=dict(facecolor='#FEF2F2', edgecolor='#FCA5A5', boxstyle='round,pad=0.4'))
-                else:
-                    fig.text(0.56, 0.96, f"[预览提示] 当前共 {total_groups} 组，分 {total_pages} 页显示。当前预览第 {P+1} 页（显示第 {start_idx+1}~{end_idx} 组）。导出时将自动分页/完整输出。",
-                         ha='center', va='center', fontsize=9, color='#991B1B', weight='bold',
-                             bbox=dict(facecolor='#FEF2F2', edgecolor='#FCA5A5', boxstyle='round,pad=0.4'))
+            pass
 
         return fig
 
@@ -3893,23 +3880,52 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         self.grid_rowconfigure(0, weight=1)
 
         # --- LEFT SIDE: Scrollable Configuration Frame ---
-        self.left_scroll = ctk.CTkScrollableFrame(self, width=400, label_text="📊 图表设置", label_font=self.font_title, fg_color=("#F9FAFB", "#2D3748"))
+        self.left_scroll = ctk.CTkScrollableFrame(self, width=400, fg_color=("#F9FAFB", "#2D3748"))
         self.left_scroll.grid(row=0, column=0, sticky="nsew", padx=(15, 10), pady=15)
+        ctk.CTkLabel(self.left_scroll, text="📊 图表设置", font=self.font_title, text_color=("#111827", "#F9FAFB"), anchor="w").pack(fill=tk.X, padx=15, pady=(10, 5))
 
         self._build_settings_cards()
 
         # --- RIGHT SIDE: Real-time Live Preview & Action Buttons ---
         self.right_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.right_frame.grid(row=0, column=1, sticky="nsew", padx=(10, 15), pady=15)
-        self.right_frame.grid_rowconfigure(0, weight=1)
-        self.right_frame.grid_rowconfigure(1, weight=0)
+        self.right_frame.grid_rowconfigure(0, weight=0)
+        self.right_frame.grid_rowconfigure(1, weight=1)
         self.right_frame.grid_rowconfigure(2, weight=0)
         self.right_frame.grid_rowconfigure(3, weight=0)
+        self.right_frame.grid_rowconfigure(4, weight=0)
         self.right_frame.grid_columnconfigure(0, weight=1)
+
+        # Top Bar for floating button and native truncation banner
+        self.preview_top_bar = ctk.CTkFrame(self.right_frame, fg_color="transparent")
+        self.preview_top_bar.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+
+        self.btn_toggle_minimize = ctk.CTkButton(
+            self.preview_top_bar, text="📌 悬浮模式", width=90, height=26, corner_radius=13,
+            font=self.font_small, fg_color=("#E5E7EB", "#374151"), text_color=("#374151", "#E5E7EB"),
+            hover_color=("#D1D5DB", "#4B5563"), bg_color="transparent", command=self.toggle_minimize
+        )
+        self.btn_toggle_minimize.pack(side=tk.LEFT)
+
+        self.truncation_banner_frame = ctk.CTkFrame(
+            self.preview_top_bar,
+            fg_color=("#FEF2F2", "#450A0A"),
+            corner_radius=12,
+            height=26
+        )
+        self.lbl_truncation_banner = ctk.CTkLabel(
+            self.truncation_banner_frame,
+            text="",
+            font=ctk.CTkFont(family="Microsoft YaHei", size=11, weight="bold"),
+            fg_color="transparent",
+            text_color=("#991B1B", "#FCA5A5"),
+            height=26
+        )
+        self.lbl_truncation_banner.pack(padx=10, fill=tk.BOTH, expand=True)
 
         # Preview Canvas Container wrapped to maintain target aspect ratio
         self.preview_wrapper = ctk.CTkFrame(self.right_frame, fg_color="transparent")
-        self.preview_wrapper.grid(row=0, column=0, sticky="nsew", pady=(0, 15))
+        self.preview_wrapper.grid(row=1, column=0, sticky="nsew", pady=(0, 15))
         self.preview_wrapper.grid_rowconfigure(0, weight=1)
         self.preview_wrapper.grid_columnconfigure(0, weight=1)
 
@@ -3923,14 +3939,6 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
 
         self.preview_lbl = ctk.CTkLabel(self.preview_container, text="正在加载图表预览...", font=self.font_title, text_color="#6B7280")
         self.preview_lbl.grid(row=0, column=0)
-
-        # Minimize / Restore button overlay on preview_container
-        self.btn_toggle_minimize = ctk.CTkButton(
-            self.preview_container, text="📌 悬浮模式", width=90, height=26, corner_radius=13,
-            font=self.font_small, fg_color=("#E5E7EB", "#374151"), text_color=("#374151", "#E5E7EB"),
-            hover_color=("#D1D5DB", "#4B5563"), bg_color="transparent", command=self.toggle_minimize
-        )
-        self.btn_toggle_minimize.place(x=10, y=10)
 
         self._bind_chart_context_menu(self.preview_container)
 
@@ -3966,17 +3974,20 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         self.group_pagination_frame.grid_columnconfigure(2, weight=1)
 
         self.btn_prev_group_page = ctk.CTkButton(
-            self.group_pagination_frame, text="◀", width=120, height=30, corner_radius=15,
+            self.group_pagination_frame, text="◀ 上一页", width=88, height=30, corner_radius=15,
             fg_color=("#F3F4F6", "#374151"), text_color=("#374151", "#E5E7EB"), hover_color=("#E5E7EB", "#4B5563"),
             font=self.font_main, command=self._prev_group_page
         )
         self.btn_prev_group_page.grid(row=0, column=0, padx=10, sticky="e")
 
-        self.lbl_group_page_info = ctk.CTkLabel(self.group_pagination_frame, text="组别页码: - (0/0)", font=self.font_title)
+        self.lbl_group_page_info = ctk.CTkLabel(
+            self.group_pagination_frame, text="组别页码: - (0/0)",
+            font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold")
+        )
         self.lbl_group_page_info.grid(row=0, column=1, padx=20)
 
         self.btn_next_group_page = ctk.CTkButton(
-            self.group_pagination_frame, text="▶", width=120, height=30, corner_radius=15,
+            self.group_pagination_frame, text="下一页 ▶", width=88, height=30, corner_radius=15,
             fg_color=("#F3F4F6", "#374151"), text_color=("#374151", "#E5E7EB"), hover_color=("#E5E7EB", "#4B5563"),
             font=self.font_main, command=self._next_group_page
         )
@@ -3984,7 +3995,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
 
         # Bottom Buttons
         self.bottom_frame = ctk.CTkFrame(self.right_frame, fg_color="transparent")
-        self.bottom_frame.grid(row=3, column=0, sticky="ew")
+        self.bottom_frame.grid(row=4, column=0, sticky="ew")
 
         self.btn_manual_refresh = ctk.CTkButton(self.bottom_frame, text="🔄 刷新预览", width=120, height=38, corner_radius=19, fg_color="#E5E7EB", text_color="#374151", hover_color="#D1D5DB", font=self.font_main, command=self.manual_refresh_preview)
         self.btn_manual_refresh.pack(side=tk.LEFT, padx=5)
@@ -4005,8 +4016,8 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
 
         self.btn_export = ctk.CTkButton(
             self.bottom_frame, text="💾 导出", width=120, height=38, corner_radius=19,
-            font=self.font_title, fg_color=self.ui_primary,
-            hover_color=self.ui_primary_hover, command=self.on_confirm
+            font=self.font_title, fg_color="#10B981",
+            hover_color="#059669", command=self.on_confirm
         )
         self.btn_export.pack(side=tk.RIGHT, padx=5)
 
@@ -4067,27 +4078,28 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
 
             btn_frame = ctk.CTkFrame(card_warn, fg_color="transparent")
             btn_frame.pack(fill=tk.X, padx=15, pady=(0, 15))
+            btn_frame.grid_columnconfigure((0, 1, 2), weight=1, uniform="opt")
 
             btn_opt1 = ctk.CTkButton(
-                btn_frame, text="精选对比", width=95, height=28, corner_radius=14,
-                fg_color=("#F59E0B", "#D97706"), text_color="white", hover_color=("#D97706", "#B45309"),
+                btn_frame, text="精选对比", height=28, corner_radius=14,
+                fg_color="#D97706", text_color="#FFFFFF", hover_color="#B45309",
                 font=self.font_small, command=self._apply_featured_contrast_mode
             )
-            btn_opt1.pack(side=tk.LEFT, padx=3)
+            btn_opt1.grid(row=0, column=0, padx=3, sticky="ew")
 
             btn_opt2 = ctk.CTkButton(
-                btn_frame, text="批量图册", width=95, height=28, corner_radius=14,
-                fg_color=("#10B981", "#059669"), text_color="white", hover_color=("#059669", "#047857"),
+                btn_frame, text="批量图册", height=28, corner_radius=14,
+                fg_color="#FFFFFF", text_color="#B45309", border_width=1, border_color="#F59E0B", hover_color="#FEF3C7",
                 font=self.font_small, command=self._apply_batch_album_mode
             )
-            btn_opt2.pack(side=tk.LEFT, padx=3)
+            btn_opt2.grid(row=0, column=1, padx=3, sticky="ew")
 
             btn_opt3 = ctk.CTkButton(
-                btn_frame, text="整体概览", width=95, height=28, corner_radius=14,
-                fg_color=("#6366F1", "#4F46E5"), text_color="white", hover_color=("#4F46E5", "#4338CA"),
+                btn_frame, text="整体概览", height=28, corner_radius=14,
+                fg_color="#FFFFFF", text_color="#B45309", border_width=1, border_color="#F59E0B", hover_color="#FEF3C7",
                 font=self.font_small, command=self._apply_overall_overview_mode
             )
-            btn_opt3.pack(side=tk.LEFT, padx=3)
+            btn_opt3.grid(row=0, column=2, padx=3, sticky="ew")
 
         # --- CARD 1: Basic Type & Scope ---
         card1 = ctk.CTkFrame(self.left_scroll, fg_color=("#FFFFFF", "#1E293B"), border_width=1, border_color=("#E5E7EB", "#475569"), corner_radius=12)
@@ -4389,7 +4401,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             if abs(delta) >= 120:
                 steps = -int(delta / 120) * 3
             else:
-                steps = -delta * 3
+                steps = -1 if delta > 0 else 1
 
         if canvas.yview() != (0.0, 1.0):
             canvas.yview_scroll(steps, "units")
@@ -4427,7 +4439,8 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             if abs(delta) >= 120:
                 steps = -int(delta / 120) * 60
             else:
-                steps = -delta * 60
+                step_mag = max(2, int(abs(delta) * 0.5))
+                steps = -step_mag if delta > 0 else step_mag
 
         try:
             canvas.configure(yscrollincrement=1)
@@ -4791,6 +4804,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             self.combo_groupby.set("按词语")
 
         self._bind_left_scroll_wheel_recursive(self.dynamic_content_frame)
+        self._bind_left_scroll_wheel_recursive(self.left_scroll)
         self._update_chart_group_rule_label()
         self._update_group_filters()
         self.update_preview()
@@ -5439,7 +5453,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         scope = self.var_export_scope.get()
         if scope == "separate" and len(self.all_speakers) > 1:
             pady_val = (0, 4) if getattr(self, 'is_minimized', False) else (0, 10)
-            self.pagination_frame.grid(row=1, column=0, pady=pady_val)
+            self.pagination_frame.grid(row=2, column=0, pady=pady_val)
             idx = getattr(self, 'current_preview_page', 0)
             if idx < 0 or idx >= len(self.all_speakers):
                 idx = 0
@@ -5468,6 +5482,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
                     msg = "❌ 没有检索到有效基频曲线，请导入有发音数据的项目！"
                 self.preview_lbl.configure(text=msg, text_color="#EF4444")
                 self.group_pagination_frame.grid_forget()
+                self.truncation_banner_frame.pack_forget()
                 return
 
             groupby = self.combo_groupby.get()
@@ -5483,7 +5498,7 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             ) or is_paginated_heatmap
             if show_group_pagination:
                 pady_val = (0, 4) if getattr(self, 'is_minimized', False) else (0, 10)
-                self.group_pagination_frame.grid(row=2, column=0, pady=pady_val)
+                self.group_pagination_frame.grid(row=3, column=0, pady=pady_val)
                 if self.current_group_page < 0:
                     self.current_group_page = 0
                 elif self.current_group_page >= total_pages:
@@ -5499,17 +5514,32 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
                         tg_name = current_chunk[0]['group'] if current_chunk else ""
                         self.lbl_group_page_info.configure(
                             text=f"组别页码: {self.current_group_page+1}/{total_pages} (当前显示组别: {tg_name}，共 {len(current_chunk)} 个词语)",
-                            font=self.font_title
+                            font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold")
                         )
                     else:
                         self.lbl_group_page_info.configure(
                             text=f"组别页码: {self.current_group_page+1}/{total_pages} (当前显示第 {self.current_group_page*8+1}~{min(total_groups, (self.current_group_page+1)*8)} 组，共 {total_groups} 组)",
-                            font=self.font_title
+                            font=ctk.CTkFont(family="Microsoft YaHei", size=13, weight="bold")
                         )
-                    self.btn_prev_group_page.configure(text="◀", width=120, height=30, font=self.font_main)
-                    self.btn_next_group_page.configure(text="▶", width=120, height=30, font=self.font_main)
+                    self.btn_prev_group_page.configure(text="◀ 上一页", width=88, height=30, font=self.font_main)
+                    self.btn_next_group_page.configure(text="下一页 ▶", width=88, height=30, font=self.font_main)
+
+                if not getattr(self, 'is_minimized', False):
+                    if is_paginated_heatmap:
+                        current_chunk = pagination_state['pages'][self.current_group_page] if self.current_group_page < len(pagination_state['pages']) else []
+                        tg_name = current_chunk[0]['group'] if current_chunk else ""
+                        banner_msg = f" ℹ 附录图册自动分页: 第 {self.current_group_page+1}/{total_pages} 页 ({tg_name}, {len(current_chunk)}词)。导出时完整输出。"
+                    else:
+                        s_g = self.current_group_page * 8 + 1
+                        e_g = min(total_groups, (self.current_group_page + 1) * 8)
+                        banner_msg = f" ℹ 共 {total_groups} 组分 {total_pages} 页: 预览第 {self.current_group_page+1} 页 ({s_g}~{e_g}组)。导出时完整输出。"
+                    self.lbl_truncation_banner.configure(text=banner_msg)
+                    self.truncation_banner_frame.pack(side=tk.LEFT, padx=(12, 0), fill=tk.X, expand=True)
+                else:
+                    self.truncation_banner_frame.pack_forget()
             else:
                 self.group_pagination_frame.grid_forget()
+                self.truncation_banner_frame.pack_forget()
 
             params_snapshot = self._snapshot_render_params()
             rule_summary = self._format_chart_group_rule_summary(params_snapshot.get("chart_group_rule"))
@@ -5945,8 +5975,9 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             if hasattr(self, 'btn_export'):
                 self.btn_export.pack_forget()
 
-            # 4. Hide the canvas toggle button completely so it doesn't block the chart
-            self.btn_toggle_minimize.place_forget()
+            # 4. Hide top bar completely so it doesn't block the chart
+            if hasattr(self, 'preview_top_bar'):
+                self.preview_top_bar.grid_remove()
 
             # 5. Pack the restore button at the bottom
             if hasattr(self, 'btn_restore'):
@@ -6001,8 +6032,8 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             if hasattr(self, 'btn_restore'):
                 self.btn_restore.pack_forget()
 
-            self.btn_toggle_minimize.place(x=10, y=10)
-            self.btn_toggle_minimize.lift()
+            if hasattr(self, 'preview_top_bar'):
+                self.preview_top_bar.grid(row=0, column=0, sticky="ew", pady=(0, 6))
 
             # 6. Restore geometry
             if hasattr(self, 'saved_geometry') and self.saved_geometry:

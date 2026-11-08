@@ -540,9 +540,8 @@ class ProjectManager:
                 if not g_item and label:
                     g_item = items_by_slot.get((gname, label))
                 if g_item:
-                    for k in ("note", "tags", "aliases", "meta"):
-                        if k in item and item[k]:
-                            g_item[k] = copy.deepcopy(item[k])
+                    for k, default_empty in (("note", ""), ("tags", []), ("aliases", []), ("meta", {})):
+                        g_item[k] = copy.deepcopy(item.get(k, default_empty))
                     if "label" in item and item["label"]:
                         g_item["label"] = item["label"]
                         if "word" in g_item:
@@ -716,9 +715,15 @@ class ProjectManager:
                             continue
                         if k in ('item_note', 'item_tags', 'item_aliases', 'item_meta'):
                             canonical_k = k[5:]
-                            if canonical_k not in item and v:
+                            if v:
                                 item_dict[canonical_k] = v
                             continue
+                        if k in ('note', 'tags', 'aliases', 'meta'):
+                            item_key = 'item_' + k
+                            if item_key in item:
+                                if item[item_key]:
+                                    item_dict[k] = item[item_key]
+                                continue
                         if k in ACOUSTIC_PARAM_KEYS:
                             spk_default = spk.last_params.get(k)
                             if spk_default is not None and v != spk_default:
@@ -1103,6 +1108,19 @@ class ProjectManager:
         workspace_dir = workspace_dir or self.workspace_dir
         restored = {}
         id_mapping = {}
+        raw_groups = state.get("groups", []) if isinstance(state, dict) else []
+        if isinstance(raw_groups, list):
+            groups_lookup = {
+                (g.get("name") or g.get("group")): g
+                for g in raw_groups
+                if isinstance(g, dict) and (g.get("name") or g.get("group"))
+            }
+        elif isinstance(raw_groups, dict):
+            groups_lookup = raw_groups
+        else:
+            groups_lookup = {}
+        wl_meta = state.get("wordlist_meta", {}) if isinstance(state, dict) else {}
+        default_wl_title = wl_meta.get("title", "") if isinstance(wl_meta, dict) else ""
 
         current_speakers = self.app.speaker_manager.speakers
         existing_names = {s.name for s in current_speakers.values()} if overlay else set()
@@ -1269,6 +1287,20 @@ class ProjectManager:
                     item['item_aliases'] = item['aliases']
                 if 'meta' in item and 'item_meta' not in item:
                     item['item_meta'] = item['meta']
+                grp_info = groups_lookup.get(item.get('group', '默认组'), {})
+                if isinstance(grp_info, dict):
+                    if 'group_note' not in item and grp_info.get('note'):
+                        item['group_note'] = grp_info['note']
+                    if 'group_tags' not in item and grp_info.get('tags'):
+                        item['group_tags'] = copy.deepcopy(grp_info['tags'])
+                if 'wordlist_title' not in item and default_wl_title:
+                    item['wordlist_title'] = default_wl_title
+                if 'wordlist_version' not in item and (
+                    default_wl_title or item.get('item_tags') or item.get('item_meta')
+                    or item.get('item_note') or item.get('item_aliases')
+                    or item.get('group_tags') or item.get('group_note')
+                ):
+                    item['wordlist_version'] = 'v2'
 
                 spk.items[item_id] = item
 

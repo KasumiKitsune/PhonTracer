@@ -73,15 +73,15 @@ def _format_meta_pairs(meta, limit=8):
 
 
 def _wordlist_row_key(item):
-    meta = item.get("item_meta") or {}
+    meta = item.get("item_meta") or item.get("meta") or {}
     if not isinstance(meta, dict):
         meta = {}
     return (
         _truncate_text(item.get("label") or item.get("text") or item.get("name") or "未命名词项", 48),
-        tuple(_as_text_list(item.get("item_tags"))),
-        tuple(_as_text_list(item.get("item_aliases"))),
+        tuple(_as_text_list(item.get("item_tags") or item.get("tags"))),
+        tuple(_as_text_list(item.get("item_aliases") or item.get("aliases"))),
         tuple((str(k), str(v)) for k, v in sorted(meta.items(), key=lambda pair: str(pair[0]))),
-        _truncate_text(item.get("item_note"), 80),
+        _truncate_text(item.get("item_note") or item.get("note"), 80),
         _truncate_text(item.get("metadata_source"), 48),
     )
 
@@ -120,9 +120,9 @@ def _build_detailed_wordlist_summary(items, max_groups=8, max_items_per_group=5)
         for tag in _as_text_list(item.get("group_tags")):
             bucket["group_tags"][tag] += 1
             global_group_tags[tag] += 1
-        for tag in _as_text_list(item.get("item_tags")):
+        for tag in _as_text_list(item.get("item_tags") or item.get("tags")):
             global_item_tags[tag] += 1
-        meta = item.get("item_meta") or {}
+        meta = item.get("item_meta") or item.get("meta") or {}
         if isinstance(meta, dict):
             for mk, mv in meta.items():
                 k_text = _truncate_text(mk, 20)
@@ -170,9 +170,9 @@ def _build_detailed_wordlist_summary(items, max_groups=8, max_items_per_group=5)
 
         for row in rows:
             item = row["item"]
-            for tag in _as_text_list(item.get("item_tags")):
+            for tag in _as_text_list(item.get("item_tags") or item.get("tags")):
                 item_tags[tag] += 1
-            meta = item.get("item_meta") or {}
+            meta = item.get("item_meta") or item.get("meta") or {}
             if isinstance(meta, dict):
                 for meta_key, meta_value in meta.items():
                     key_text = _truncate_text(meta_key, 20)
@@ -184,8 +184,8 @@ def _build_detailed_wordlist_summary(items, max_groups=8, max_items_per_group=5)
         for row in rows[:max_items_per_group]:
             item = row["item"]
             label = _truncate_text(item.get("label") or item.get("text") or item.get("name") or "未命名词项", 20)
-            tags = _as_text_list(item.get("item_tags"))
-            meta = item.get("item_meta") or {}
+            tags = _as_text_list(item.get("item_tags") or item.get("tags"))
+            meta = item.get("item_meta") or item.get("meta") or {}
             short_parts = []
             if tags:
                 short_parts.append("/".join(tags[:2]))
@@ -208,9 +208,55 @@ def _build_detailed_wordlist_summary(items, max_groups=8, max_items_per_group=5)
     return "\n".join(lines)
 
 
+def _extract_project_groups_and_title(project_data):
+    if not project_data or not isinstance(project_data, dict):
+        return {}, ""
+    raw_groups = project_data.get("groups", [])
+    if isinstance(raw_groups, dict):
+        groups_map = raw_groups
+    elif isinstance(raw_groups, list):
+        groups_map = {
+            (g.get("name") or g.get("group")): g
+            for g in raw_groups
+            if isinstance(g, dict) and (g.get("name") or g.get("group"))
+        }
+    else:
+        groups_map = {}
+    wl_meta = project_data.get("wordlist_meta", {})
+    default_title = wl_meta.get("title", "") if isinstance(wl_meta, dict) else ""
+    return groups_map, default_title
+
+
+def _enrich_item_with_project_meta(item, groups_map, default_title):
+    if not isinstance(item, dict):
+        return item
+    grp_name = item.get("group") or "默认组"
+    grp_info = groups_map.get(grp_name, {}) if isinstance(groups_map, dict) else {}
+    if not isinstance(grp_info, dict):
+        grp_info = {}
+    needs_copy = False
+    if not item.get("group_note") and grp_info.get("note"):
+        needs_copy = True
+    if not item.get("group_tags") and grp_info.get("tags"):
+        needs_copy = True
+    if not item.get("wordlist_title") and default_title:
+        needs_copy = True
+    if not needs_copy:
+        return item
+    enriched = dict(item)
+    if not enriched.get("group_note") and grp_info.get("note"):
+        enriched["group_note"] = grp_info.get("note")
+    if not enriched.get("group_tags") and grp_info.get("tags"):
+        enriched["group_tags"] = list(grp_info.get("tags") or [])
+    if not enriched.get("wordlist_title") and default_title:
+        enriched["wordlist_title"] = default_title
+    return enriched
+
+
 def _iter_project_items(project_data):
     if not project_data or not isinstance(project_data, dict):
         return
+    groups_map, default_title = _extract_project_groups_and_title(project_data)
     speakers = project_data.get("speakers", {})
     if not isinstance(speakers, dict):
         return
@@ -226,19 +272,19 @@ def _iter_project_items(project_data):
             iterable = []
         for item in iterable:
             if isinstance(item, dict):
-                yield item
+                yield _enrich_item_with_project_meta(item, groups_map, default_title)
 
 
 def _looks_like_v2_wordlist_item(item):
     return (
         item.get("wordlist_version") == "v2"
         or bool(item.get("wordlist_title"))
-        or bool(item.get("item_tags"))
+        or bool(item.get("item_tags") or item.get("tags"))
         or bool(item.get("group_tags"))
-        or bool(item.get("item_meta"))
-        or bool(item.get("item_note"))
+        or bool(item.get("item_meta") or item.get("meta"))
+        or bool(item.get("item_note") or item.get("note"))
         or bool(item.get("group_note"))
-        or bool(item.get("item_aliases"))
+        or bool(item.get("item_aliases") or item.get("aliases"))
     )
 
 
@@ -261,13 +307,13 @@ def _build_wordlist_metadata_summary(items, limit=16):
         title = item.get("wordlist_title")
         if title:
             titles[str(title)] += 1
-        for tag in item.get("item_tags", []) or []:
+        for tag in (item.get("item_tags") or item.get("tags") or []):
             if str(tag).strip():
                 item_tags[str(tag).strip()] += 1
-        for tag in item.get("group_tags", []) or []:
+        for tag in (item.get("group_tags") or []):
             if str(tag).strip():
                 group_tags[str(tag).strip()] += 1
-        item_meta = item.get("item_meta") or {}
+        item_meta = item.get("item_meta") or item.get("meta") or {}
         if isinstance(item_meta, dict) and item_meta:
             meta_item_count += 1
             for key in item_meta.keys():
@@ -275,11 +321,11 @@ def _build_wordlist_metadata_summary(items, limit=16):
                     meta_keys[str(key).strip()] += 1
         if item.get("metadata_source"):
             metadata_sources[str(item.get("metadata_source"))] += 1
-        if item.get("item_note"):
+        if item.get("item_note") or item.get("note"):
             item_note_count += 1
         if item.get("group_note"):
             group_note_count += 1
-        if item.get("item_aliases"):
+        if item.get("item_aliases") or item.get("aliases"):
             alias_count += 1
 
     if not v2_count:
@@ -321,6 +367,7 @@ def _build_project_summary(
     all_items = []
 
     if project_data and isinstance(project_data, dict):
+        groups_map, default_title = _extract_project_groups_and_title(project_data)
         speakers = project_data.get("speakers", {})
         spk_count = len(speakers)
         for spk_id, spk in speakers.items():
@@ -344,7 +391,7 @@ def _build_project_summary(
             for item in item_values:
                 if not isinstance(item, dict):
                     continue
-                all_items.append(item)
+                all_items.append(_enrich_item_with_project_meta(item, groups_map, default_title))
                 item_count += 1
                 if item.get("is_excluded", False):
                     excluded_count += 1
