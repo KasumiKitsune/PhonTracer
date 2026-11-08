@@ -2,7 +2,13 @@ import os
 import textgrid
 from typing import List, Dict, Optional, Any, Tuple
 import numpy as np
-import parselmouth
+try:
+    import parselmouth
+except ImportError:
+    from modules import _parselmouth_fallback as parselmouth
+    import sys as _sys
+    _sys.modules.setdefault("parselmouth", parselmouth)
+    _sys.modules.setdefault("parselmouth.praat", parselmouth.praat)
 import re  # 新增正则库用于支持多种分隔符拆分
 
 def parse_wordlist(raw_text: str) -> Tuple[List[Dict[str, Any]], List[str]]:

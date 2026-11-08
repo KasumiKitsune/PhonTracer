@@ -6,7 +6,13 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import numpy as np
 import sounddevice as sd
-import parselmouth
+try:
+    import parselmouth
+except ImportError:
+    from modules import _parselmouth_fallback as parselmouth
+    import sys as _sys
+    _sys.modules.setdefault("parselmouth", parselmouth)
+    _sys.modules.setdefault("parselmouth.praat", parselmouth.praat)
 from .audio_core import SILENCE_AMPLITUDE_THRESHOLD
 from .anomaly_detection import detect_pitch_anomaly_points
 from .ui_widgets import CTkReleaseButton

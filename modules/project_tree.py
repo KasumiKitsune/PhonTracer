@@ -3,7 +3,13 @@ from tkinter import ttk, messagebox, filedialog
 import customtkinter as ctk
 import csv
 import os
-import parselmouth
+try:
+    import parselmouth
+except ImportError:
+    from modules import _parselmouth_fallback as parselmouth
+    import sys as _sys
+    _sys.modules.setdefault("parselmouth", parselmouth)
+    _sys.modules.setdefault("parselmouth.praat", parselmouth.praat)
 import numpy as np
 import math
 import matplotlib

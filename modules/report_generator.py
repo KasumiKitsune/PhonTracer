@@ -150,13 +150,15 @@ def split_into_syllables(label: str) -> List[str]:
 import re
 re_cjk = re.compile(r'[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]')
 
-def load_item_cache_if_any(item: Dict[str, Any], zip_ref: zipfile.ZipFile) -> Tuple[Any, Any, str, str]:
+def load_item_cache_if_any(item: Dict[str, Any], zip_ref: Optional[zipfile.ZipFile], spk: Optional[Dict[str, Any]] = None) -> Tuple[Any, Any, str, str]:
     pitch_data = None
     formant_data = None
     pitch_status = "无"
     formant_status = "无"
 
     p_file = item.get("pitch_data_file")
+    if not p_file and isinstance(spk, dict):
+        p_file = spk.get("long_pitch_data_file")
     if p_file and zip_ref:
         pitch_status = "损坏"
         try:
@@ -168,6 +170,12 @@ def load_item_cache_if_any(item: Dict[str, Any], zip_ref: zipfile.ZipFile) -> Tu
                 pitch_status = "正常"
         except Exception:
             pass
+
+    if pitch_data is None and isinstance(item.get("pitch_data"), dict):
+        pd = item["pitch_data"]
+        if "xs" in pd and "freqs" in pd and pd["xs"] is not None and pd["freqs"] is not None:
+            pitch_data = {"xs": np.asarray(pd["xs"], dtype=float), "freqs": np.asarray(pd["freqs"], dtype=float)}
+            pitch_status = "正常"
 
     f_file = item.get("formant_data_file")
     if f_file and zip_ref:
@@ -188,6 +196,19 @@ def load_item_cache_if_any(item: Dict[str, Any], zip_ref: zipfile.ZipFile) -> Tu
                 formant_status = "正常"
         except Exception:
             pass
+
+    if formant_data is None:
+        fd = item.get("formant_data") or item.get("preview_formants")
+        if isinstance(fd, dict) and fd.get("f1") is not None and fd.get("f2") is not None:
+            formant_dict = {
+                "xs": np.asarray(fd.get("xs", []), dtype=float),
+                "f1": np.asarray(fd["f1"], dtype=float),
+                "f2": np.asarray(fd["f2"], dtype=float),
+            }
+            if "f3" in fd and fd["f3"] is not None:
+                formant_dict["f3"] = np.asarray(fd["f3"], dtype=float)
+            formant_data = formant_dict
+            formant_status = "正常"
 
     return pitch_data, formant_data, pitch_status, formant_status
 
@@ -582,6 +603,656 @@ def generate_natural_language_summary(state: Dict[str, Any]) -> str:
     )
     return summary
 
+
+def hz_to_chao_t(hz_val: Optional[float], s_min: float, s_max: float) -> Optional[float]:
+    """将 Hz 转换为赵元任五度值（Chao's T-value, 1.0 ~ 5.0 对数标度）。"""
+    import math
+    if hz_val is None:
+        return None
+    try:
+        hz = float(hz_val)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(hz) or hz <= 0:
+        return None
+    if s_min is None or s_max is None or not np.isfinite(s_min) or not np.isfinite(s_max) or s_min <= 0 or s_max <= s_min:
+        return 3.0
+    ratio = (math.log10(hz) - math.log10(float(s_min))) / (math.log10(float(s_max)) - math.log10(float(s_min)))
+    return float(np.clip(1.0 + 4.0 * ratio, 1.0, 5.0))
+
+
+def fit_chao_tone_code(
+    t_contour: List[float],
+    t_start: Optional[float] = None,
+    t_mid: Optional[float] = None,
+    t_end: Optional[float] = None,
+) -> str:
+    """根据 5 点代表性 T 值轨迹与首/中/尾 T 值拟合整型声调五度值编码建议（如 "55", "35", "214", "51"）。"""
+    valid = [float(v) for v in (t_contour or []) if v is not None and np.isfinite(v)]
+    if not valid:
+        if t_start is not None and t_end is not None and np.isfinite(t_start) and np.isfinite(t_end):
+            valid = [float(t_start), float(t_mid) if (t_mid is not None and np.isfinite(t_mid)) else float((t_start + t_end) / 2.0), float(t_end)]
+        else:
+            return ""
+
+    t0 = float(t_start) if (t_start is not None and np.isfinite(t_start)) else valid[0]
+    t2 = float(t_mid) if (t_mid is not None and np.isfinite(t_mid)) else valid[len(valid) // 2]
+    t4 = float(t_end) if (t_end is not None and np.isfinite(t_end)) else valid[-1]
+
+    d_start = int(np.clip(round(t0), 1, 5))
+    d_end = int(np.clip(round(t4), 1, 5))
+
+    span = float(max(valid) - min(valid))
+    if span < 0.60 and abs(t4 - t0) < 0.50:
+        d_avg = int(np.clip(round(float(np.mean(valid))), 1, 5))
+        return f"{d_avg}{d_avg}"
+
+    inner = valid[1:-1] if len(valid) >= 3 else [t2]
+    inner_min = float(min(inner))
+    inner_max = float(max(inner))
+    dip_depth = min(t0, t4) - inner_min
+    peak_height = inner_max - max(t0, t4)
+
+    if dip_depth >= 0.45 and dip_depth >= peak_height:
+        d_turn = int(np.clip(round(inner_min), 1, 5))
+        if d_turn == d_start and (t0 - inner_min) >= 0.55 and d_turn > 1:
+            d_turn -= 1
+        if d_turn == d_end and (t4 - inner_min) >= 0.55 and d_turn > 1:
+            d_turn -= 1
+        if d_turn < d_start and d_turn < d_end:
+            return f"{d_start}{d_turn}{d_end}"
+
+    if peak_height >= 0.45:
+        d_turn = int(np.clip(round(inner_max), 1, 5))
+        if d_turn == d_start and (inner_max - t0) >= 0.55 and d_turn < 5:
+            d_turn += 1
+        if d_turn == d_end and (inner_max - t4) >= 0.55 and d_turn < 5:
+            d_turn += 1
+        if d_turn > d_start and d_turn > d_end:
+            return f"{d_start}{d_turn}{d_end}"
+
+    if d_start == d_end:
+        if (t4 - t0) >= 0.55:
+            if d_end < 5:
+                d_end += 1
+            elif d_start > 1:
+                d_start -= 1
+        elif (t0 - t4) >= 0.55:
+            if d_end > 1:
+                d_end -= 1
+            elif d_start < 5:
+                d_start += 1
+
+    return f"{d_start}{d_end}"
+
+
+def _extract_item_acoustic_record(
+    item_id: str,
+    item: Dict[str, Any],
+    spk_name: str,
+    spk_params: Dict[str, Any],
+    zip_ref: Optional[zipfile.ZipFile] = None,
+    spk: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    label = str(item.get("label") or item.get("word") or item_id)
+    group = str(item.get("group") or "默认组")
+    t_s = item.get("start")
+    t_e = item.get("end")
+    pts = int(item.get("pts") or spk_params.get("pts", 11) or 11)
+
+    duration_ms = None
+    if t_s is not None and t_e is not None:
+        try:
+            dur_s = float(t_e) - float(t_s)
+            if dur_s > 0:
+                duration_ms = float(dur_s * 1000.0)
+        except (TypeError, ValueError):
+            duration_ms = None
+
+    pitch_data, formant_data, p_status, f_status = load_item_cache_if_any(item, zip_ref, spk=spk)
+    warnings_list = analyze_item_anomalies(item, pitch_data, formant_data, spk_params, p_status, f_status)
+    if item.get("has_empty_data") and not any("无基频帧" in w for w in warnings_list):
+        warnings_list.append("[复核] 采样点含无基频帧")
+    for w in (item.get("warnings") or []):
+        if w and w not in warnings_list:
+            warnings_list.append(str(w))
+
+    # Extract 11-point normalized F0 trajectory and valid F0 frames
+    f0_11 = np.full(pts, np.nan, dtype=float)
+    raw_valid_f0 = np.array([], dtype=float)
+
+    if pitch_data and "xs" in pitch_data and "freqs" in pitch_data:
+        p_xs = np.asarray(pitch_data["xs"], dtype=float)
+        p_freqs = np.asarray(pitch_data["freqs"], dtype=float)
+        if p_xs.size > 0 and p_xs.size == p_freqs.size:
+            if t_s is not None and t_e is not None and float(t_e) > float(t_s):
+                mask = (p_xs >= float(t_s)) & (p_xs <= float(t_e)) & np.isfinite(p_freqs) & (p_freqs > 0)
+            else:
+                mask = np.isfinite(p_freqs) & (p_freqs > 0)
+            valid_idx = np.where(mask)[0]
+            if valid_idx.size >= 2:
+                seg_xs = p_xs[valid_idx]
+                seg_ys = p_freqs[valid_idx]
+                raw_valid_f0 = seg_ys.copy()
+                v_s, v_e = float(seg_xs[0]), float(seg_xs[-1])
+                if v_e > v_s:
+                    sample_times = np.linspace(v_s, v_e, pts)
+                    interp_vals = np.interp(sample_times, seg_xs, seg_ys)
+                    for idx_t, st in enumerate(sample_times):
+                        if np.min(np.abs(seg_xs - st)) > 0.035:
+                            interp_vals[idx_t] = np.nan
+                    if np.count_nonzero(np.isfinite(interp_vals) & (interp_vals > 0)) >= 2:
+                        f0_11 = interp_vals
+                    else:
+                        f0_11 = np.interp(np.linspace(0.0, 1.0, pts), np.linspace(0.0, 1.0, seg_ys.size), seg_ys)
+                else:
+                    f0_11 = np.full(pts, float(np.mean(seg_ys)), dtype=float)
+            elif valid_idx.size == 1:
+                only_f0 = float(p_freqs[valid_idx[0]])
+                raw_valid_f0 = np.array([only_f0], dtype=float)
+                f0_11 = np.full(pts, only_f0, dtype=float)
+
+    if not np.any(np.isfinite(f0_11) & (f0_11 > 0)) and item.get("preview_f0"):
+        prev = np.asarray(item.get("preview_f0"), dtype=float)
+        valid_prev = np.where(np.isfinite(prev) & (prev > 0), prev, np.nan)
+        if np.any(np.isfinite(valid_prev)):
+            if valid_prev.size == pts:
+                f0_11 = valid_prev
+            else:
+                vp = valid_prev[np.isfinite(valid_prev)]
+                if vp.size >= 2:
+                    f0_11 = np.interp(np.linspace(0.0, 1.0, pts), np.linspace(0.0, 1.0, vp.size), vp)
+                elif vp.size == 1:
+                    f0_11 = np.full(pts, float(vp[0]), dtype=float)
+            raw_valid_f0 = valid_prev[np.isfinite(valid_prev)]
+
+    valid_11_mask = np.isfinite(f0_11) & (f0_11 > 0)
+    valid_11 = f0_11[valid_11_mask]
+    has_valid_f0 = bool(valid_11.size > 0)
+
+    if has_valid_f0:
+        f0_start = float(f0_11[0]) if (np.isfinite(f0_11[0]) and f0_11[0] > 0) else float(valid_11[0])
+        mid_i = len(f0_11) // 2
+        f0_mid = float(f0_11[mid_i]) if (np.isfinite(f0_11[mid_i]) and f0_11[mid_i] > 0) else float(valid_11[len(valid_11) // 2])
+        f0_end = float(f0_11[-1]) if (np.isfinite(f0_11[-1]) and f0_11[-1] > 0) else float(valid_11[-1])
+        pool_for_stats = raw_valid_f0 if raw_valid_f0.size >= valid_11.size else valid_11
+        f0_min = float(np.min(valid_11))
+        f0_max = float(np.max(valid_11))
+        f0_range = float(f0_max - f0_min)
+        f0_mean = float(np.mean(valid_11))
+        f0_sd = float(np.std(valid_11))
+        x_norm = np.linspace(0.0, 1.0, len(f0_11))
+        if valid_11.size >= 2:
+            f0_5pt = np.interp([0.01, 0.25, 0.50, 0.75, 1.00], x_norm[valid_11_mask], f0_11[valid_11_mask])
+        else:
+            f0_5pt = np.full(5, float(valid_11[0]), dtype=float)
+    else:
+        f0_start = f0_mid = f0_end = f0_min = f0_max = f0_range = f0_mean = f0_sd = None
+        f0_5pt = np.full(5, np.nan, dtype=float)
+        pool_for_stats = np.array([], dtype=float)
+
+    # Extract Formants (F1, F2, F3)
+    f1_mean = f2_mean = f3_mean = None
+    if formant_data and "f1" in formant_data and "f2" in formant_data:
+        f_xs = np.asarray(formant_data.get("xs", []), dtype=float)
+        f1_arr = np.asarray(formant_data.get("f1", []), dtype=float)
+        f2_arr = np.asarray(formant_data.get("f2", []), dtype=float)
+        f3_arr = np.asarray(formant_data.get("f3", []), dtype=float) if formant_data.get("f3") is not None else np.array([], dtype=float)
+
+        if f_xs.size == f1_arr.size and f_xs.size > 0 and t_s is not None and t_e is not None and float(t_e) > float(t_s):
+            f_mask = (f_xs >= float(t_s)) & (f_xs <= float(t_e))
+            if not np.any(f_mask):
+                f_mask = np.ones(f1_arr.size, dtype=bool)
+        else:
+            f_mask = np.ones(f1_arr.size, dtype=bool)
+
+        if f1_arr.size > 0:
+            s_f1 = f1_arr[f_mask]
+            v_f1 = s_f1[np.isfinite(s_f1) & (s_f1 > 0)]
+            if v_f1.size > 0:
+                f1_mean = float(np.mean(v_f1))
+        if f2_arr.size > 0:
+            s_f2 = f2_arr[f_mask[:f2_arr.size]] if f_mask.size >= f2_arr.size else f2_arr
+            v_f2 = s_f2[np.isfinite(s_f2) & (s_f2 > 0)]
+            if v_f2.size > 0:
+                f2_mean = float(np.mean(v_f2))
+        if f3_arr.size > 0:
+            s_f3 = f3_arr[f_mask[:f3_arr.size]] if f_mask.size >= f3_arr.size else f3_arr
+            v_f3 = s_f3[np.isfinite(s_f3) & (s_f3 > 0)]
+            if v_f3.size > 0:
+                f3_mean = float(np.mean(v_f3))
+
+    return {
+        "item_id": item_id,
+        "speaker": spk_name,
+        "group": group,
+        "label": label,
+        "duration_ms": duration_ms,
+        "has_valid_f0": has_valid_f0,
+        "f0_start": f0_start,
+        "f0_mid": f0_mid,
+        "f0_end": f0_end,
+        "f0_min": f0_min,
+        "f0_max": f0_max,
+        "f0_range": f0_range,
+        "f0_mean": f0_mean,
+        "f0_sd": f0_sd,
+        "f0_11": f0_11,
+        "f0_5pt": f0_5pt,
+        "f0_pool": pool_for_stats,
+        "f1_mean": f1_mean,
+        "f2_mean": f2_mean,
+        "f3_mean": f3_mean,
+        "warnings": warnings_list,
+        "warning_count": 1 if len(warnings_list) > 0 else 0,
+    }
+
+
+def _round_or_none(val: Optional[float], ndigits: int = 2) -> Optional[float]:
+    if val is None or not np.isfinite(val):
+        return None
+    return round(float(val), ndigits)
+
+
+def _aggregate_bucket_records(bucket_key: str, records: List[Dict[str, Any]], by: str) -> Dict[str, Any]:
+    count = len(records)
+    valid_f0_records = [r for r in records if r.get("has_valid_f0")]
+    valid_f0_count = len(valid_f0_records)
+    warning_count = sum(1 for r in records if r.get("warning_count", 0) > 0)
+
+    durs = [float(r["duration_ms"]) for r in records if r.get("duration_ms") is not None and np.isfinite(r["duration_ms"])]
+    dur_mean = _round_or_none(float(np.mean(durs)) if durs else None, 2)
+    dur_sd = _round_or_none(float(np.std(durs)) if durs else None, 2)
+
+    if valid_f0_records:
+        f0_starts = [r["f0_start"] for r in valid_f0_records if r.get("f0_start") is not None]
+        f0_mids = [r["f0_mid"] for r in valid_f0_records if r.get("f0_mid") is not None]
+        f0_ends = [r["f0_end"] for r in valid_f0_records if r.get("f0_end") is not None]
+        f0_mins = [r["f0_min"] for r in valid_f0_records if r.get("f0_min") is not None]
+        f0_maxs = [r["f0_max"] for r in valid_f0_records if r.get("f0_max") is not None]
+        f0_ranges = [r["f0_range"] for r in valid_f0_records if r.get("f0_range") is not None]
+        f0_means = [r["f0_mean"] for r in valid_f0_records if r.get("f0_mean") is not None]
+
+        pooled_f0 = []
+        for r in valid_f0_records:
+            v11 = r["f0_11"][np.isfinite(r["f0_11"]) & (r["f0_11"] > 0)]
+            pooled_f0.extend(v11.tolist())
+
+        f0_start_mean = _round_or_none(float(np.mean(f0_starts)) if f0_starts else None, 2)
+        f0_mid_mean = _round_or_none(float(np.mean(f0_mids)) if f0_mids else None, 2)
+        f0_end_mean = _round_or_none(float(np.mean(f0_ends)) if f0_ends else None, 2)
+        f0_min_mean = _round_or_none(float(np.mean(f0_mins)) if f0_mins else None, 2)
+        f0_max_mean = _round_or_none(float(np.mean(f0_maxs)) if f0_maxs else None, 2)
+        f0_range_mean = _round_or_none(float(np.mean(f0_ranges)) if f0_ranges else None, 2)
+        f0_mean = _round_or_none(float(np.mean(f0_means)) if f0_means else None, 2)
+        f0_sd = _round_or_none(float(np.std(pooled_f0)) if pooled_f0 else 0.0, 2)
+
+        t_starts = [r["t_start"] for r in valid_f0_records if r.get("t_start") is not None and np.isfinite(r["t_start"])]
+        t_mids = [r["t_mid"] for r in valid_f0_records if r.get("t_mid") is not None and np.isfinite(r["t_mid"])]
+        t_ends = [r["t_end"] for r in valid_f0_records if r.get("t_end") is not None and np.isfinite(r["t_end"])]
+
+        t_start = _round_or_none(float(np.mean(t_starts)) if t_starts else None, 2)
+        t_mid = _round_or_none(float(np.mean(t_mids)) if t_mids else None, 2)
+        t_end = _round_or_none(float(np.mean(t_ends)) if t_ends else None, 2)
+
+        t_5_matrix = np.array([r["t_contour"] for r in valid_f0_records if len(r.get("t_contour") or []) == 5], dtype=float)
+        if t_5_matrix.size > 0:
+            t_contour = []
+            for col_i in range(5):
+                col = t_5_matrix[:, col_i]
+                valid_col = col[np.isfinite(col)]
+                t_contour.append(round(float(np.mean(valid_col)), 2) if valid_col.size > 0 else 3.0)
+        else:
+            t_contour = []
+
+        t_code = fit_chao_tone_code(t_contour, t_start=t_start, t_mid=t_mid, t_end=t_end)
+    else:
+        f0_start_mean = f0_mid_mean = f0_end_mean = None
+        f0_min_mean = f0_max_mean = f0_range_mean = None
+        f0_mean = f0_sd = None
+        t_start = t_mid = t_end = None
+        t_contour = []
+        t_code = ""
+
+    f1s = [r["f1_mean"] for r in records if r.get("f1_mean") is not None and np.isfinite(r["f1_mean"])]
+    f2s = [r["f2_mean"] for r in records if r.get("f2_mean") is not None and np.isfinite(r["f2_mean"])]
+    f3s = [r["f3_mean"] for r in records if r.get("f3_mean") is not None and np.isfinite(r["f3_mean"])]
+    f1_mean = _round_or_none(float(np.mean(f1s)) if f1s else None, 1)
+    f2_mean = _round_or_none(float(np.mean(f2s)) if f2s else None, 1)
+    f3_mean = _round_or_none(float(np.mean(f3s)) if f3s else None, 1)
+
+    res = {
+        "key": bucket_key,
+        "name": bucket_key,
+        "count": count,
+        "valid_f0_count": valid_f0_count,
+        "warning_count": warning_count,
+        "duration_ms_mean": dur_mean,
+        "duration_ms_sd": dur_sd,
+        "f0_start_mean": f0_start_mean,
+        "f0_mid_mean": f0_mid_mean,
+        "f0_end_mean": f0_end_mean,
+        "f0_min_mean": f0_min_mean,
+        "f0_max_mean": f0_max_mean,
+        "f0_range_mean": f0_range_mean,
+        "f0_mean": f0_mean,
+        "f0_sd": f0_sd,
+        "t_start": t_start,
+        "t_mid": t_mid,
+        "t_end": t_end,
+        "t_contour": t_contour,
+        "t_code": t_code,
+        "f1_mean": f1_mean,
+        "f2_mean": f2_mean,
+        "f3_mean": f3_mean,
+    }
+    if by == "group":
+        res["group"] = bucket_key
+    elif by == "item":
+        res["label"] = bucket_key
+        res["item"] = bucket_key
+        if records:
+            res["group"] = records[0].get("group", "默认组")
+            res["speakers"] = list(dict.fromkeys(r.get("speaker", "") for r in records if r.get("speaker")))
+    elif by == "speaker":
+        res["speaker"] = bucket_key
+    return res
+
+
+def compute_acoustic_statistics(
+    state: Dict[str, Any],
+    zip_ref: Optional[zipfile.ZipFile] = None,
+    by: str = "group",
+    scope: str = "integrated",
+    active_speaker_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    计算结构化声学统计摘要（支持 by=group|item|speaker 与 scope=active|integrated）。
+    """
+    by_norm = str(by or "group").strip().lower()
+    if by_norm in ("word", "label", "items", "words"):
+        by_norm = "item"
+    elif by_norm in ("groups", "tone"):
+        by_norm = "group"
+    elif by_norm in ("speakers", "spk"):
+        by_norm = "speaker"
+    if by_norm not in ("group", "item", "speaker"):
+        by_norm = "group"
+
+    scope_norm = str(scope or "integrated").strip().lower()
+    if scope_norm not in ("active", "integrated"):
+        scope_norm = "integrated"
+
+    speakers_dict = state.get("speakers", {}) if isinstance(state, dict) else {}
+    target_active_id = active_speaker_id or (state.get("active_speaker_id") if isinstance(state, dict) else None)
+
+    selected_speakers = []
+    if scope_norm == "active" and target_active_id and target_active_id in speakers_dict:
+        selected_speakers.append((target_active_id, speakers_dict[target_active_id]))
+    elif scope_norm == "active" and speakers_dict:
+        first_id = next(iter(speakers_dict.keys()))
+        selected_speakers.append((first_id, speakers_dict[first_id]))
+    else:
+        for sid, spk in speakers_dict.items():
+            selected_speakers.append((sid, spk))
+
+    speaker_baselines = {}
+    all_records = []
+
+    for sid, spk in selected_speakers:
+        if not isinstance(spk, dict):
+            continue
+        spk_name = str(spk.get("name") or sid)
+        spk_params = spk.get("last_params", {}) or {}
+        items = spk.get("items", {}) or {}
+        if isinstance(items, list):
+            items_iter = [(str(it.get("id", idx)), it) for idx, it in enumerate(items) if isinstance(it, dict)]
+        elif isinstance(items, dict):
+            items_iter = list(items.items())
+        else:
+            items_iter = []
+
+        spk_records = []
+        spk_f0_values = []
+        for item_id, item in items_iter:
+            if not isinstance(item, dict):
+                continue
+            if item.get("is_excluded", False) or item.get("missing", False) or not item.get("success", True):
+                continue
+            rec = _extract_item_acoustic_record(str(item_id), item, spk_name, spk_params, zip_ref=zip_ref, spk=spk)
+            spk_records.append(rec)
+            if rec["has_valid_f0"]:
+                v11 = rec["f0_11"][np.isfinite(rec["f0_11"]) & (rec["f0_11"] > 0)]
+                spk_f0_values.extend(v11.tolist())
+
+        if spk_f0_values:
+            s_min = float(np.min(spk_f0_values))
+            s_max = float(np.max(spk_f0_values))
+            s_mean = float(np.mean(spk_f0_values))
+            s_sd = float(np.std(spk_f0_values))
+            speaker_baselines[spk_name] = {
+                "min_f0": round(s_min, 2),
+                "max_f0": round(s_max, 2),
+                "mean_f0": round(s_mean, 2),
+                "sd_f0": round(s_sd, 2),
+                "count": len(spk_records),
+                "valid_f0_count": sum(1 for r in spk_records if r["has_valid_f0"]),
+            }
+        else:
+            s_min, s_max = 75.0, 600.0
+            speaker_baselines[spk_name] = {
+                "min_f0": None,
+                "max_f0": None,
+                "mean_f0": None,
+                "sd_f0": None,
+                "count": len(spk_records),
+                "valid_f0_count": 0,
+            }
+
+        for rec in spk_records:
+            if rec["has_valid_f0"]:
+                rec["t_start"] = _round_or_none(hz_to_chao_t(rec["f0_start"], s_min, s_max), 2)
+                rec["t_mid"] = _round_or_none(hz_to_chao_t(rec["f0_mid"], s_min, s_max), 2)
+                rec["t_end"] = _round_or_none(hz_to_chao_t(rec["f0_end"], s_min, s_max), 2)
+                rec["t_contour"] = [
+                    round(float(hz_to_chao_t(v, s_min, s_max) or 3.0), 2)
+                    for v in rec["f0_5pt"]
+                ]
+                rec["t_code"] = fit_chao_tone_code(rec["t_contour"], rec["t_start"], rec["t_mid"], rec["t_end"])
+            else:
+                rec["t_start"] = None
+                rec["t_mid"] = None
+                rec["t_end"] = None
+                rec["t_contour"] = []
+                rec["t_code"] = ""
+            all_records.append(rec)
+
+    buckets: Dict[str, List[Dict[str, Any]]] = {}
+    for rec in all_records:
+        if by_norm == "group":
+            bkey = rec["group"]
+        elif by_norm == "item":
+            bkey = rec["label"]
+        else:
+            bkey = rec["speaker"]
+        buckets.setdefault(bkey, []).append(rec)
+
+    summary_list = []
+    keyed_map = {}
+    for bkey, recs in buckets.items():
+        agg = _aggregate_bucket_records(bkey, recs, by=by_norm)
+        summary_list.append(agg)
+        keyed_map[bkey] = agg
+
+    serialized_items = []
+    for rec in all_records:
+        serialized_items.append({
+            "item_id": rec["item_id"],
+            "speaker": rec["speaker"],
+            "group": rec["group"],
+            "label": rec["label"],
+            "count": 1,
+            "valid_f0_count": 1 if rec["has_valid_f0"] else 0,
+            "warning_count": rec["warning_count"],
+            "duration_ms_mean": _round_or_none(rec["duration_ms"], 2),
+            "duration_ms_sd": 0.0 if rec["duration_ms"] is not None else None,
+            "f0_start_mean": _round_or_none(rec["f0_start"], 2),
+            "f0_mid_mean": _round_or_none(rec["f0_mid"], 2),
+            "f0_end_mean": _round_or_none(rec["f0_end"], 2),
+            "f0_min_mean": _round_or_none(rec["f0_min"], 2),
+            "f0_max_mean": _round_or_none(rec["f0_max"], 2),
+            "f0_range_mean": _round_or_none(rec["f0_range"], 2),
+            "f0_mean": _round_or_none(rec["f0_mean"], 2),
+            "f0_sd": _round_or_none(rec["f0_sd"], 2),
+            "t_start": rec["t_start"],
+            "t_mid": rec["t_mid"],
+            "t_end": rec["t_end"],
+            "t_contour": rec["t_contour"],
+            "t_code": rec["t_code"],
+            "f1_mean": _round_or_none(rec["f1_mean"], 1),
+            "f2_mean": _round_or_none(rec["f2_mean"], 1),
+            "f3_mean": _round_or_none(rec["f3_mean"], 1),
+        })
+
+    result = {
+        "by": by_norm,
+        "scope": scope_norm,
+        "count": len(all_records),
+        "valid_f0_count": sum(1 for r in all_records if r["has_valid_f0"]),
+        "warning_count": sum(1 for r in all_records if r["warning_count"] > 0),
+        "speaker_baselines": speaker_baselines,
+        "summary": summary_list,
+        "stats": keyed_map,
+        "item_records": serialized_items,
+    }
+    if by_norm == "group":
+        result["groups"] = keyed_map
+    elif by_norm == "item":
+        result["items"] = keyed_map
+    elif by_norm == "speaker":
+        result["speakers"] = keyed_map
+    return result
+
+
+def build_markdown_acoustic_summary_section(state: Dict[str, Any], zip_ref: Optional[zipfile.ZipFile] = None) -> List[str]:
+    """构建 Markdown 报告中的 `## 核心声学指标分组统计摘要表` 与各词项核心声学数据速览表。"""
+    stats_group = compute_acoustic_statistics(state, zip_ref=zip_ref, by="group", scope="integrated")
+    md_lines = []
+    md_lines.append("## 核心声学指标分组统计摘要表")
+    md_lines.append("")
+    md_lines.append("本节自动汇总各声调/实验分组与各词项的实测声学均值、标准差、五度值（Chao's T-value, 1–5）拟合轨迹与编码建议，可直接用于学术论文结果报告。")
+    md_lines.append("")
+
+    baselines = stats_group.get("speaker_baselines", {})
+    if baselines:
+        md_lines.append("### 发音人基频基线 (Speaker F0 Baselines)")
+        md_lines.append("")
+        md_lines.append("| 发音人 | 样本数 (有效F0) | F0 极小值 (Hz) | F0 极大值 (Hz) | F0 均值 ± 标准差 (Hz) |")
+        md_lines.append("| :--- | :--- | :--- | :--- | :--- |")
+        for spk_name, bl in baselines.items():
+            cnt_str = f"{bl.get('count', 0)} ({bl.get('valid_f0_count', 0)})"
+            min_s = f"{bl['min_f0']:.1f}" if bl.get("min_f0") is not None else "-"
+            max_s = f"{bl['max_f0']:.1f}" if bl.get("max_f0") is not None else "-"
+            mean_sd_s = (
+                f"{bl['mean_f0']:.1f} ± {bl['sd_f0']:.1f}"
+                if bl.get("mean_f0") is not None and bl.get("sd_f0") is not None
+                else "-"
+            )
+            md_lines.append(f"| {spk_name} | {cnt_str} | {min_s} | {max_s} | {mean_sd_s} |")
+        md_lines.append("")
+
+    def _fmt_row(label_col: str, row: Dict[str, Any]) -> str:
+        cnt = f"{row.get('count', 0)} (有效{row.get('valid_f0_count', 0)}, 警告{row.get('warning_count', 0)})"
+        dur = (
+            f"{row['duration_ms_mean']:.1f} ± {row['duration_ms_sd']:.1f}"
+            if row.get("duration_ms_mean") is not None and row.get("duration_ms_sd") is not None
+            else (f"{row['duration_ms_mean']:.1f}" if row.get("duration_ms_mean") is not None else "-")
+        )
+        f_s = f"{row['f0_start_mean']:.1f}" if row.get("f0_start_mean") is not None else "-"
+        f_m = f"{row['f0_mid_mean']:.1f}" if row.get("f0_mid_mean") is not None else "-"
+        f_e = f"{row['f0_end_mean']:.1f}" if row.get("f0_end_mean") is not None else "-"
+        f_msd = (
+            f"{row['f0_mean']:.1f} ± {row['f0_sd']:.1f}"
+            if row.get("f0_mean") is not None and row.get("f0_sd") is not None
+            else (f"{row['f0_mean']:.1f}" if row.get("f0_mean") is not None else "-")
+        )
+        f_rng = f"{row['f0_range_mean']:.1f}" if row.get("f0_range_mean") is not None else "-"
+        if row.get("t_code"):
+            tc_pts = "/".join(f"{v:.1f}" for v in (row.get("t_contour") or []))
+            t_str = f"`{row['t_code']}` ({tc_pts})" if tc_pts else f"`{row['t_code']}`"
+        else:
+            t_str = "-"
+        if any(row.get(k) is not None for k in ("f1_mean", "f2_mean", "f3_mean")):
+            f1_s = f"{row['f1_mean']:.0f}" if row.get("f1_mean") is not None else "-"
+            f2_s = f"{row['f2_mean']:.0f}" if row.get("f2_mean") is not None else "-"
+            f3_s = f"{row['f3_mean']:.0f}" if row.get("f3_mean") is not None else "-"
+            fmt_str = f"{f1_s} / {f2_s} / {f3_s}"
+        else:
+            fmt_str = "-"
+        return f"| {label_col} | {cnt} | {dur} | {f_s} | {f_m} | {f_e} | {f_msd} | {f_rng} | {t_str} | {fmt_str} |"
+
+    summary_rows = stats_group.get("summary", [])
+    md_lines.append("### 分组核心声学指标汇总表")
+    md_lines.append("")
+    if summary_rows:
+        md_lines.append("| 分组/发音人 | 样本数 | 平均时长(ms) | 起点F0(Hz) | 中点F0(Hz) | 终点F0(Hz) | F0均值±标准差(Hz) | F0极差(Hz) | 拟合五度值(T值) | F1/F2/F3均值(Hz) |")
+        md_lines.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
+        speakers_dict = state.get("speakers", {}) if isinstance(state, dict) else {}
+        multi_spk = len(speakers_dict) > 1
+        for row in summary_rows:
+            grp_label = f"{row['key']} (全体合并)" if multi_spk else str(row["key"])
+            md_lines.append(_fmt_row(grp_label, row))
+
+        if multi_spk:
+            for sid, spk in speakers_dict.items():
+                if not isinstance(spk, dict) or not spk.get("items"):
+                    continue
+                spk_stats = compute_acoustic_statistics(state, zip_ref=zip_ref, by="group", scope="active", active_speaker_id=sid)
+                spk_name = spk.get("name", sid)
+                for srow in spk_stats.get("summary", []):
+                    md_lines.append(_fmt_row(f"{spk_name} / {srow['key']}", srow))
+    else:
+        md_lines.append("当前工程暂无有效声学数据可供统计汇总。")
+    md_lines.append("")
+
+    item_records = stats_group.get("item_records", [])
+    md_lines.append("### 各词项核心声学数据速览表")
+    md_lines.append("")
+    if item_records:
+        md_lines.append("| 发音人 | 分组 | 词项 | 时长(ms) | 起点F0(Hz) | 中点F0(Hz) | 终点F0(Hz) | F0均值±标准差(Hz) | F0极差(Hz) | 拟合五度值(T值) | F1/F2/F3均值(Hz) |")
+        md_lines.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
+        for rec in item_records:
+            dur_s = f"{rec['duration_ms_mean']:.1f}" if rec.get("duration_ms_mean") is not None else "-"
+            fs = f"{rec['f0_start_mean']:.1f}" if rec.get("f0_start_mean") is not None else "-"
+            fm = f"{rec['f0_mid_mean']:.1f}" if rec.get("f0_mid_mean") is not None else "-"
+            fe = f"{rec['f0_end_mean']:.1f}" if rec.get("f0_end_mean") is not None else "-"
+            fmsd = (
+                f"{rec['f0_mean']:.1f} ± {rec['f0_sd']:.1f}"
+                if rec.get("f0_mean") is not None and rec.get("f0_sd") is not None
+                else "-"
+            )
+            frng = f"{rec['f0_range_mean']:.1f}" if rec.get("f0_range_mean") is not None else "-"
+            if rec.get("t_code"):
+                t_pts = "/".join(f"{v:.1f}" for v in (rec.get("t_contour") or []))
+                t_cell = f"`{rec['t_code']}` ({t_pts})" if t_pts else f"`{rec['t_code']}`"
+            else:
+                t_cell = "-"
+            if any(rec.get(k) is not None for k in ("f1_mean", "f2_mean", "f3_mean")):
+                f1_s = f"{rec['f1_mean']:.0f}" if rec.get("f1_mean") is not None else "-"
+                f2_s = f"{rec['f2_mean']:.0f}" if rec.get("f2_mean") is not None else "-"
+                f3_s = f"{rec['f3_mean']:.0f}" if rec.get("f3_mean") is not None else "-"
+                fmt_cell = f"{f1_s} / {f2_s} / {f3_s}"
+            else:
+                fmt_cell = "-"
+            md_lines.append(
+                f"| {rec['speaker']} | {rec['group']} | {rec['label']} | {dur_s} | {fs} | {fm} | {fe} | {fmsd} | {frng} | {t_cell} | {fmt_cell} |"
+            )
+    else:
+        md_lines.append("当前工程暂无有效词项声学记录。")
+    md_lines.append("")
+    return md_lines
+
+
 def generate_markdown_report(teproj_path: str, state: Dict[str, Any], zip_ref: zipfile.ZipFile) -> str:
     from modules.project_adaptor import validate_project_archive_members
     if zip_ref:
@@ -698,7 +1369,7 @@ def generate_markdown_report(teproj_path: str, state: Dict[str, Any], zip_ref: z
             if item_path:
                 wav_usage.setdefault(item_path.replace("\\", "/"), []).append((name, item_id, item.get("label", "无")))
 
-            pitch_data, formant_data, p_status, f_status = load_item_cache_if_any(item, zip_ref)
+            pitch_data, formant_data, p_status, f_status = load_item_cache_if_any(item, zip_ref, spk=spk)
             item_warnings = analyze_item_anomalies(item, pitch_data, formant_data, params, p_status, f_status)
             if item.get("is_manual_edited"):
                 manually_adjusted += 1
@@ -953,6 +1624,8 @@ def generate_markdown_report(teproj_path: str, state: Dict[str, Any], zip_ref: z
         lines.append("工程中无任何被忽略或排除的分析条目。")
     lines.append("")
 
+    lines.extend(build_markdown_acoustic_summary_section(state, zip_ref=zip_ref))
+
     return "\n".join(lines)
 
 def write_excel_archive(teproj_path: str, state: Dict[str, Any], output_xlsx_path: str, include_cache_details: bool = False):
@@ -1150,7 +1823,7 @@ def write_excel_archive(teproj_path: str, state: Dict[str, Any], output_xlsx_pat
                     char_status = "字级边界缺失" if c_s == 0.0 and c_e == 0.0 else ("含词内切分点" if split_pt != "" else "正常")
                     char_boundary_rows.append([spk_name, group, item_id, label, "是" if is_excluded else "否", idx_syl + 1, syl, c_s, c_e, split_pt, char_status])
 
-                pitch_data, formant_data, p_status, f_status = load_item_cache_if_any(item, z)
+                pitch_data, formant_data, p_status, f_status = load_item_cache_if_any(item, z, spk=spk)
                 p_file = item.get("pitch_data_file")
                 if p_file: cache_statuses[p_file.replace("\\", "/")] = p_status
                 f_file = item.get("formant_data_file")

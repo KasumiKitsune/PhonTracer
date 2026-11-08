@@ -1,16 +1,73 @@
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, message=".*Glyph.*missing from.*font.*")
 import math
 import os
 import threading
 import queue
 from collections import Counter
 import numpy as np
-import parselmouth
+try:
+    import parselmouth
+except ImportError:
+    from modules import _parselmouth_fallback as parselmouth
+    import sys as _sys
+    _sys.modules.setdefault('parselmouth', parselmouth)
+    _sys.modules.setdefault('parselmouth.praat', parselmouth.praat)
 import matplotlib
 
 matplotlib.use("Agg", force=True)
 
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, message=".*Tight layout not applied.*")
+warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*Mean of empty slice.*")
+warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*Degrees of freedom <= 0 for slice.*")
+warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*All-NaN slice encountered.*")
+
+
+def _safe_nanmean(arr, axis=None, default=np.nan):
+    a = np.asarray(arr, dtype=float)
+    if a.size == 0:
+        return default
+    if axis is None:
+        valid = a[np.isfinite(a)]
+        return float(np.mean(valid)) if valid.size > 0 else default
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        if a.ndim == 2 and axis == 0:
+            out = np.full(a.shape[1], default, dtype=float)
+            for col_idx in range(a.shape[1]):
+                col = a[:, col_idx]
+                valid = col[np.isfinite(col)]
+                if valid.size > 0:
+                    out[col_idx] = float(np.mean(valid))
+            return out
+        return np.nanmean(a, axis=axis)
+
+
+def _safe_nanstd(arr, axis=None, default=np.nan):
+    a = np.asarray(arr, dtype=float)
+    if a.size == 0:
+        return default
+    if axis is None:
+        valid = a[np.isfinite(a)]
+        return float(np.std(valid)) if valid.size > 0 else default
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        if a.ndim == 2 and axis == 0:
+            out = np.full(a.shape[1], default, dtype=float)
+            for col_idx in range(a.shape[1]):
+                col = a[:, col_idx]
+                valid = col[np.isfinite(col)]
+                if valid.size > 0:
+                    out[col_idx] = float(np.std(valid))
+            return out
+        return np.nanstd(a, axis=axis)
+
+
+def _safe_nanmax(arr, default=np.nan):
+    a = np.asarray(arr, dtype=float)
+    valid = a[np.isfinite(a)]
+    return float(np.max(valid)) if valid.size > 0 else default
 
 from scipy.stats import gaussian_kde
 from .data_utils import split_into_syllables, get_export_text_for_item, get_item_syllable_bounds, sample_formant_points_by_bounds
@@ -318,7 +375,7 @@ class AcousticChartExporter:
                 for child in children:
                     item = speaker.items[child]
                     self.project_tree._ensure_item_loaded(item)
-                    if item.get('start') is None or not item.get('snd') or (not item.get('pitch') and not item.get('pitch_data')):
+                    if item.get('start') is None or (not item.get('pitch') and not item.get('pitch_data')):
                         continue
 
                     total_dur, syl_data = self.project_tree._extract_syl_data(item, num_points)
@@ -861,7 +918,7 @@ class AcousticChartExporter:
 
     # --- ADVANCED SCIENTIFIC PLOTTING ENGINE ---
     def generate_plot(self, data_entries, is_preview=True):
-        plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS', 'sans-serif']
+        plt.rcParams['font.sans-serif'] = ['Noto Sans CJK SC', 'Noto Sans CJK JP', 'WenQuanYi Micro Hei', 'SimHei', 'Microsoft YaHei', 'Arial Unicode MS', 'DejaVu Sans']
         plt.rcParams['axes.unicode_minus'] = False
 
         chart_type = self.get_param('chart_type', 'contour')
@@ -1126,8 +1183,8 @@ class AcousticChartExporter:
                     if not interpolated_ys:
                         continue
 
-                    mean_y = np.nanmean(interpolated_ys, axis=0)
-                    std_y = np.nanstd(interpolated_ys, axis=0)
+                    mean_y = _safe_nanmean(interpolated_ys, axis=0)
+                    std_y = _safe_nanstd(interpolated_ys, axis=0)
 
                     if "个体浅色" in content:
                         from matplotlib.collections import LineCollection
@@ -1308,11 +1365,12 @@ class AcousticChartExporter:
 
             if vectors:
                 vectors = np.array(vectors)
-                with np.errstate(all='ignore'):
+                with warnings.catch_warnings(), np.errstate(all='ignore'):
+                    warnings.simplefilter("ignore", category=RuntimeWarning)
                     if "均值" in metric:
-                        row_vec = np.nanmean(vectors, axis=0)
+                        row_vec = _safe_nanmean(vectors, axis=0)
                     else:
-                        row_vec = np.nanstd(vectors, axis=0)
+                        row_vec = _safe_nanstd(vectors, axis=0)
                 if np.isnan(row_vec).all():
                     row_vec = np.zeros(total_points)
                 matrix.append(row_vec)
@@ -1330,7 +1388,7 @@ class AcousticChartExporter:
         if show_deviation:
             cmap = 'RdBu_r'
             # Symmetric limits around 0
-            max_abs = np.nanmax(np.abs(matrix)) if len(matrix) > 0 else 1.0
+            max_abs = _safe_nanmax(np.abs(matrix), default=1.0) if len(matrix) > 0 else 1.0
             if np.isnan(max_abs) or max_abs <= 0:
                 max_abs = 1.0
             vmin = -max_abs
@@ -1576,18 +1634,19 @@ class AcousticChartExporter:
                 vectors_f2.append(f2_flat[:total_points])
                 vectors_ratio.append(ratio_flat[:total_points])
 
-            with np.errstate(all='ignore'):
+            with warnings.catch_warnings(), np.errstate(all='ignore'):
+                warnings.simplefilter("ignore", category=RuntimeWarning)
                 vectors_f1 = np.asarray(vectors_f1, dtype=float)
                 vectors_f2 = np.asarray(vectors_f2, dtype=float)
                 vectors_ratio = np.asarray(vectors_ratio, dtype=float)
                 if "均值" in metric:
-                    row_f1 = np.nanmean(vectors_f1, axis=0)
-                    row_f2 = np.nanmean(vectors_f2, axis=0)
-                    row_ratio = np.nanmean(vectors_ratio, axis=0)
+                    row_f1 = _safe_nanmean(vectors_f1, axis=0)
+                    row_f2 = _safe_nanmean(vectors_f2, axis=0)
+                    row_ratio = _safe_nanmean(vectors_ratio, axis=0)
                 else:
-                    row_f1 = np.nanstd(vectors_f1, axis=0)
-                    row_f2 = np.nanstd(vectors_f2, axis=0)
-                    row_ratio = np.nanstd(vectors_ratio, axis=0)
+                    row_f1 = _safe_nanstd(vectors_f1, axis=0)
+                    row_f2 = _safe_nanstd(vectors_f2, axis=0)
+                    row_ratio = _safe_nanstd(vectors_ratio, axis=0)
 
             matrix_f1.append(row_f1)
             matrix_f2.append(row_f2)
@@ -1898,8 +1957,8 @@ class AcousticChartExporter:
                     all_pts_flat.extend(valid_ys.tolist())
 
                 if all_pts_flat:
-                    mean_val = np.mean(all_pts_flat)
-                    std_val = np.nanstd(all_pts_flat)
+                    mean_val = _safe_nanmean(all_pts_flat, default=0.0)
+                    std_val = _safe_nanstd(all_pts_flat, default=0.0)
                     cv = (std_val / mean_val) if mean_val > 0 else 0.0
                     cv_values.append(cv)
                 else:
@@ -2521,6 +2580,9 @@ class AcousticChartExporter:
 
             out_path = os.path.join(dir_name, f"{name_part}_第{page_idx + 1}页{ext}")
             self._save_figure(fig, out_path)
+            if page_idx == 0 and os.path.abspath(out_path) != os.path.abspath(base_path):
+                import shutil as _shutil
+                _shutil.copy2(out_path, base_path)
             plt.close(fig)
 
     def _export_dataset(self, data, out_path, ext):
@@ -2589,7 +2651,7 @@ class AcousticChartExporter:
                 for child in children:
                     item = speaker.items[child]
                     self.project_tree._ensure_item_loaded(item)
-                    if item.get('start') is None or not item.get('snd') or not item.get('formant_data'):
+                    if item.get('start') is None or not item.get('formant_data'):
                         continue
 
                     # Get bounds and split into syllables
@@ -2833,7 +2895,7 @@ class AcousticChartExporter:
         except Exception:
             pass
 
-        D_max = float(np.nanmax(D)) if np.size(D) else 0.0
+        D_max = _safe_nanmax(D, default=0.0) if np.size(D) else 0.0
         if D_max <= 0:
             return None, all_f1.tolist(), all_f2.tolist()
 
@@ -2977,9 +3039,10 @@ class AcousticChartExporter:
             lbl_y = np.nan
 
             if time_gradient and len(trajs_f1) > 0 and len(trajs_f2) > 0:
-                with np.errstate(all='ignore'):
-                    mean_traj_f1 = np.nanmean(trajs_f1, axis=0)
-                    mean_traj_f2 = np.nanmean(trajs_f2, axis=0)
+                with warnings.catch_warnings(), np.errstate(all='ignore'):
+                    warnings.simplefilter("ignore", category=RuntimeWarning)
+                    mean_traj_f1 = _safe_nanmean(trajs_f1, axis=0)
+                    mean_traj_f2 = _safe_nanmean(trajs_f2, axis=0)
 
                 valid_mask = np.isfinite(mean_traj_f1) & np.isfinite(mean_traj_f2)
                 if np.any(valid_mask):
@@ -3002,8 +3065,8 @@ class AcousticChartExporter:
                     lbl_y = v_f1[mid_idx]
 
             if np.isnan(lbl_x) or np.isnan(lbl_y):
-                mean_f1 = np.mean(f1_list)
-                mean_f2 = np.mean(f2_list)
+                mean_f1 = _safe_nanmean(f1_list)
+                mean_f2 = _safe_nanmean(f2_list)
                 ax.scatter(mean_f2, mean_f1, color=color, s=150, marker='o', edgecolors='black', linewidth=1.2, zorder=6, label=str(cat))
                 lbl_x = mean_f2
                 lbl_y = mean_f1
@@ -3383,11 +3446,12 @@ class AcousticChartExporter:
             if len(f1_arr) == 0 or len(f2_arr) == 0:
                 continue
 
-            with np.errstate(all='ignore'):
-                mean_f1 = np.nanmean(f1_arr, axis=0)
-                std_f1 = np.nanstd(f1_arr, axis=0)
-                mean_f2 = np.nanmean(f2_arr, axis=0)
-                std_f2 = np.nanstd(f2_arr, axis=0)
+            with warnings.catch_warnings(), np.errstate(all='ignore'):
+                warnings.simplefilter("ignore", category=RuntimeWarning)
+                mean_f1 = _safe_nanmean(f1_arr, axis=0)
+                std_f1 = _safe_nanstd(f1_arr, axis=0)
+                mean_f2 = _safe_nanmean(f2_arr, axis=0)
+                std_f2 = _safe_nanstd(f2_arr, axis=0)
 
             if "个体浅色细线" in traj_style:
                 from matplotlib.collections import LineCollection
@@ -3659,6 +3723,9 @@ class AcousticChartExporter:
 
             out_path = os.path.join(dir_name, f"{name_part}_第{page_idx + 1}页{ext}")
             self._save_figure(fig, out_path)
+            if page_idx == 0 and os.path.abspath(out_path) != os.path.abspath(base_path):
+                import shutil as _shutil
+                _shutil.copy2(out_path, base_path)
             plt.close(fig)
 
 

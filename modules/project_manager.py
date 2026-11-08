@@ -9,6 +9,13 @@ import math
 import hashlib
 import logging
 import numpy as np
+try:
+    import parselmouth
+except ImportError:
+    from modules import _parselmouth_fallback as parselmouth
+    import sys as _sys
+    _sys.modules.setdefault('parselmouth', parselmouth)
+    _sys.modules.setdefault('parselmouth.praat', parselmouth.praat)
 import threading
 import traceback
 import time
@@ -676,6 +683,9 @@ class ProjectManager:
                     "project_groups": spk_project_groups,
                     "items": {}
                 }
+                spk_wl_doc = getattr(spk, "wordlist_doc", None)
+                if isinstance(spk_wl_doc, dict):
+                    spk_data["wordlist_doc"] = copy.deepcopy(spk_wl_doc)
                 existing_long_pitch = getattr(spk, 'long_pitch_data_file', None)
                 if existing_long_pitch:
                     spk_data["long_pitch_data_file"] = existing_long_pitch
@@ -1287,6 +1297,13 @@ class ProjectManager:
                     item['item_aliases'] = item['aliases']
                 if 'meta' in item and 'item_meta' not in item:
                     item['item_meta'] = item['meta']
+                if 'item_meta' in item and isinstance(item['item_meta'], dict):
+                    item.setdefault('fields', copy.deepcopy(item['item_meta']))
+                    item.setdefault('custom_fields', copy.deepcopy(item['item_meta']))
+                if 'item_tags' in item and 'tags' not in item:
+                    item['tags'] = copy.deepcopy(item['item_tags'])
+                if 'item_note' in item and 'note' not in item:
+                    item['note'] = item['item_note']
                 grp_info = groups_lookup.get(item.get('group', '默认组'), {})
                 if isinstance(grp_info, dict):
                     if 'group_note' not in item and grp_info.get('note'):
@@ -1304,6 +1321,10 @@ class ProjectManager:
 
                 spk.items[item_id] = item
 
+            if isinstance(spk_data.get("wordlist_doc"), dict):
+                spk.wordlist_doc = copy.deepcopy(spk_data["wordlist_doc"])
+            elif isinstance(state.get("wordlist_doc"), dict):
+                spk.wordlist_doc = copy.deepcopy(state["wordlist_doc"])
             restored[spk.id] = spk
 
         if not overlay:
@@ -1340,3 +1361,4 @@ class ProjectManager:
         self.app.custom_script_runs = state.get("custom_script_runs", [])
 
 ProjectManager.import_project = ProjectManager.load_project
+ProjectManager.export_project_archive = ProjectManager.export_project

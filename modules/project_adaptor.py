@@ -8,6 +8,13 @@ import struct
 import math
 import hashlib
 import numpy as np
+try:
+    import parselmouth
+except ImportError:
+    from modules import _parselmouth_fallback as parselmouth
+    import sys as _sys
+    _sys.modules.setdefault("parselmouth", parselmouth)
+    _sys.modules.setdefault("parselmouth.praat", parselmouth.praat)
 
 MAX_ARCHIVE_MEMBERS = 100000
 MAX_SINGLE_MEMBER_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB

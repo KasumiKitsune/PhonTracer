@@ -2,7 +2,13 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 import customtkinter as ctk
 import numpy as np
-import parselmouth
+try:
+    import parselmouth
+except ImportError:
+    from modules import _parselmouth_fallback as parselmouth
+    import sys as _sys
+    _sys.modules.setdefault("parselmouth", parselmouth)
+    _sys.modules.setdefault("parselmouth.praat", parselmouth.praat)
 import sounddevice as sd
 import platform
 import time

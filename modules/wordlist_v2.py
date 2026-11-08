@@ -1,11 +1,45 @@
 import csv
 import io
 import json
+import os
 import re
 from copy import deepcopy
 from typing import Any, Dict, List, Optional, Tuple
 
-from .data_utils import parse_wordlist
+try:
+    from .data_utils import parse_wordlist
+except Exception:
+    def parse_wordlist(raw_text: str) -> Tuple[List[Dict[str, Any]], List[str]]:
+        groups = []
+        flat_words = []
+        curr_group = "未分组"
+        curr_items = []
+        raw_text = (raw_text or "").lstrip("\ufeff")
+        for line in raw_text.split("\n"):
+            line = line.strip()
+            if not line or line.startswith("```"):
+                continue
+            if line.startswith("【") or line.startswith("[") or line.startswith("［") or line.startswith("#"):
+                if curr_items:
+                    groups.append({"group": curr_group, "items": curr_items})
+                    curr_items = []
+                curr_group = (
+                    line.replace("【", "")
+                    .replace("】", "")
+                    .replace("[", "")
+                    .replace("]", "")
+                    .replace("［", "")
+                    .replace("］", "")
+                    .replace("#", "")
+                    .strip()
+                )
+            else:
+                words = [w.strip() for w in re.split(r"[,\s\t，、;；]+", line) if w.strip()]
+                curr_items.extend(words)
+                flat_words.extend(words)
+        if curr_items:
+            groups.append({"group": curr_group, "items": curr_items})
+        return groups, flat_words
 
 
 WORDLIST_SCHEMA = "phontracer.wordlist.v2"
@@ -22,6 +56,8 @@ TITLE_DIRECTIVE_RE = re.compile(
     r"^(?:(?:#|@)\s*(?:title|标题)\s*[:：]?|(?:title|标题)\s*[:：])\s*(.+)$",
     flags=re.IGNORECASE
 )
+
+STRUCTURED_KV_PIPE_RE = re.compile(r"\|\s*[^|=\s]+\s*=")
 
 ADVANCED_WORDLIST_AGENT_PROMPT = """你现在是 PhonTracer 高级字表整理 Agent。
 
@@ -110,6 +146,21 @@ def _as_text(value: Any) -> str:
     return str(value).strip()
 
 
+def _read_text_file_with_fallback(path: str) -> str:
+    last_error = None
+    for encoding in ("utf-8-sig", "utf-8", "gbk"):
+        try:
+            with open(path, "r", encoding=encoding) as f:
+                return f.read()
+        except UnicodeDecodeError as e:
+            last_error = e
+    if last_error:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            return f.read()
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        return f.read()
+
+
 def _split_text_list(value: Any) -> List[str]:
     if isinstance(value, list):
         values = value
@@ -140,7 +191,11 @@ def _normalize_item(item: Any, fallback_label: str = "", fallback_id: str = "") 
     elif not isinstance(item, dict):
         item = {}
 
-    meta = _normalize_meta(item.get("meta", {}))
+    meta: Dict[str, str] = {}
+    for meta_field in ("custom_fields", "fields", "item_meta", "meta"):
+        if isinstance(item.get(meta_field), dict):
+            meta.update(_normalize_meta(item.get(meta_field)))
+
     for source_key, meta_key in (
         ("pinyin", META_PINYIN),
         ("拼音", META_PINYIN),
@@ -156,14 +211,22 @@ def _normalize_item(item: Any, fallback_label: str = "", fallback_id: str = "") 
     if not item_id and fallback_id:
         item_id = fallback_id
 
+    raw_tags = item.get("tags") if item.get("tags") else item.get("item_tags", [])
+    raw_aliases = item.get("aliases") if item.get("aliases") else item.get("item_aliases", [])
+
     return {
         "id": item_id,
         "label": _as_text(item.get("label") or item.get("word") or fallback_label),
         "note": _as_text(item.get("note") or item.get("item_note")),
-        "tags": _split_text_list(item.get("tags", [])),
-        "aliases": _split_text_list(item.get("aliases", [])),
+        "tags": _split_text_list(raw_tags),
+        "aliases": _split_text_list(raw_aliases),
         "meta": meta,
-        "metadata_source": _as_text(item.get("metadata_source") or item.get("auto_status") or item.get("review_status") or DEFAULT_REVIEW_STATUS),
+        "metadata_source": _as_text(
+            item.get("metadata_source")
+            or item.get("auto_status")
+            or item.get("review_status")
+            or DEFAULT_REVIEW_STATUS
+        ),
     }
 
 
@@ -175,6 +238,8 @@ def _normalize_group(group: Any, index: int = 0) -> Dict[str, Any]:
 
     grp_id = _as_text(group.get("id", "")) or f"grp_{index + 1}"
     name = _as_text(group.get("name") or group.get("group") or f"组{index + 1}")
+    raw_tags = group.get("tags") if group.get("tags") else group.get("group_tags", [])
+    raw_meta = group.get("meta") if isinstance(group.get("meta"), dict) else group.get("group_meta", {})
     items = [
         _normalize_item(item, fallback_id=f"slot_{index + 1}_{item_idx + 1}")
         for item_idx, item in enumerate(group.get("items", []))
@@ -183,8 +248,8 @@ def _normalize_group(group: Any, index: int = 0) -> Dict[str, Any]:
         "id": grp_id,
         "name": name or "未分组",
         "note": _as_text(group.get("note") or group.get("group_note")),
-        "tags": _split_text_list(group.get("tags", [])),
-        "meta": _normalize_meta(group.get("meta", {})),
+        "tags": _split_text_list(raw_tags),
+        "meta": _normalize_meta(raw_meta),
         "items": items,
     }
 
@@ -215,11 +280,11 @@ def normalize_wordlist_document(raw: Any) -> Dict[str, Any]:
         groups_raw = []
     groups = [_normalize_group(group, idx) for idx, group in enumerate(groups_raw)]
     if not groups:
-        groups = create_empty_wordlist_document().get("groups", [])
+        groups = [_normalize_group(g, idx) for idx, g in enumerate(create_empty_wordlist_document().get("groups", []))]
     return {
         "schema": WORDLIST_SCHEMA,
-        "title": _as_text(raw.get("title") or "未命名字表"),
-        "note": _as_text(raw.get("note")),
+        "title": _as_text(raw.get("title") or raw.get("wordlist_title") or "未命名字表"),
+        "note": _as_text(raw.get("note") or raw.get("wordlist_note")),
         "groups": groups,
     }
 
@@ -239,16 +304,155 @@ def build_document_from_v1_text(raw_text: str, title: str = "从普通字表导�
         })
     if not doc["groups"]:
         doc["groups"] = create_empty_wordlist_document().get("groups", [])
-    return doc
+    return normalize_wordlist_document(doc)
+
+
+def build_document_from_messy_text(raw_text: str, title: str = "从普通字表导入") -> Dict[str, Any]:
+    """
+    将普通或随手编写的杂乱字表文本解析并升级为标准 v2 高级字表文档。
+    兼容：
+    - 结构化指令或 CSV 文本（若自动识别命中则直接转交对应构建器）
+    - 【组名】、[组名]、［组名］、# 组名 以及同行带词条如“【阴平】 妈 麻”或“第一组：妈、麻”
+    - 词条序号前缀（如 1. 播音、2、高峰、(1)播音）与括号内备注/别名（如 播音(boyin)、播音（阴阴））
+    """
+    clean_text = _strip_markdown_code_fence((raw_text or "").lstrip("\ufeff"))
+    if looks_like_structured_wordlist_text(clean_text):
+        return build_document_from_structured_text(clean_text, title=title)
+    if looks_like_csv_wordlist_text(clean_text):
+        return build_document_from_csv_text(clean_text, title=title)
+
+    doc = create_empty_wordlist_document(title=title)
+    doc["groups"] = []
+    group_map: Dict[str, Dict[str, Any]] = {}
+    curr_group_name = "未分组"
+
+    def get_or_create_group(g_name: str) -> Dict[str, Any]:
+        g_name = _as_text(g_name) or "未分组"
+        if g_name not in group_map:
+            grp = {
+                "id": "",
+                "name": g_name,
+                "note": "",
+                "tags": [],
+                "meta": {},
+                "items": [],
+            }
+            group_map[g_name] = grp
+            doc["groups"].append(grp)
+        return group_map[g_name]
+
+    def append_words_from_fragment(fragment: str, g_name: str, line_note: str = "") -> None:
+        raw_tokens = [w.strip() for w in re.split(r"[,\s\t，、;；]+", fragment) if w.strip()]
+        for token in raw_tokens:
+            # 剥离常见列表编号前缀，如 "1.播音"、"01、播音"、"(1)播音"
+            cleaned = re.sub(
+                r"^(?:\(\d+\)|（\d+）|\d+[.、)）]|[①-⑳])\s*(?=[^\d\s])",
+                "",
+                token,
+            ).strip()
+            if not cleaned or re.match(r"^(?:\(\d+\)|（\d+）|\d+[.、)）]?|[-*•]+)$", cleaned):
+                continue
+
+            item_note = line_note
+            aliases: List[str] = []
+            label = cleaned
+
+            # 识别形如 "播音(boyin)" 或 "播音（阴阴目标词）" 的括号附注
+            paren_match = re.match(r"^([^\s(（]+?)[(（]([^)）]+)[)）]$", cleaned)
+            if paren_match:
+                label = _as_text(paren_match.group(1))
+                inner = _as_text(paren_match.group(2))
+                if inner:
+                    if re.match(r"^[a-zA-Z0-9_\-\s]+$", inner):
+                        aliases.append(inner)
+                    item_note = f"{inner}；{item_note}".strip("；") if item_note else inner
+
+            if not label:
+                continue
+
+            grp = get_or_create_group(g_name)
+            grp["items"].append(
+                _normalize_item({
+                    "label": label,
+                    "note": item_note,
+                    "aliases": aliases,
+                })
+            )
+
+    bracket_group_re = re.compile(r"^(?:【([^】]+)】|\[([^\]]+)\]|［([^］]+)］)\s*[:：]?\s*(.*)$")
+
+    for raw_line in clean_text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("```"):
+            continue
+
+        title_match = TITLE_DIRECTIVE_RE.match(line)
+        if title_match:
+            doc["title"] = _as_text(title_match.group(1)) or doc["title"]
+            continue
+        if line.lower().startswith("@title"):
+            t_val = _as_text(line[len("@title"):].lstrip(":： "))
+            if t_val:
+                doc["title"] = t_val
+            continue
+
+        # 提取行尾 // 注释作为备注
+        line_note = ""
+        if "//" in line:
+            line, comment_part = line.split("//", 1)
+            line = line.strip()
+            line_note = comment_part.strip()
+            if not line:
+                continue
+
+        b_match = bracket_group_re.match(line)
+        if b_match:
+            curr_group_name = _as_text(b_match.group(1) or b_match.group(2) or b_match.group(3)) or "未分组"
+            get_or_create_group(curr_group_name)
+            trailing = _as_text(b_match.group(4))
+            if trailing:
+                append_words_from_fragment(trailing, curr_group_name, line_note=line_note)
+            continue
+
+        if line.startswith("#"):
+            grp_candidate = line.lstrip("#").strip()
+            if grp_candidate:
+                curr_group_name = grp_candidate
+                get_or_create_group(curr_group_name)
+            continue
+
+        # 识别形如 "第一组：妈 麻" 或 "阴平组：" 的冒号分组头
+        if ("：" in line or ":" in line) and "|" not in line:
+            sep = "：" if "：" in line else ":"
+            left, right = line.split(sep, 1)
+            left_clean = re.sub(r"^(?:[\d一二三四五六七八九十]+[.、\s]+)", "", left.strip()).strip()
+            if left_clean and len(left_clean) <= 24 and not re.search(r"[,，、;；]", left_clean):
+                curr_group_name = left_clean
+                get_or_create_group(curr_group_name)
+                if right.strip():
+                    append_words_from_fragment(right.strip(), curr_group_name, line_note=line_note)
+                continue
+
+        append_words_from_fragment(line, curr_group_name, line_note=line_note)
+
+    if not doc["groups"]:
+        doc["groups"] = create_empty_wordlist_document().get("groups", [])
+    return normalize_wordlist_document(doc)
 
 
 def looks_like_structured_wordlist_text(text: str) -> bool:
-    for raw_line in (text or "").splitlines():
+    for raw_line in (text or "").lstrip("\ufeff").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("```"):
             continue
         lowered = line.lower()
-        if lowered.startswith("@group") or lowered.startswith("@defaults") or TITLE_DIRECTIVE_RE.match(line):
+        if (
+            lowered.startswith("@group")
+            or lowered.startswith("@defaults")
+            or lowered.startswith("@title")
+            or TITLE_DIRECTIVE_RE.match(line)
+            or bool(STRUCTURED_KV_PIPE_RE.search(line))
+        ):
             return True
     return False
 
@@ -370,7 +574,9 @@ def build_document_from_structured_text(text: str, title: str = "从结构化文
             doc["groups"].append(current_group)
         return current_group
 
-    for raw_line in (text or "").splitlines():
+    bracket_re = re.compile(r"^(?:【([^】]+)】|\[([^\]]+)\]|［([^］]+)］)$")
+
+    for raw_line in (text or "").lstrip("\ufeff").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("```"):
             continue
@@ -407,6 +613,22 @@ def build_document_from_structured_text(text: str, title: str = "从结构化文
             doc["groups"].append(current_group)
             continue
 
+        b_match = bracket_re.match(head)
+        if b_match:
+            defaults = {}
+            group_name = _as_text(b_match.group(1) or b_match.group(2) or b_match.group(3)) or "未分组"
+            current_group = {
+                "id": "",
+                "name": group_name,
+                "note": "",
+                "tags": [],
+                "meta": {},
+                "items": [],
+            }
+            _apply_structured_group_attrs(current_group, attrs)
+            doc["groups"].append(current_group)
+            continue
+
         if lowered.startswith("@defaults"):
             defaults = dict(attrs)
             continue
@@ -424,15 +646,200 @@ def build_document_from_structured_text(text: str, title: str = "从结构化文
 
 
 def load_wordlist_document(path: str) -> Dict[str, Any]:
-    with open(path, "r", encoding="utf-8") as f:
-        raw = json.load(f)
+    text = _read_text_file_with_fallback(path)
+    raw = json.loads(text)
     return normalize_wordlist_document(raw)
 
 
-def save_wordlist_document(doc: Dict[str, Any], path: str) -> None:
+def load_wordlist_file(path: str, title: Optional[str] = None) -> Dict[str, Any]:
+    """加载 .ptwl（或自动回退解析 .csv / 结构化 .txt / 普通 .txt）并规范化为 v2 字表文档。"""
+    text = _read_text_file_with_fallback(path)
+    default_title = _as_text(title) or os.path.splitext(os.path.basename(path))[0] or "未命名字表"
+    doc: Optional[Dict[str, Any]] = None
+    stripped = (text or "").lstrip("\ufeff").strip()
+    if stripped.startswith("{") or str(path).lower().endswith(".ptwl"):
+        try:
+            raw = json.loads(stripped)
+            if isinstance(raw, dict):
+                doc = normalize_wordlist_document(raw)
+        except Exception:
+            if str(path).lower().endswith(".ptwl"):
+                raise
+    if doc is None:
+        lower = str(path).lower()
+        if lower.endswith(".csv") or looks_like_csv_wordlist_text(stripped):
+            doc = build_document_from_csv_text(stripped, title=default_title)
+        elif looks_like_structured_wordlist_text(stripped):
+            doc = build_document_from_structured_text(stripped, title=default_title)
+        else:
+            doc = build_document_from_messy_text(stripped, title=default_title)
+    if title and _as_text(title):
+        doc["title"] = _as_text(title)
+    return normalize_wordlist_document(doc)
+
+
+def load_wordlist_from_csv_file(path: str, title: Optional[str] = None) -> Dict[str, Any]:
+    """从 CSV 文件加载并构建标准 v2 高级字表文档。"""
+    csv_text = _read_text_file_with_fallback(path)
+    resolved_title = _as_text(title) or os.path.splitext(os.path.basename(path))[0] or "从表格导入"
+    doc = build_document_from_csv_text(csv_text, title=resolved_title)
+    if title and _as_text(title):
+        doc["title"] = _as_text(title)
+    return normalize_wordlist_document(doc)
+
+
+def save_wordlist_file(doc_or_path: Any, path_or_doc: Any = None) -> Dict[str, Any]:
+    """保存标准 v2 高级字表文档（支持 (doc, path) 或 (path, doc) 参数顺序）。"""
+    if isinstance(doc_or_path, (str, os.PathLike)) and isinstance(path_or_doc, dict):
+        path = os.fspath(doc_or_path)
+        doc = path_or_doc
+    else:
+        doc = doc_or_path
+        path = os.fspath(path_or_doc)
     normalized = normalize_wordlist_document(doc)
+    parent = os.path.dirname(os.path.abspath(path))
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(normalized, f, ensure_ascii=False, indent=2)
+    return normalized
+
+
+def save_wordlist_document(doc: Dict[str, Any], path: str) -> Dict[str, Any]:
+    return save_wordlist_file(doc, path)
+
+
+def build_wordlist_document_from_items(
+    items: Any,
+    groups_order: Optional[List[str]] = None,
+    base_doc: Optional[Dict[str, Any]] = None,
+    title: Optional[str] = None,
+) -> Dict[str, Any]:
+    """从当前词条字典/列表（及可选的已有 wordlist_doc）构建规范化的 v2 .ptwl 文档。"""
+    norm_base = normalize_wordlist_document(base_doc) if isinstance(base_doc, dict) else None
+
+    if isinstance(items, dict):
+        item_list = list(items.values())
+    elif isinstance(items, (list, tuple)):
+        item_list = list(items)
+    else:
+        item_list = []
+
+    if not item_list and norm_base:
+        if title and _as_text(title):
+            norm_base = deepcopy(norm_base)
+            norm_base["title"] = _as_text(title)
+        return normalize_wordlist_document(norm_base)
+
+    doc_title = _as_text(title)
+    if not doc_title and norm_base:
+        doc_title = _as_text(norm_base.get("title"))
+    if not doc_title:
+        for it in item_list:
+            if isinstance(it, dict) and _as_text(it.get("wordlist_title")):
+                doc_title = _as_text(it.get("wordlist_title"))
+                break
+    doc_title = doc_title or "未命名字表"
+    doc_note = _as_text(norm_base.get("note")) if norm_base else ""
+
+    base_group_lookup: Dict[str, Dict[str, Any]] = {}
+    base_item_lookup: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    if norm_base:
+        for grp in norm_base.get("groups", []):
+            gname = _as_text(grp.get("name")) or "未分组"
+            base_group_lookup[gname] = grp
+            for git in grp.get("items", []):
+                lbl = _as_text(git.get("label"))
+                if lbl and (gname, lbl) not in base_item_lookup:
+                    base_item_lookup[(gname, lbl)] = git
+
+    groups_dict: Dict[str, Dict[str, Any]] = {}
+    ordered_group_names: List[str] = []
+
+    for gname in (groups_order or []):
+        g_clean = _as_text(gname)
+        if g_clean and g_clean not in ordered_group_names:
+            ordered_group_names.append(g_clean)
+
+    for it in item_list:
+        if not isinstance(it, dict):
+            continue
+        g_clean = _as_text(it.get("group")) or "未分组"
+        if g_clean not in ordered_group_names:
+            ordered_group_names.append(g_clean)
+
+    for g_clean in ordered_group_names:
+        base_grp = base_group_lookup.get(g_clean, {})
+        groups_dict[g_clean] = {
+            "id": _as_text(base_grp.get("id", "")),
+            "name": g_clean,
+            "note": _as_text(base_grp.get("note", "")),
+            "tags": list(base_grp.get("tags", [])),
+            "meta": dict(base_grp.get("meta", {})),
+            "items": [],
+        }
+
+    for idx, it in enumerate(item_list):
+        if not isinstance(it, dict):
+            continue
+        label = _as_text(it.get("label") or it.get("word"))
+        if not label:
+            continue
+        g_clean = _as_text(it.get("group")) or "未分组"
+        grp = groups_dict.setdefault(
+            g_clean,
+            {"id": "", "name": g_clean, "note": "", "tags": [], "meta": {}, "items": []},
+        )
+        if not grp["note"] and _as_text(it.get("group_note")):
+            grp["note"] = _as_text(it.get("group_note"))
+        for gtag in _split_text_list(it.get("group_tags", [])):
+            if gtag not in grp["tags"]:
+                grp["tags"].append(gtag)
+        if isinstance(it.get("group_meta"), dict):
+            for gk, gv in _normalize_meta(it.get("group_meta")).items():
+                grp["meta"].setdefault(gk, gv)
+
+        base_it = base_item_lookup.get((g_clean, label), {})
+        merged_meta: Dict[str, str] = {}
+        if isinstance(base_it.get("meta"), dict):
+            merged_meta.update(_normalize_meta(base_it.get("meta")))
+        for mf in ("meta", "item_meta", "fields", "custom_fields"):
+            if isinstance(it.get(mf), dict):
+                merged_meta.update(_normalize_meta(it.get(mf)))
+
+        item_tags = _split_text_list(it.get("tags") or it.get("item_tags") or base_it.get("tags") or [])
+        item_aliases = _split_text_list(it.get("aliases") or it.get("item_aliases") or base_it.get("aliases") or [])
+        item_note = _as_text(it.get("note") or it.get("item_note") or base_it.get("note") or "")
+        metadata_source = _as_text(
+            it.get("metadata_source")
+            or it.get("review_status")
+            or base_it.get("metadata_source")
+            or DEFAULT_REVIEW_STATUS
+        )
+
+        grp["items"].append(
+            _normalize_item(
+                {
+                    "id": _as_text(it.get("id") or base_it.get("id") or f"slot_{idx + 1}"),
+                    "label": label,
+                    "note": item_note,
+                    "tags": item_tags,
+                    "aliases": item_aliases,
+                    "meta": merged_meta,
+                    "metadata_source": metadata_source,
+                }
+            )
+        )
+
+    final_groups = [g for g in groups_dict.values() if g.get("items") or len(groups_dict) == 1]
+    return normalize_wordlist_document(
+        {
+            "schema": WORDLIST_SCHEMA,
+            "title": doc_title,
+            "note": doc_note,
+            "groups": final_groups,
+        }
+    )
 
 
 def flatten_wordlist_document(doc: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], List[str], List[Dict[str, Any]]]:
@@ -462,6 +869,12 @@ def flatten_wordlist_document(doc: Dict[str, Any]) -> Tuple[List[Dict[str, Any]]
                 "item_tags": list(item.get("tags", [])),
                 "item_aliases": list(item.get("aliases", [])),
                 "item_meta": merged_meta,
+                "note": item.get("note", ""),
+                "tags": list(item.get("tags", [])),
+                "aliases": list(item.get("aliases", [])),
+                "meta": dict(merged_meta),
+                "fields": dict(merged_meta),
+                "custom_fields": dict(merged_meta),
                 "metadata_source": item.get("metadata_source", DEFAULT_REVIEW_STATUS),
                 "wordlist_version": "v2",
                 "wordlist_title": normalized.get("title", ""),
@@ -480,17 +893,43 @@ def flatten_wordlist_document(doc: Dict[str, Any]) -> Tuple[List[Dict[str, Any]]
 def metadata_from_record(record: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if not record:
         return {"wordlist_version": "v1"}
-    return {
+    item_note = _as_text(record.get("item_note") or record.get("note") or "")
+    item_tags = list(record.get("item_tags") or record.get("tags") or [])
+    item_aliases = list(record.get("item_aliases") or record.get("aliases") or [])
+    item_meta = dict(
+        record.get("item_meta")
+        or record.get("meta")
+        or record.get("fields")
+        or record.get("custom_fields")
+        or {}
+    )
+    group_note = _as_text(record.get("group_note") or "")
+    group_tags = list(record.get("group_tags") or [])
+    group_meta = dict(record.get("group_meta") or {})
+    metadata_source = _as_text(record.get("metadata_source") or DEFAULT_REVIEW_STATUS)
+    result = {
         "wordlist_version": "v2",
         "wordlist_title": record.get("wordlist_title", ""),
-        "item_note": record.get("item_note", ""),
-        "item_tags": list(record.get("item_tags", [])),
-        "item_aliases": list(record.get("item_aliases", [])),
-        "item_meta": dict(record.get("item_meta", {})),
-        "group_note": record.get("group_note", ""),
-        "group_tags": list(record.get("group_tags", [])),
-        "metadata_source": record.get("metadata_source", DEFAULT_REVIEW_STATUS),
+        "item_note": item_note,
+        "item_tags": list(item_tags),
+        "item_aliases": list(item_aliases),
+        "item_meta": dict(item_meta),
+        "group_note": group_note,
+        "group_tags": list(group_tags),
+        "group_meta": dict(group_meta),
+        "metadata_source": metadata_source,
+        "note": item_note,
+        "tags": list(item_tags),
+        "aliases": list(item_aliases),
+        "meta": dict(item_meta),
+        "fields": dict(item_meta),
+        "custom_fields": dict(item_meta),
     }
+    if record.get("group"):
+        result["group"] = record["group"]
+    if record.get("label") or record.get("word"):
+        result["label"] = record.get("label") or record.get("word")
+    return result
 
 
 def apply_record_metadata(item: Dict[str, Any], record: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -511,7 +950,7 @@ def document_to_v1_text(doc: Dict[str, Any]) -> str:
 
 
 def build_document_from_csv_text(csv_text: str, title: str = "从表格导入") -> Dict[str, Any]:
-    clean_csv = _strip_markdown_code_fence(csv_text)
+    clean_csv = _strip_markdown_code_fence((csv_text or "").lstrip("\ufeff"))
     stream = io.StringIO(clean_csv or "")
     reader = csv.DictReader(stream)
     doc = create_empty_wordlist_document(title=title)

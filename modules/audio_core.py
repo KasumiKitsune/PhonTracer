@@ -3,7 +3,13 @@ import os
 import tempfile
 import shutil
 from typing import Tuple, List, Union, Dict, Any
-import parselmouth
+try:
+    import parselmouth
+except ImportError:
+    from modules import _parselmouth_fallback as parselmouth
+    import sys as _sys
+    _sys.modules.setdefault("parselmouth", parselmouth)
+    _sys.modules.setdefault("parselmouth.praat", parselmouth.praat)
 
 def load_compatible_sound(path: str) -> parselmouth.Sound:
     """

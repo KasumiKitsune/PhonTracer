@@ -5,6 +5,13 @@ import re
 import csv
 import subprocess
 import platform
+try:
+    import parselmouth
+except ImportError:
+    from modules import _parselmouth_fallback as parselmouth
+    import sys as _sys
+    _sys.modules.setdefault("parselmouth", parselmouth)
+    _sys.modules.setdefault("parselmouth.praat", parselmouth.praat)
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import customtkinter as ctk
@@ -117,7 +124,6 @@ def start_safe_thread(target):
 
 import numpy as np
 
-import parselmouth
 from PIL import Image, ImageTk
 import hashlib
 import datetime

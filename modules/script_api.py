@@ -9,6 +9,13 @@ import json
 import math
 import tempfile
 import numpy as np
+try:
+    import parselmouth
+except ImportError:
+    from modules import _parselmouth_fallback as parselmouth
+    import sys as _sys
+    _sys.modules.setdefault("parselmouth", parselmouth)
+    _sys.modules.setdefault("parselmouth.praat", parselmouth.praat)
 
 
 def configure_matplotlib_chinese_font():

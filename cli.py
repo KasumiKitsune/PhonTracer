@@ -3,7 +3,15 @@ import shlex
 import sys
 import os
 import re
+import shutil
+import inspect
+import warnings
 import multiprocessing
+
+warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*Mean of empty slice.*")
+warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*Degrees of freedom <= 0 for slice.*")
+warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*All-NaN slice encountered.*")
+warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 # Force sys.stdin, sys.stdout, sys.stderr to use UTF-8 encoding to avoid encoding issues (especially on Windows)
 if sys.stdin and hasattr(sys.stdin, 'reconfigure'):
@@ -22,8 +30,19 @@ if sys.stderr and hasattr(sys.stderr, 'reconfigure'):
     except Exception:
         pass
 
-import parselmouth
+warnings.filterwarnings("ignore", category=UserWarning, message=".*Glyph.*missing from.*font.*")
+
 import numpy as np
+
+import copy
+import glob
+try:
+    import parselmouth
+except ImportError:
+    from modules import _parselmouth_fallback as parselmouth
+    sys.modules.setdefault("parselmouth", parselmouth)
+    sys.modules.setdefault("parselmouth.praat", parselmouth.praat)
+import textgrid
 import concurrent.futures
 from collections import OrderedDict
 import json
@@ -60,6 +79,37 @@ from modules.textgrid_converter import (
     preview_textgrid_conversion,
     recommend_tier_names,
 )
+
+
+from modules.wordlist_v2 import (
+    WORDLIST_SCHEMA,
+    apply_record_metadata,
+    build_document_from_csv_text,
+    build_document_from_messy_text,
+    build_document_from_structured_text,
+    build_document_from_v1_text,
+    build_wordlist_document_from_items,
+    create_empty_wordlist_document,
+    flatten_wordlist_document,
+    load_wordlist_document,
+    load_wordlist_file,
+    load_wordlist_from_csv_file,
+    looks_like_csv_wordlist_text,
+    looks_like_structured_wordlist_text,
+    metadata_from_record,
+    normalize_wordlist_document,
+    save_wordlist_document,
+    save_wordlist_file,
+    summarize_wordlist_document,
+    validate_wordlist_document,
+)
+
+COMMON_AUDIO_EXTENSIONS = ('.wav', '.mp3', '.flac', '.ogg', '.m4a', '.aac', '.wma')
+
+
+def _natural_sort_key(s):
+    text = os.path.basename(str(s))
+    return [int(part) if part.isdigit() else part.lower() for part in re.split(r'([0-9]+)', text)]
 
 class LoggerOut:
     def __init__(self, original_stdout, log_file):
@@ -212,25 +262,258 @@ def _calc_preview_f0(preview_times, pitch_xs, pitch_freqs, valid_xs=None):
             preview_f0[j] = 0.0
     return preview_f0
 
+def get_cli_help_text(lang='en'):
+    if str(lang or 'en').lower().startswith('zh') or str(lang).lower() in ('cn', 'chinese', '中文'):
+        return f"""
+================================================================================
+                            {APP_NAME}语音学标注与声学分析系统 V{__version__} 命令行手册 (批处理与开发者指南)
+================================================================================
+AI 操作守则：优先只使用本 CLI。除非用户明确要求，不要直接编辑源码、移动/删除文件、
+不要绕过 CLI 去操作工程数据。需要说明时，请先用 `status`、`list_items`、`agent_guide` 确认。
+
+--- 全局启动选项 (Global Startup Options) ---
+* `--project <filepath.teproj>`: 绑定持久工程文件（启动时若存在自动载入，退出或状态变更后自动保存回 `<filepath.teproj>`，强烈推荐单步交互使用！）
+* `--workspace <dir>`: 指定持久化工作区目录（若 `<dir>/project.json` 已存在则自动调用 `project_load` 恢复，退出前自动调用 `project_save` 落盘，且绝不删除该目录）
+* `--script-file <commands.txt>` / `--batch-cmds <file>`: 批量剧本模式，按行读取 UTF-8 命令文件（自动剥离 BOM，跳过空行与 `#` 注释），遇 `success: false` 立即中止并报告 `failed_line` 和 `failed_command`
+* `--lang zh|en`: 指定 CLI 引导与回执语言（若未指定且命令行参数含中文字符，自动切换为 `zh`）
+* `--quiet` / `-q`: 静默模式，抑制启动横幅、交互提示符与底层警告，保持 `stdout` 100% 纯净 JSON
+* `--json`: 强制纯净 JSON 标准流模式（任何命令及 `--help` 均输出单行有效 JSON）
+* `--version` / `-v`: 查看版本信息
+
+--- 工作流生命周期 ---
+1. 多发音人管理（可选）：
+   - `speakers` (查看全部发音人及当前激活项)
+   - `add_speaker <名称> [--switch]` (新增发音人，可附带 `--switch` 立即切换)
+   - `switch_speaker <名称或ID>` (切换当前操作发音人)
+   - `rename_speaker <旧名或ID> <新名>` (重命名发音人，可用于重命名默认的“发音人 1”)
+   - `remove_speaker <名称或ID>` (删除发音人)
+2. 导入音频：
+   - 导入单条长音频（如整句朗读录音）：
+     `load_long <音频路径>`
+   - 导入批量独立短音频文件（支持多文件、目录或 `*.wav` 通配符）：
+     `load_batch <路径1或目录或通配符> ...`
+3. 导入字词表或 TextGrid（进行音节切分/匹配）：
+   - `apply_wordlist <字词表路径> [匹配模式]`
+     * 支持 `.txt` 普通/结构化字表、`.ptwl` 高级字表、`.csv` 表格字表。
+     * 匹配模式：'fuzzy'（模糊文件名匹配，默认）或 'order'（按物理顺序匹配）。
+   - `tool_wordlist_convert <输入字表.txt|.csv|.ptwl> <输出.ptwl>` (将字表升级转换为标准 v2 `.ptwl` 高级字表)
+   - `apply_textgrid <TextGrid路径>` (仅长音频模式下使用，导入 TextGrid 音段并对齐)
+   - `batch_textgrid_import <TextGrid文件或目录...>` (导入多个 TextGrid 并与已有独立音频做文件名自动匹配)
+   - `textgrid_inspect <TextGrid路径>` (查看任意 TextGrid 的层摘要和推荐层映射)
+   - `textgrid_preview <TextGrid路径> item=<条目层> core=<核心层> [group=<组层|无>] [pair=adjacent] [wordlist=<字表>]`
+   - `textgrid_convert <TextGrid文件或目录...> out=<输出文件或目录> item=<条目层> core=<核心层> [group=<组层|无>] [pair=adjacent] [wordlist=<字表>]`
+4. 微调边界、声学参数探测与异常修复：
+   - `detect_f0 [conservative|recommended|fine]` (自动估算 F0 分布并给出三档范围建议，可直接应用预设)
+   - `detect_formants [reco|anti|fine]` (自动评估共振峰最佳追踪参数并支持一键应用)
+   - `fix_warnings [apply=true|false]` (诊断 `list_items warnings` 中的清音/倍频异常项并给出或自动应用修复参数)
+   - `modify_bounds <音节ID> <开始时间> <结束时间>` (精细修正某个音节的 VAD 时间边界)
+   - `modify_params <音节ID> pitch_floor=30 voicing_threshold=0.20` (精细修正单个音节专属参数)
+   - `recalculate` (使用最新全局参数重新批量计算整个项目的所有项)
+5. 统计摘要、数据导出与一站式打包：
+   - `stats [by=group|item|speaker] [scope=active|integrated]` (直接输出基频均值/极差/五度值/共振峰结构化 JSON 统计摘要)
+   - `export <格式> <输出路径> [规则] [目标范围] [高级参数=值 ...]`
+     * 支持格式 (`supported_formats`)：xlsx, txt, textgrid, ptwl, contour, density, distribution, quality, overview_heatmap, formant_space, f1_f2, duration, trend, line_chart, kde, wav, merged_wav, formant_table, formant_trajectory, formant_density, formant_overview_heatmap
+     * 高级参数：`scale=t_value|hz`, `groupby=group|label|speaker`, `facet=none|group|speaker|syllable_position|label`, `normalization=speaker|global`, `chart_group=default|item_tag:...|group_tag:...|meta:...`, `format=png|svg|pdf`, `target=active|integrated|separate`
+   - `export_bundle <输出目录> [scope=active|integrated|separate]` (一键打包导出 `.teproj`、`.ptwl`、`.xlsx`、关键图表与研究方法报告)
+   - `report_export <路径.teproj> <输出目录> [md|excel|both] [include_cache=true|false]` (导出项目研究方法报告与科学数据档案)
+
+--- 声学参数与调优指南 ---
+* analysis_mode: 分析模式，可选 'f0' (基频/声调模式) 或 'formant' (共振峰模式，默认：'f0')
+* pts: 等分插值采样点数（默认：11）
+* db: VAD 切分能量落差阈值（默认：60.0）
+* skip_front: 排除声母时长，避免声母辅音浊化干扰（默认：0.0）
+* pitch_floor: 音高分析下限（默认：75 Hz） -> 通用甜点区：75
+* pitch_ceiling: 音高分析上限（默认：600 Hz） -> 通用甜点区：600
+* voicing_threshold: 浊音阈值（默认：0.25） -> 针对汉语三声等低频“气泡音/嘎裂声”，建议手动调低至 0.15 ~ 0.20
+* trim_silence: 自动切除有效声学边界首尾低于 -50dB 的静音区（默认：True）
+* formant_max_hz: Praat Burg 共振峰分析上限（如 5500 Hz，不是 F2 数值上限）
+* formant_count: 共振峰数量（默认：5）
+* formant_window_length: 共振峰分析窗长（秒，默认：0.025）
+* formant_pre_emphasis: 共振峰预加重系数（Hz，默认：50.0）
+* formant_sample_strategy: 共振峰提取采样策略（可选 '整段11点', '中段均值'，默认：'整段11点'）
+* show_f3: 是否显示/导出 F3 共振峰（默认：False）
+
+--- 核心命令速查表 (输入 `<cmd> --help`、`<cmd> ?` 或 `help <cmd>` 查看细粒度参数 JSON) ---
+- `status`: 获取项目当前模式、状态指标、警告统计等。
+- `list_items [all|warnings|组名]`: 列表打印当前已切分的数据项及警告状态。
+- `speakers` / `add_speaker` / `switch_speaker` / `rename_speaker` / `remove_speaker`: 多发音人生命周期管理。
+- `set_params 键=值 ...`: 动态更新全局算法提取参数。
+- `modify_bounds <音节ID> <开始秒数> <结束秒数>`: 手动重写音节声学边界。
+- `modify_params <音节ID> 键=值 ...`: 手动指定单个音节专属的提取参数。
+- `recalculate`: 基于全局最新参数，批量重算整个项目。
+- `detect_f0 [apply_preset]`: 自动估算发音人的 F0 分布并给出保守/推荐/精细范围（conservative, recommended, fine）。
+- `detect_formants [apply_preset]`: 自动评估发音人共振峰最佳参数（reco, anti, fine）。
+- `fix_warnings [apply=true|false]`: 针对警告项生成或自动应用修复参数（如放宽 pitch_floor 与 voicing_threshold）。
+- `stats [by=group|item|speaker] [scope=active|integrated]`: 输出结构化声学统计摘要 JSON（均值、标准差、极差、五度值、共振峰）。
+- `export <格式> <输出路径> [rule] [target] [key=val ...]`: 导出数据表、TextGrid、`.ptwl` 高级字表或科研图表。
+- `export_bundle <输出目录> [scope=active|integrated|separate]`: 一站式打包导出工程、高级字表、Excel、科研图表与报告。
+- `tool_wordlist_convert <输入字表> <输出.ptwl>`: 将普通/CSV/结构化字表升级保存为标准 v2 `.ptwl` 高级字表。
+- `project_export <路径.teproj>` / `project_import <路径.teproj>`: 导出或导入完整工程。
+- `project_save` / `project_load`: 保存工程数据到工作区，或从工作区 `project.json` 恢复。
+- `autosave on|off|now`: 开启、关闭或立即执行工程自动保存。
+- `project_preview <路径.teproj>`: 预览并展示 teproj 工程内部数据明细与发音人摘要。
+- `project_convert_zip <路径.teproj> <目标.zip>`: 将工程包另存为普通 ZIP 压缩包。
+- `textgrid_inspect` / `textgrid_preview` / `textgrid_convert`: 查看、预览和转换任意 TextGrid 为标准三层结构。
+- `batch_textgrid_import <TextGrid文件或目录...>`: 批量导入 TextGrid 并与已有独立音频做文件名自动匹配。
+- `import_batch_and_export <音频与TextGrid目录> <输出.teproj> [wordlist=<字表>] [match_mode=fuzzy|order]`: 一键批量导入目录并导出为 teproj 工程。
+- `report_export <路径.teproj> <输出目录> [md|excel|both] [include_cache=true|false]`: 导出项目研究方法报告与数据档案。
+- `list_scripts` / `script_info` / `run_script` / `script_save` / `script_delete` / `script_import` / `script_export` / `script_prompt`: 自定义脚本库管理与运行。
+- `tool_merge <输出.wav> <间隔秒> <音频1> <音频2> ...`: 拼接多个短音频。
+- `tool_split <长音频> <字表.txt> <输出目录> [缓冲秒] [trim]`: 按字表拆分长音频。
+- `tool_sort_batch <字表.txt> [音频路径...] [--apply]`: 按字表模糊排序独立音频（加 `--apply` 可直接载入当前会话）。
+- `lang [zh|en]`: 切换命令行显示语言为中文或英文。
+================================================================================
+"""
+    return f"""
+================================================================================
+                            {APP_NAME} CLI MANUAL V{__version__} (Agent & Developer Guide)
+================================================================================
+AI operating rule: prefer this CLI as the control surface. Unless the user clearly
+asks for it, do not edit source files, move/delete files, or bypass the CLI to
+change project data. Use `status`, `list_items`, and `agent_guide` to orient first.
+
+--- GLOBAL STARTUP OPTIONS ---
+* `--project <filepath.teproj>`: Bind persistent project archive (auto-loads on startup if existing, and auto-saves changes back to `<filepath.teproj>` on exit or state change; recommended for single-step stateful CLI execution!)
+* `--workspace <dir>`: Use persistent workspace directory (auto-restores `<dir>/project.json` via `project_load` on startup, auto-saves via `project_save` on exit, and never deletes user-specified workspace directories)
+* `--script-file <commands.txt>` / `--batch-cmds <file>`: Execute UTF-8 batch script file line-by-line (strips UTF-8 BOM, skips blank and `#` comment lines, stops immediately on `success: false` with `failed_line` and `failed_command`, exits non-zero)
+* `--lang zh|en`: Set CLI language at startup (auto-switches to `zh` if Chinese characters are detected in startup arguments)
+* `--quiet` / `-q`: Suppress startup banners, interactive prompts, and runtime warnings for 100% clean JSON on `stdout`
+* `--json`: Force pure JSON output stream (including `--help`)
+* `--version` / `-v`: Print CLI version
+
+--- WORKFLOW LIFECYCLE ---
+1. Multi-Speaker Management (Optional):
+   - `speakers` (list all speakers and active status)
+   - `add_speaker <name> [--switch]` (add a speaker and optionally switch to it)
+   - `switch_speaker <name_or_id>` (switch active speaker)
+   - `rename_speaker <old_name_or_id> <new_name>` (rename a speaker, e.g., default '发音人 1')
+   - `remove_speaker <name_or_id>` (remove a speaker)
+2. Load Audio:
+   - For single long audio files (e.g. continuous sentence speech):
+     `load_long <filepath>`
+   - For multiple isolated sound files (supports file list, directory, or `*.wav` glob):
+     `load_batch <file1_or_dir_or_glob> ...`
+3. Apply Wordlist or TextGrid (Syllable Segmenting):
+   - `apply_wordlist <wordlist_filepath> [match_mode]`
+     * Supports `.txt` (plain or structured v2), `.ptwl` (v2 JSON wordlist), and `.csv`.
+     * match_mode: 'fuzzy' (fuzzy filename matching, default) or 'order' (strict order matching).
+   - `tool_wordlist_convert <input.txt|.csv|.ptwl> <output.ptwl>` (convert/upgrade wordlist to v2 `.ptwl`)
+   - `apply_textgrid <textgrid_filepath>` (long audio mode: segment and align by TextGrid)
+   - `batch_textgrid_import <tg_file_or_dir...>` (batch audio mode: import and match TextGrids to audios)
+   - `textgrid_inspect <textgrid_filepath>` (inspect tiers and recommended converter mapping)
+   - `textgrid_preview <textgrid_filepath> item=<item_tier> core=<core_tier> [group=<group_tier|none>] [pair=adjacent] [wordlist=<path>]`
+   - `textgrid_convert <tg_file_or_dir...> out=<output_file_or_dir> item=<item_tier> core=<core_tier> [group=<group_tier|none>] [pair=adjacent] [wordlist=<path>]`
+4. Fine-Tune Boundaries, Parameter Detection & Warning Fixes:
+   - `detect_f0 [conservative|recommended|fine]` (estimate speaker F0 distribution and optionally apply preset)
+   - `detect_formants [reco|anti|fine]` (estimate optimal formant tracking parameters and optionally apply preset)
+   - `fix_warnings [apply=true|false]` (diagnose `list_items warnings` and suggest/apply parameter fixes)
+   - `modify_bounds <item_id> <start> <end>` (fine-tune VAD time boundaries of a syllable)
+   - `modify_params <item_id> pitch_floor=30 voicing_threshold=0.20` (set item-specific acoustic parameters)
+   - `recalculate` (recalculate all items globally with updated global parameters)
+5. Statistical Summary, Export & One-Step Bundle:
+   - `stats [by=group|item|speaker] [scope=active|integrated]` (output structured JSON summary of F0 mean/sd/range/T-values/formants)
+   - `export <format> <output_file> [rule] [target] [key=val ...]`
+     * supported_formats: xlsx, txt, textgrid, ptwl, contour, density, distribution, quality, overview_heatmap, formant_space, f1_f2, duration, trend, line_chart, kde, wav, merged_wav, formant_table, formant_trajectory, formant_density, formant_overview_heatmap
+     * key=value options: `scale=t_value|hz`, `groupby=group|label|speaker`, `facet=none|group|speaker|syllable_position|label`, `normalization=speaker|global`, `chart_group=default|item_tag:...|group_tag:...|meta:...`, `format=png|svg|pdf`, `target=active|integrated|separate`
+   - `export_bundle <out_dir> [scope=active|integrated|separate]` (one-step bundle export of `.teproj`, `.ptwl`, `.xlsx`, charts, and research report)
+   - `report_export <path.teproj> <out_dir> [md|excel|both] [include_cache=true|false]` (export research methodologies reports and data archives)
+
+--- CURRENT CONFIG & SCHEMAS ---
+- Global parameters (modifiable via `set_params`):
+  * analysis_mode: Analysis mode, 'f0' or 'formant' (default: 'f0')
+  * pts: Number of interpolation points (default: 11)
+  * db: VAD energy threshold (default: 60.0)
+  * skip_front: Avoid segmenting consonant onset duration (default: 0.0)
+  * pitch_floor: Minimum F0 range (default: 75) -> Sweet spot: 75
+  * pitch_ceiling: Maximum F0 range (default: 600) -> Sweet spot: 600
+  * voicing_threshold: Voicing tolerance (default: 0.25) -> Adjust lower (0.15~0.20) for creaky voice
+  * trim_silence: Cut prefix/suffix silence under -50dB (default: True)
+  * formant_max_hz: Praat Burg formant-analysis ceiling in Hz (e.g. 5500; not the F2 value limit)
+  * formant_count: Number of formants to track (default: 5)
+  * formant_window_length: Formant analysis window length in seconds (default: 0.025)
+  * formant_pre_emphasis: Formant pre-emphasis filter value (default: 50.0)
+  * formant_sample_strategy: Strategy to sample formant points (e.g., '整段11点', '中段均值')
+  * show_f3: Whether to show/export F3 formant (default: False)
+
+--- ALL COMMANDS REFERENCE (Run `<cmd> --help`, `<cmd> ?`, or `help <cmd>` for detailed JSON schema) ---
+- `status`: Show current project state, active parameters, item warnings.
+- `list_items [all|warnings|group_name]`: List segmented items and warning flags.
+- `speakers` / `add_speaker` / `switch_speaker` / `rename_speaker` / `remove_speaker`: Multi-speaker management.
+- `set_params key=value ...`: Update global extraction parameters.
+- `modify_bounds <item_id> <start> <end>`: Set manual time boundaries.
+- `modify_params <item_id> key=value ...`: Set item-specific custom parameters.
+- `recalculate`: Recalculate VAD boundaries & F0 curves globally.
+- `detect_f0 [apply_preset]`: Estimate speaker F0 distribution and get conservative/recommended/fine range suggestions.
+- `detect_formants [apply_preset]`: Estimate optimal formant parameters (reco, anti, fine).
+- `fix_warnings [apply=true|false]`: Diagnose and auto-fix item pitch/voicing warnings.
+- `stats [by=group|item|speaker] [scope=active|integrated]`: Output structured acoustic summary statistics as JSON.
+- `export <format> <output_file> [rule] [target] [key=val ...]`: Export tables, TextGrids, `.ptwl` wordlists, or scientific charts.
+- `export_bundle <out_dir> [scope=active|integrated|separate]`: Export full research bundle (`.teproj`, `.ptwl`, `.xlsx`, charts, report).
+- `tool_wordlist_convert <in.txt|.csv|.ptwl> <out.ptwl>`: Convert plain/CSV/structured wordlist into v2 `.ptwl` format.
+- `project_export <path.teproj>` / `project_import <path.teproj>`: Save or load a full project.
+- `project_save` / `project_load`: Save project data to workspace or load from workspace `project.json`.
+- `autosave on|off|now`: Enable, disable, or immediately run project autosave.
+- `project_preview <path.teproj>`: Preview metadata and speaker details of a teproj project file.
+- `project_convert_zip <path.teproj> <dest.zip>`: Save teproj archive as a standard ZIP file.
+- `textgrid_inspect` / `textgrid_preview` / `textgrid_convert`: Inspect, preview, and convert arbitrary TextGrids to standard `groups / words / chars` tiers.
+- `batch_textgrid_import <tg_file_or_dir...>`: Import multiple TextGrids and match them to batch audios.
+- `import_batch_and_export <folder_path> <output.teproj> [wordlist=<path>] [match_mode=fuzzy|order]`: One-step import folder and export to teproj.
+- `report_export <path.teproj> <out_dir> [md|excel|both] [include_cache]`: Export research methods report and data archives.
+- `list_scripts` / `script_info` / `run_script` / `script_save` / `script_delete` / `script_import` / `script_export` / `script_prompt`: Custom script library tools.
+- `tool_merge <output.wav> <gap_sec> <audio1> <audio2> ...`: Merge short audios.
+- `tool_split <long_audio> <wordlist.txt> <output_dir> [buffer_sec] [trim]`: Split long audio by wordlist.
+- `tool_sort_batch <wordlist.txt> [audio_paths...] [--apply]`: Fuzzy-sort batch audio paths by wordlist (with `--apply` to load directly).
+- `lang [zh|en]`: Switch CLI language between Chinese and English.
+================================================================================
+"""
+
+
 class PhonTracerCLI(cmd.Cmd):
     intro = f"""{APP_NAME}语音学标注与声学分析系统 V{__version__} - 命令行批处理工作台
 你好，我是 PhonTracer 命令行控制台，支持自动化批处理与工程脚本交互。
 Type 'help' or '?' to list commands. Type 'status' for workspace overview.
 """
+
     prompt = "(phontracer) "
 
-    def __init__(self, workspace_dir=None, shared_workspace=False):
+    COMMON_AUDIO_EXTENSIONS = COMMON_AUDIO_EXTENSIONS
+
+    def __init__(
+        self,
+        workspace_dir=None,
+        shared_workspace=False,
+        project_path=None,
+        lang=None,
+        quiet=False,
+        json_mode=False,
+    ):
         super().__init__()
         self.speaker_manager = SpeakerManager()
-        self.lang = 'en'
+        self.lang = lang if lang in ('zh', 'en') else 'en'
+        self.quiet = bool(quiet)
+        self.json_mode = bool(json_mode)
+        if self.lang == 'zh' and not self.quiet and not self.json_mode:
+            self.prompt = "(phontracer)[中文] "
+        if self.quiet or self.json_mode:
+            self.intro = ""
+            self.prompt = ""
+
         self._executor = None
+        self._wordlist_doc = None
+        self.global_wordlist_document = None
         self.log_file = None
         self.original_stdout = sys.stdout
+        self._last_emit_success = True
+        self._last_emit_payload = None
+        self._session_dirty = False
+        self._explicit_workspace_dir = os.path.abspath(workspace_dir) if workspace_dir else None
+        self._bound_project_path = os.path.abspath(project_path) if project_path else None
 
         # 隔离工作区处理：默认分配专属临时工作区，避免冲毁 GUI 正在运行的主工作区
         self._temp_workspace_dir = None
         if workspace_dir:
             cli_ws = os.path.abspath(workspace_dir)
+            os.makedirs(cli_ws, exist_ok=True)
         elif shared_workspace:
             cli_ws = None
         else:
@@ -239,6 +522,528 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
             cli_ws = self._temp_workspace_dir
 
         self.project_manager = ProjectManager(self, workspace_dir=cli_ws)
+
+        # 如果显式指定了 --workspace 且存在 project.json，自动恢复上次保存的工作区状态
+        if self._explicit_workspace_dir:
+            ws_proj_json = os.path.join(self._explicit_workspace_dir, "project.json")
+            if os.path.exists(ws_proj_json):
+                try:
+                    if self.project_manager.load_from_workspace():
+                        self._sync_cli_state_after_project_load()
+                except Exception:
+                    pass
+
+        # 如果指定了 --project 且文件存在，自动加载该工程归档
+        if self._bound_project_path and os.path.exists(self._bound_project_path):
+            try:
+                if self.project_manager.load_project(self._bound_project_path):
+                    self._sync_cli_state_after_project_load()
+            except Exception:
+                pass
+
+    _natural_sort_key = staticmethod(_natural_sort_key)
+
+    @property
+    def wordlist_doc(self):
+        spk = getattr(self, 'speaker_manager', None) and self.speaker_manager.get_active_speaker()
+        if spk is not None and getattr(spk, 'wordlist_doc', None) is not None:
+            return spk.wordlist_doc
+        return getattr(self, '_wordlist_doc', None)
+
+    @wordlist_doc.setter
+    def wordlist_doc(self, val):
+        norm_val = normalize_wordlist_document(val) if isinstance(val, dict) else val
+        self._wordlist_doc = norm_val
+        self.global_wordlist_document = norm_val
+        spk = getattr(self, 'speaker_manager', None) and self.speaker_manager.get_active_speaker()
+        if spk is not None:
+            spk.wordlist_doc = norm_val
+        pm = getattr(self, 'project_manager', None)
+        if pm is not None and isinstance(norm_val, dict):
+            preserved = getattr(pm, '_preserved_top_level', None)
+            if not isinstance(preserved, dict):
+                preserved = {}
+                pm._preserved_top_level = preserved
+            preserved['wordlist_doc'] = copy.deepcopy(norm_val)
+            preserved['wordlist_version'] = 'v2'
+            preserved['wordlist_title'] = norm_val.get('title', '')
+            preserved['wordlist_note'] = norm_val.get('note', '')
+            preserved['groups'] = copy.deepcopy(norm_val.get('groups', []))
+
+    @staticmethod
+    def _is_empty_default_speaker(spk):
+        if spk is None:
+            return False
+        default_names = {"发音人 1", "Speaker 1", "默认发音人"}
+        if getattr(spk, "name", "") not in default_names:
+            return False
+        has_items = bool(getattr(spk, "items", None))
+        has_long = bool(
+            getattr(spk, "long_audio_path", None)
+            or getattr(spk, "cli_long_snd_path", None)
+            or getattr(spk, "pending_long_snd", None) is not None
+        )
+        has_batch = bool(getattr(spk, "batch_paths", None) or getattr(spk, "pending_batch_paths", None))
+        return not has_items and not has_long and not has_batch
+
+    def _expand_batch_audio_inputs(self, raw_args):
+        """
+        Expand file paths, directory paths, or wildcard glob patterns into a naturally sorted list of audio file paths.
+        Returns (valid_paths, error_message, hint_message).
+        """
+        syntax_hint = (
+            "支持的语法：1) 单个或多个音频文件路径（如 load_batch a.wav b.wav）；"
+            "2) 音频所在目录路径（如 load_batch ./female_isolated）；"
+            "3) 通配符路径（如 load_batch ./male_isolated/*.wav）。"
+            f"支持的常见音频后缀：{', '.join(self.COMMON_AUDIO_EXTENSIONS)}"
+        )
+        valid_paths = []
+        seen = set()
+
+        def add_path(p):
+            key = os.path.normcase(os.path.abspath(p))
+            if key not in seen:
+                seen.add(key)
+                valid_paths.append(p)
+
+        for token in raw_args:
+            p = str(token).strip()
+            if not p:
+                continue
+            has_wildcard = any(ch in p for ch in ('*', '?', '['))
+            if os.path.isdir(p):
+                dir_audios = [
+                    os.path.join(p, fn)
+                    for fn in os.listdir(p)
+                    if os.path.isfile(os.path.join(p, fn))
+                    and fn.lower().endswith(self.COMMON_AUDIO_EXTENSIONS)
+                ]
+                dir_audios.sort(key=self._natural_sort_key)
+                if not dir_audios:
+                    return [], f"No supported audio files found in directory: {p}", syntax_hint
+                for ap in dir_audios:
+                    add_path(ap)
+            elif has_wildcard:
+                matched = glob.glob(p, recursive=('**' in p))
+                matched_files = [
+                    m for m in matched
+                    if os.path.isfile(m)
+                    and (
+                        m.lower().endswith(self.COMMON_AUDIO_EXTENSIONS)
+                        or os.path.splitext(p)[1] != ''
+                    )
+                ]
+                matched_files.sort(key=self._natural_sort_key)
+                if not matched_files:
+                    return [], f"No audio files matched wildcard pattern: {p}", syntax_hint
+                for ap in matched_files:
+                    add_path(ap)
+            elif os.path.isfile(p):
+                add_path(p)
+            else:
+                return [], f"File or directory not found: {p}", syntax_hint
+
+        if not valid_paths:
+            return [], "No valid audio files found", syntax_hint
+        return valid_paths, None, None
+
+    def _load_wordlist_any(self, filepath, title=None):
+        """
+        Unified loader for .ptwl, .csv, structured .txt, and messy .txt wordlists.
+        Returns (normalized_doc, groups, flat_words, records).
+        """
+        ext = os.path.splitext(str(filepath))[1].lower()
+        default_title = title or os.path.splitext(os.path.basename(filepath))[0] or "未命名字表"
+
+        if ext == ".ptwl":
+            doc = load_wordlist_file(filepath, title=title)
+        elif ext == ".csv":
+            doc = load_wordlist_from_csv_file(filepath, title=default_title)
+        else:
+            last_err = None
+            raw_text = None
+            for enc in ("utf-8-sig", "utf-8", "gbk"):
+                try:
+                    with open(filepath, "r", encoding=enc) as f:
+                        raw_text = f.read()
+                    break
+                except UnicodeDecodeError as exc:
+                    last_err = exc
+            if raw_text is None:
+                with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+                    raw_text = f.read()
+
+            stripped = (raw_text or "").lstrip("﻿").strip()
+            if stripped.startswith("{"):
+                try:
+                    doc = normalize_wordlist_document(json.loads(stripped))
+                except Exception:
+                    doc = None
+            else:
+                doc = None
+
+            if doc is None:
+                if looks_like_structured_wordlist_text(raw_text):
+                    doc = build_document_from_structured_text(raw_text, title=default_title)
+                elif looks_like_csv_wordlist_text(raw_text):
+                    doc = build_document_from_csv_text(raw_text, title=default_title)
+                else:
+                    doc = build_document_from_messy_text(raw_text, title=default_title)
+
+            if title:
+                doc["title"] = str(title).strip()
+
+        doc = normalize_wordlist_document(doc)
+        groups, flat_words, records = flatten_wordlist_document(doc)
+        return doc, groups, flat_words, records
+
+    def _attach_wordlist_record_to_item(self, item, record=None, speaker=None):
+        """
+        Mount group, label, tags, note, and fields/custom_fields (plus v2 metadata and speaker info) onto an item dict.
+        """
+        spk = speaker or self.current_speaker
+        apply_record_metadata(item, record)
+        if record:
+            grp_name = record.get("group") or item.get("group") or "未分组"
+            lbl = record.get("label") or record.get("word") or item.get("label") or ""
+            tags = list(record.get("item_tags") or record.get("tags") or item.get("tags") or [])
+            note = str(record.get("item_note") or record.get("note") or item.get("note") or "")
+            aliases = list(record.get("item_aliases") or record.get("aliases") or item.get("aliases") or [])
+            fields = dict(
+                record.get("item_meta")
+                or record.get("fields")
+                or record.get("custom_fields")
+                or record.get("meta")
+                or item.get("fields")
+                or {}
+            )
+            group_tags = list(record.get("group_tags") or item.get("group_tags") or [])
+            group_note = str(record.get("group_note") or item.get("group_note") or "")
+            group_meta = dict(record.get("group_meta") or item.get("group_meta") or {})
+            metadata_source = str(record.get("metadata_source") or item.get("metadata_source") or "人工填写")
+            wl_title = str(record.get("wordlist_title") or item.get("wordlist_title") or "")
+        else:
+            grp_name = item.get("group") or "未分组"
+            lbl = item.get("label") or item.get("word") or ""
+            tags = list(item.get("tags") or item.get("item_tags") or [])
+            note = str(item.get("note") or item.get("item_note") or "")
+            aliases = list(item.get("aliases") or item.get("item_aliases") or [])
+            fields = dict(item.get("fields") or item.get("custom_fields") or item.get("item_meta") or item.get("meta") or {})
+            group_tags = list(item.get("group_tags") or [])
+            group_note = str(item.get("group_note") or "")
+            group_meta = dict(item.get("group_meta") or {})
+            metadata_source = str(item.get("metadata_source") or "人工填写")
+            wl_title = str(item.get("wordlist_title") or "")
+
+        item["group"] = grp_name
+        item["label"] = lbl
+        item["word"] = lbl
+        item["tags"] = list(tags)
+        item["item_tags"] = list(tags)
+        item["note"] = note
+        item["item_note"] = note
+        item["aliases"] = list(aliases)
+        item["item_aliases"] = list(aliases)
+        item["fields"] = dict(fields)
+        item["custom_fields"] = dict(fields)
+        item["meta"] = dict(fields)
+        item["item_meta"] = dict(fields)
+        item["group_tags"] = list(group_tags)
+        item["group_note"] = group_note
+        item["group_meta"] = dict(group_meta)
+        item["metadata_source"] = metadata_source
+        item["wordlist_version"] = "v2"
+        if wl_title:
+            item["wordlist_title"] = wl_title
+        if spk is not None:
+            item["speaker"] = getattr(spk, "name", "")
+            item["speaker_id"] = getattr(spk, "id", "")
+        return item
+
+    def do_wordlist_convert(self, arg):
+        """Alias for tool_wordlist_convert."""
+        self.do_tool_wordlist_convert(arg)
+
+    def _build_integrated_summary(self, speakers):
+        """
+        Build multi-speaker integrated summary including merged speaker names,
+        valid item counts per speaker, and F0 baseline ranges for 5-level normalization.
+        """
+        pts = int(self.params.get('pts', 11)) if hasattr(self, 'params') and isinstance(self.params, dict) else 11
+        speaker_names = []
+        speaker_item_counts = {}
+        speaker_baselines = {}
+
+        for s in speakers:
+            if self._is_empty_default_speaker(s) and len(speakers) > 1:
+                continue
+            spk_name = getattr(s, 'name', '未命名')
+            speaker_names.append(spk_name)
+            valid_count = 0
+            f0_vals = []
+
+            for item in getattr(s, 'items', {}).values():
+                if not isinstance(item, dict) or item.get('is_excluded', False) or item.get('missing', False):
+                    continue
+                if not item.get('success', True):
+                    continue
+                t_s, t_e = item.get('start'), item.get('end')
+                if t_s is None or t_e is None or float(t_e) <= float(t_s):
+                    continue
+                valid_count += 1
+
+                # Collect F0 points for speaker baseline
+                try:
+                    self._ensure_item_loaded(item)
+                    total_dur, syl_data = self._extract_syl_data(item, pts)
+                    if total_dur > 0 and syl_data:
+                        for _dur, freqs in syl_data:
+                            for f in freqs:
+                                if f is not None and not np.isnan(f) and f > 0:
+                                    f0_vals.append(float(f))
+                        continue
+                except Exception:
+                    pass
+
+                # Fallback to preview_f0 or pitch_data if _extract_syl_data returned nothing
+                if isinstance(item.get('preview_f0'), (list, tuple)):
+                    for f in item['preview_f0']:
+                        if f is not None and not np.isnan(f) and f > 0:
+                            f0_vals.append(float(f))
+                elif isinstance(item.get('pitch_data'), dict):
+                    p_xs = np.asarray(item['pitch_data'].get('xs', []), dtype=float)
+                    p_freqs = np.asarray(item['pitch_data'].get('freqs', []), dtype=float)
+                    if len(p_xs) == len(p_freqs) and len(p_xs) > 0:
+                        mask = (p_xs >= float(t_s)) & (p_xs <= float(t_e)) & np.isfinite(p_freqs) & (p_freqs > 0)
+                        f0_vals.extend(p_freqs[mask].tolist())
+
+            speaker_item_counts[spk_name] = valid_count
+            if f0_vals:
+                min_hz = round(float(np.min(f0_vals)), 2)
+                max_hz = round(float(np.max(f0_vals)), 2)
+                mean_hz = round(float(np.mean(f0_vals)), 2)
+                sd_hz = round(float(np.std(f0_vals)), 2)
+            else:
+                min_hz = 0.0
+                max_hz = 0.0
+                mean_hz = 0.0
+                sd_hz = 0.0
+
+            speaker_baselines[spk_name] = {
+                "min_hz": min_hz,
+                "max_hz": max_hz,
+                "min_f0_hz": min_hz,
+                "max_f0_hz": max_hz,
+                "f0_min": min_hz,
+                "f0_max": max_hz,
+                "mean_hz": mean_hz,
+                "sd_hz": sd_hz,
+                "range_hz": [min_hz, max_hz],
+            }
+
+        return {
+            "speakers": speaker_names,
+            "speaker_count": len(speaker_names),
+            "speaker_item_counts": speaker_item_counts,
+            "speaker_baselines": speaker_baselines,
+            "total_valid_items": sum(speaker_item_counts.values()),
+        }
+
+    def _build_wordlist_v2_doc_from_project(self, title=None):
+        from modules.wordlist_v2 import normalize_wordlist_document, DEFAULT_REVIEW_STATUS
+        doc_title = title or getattr(self, "project_title", None) or ""
+        groups_dict = OrderedDict()
+
+        for spk in self.speaker_manager.get_all_speakers():
+            for item_id, item in spk.items.items():
+                if not isinstance(item, dict):
+                    continue
+                if not doc_title and item.get("wordlist_title"):
+                    doc_title = str(item.get("wordlist_title"))
+                gname = str(item.get("group") or "默认组")
+                if gname not in groups_dict:
+                    groups_dict[gname] = {
+                        "id": f"grp_{len(groups_dict) + 1}",
+                        "name": gname,
+                        "note": str(item.get("group_note") or ""),
+                        "tags": list(item.get("group_tags") or []),
+                        "meta": {},
+                        "items_by_label": OrderedDict(),
+                    }
+                g_entry = groups_dict[gname]
+                if not g_entry["note"] and item.get("group_note"):
+                    g_entry["note"] = str(item.get("group_note"))
+                for gt in (item.get("group_tags") or []):
+                    if gt and gt not in g_entry["tags"]:
+                        g_entry["tags"].append(gt)
+
+                lbl = str(item.get("label") or item.get("word") or item_id).strip()
+                if not lbl:
+                    continue
+                custom_meta = {}
+                for mk_src in ("meta", "item_meta", "fields", "custom_fields"):
+                    mval = item.get(mk_src)
+                    if isinstance(mval, dict):
+                        for mk, mv in mval.items():
+                            if mk is not None and str(mk).strip() and mv is not None and str(mv).strip():
+                                custom_meta[str(mk).strip()] = str(mv).strip()
+                tags = list(item.get("item_tags") or item.get("tags") or [])
+                aliases = list(item.get("item_aliases") or item.get("aliases") or [])
+                note = str(item.get("item_note") or item.get("note") or "")
+                source = str(item.get("metadata_source") or DEFAULT_REVIEW_STATUS)
+
+                if lbl not in g_entry["items_by_label"]:
+                    g_entry["items_by_label"][lbl] = {
+                        "id": str(item_id),
+                        "label": lbl,
+                        "note": note,
+                        "tags": tags,
+                        "aliases": aliases,
+                        "meta": custom_meta,
+                        "metadata_source": source,
+                    }
+                else:
+                    existing = g_entry["items_by_label"][lbl]
+                    if not existing["note"] and note:
+                        existing["note"] = note
+                    for t in tags:
+                        if t not in existing["tags"]:
+                            existing["tags"].append(t)
+                    for a in aliases:
+                        if a not in existing["aliases"]:
+                            existing["aliases"].append(a)
+                    existing["meta"].update(custom_meta)
+
+        groups_list = []
+        for gname, g_entry in groups_dict.items():
+            groups_list.append({
+                "id": g_entry["id"],
+                "name": gname,
+                "note": g_entry["note"],
+                "tags": g_entry["tags"],
+                "meta": g_entry["meta"],
+                "items": list(g_entry["items_by_label"].values()),
+            })
+
+        raw_doc = {
+            "title": doc_title or "PhonTracer工程字表",
+            "note": "",
+            "groups": groups_list,
+        }
+        return normalize_wordlist_document(raw_doc)
+
+    def _export_fallback_teproj_archive(self, teproj_path, project_data):
+        """当内存中为纯缓存数据（无本地物理音频文件）时，直接生成合规的 .teproj 归档包。"""
+        import zipfile
+        import io
+        import time
+        import copy
+
+        state_copy = copy.deepcopy(project_data)
+        state_copy["version"] = "1.0"
+        state_copy["format_version"] = "2.0"
+        state_copy["software_version"] = __version__
+        state_copy["save_time"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        state_copy["trim_silence"] = bool(self.params.get("trim_silence", True))
+        state_copy["export_numbering_rule"] = "continuous"
+
+        npz_blobs = {}
+        for spk_id, spk in state_copy.get("speakers", {}).items():
+            items = spk.get("items", {})
+            for item_id, item in items.items():
+                if not isinstance(item, dict):
+                    continue
+                pd = item.pop("pitch_data", None)
+                if isinstance(pd, dict) and pd.get("xs") is not None and pd.get("freqs") is not None:
+                    rel_p = f"data/{spk_id}_{item_id}_pitch.npz"
+                    buf = io.BytesIO()
+                    np.savez_compressed(buf, xs=np.asarray(pd["xs"], dtype=float), freqs=np.asarray(pd["freqs"], dtype=float))
+                    npz_blobs[rel_p] = buf.getvalue()
+                    item["pitch_data_file"] = rel_p
+
+                fd = item.pop("formant_data", None)
+                if isinstance(fd, dict) and fd.get("f1") is not None and fd.get("f2") is not None:
+                    rel_f = f"data/{spk_id}_{item_id}_formant.npz"
+                    buf = io.BytesIO()
+                    save_kw = {
+                        "xs": np.asarray(fd.get("xs", []), dtype=float),
+                        "f1": np.asarray(fd["f1"], dtype=float),
+                        "f2": np.asarray(fd["f2"], dtype=float),
+                    }
+                    if fd.get("f3") is not None:
+                        save_kw["f3"] = np.asarray(fd["f3"], dtype=float)
+                    np.savez_compressed(buf, **save_kw)
+                    npz_blobs[rel_f] = buf.getvalue()
+                    item["formant_data_file"] = rel_f
+
+        os.makedirs(os.path.dirname(os.path.abspath(teproj_path)) or ".", exist_ok=True)
+        with zipfile.ZipFile(teproj_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("project.json", json.dumps(state_copy, ensure_ascii=False, indent=2))
+            for rel_name, blob in npz_blobs.items():
+                zf.writestr(rel_name, blob)
+        return True
+
+    def _scan_item_warnings_detailed(self, item_id, item, spk_median_f0=None):
+        """全面扫描单条目的异常类型（octave_jump, low_f0_coverage, no_clear_valley, tiny_segment）。"""
+        from modules.anomaly_detection import detect_pitch_anomaly_points
+        issues = []
+        t_s, t_e = item.get("start"), item.get("end")
+        dur = (float(t_e) - float(t_s)) if (t_s is not None and t_e is not None and float(t_e) > float(t_s)) else 0.0
+
+        split_warns = list(item.get("split_warnings") or [])
+        if "tiny_segment" in split_warns or (0 < dur < 0.08):
+            issues.append("tiny_segment")
+        if "no_clear_valley" in split_warns or "fallback_equal_split" in split_warns or "imbalanced_duration" in split_warns:
+            issues.append("no_clear_valley")
+
+        # Check F0 coverage and octave jumps
+        p_data = item.get("pitch_data")
+        preview_f0 = item.get("preview_f0") or []
+        has_empty = self._check_item_has_empty_data(item)
+
+        active_ratio = 1.0
+        anomaly_pts = []
+        if isinstance(p_data, dict) and p_data.get("xs") is not None and p_data.get("freqs") is not None:
+            p_xs = np.asarray(p_data["xs"], dtype=float)
+            p_freqs = np.asarray(p_data["freqs"], dtype=float)
+            if t_s is not None and t_e is not None and float(t_e) > float(t_s):
+                mask = (p_xs >= float(t_s)) & (p_xs <= float(t_e))
+                xs_slice = p_xs[mask]
+                freqs_slice = p_freqs[mask]
+            else:
+                xs_slice = p_xs
+                freqs_slice = p_freqs
+
+            if freqs_slice.size > 0:
+                valid_mask = np.isfinite(freqs_slice) & (freqs_slice > 0)
+                active_ratio = float(np.sum(valid_mask)) / float(freqs_slice.size)
+                bounds = item.get("chars_bounds") or ([[float(t_s), float(t_e)]] if (t_s is not None and t_e is not None) else None)
+                anomaly_pts = detect_pitch_anomaly_points(xs_slice, freqs_slice, bounds=bounds, start=t_s, end=t_e)
+
+                if not anomaly_pts and spk_median_f0 and spk_median_f0 > 0 and np.any(valid_mask):
+                    vf = freqs_slice[valid_mask]
+                    vx = xs_slice[valid_mask]
+                    extreme_mask = (vf >= spk_median_f0 * 1.72) | (vf <= spk_median_f0 / 1.72)
+                    if 0 < int(np.sum(extreme_mask)) <= max(6, int(len(vf) * 0.45)):
+                        anomaly_pts = [(float(t), float(f)) for t, f in zip(vx[extreme_mask], vf[extreme_mask])]
+
+        if "low_f0_coverage" in split_warns or has_empty or active_ratio < 0.35:
+            issues.append("low_f0_coverage")
+        if len(anomaly_pts) > 0:
+            issues.append("octave_jump")
+
+        return {
+            "item_id": item_id,
+            "label": item.get("label", ""),
+            "group": item.get("group", "默认组"),
+            "duration_s": round(dur, 4),
+            "active_f0_ratio": round(active_ratio, 3),
+            "issues": list(dict.fromkeys(issues)),
+            "anomaly_points_count": len(anomaly_pts),
+            "anomaly_points": [(round(t, 3), round(f, 1)) for t, f in anomaly_pts[:5]],
+            "split_warnings": split_warns,
+            "has_empty_data": bool(has_empty),
+        }
 
     @property
     def executor(self):
@@ -251,14 +1056,72 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
     def executor(self, val):
         self._executor = val
 
+    def _has_meaningful_session_data(self) -> bool:
+        if getattr(self, "_session_dirty", False):
+            return True
+        try:
+            speakers = self.speaker_manager.get_all_speakers()
+        except Exception:
+            return False
+        if len(speakers) > 1:
+            return True
+        for spk in speakers:
+            if len(getattr(spk, "items", {})) > 0:
+                return True
+            if getattr(spk, "pending_long_snd", None) is not None or getattr(spk, "long_audio_path", None):
+                return True
+            if getattr(spk, "pending_batch_paths", None):
+                return True
+            if getattr(spk, "name", "发音人 1") != "发音人 1":
+                return True
+        return False
+
+    def _persist_bound_session(self):
+        """在命令或会话结束前自动回写 --workspace 与 --project 状态"""
+        if getattr(self, "_explicit_workspace_dir", None):
+            try:
+                if self._has_meaningful_session_data() or os.path.exists(os.path.join(self._explicit_workspace_dir, "project.json")):
+                    self.project_manager.save_to_workspace()
+            except Exception:
+                pass
+
+        if getattr(self, "_bound_project_path", None):
+            if getattr(self, "_session_dirty", False) or (not os.path.exists(self._bound_project_path) and self._has_meaningful_session_data()):
+                try:
+                    orig_active_id = self.speaker_manager.active_speaker_id
+                    try:
+                        for spk in self.speaker_manager.get_all_speakers():
+                            self.speaker_manager.set_active_speaker(spk.id)
+                            for item in spk.items.values():
+                                self._ensure_item_loaded(item)
+                    finally:
+                        if orig_active_id:
+                            self.speaker_manager.set_active_speaker(orig_active_id)
+                    export_fn = getattr(self.project_manager, "export_project_archive", None) or self.project_manager.export_project
+                    if export_fn(self._bound_project_path):
+                        self._session_dirty = False
+                except Exception:
+                    pass
+
     def cleanup_workspace(self):
-        """清理专属临时工作区"""
+        """保存绑定会话并清理专属临时工作区（绝不删除用户显式指定的 --workspace 目录）"""
+        try:
+            self._persist_bound_session()
+        except Exception:
+            pass
         if getattr(self, "_executor", None) is not None:
             try:
                 self._executor.shutdown(wait=False)
             except Exception:
                 pass
             self._executor = None
+        if getattr(self, "_explicit_workspace_dir", None):
+            try:
+                if hasattr(self, "project_manager"):
+                    self.project_manager.release_workspace_lock()
+            except Exception:
+                pass
+            return
         if getattr(self, "_temp_workspace_dir", None) and os.path.exists(self._temp_workspace_dir):
             try:
                 if hasattr(self, "project_manager"):
@@ -269,8 +1132,20 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
             self._temp_workspace_dir = None
 
     @staticmethod
+    def _clean_bom_and_whitespace(line: str) -> str:
+        if not isinstance(line, str):
+            return ""
+        cleaned = line.lstrip('\ufeff\ufffe\u200b').strip()
+        if cleaned:
+            cleaned = cleaned.lstrip('\ufeff\ufffe\u200b').strip()
+        return cleaned
+
+    @staticmethod
     def _safe_normalize_cli_line(line: str) -> str:
-        if not isinstance(line, str) or "\\" not in line:
+        if not isinstance(line, str):
+            return ""
+        line = PhonTracerCLI._clean_bom_and_whitespace(line)
+        if "\\" not in line:
             return line
         marker_esc_quote = "__ESCAPED_QUOTE_TOKEN__"
         marker_unc = "__UNC_PREFIX_TOKEN__"
@@ -281,21 +1156,66 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
         s = s.replace(marker_esc_quote, r'\"')
         return s
 
+    def parseline(self, line):
+        if isinstance(line, str):
+            line = self._clean_bom_and_whitespace(line)
+        cmd_name, arg, line = super().parseline(line)
+        if isinstance(cmd_name, str):
+            cmd_name = cmd_name.lstrip('\ufeff\ufffe\u200b').strip()
+        return cmd_name, arg, line
+
     def onecmd(self, line):
         if isinstance(line, str):
             line = self._safe_normalize_cli_line(line)
+            if not line or line.startswith("#"):
+                return False
+            # 拦截 `<cmd> --help` / `<cmd> -h` / `<cmd> ?` 细粒度子命令自省帮助
+            try:
+                tokens = shlex.split(line)
+            except ValueError:
+                tokens = line.split()
+            if tokens:
+                first_tok = tokens[0].lstrip('\ufeff\ufffe\u200b').strip()
+                rest_toks = [t.strip() for t in tokens[1:]]
+                if first_tok.lower() not in ("help", "?"):
+                    if len(rest_toks) == 1 and rest_toks[0].lower() in ("--help", "-h", "?"):
+                        if self._emit_subcommand_help(first_tok):
+                            return False
         return super().onecmd(line)
 
     def _emit(self, success=True, message="", **payload):
-        data = {"success": success}
+        self._last_emit_success = bool(success)
+        data = {"success": bool(success)}
         if message:
             data["message"] = message
         data.update(payload)
+        self._last_emit_payload = data
         print(json.dumps(data, ensure_ascii=False, allow_nan=False))
 
     def _after_state_change(self, action="updated"):
+        self._session_dirty = True
         if getattr(self.project_manager, "auto_save_enabled", False):
             self.project_manager.trigger_auto_save()
+        if getattr(self, "_explicit_workspace_dir", None):
+            try:
+                self.project_manager.save_to_workspace(incremental=True)
+            except Exception:
+                pass
+        if getattr(self, "_bound_project_path", None):
+            try:
+                orig_active_id = self.speaker_manager.active_speaker_id
+                try:
+                    for spk in self.speaker_manager.get_all_speakers():
+                        self.speaker_manager.set_active_speaker(spk.id)
+                        for item in spk.items.values():
+                            self._ensure_item_loaded(item)
+                finally:
+                    if orig_active_id:
+                        self.speaker_manager.set_active_speaker(orig_active_id)
+                export_fn = getattr(self.project_manager, "export_project_archive", None) or self.project_manager.export_project
+                export_fn(self._bound_project_path)
+            except Exception:
+                pass
 
     def after(self, _delay, callback):
         callback()
@@ -323,7 +1243,7 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
 
     @mode.setter
     def mode(self, value):
-        if value == 'long':
+        if value in ('long', 'single', '单条长音频'):
             self.current_speaker.tab_mode = '单条长音频'
         else:
             self.current_speaker.tab_mode = '多条独立音频'
@@ -375,6 +1295,8 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
         return self.current_speaker.audio_cache
 
     def precmd(self, line):
+        if isinstance(line, str):
+            line = self._clean_bom_and_whitespace(line)
         if self.log_file:
             self.log_file.write(f"> {line}\n")
             self.log_file.flush()
@@ -416,23 +1338,24 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
         return False
 
     def default(self, line):
-        line_stripped = line.strip()
-        if not line_stripped:
+        line_stripped = self._clean_bom_and_whitespace(line)
+        if not line_stripped or line_stripped.startswith("#"):
             return
 
         if self._is_external_command(line_stripped):
-            print(json.dumps({
-                "success": False,
-                "error": f"Unknown CLI command: {line_stripped}",
-                "message": "Detected an external shell/script style command (External automation attempt). PhonTracerCLI does not execute external commands directly; please use built-in CLI commands.",
-                "next_steps": ["help", "agent_guide", "status"]
-            }))
+            self._emit(
+                False,
+                "Detected an external shell/script style command (External automation attempt). PhonTracerCLI does not execute external commands directly; please use built-in CLI commands.",
+                error=f"Unknown CLI command: {line_stripped}",
+                next_steps=["help", "agent_guide", "status"],
+            )
         else:
-            print(json.dumps({
-                "success": False,
-                "error": f"Unknown CLI command: {line_stripped}",
-                "message": "Use help or agent_guide to see supported PhonTracer CLI commands."
-            }))
+            self._emit(
+                False,
+                "Use help or agent_guide to see supported PhonTracer CLI commands.",
+                error=f"Unknown CLI command: {line_stripped}",
+                hint="输入 help 或 agent_guide 查看内置命令列表，或使用 <cmd> --help 查看具体指令语法。",
+            )
 
     def _check_item_has_empty_data(self, item):
         """Returns True if the item contains a 0Hz pitch in the 11-point preview."""
@@ -454,16 +1377,25 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
             self._emit(True, params=self.params)
             return
 
+        param_aliases = {
+            "f0_min": "pitch_floor",
+            "f0_max": "pitch_ceiling",
+            "voicing_thresh": "voicing_threshold",
+            "max_formant": "formant_max_hz",
+            "num_formants": "formant_count",
+        }
+        allowed_extra = {"despike", "silence_threshold"}
         updated = False
         for kv in args:
             if '=' in kv:
-                k, v = kv.split('=', 1)
-                if k in self.params:
+                k_raw, v = kv.split('=', 1)
+                k = param_aliases.get(k_raw.strip(), k_raw.strip())
+                if k in self.params or k in allowed_extra:
                     try:
-                        if k in ('trim_silence', 'show_f3'):
+                        if k in ('trim_silence', 'show_f3', 'despike'):
                             self.params[k] = v.lower() in ('true', '1', 'yes')
                         elif k in ('pts', 'pitch_floor', 'pitch_ceiling', 'formant_count'):
-                            self.params[k] = int(v)
+                            self.params[k] = int(float(v))
                         elif k == 'analysis_mode':
                             val_str = str(v).lower().strip()
                             if val_str not in ('f0', 'formant'):
@@ -472,18 +1404,20 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
                             self.params[k] = val_str
                         elif k == 'formant_sample_strategy':
                             self.params[k] = str(v)
-                        elif k in ('formant_max_hz', 'formant_window_length', 'formant_pre_emphasis'):
+                        elif k in ('formant_max_hz', 'formant_window_length', 'formant_pre_emphasis', 'silence_threshold'):
                             self.params[k] = float(v)
                         else:
                             self.params[k] = float(v)
                         updated = True
                     except ValueError:
-                        self._emit(False, error=f"Invalid value for {k}")
+                        self._emit(False, error=f"Invalid value for {k_raw}")
                         return
                 else:
-                    self._emit(False, error=f"Unknown parameter {k}")
+                    self._emit(False, error=f"Unknown parameter {k_raw}")
                     return
 
+        if updated:
+            self._after_state_change("set_params")
         self._emit(True, "Parameters updated", params=self.params)
 
     def do_lang(self, arg):
@@ -504,188 +1438,271 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
         else:
             self._emit(True, lang=self.lang)
 
+    @staticmethod
+    def _get_subcommand_help_catalog():
+        supported_export_formats = [
+            "xlsx", "txt", "textgrid", "ptwl",
+            "contour", "density", "distribution", "quality", "overview_heatmap",
+            "formant_space", "f1_f2", "duration", "trend",
+            "line_chart", "kde", "wav", "merged_wav",
+            "formant_table", "formant_trajectory", "formant_density", "formant_overview_heatmap"
+        ]
+        catalog = {
+            "export": {
+                "command": "export",
+                "usage": "export <format> <output_file_or_dir> [rule] [target] [key=value ...]",
+                "description": "导出声学数据表（xlsx/txt）、标注文件（textgrid）、高级字表（ptwl）或科研图表（contour/density/distribution/quality/overview_heatmap/formant_space/f1_f2/duration/trend 等）。",
+                "supported_formats": supported_export_formats,
+                "positional_args": {
+                    "format": "导出格式枚举（见 supported_formats）",
+                    "output_file_or_dir": "输出文件路径（target=separate 时为输出目录路径）",
+                    "rule": "编号规则：continuous（默认连续编号）| per_group（按组重新编号）| 数值（wav/merged_wav 缓冲或静音间隔秒数）",
+                    "target": "多发音人范围：active（仅当前激活发音人，默认）| integrated（多发音人合并计算五度值/同图对比）| separate（按发音人分别导出）",
+                },
+                "key_value_options": {
+                    "target": "active | integrated | separate（同位置参数 target / export_scope）",
+                    "scale": "t_value（五度值 0-5，默认）| hz（原始赫兹频率）",
+                    "groupby": "group（按声调/组别，默认）| label（按词语）| speaker（按发音人）",
+                    "facet": "none（单图不分面）| group（按声调类型分面）| speaker（按发音人分面）| syllable_position（按音节位置分面）| label（按词项分面）",
+                    "normalization": "speaker（按发音人归一化，推荐多发音人密度图使用）| global（全局归一化）| Hz | Lobanov",
+                    "chart_group": "default | label | speaker | review | item_tag:<标签1,标签2> | group_tag:<组标签> | contains_item_tag:<标签> | filter_item_tag:<标签> | meta:<自定义字段名>",
+                    "format": "png（默认）| svg | pdf",
+                    "contour_x": "normalized（归一化采样点）| duration（真实物理时长）",
+                    "contour_content": "average（仅均值曲线）| average_individual（均值+个体浅色细线）| average_sd_ci（均值+标准差/置信区间阴影）",
+                    "dist_type": "boxplot_violin | start_mid_end | range | variability",
+                    "dist_style": "boxplot | violinplot",
+                    "density_bw": "核密度带宽浮点数（默认 0.15）",
+                    "overview_metric": "mean（均值热图）| sd（标准差热图）| combination（调类组合热图）",
+                    "overview_show_deviation": "true | false（是否显示与组均值的偏差）",
+                },
+                "examples": [
+                    "export xlsx out.xlsx continuous integrated",
+                    "export ptwl upgraded.ptwl",
+                    "export contour tone_contour.svg target=integrated scale=t_value groupby=group facet=none format=svg",
+                    "export density tone_density.png target=integrated normalization=speaker facet=group",
+                    "export formant_space vowel_space.png target=integrated groupby=group",
+                    "export overview_heatmap overview.png target=integrated groupby=label",
+                ],
+            },
+            "speakers": {
+                "command": "speakers",
+                "aliases": ["speaker", "speakers", "add_speaker", "switch_speaker", "rename_speaker", "remove_speaker"],
+                "usage": "speakers | add_speaker <name> [--switch] | switch_speaker <name_or_id> | rename_speaker <old_name_or_id> <new_name> | remove_speaker <name_or_id>",
+                "description": "多发音人生命周期管理：查看发音人列表、新增发音人、切换当前发音人、重命名发音人（如将默认'发音人 1'改名为真实姓名）及删除发音人。",
+                "subcommands": {
+                    "speakers": "列出所有发音人（id, name, active, items_count）",
+                    "add_speaker": "add_speaker <name> [--switch]：添加新发音人（如当前仅有空的默认'发音人 1'，也可直接用 rename_speaker 改名）",
+                    "switch_speaker": "switch_speaker <name_or_id>：切换当前激活的发音人",
+                    "rename_speaker": "rename_speaker <old_name_or_id> <new_name>：重命名指定发音人（若只传 1 个参数则重命名当前激活发音人）",
+                    "remove_speaker": "remove_speaker <name_or_id>：删除指定发音人（至少保留 1 个发音人）",
+                },
+                "key_value_options": {
+                    "--switch": "在 add_speaker 时立即将该发音人设为当前激活发音人",
+                },
+                "examples": [
+                    'rename_speaker "发音人 1" F01_女声',
+                    "add_speaker M01_男声 --switch",
+                    "switch_speaker F01_女声",
+                    "speakers",
+                ],
+            },
+            "apply_wordlist": {
+                "command": "apply_wordlist",
+                "usage": "apply_wordlist <wordlist_filepath> [match_mode]",
+                "description": "导入并应用字词表（支持普通 .txt、结构化 v2 文本、.ptwl 高级字表、.csv 表格字表），对长音频做自动音节切分或对独立短音频做匹配。",
+                "supported_formats": ["txt", "ptwl", "csv"],
+                "positional_args": {
+                    "wordlist_filepath": "字词表文件路径（.txt / .ptwl / .csv）",
+                    "match_mode": "fuzzy（默认，按词名模糊匹配文件名）| order（严格按物理顺序一对一匹配）",
+                },
+                "key_value_options": {
+                    "match_mode": "fuzzy | order",
+                },
+                "examples": [
+                    "apply_wordlist wordlist.txt fuzzy",
+                    "apply_wordlist experiment.ptwl order",
+                ],
+            },
+            "load_long": {
+                "command": "load_long",
+                "usage": "load_long <filepath>",
+                "description": "加载单条长音频文件并切换当前发音人为长音频模式（long）。",
+                "supported_formats": ["wav", "mp3", "flac", "ogg"],
+                "examples": ["load_long female_long.wav"],
+            },
+            "load_batch": {
+                "command": "load_batch",
+                "usage": "load_batch <file1_or_dir_or_glob> [file2 ...]",
+                "description": "加载多条独立短音频文件（支持逐个文件路径、文件夹目录自动扫描、或 `*.wav` 通配符展开，自动按自然顺序排序）。",
+                "supported_formats": ["wav", "mp3", "flac", "ogg"],
+                "key_value_options": {
+                    "recursive": "true | false（传入目录时是否递归扫描子目录，默认 false）",
+                },
+                "examples": [
+                    "load_batch ./female_isolated",
+                    "load_batch ./male_isolated/*.wav",
+                    "load_batch a01.wav a02.wav a03.wav",
+                ],
+            },
+            "stats": {
+                "command": "stats",
+                "usage": "stats [by=group|item|speaker] [scope=active|integrated]",
+                "description": "计算并返回当前工程的结构化声学统计摘要 JSON（样本数、平均时长、起点/中点/终点 F0、极差、均值、标准差、五度值 T 值及 F1/F2/F3 共振峰均值）。",
+                "key_value_options": {
+                    "by": "group（按组别汇总，默认）| item（按词条明细汇总）| speaker（按发音人汇总）",
+                    "scope": "active（仅当前发音人，默认）| integrated（合并所有发音人）",
+                },
+                "examples": [
+                    "stats",
+                    "stats by=group scope=integrated",
+                    "stats by=item",
+                ],
+            },
+            "export_bundle": {
+                "command": "export_bundle",
+                "usage": "export_bundle <out_dir> [scope=active|integrated|separate]",
+                "description": "一站式打包导出科研产物到指定目录：完整工程 (.teproj)、高级字表 (.ptwl)、数据档案 (.xlsx)、核心科研图表 (.png) 与研究方法学报告 (.md)。",
+                "key_value_options": {
+                    "scope": "active | integrated（默认多发音人自动使用 integrated）| separate",
+                    "format": "png（默认）| svg",
+                },
+                "examples": [
+                    "export_bundle ./output_bundle",
+                    "export_bundle ./output_bundle scope=integrated",
+                ],
+            },
+            "tool_wordlist_convert": {
+                "command": "tool_wordlist_convert",
+                "usage": "tool_wordlist_convert <input_wordlist> <output.ptwl> [title=<字表标题>]",
+                "description": "将普通杂乱字表 (.txt)、结构化字表文本或表格字表 (.csv) 解析升级并保存为标准 v2 高级字表 (.ptwl)。",
+                "supported_formats": ["txt", "csv", "ptwl"],
+                "key_value_options": {
+                    "title": "指定生成的 .ptwl 字表标题",
+                },
+                "examples": [
+                    "tool_wordlist_convert raw_wordlist.txt standard.ptwl",
+                    "tool_wordlist_convert raw_wordlist.csv standard.ptwl title=普通话声调实验",
+                ],
+            },
+            "detect_f0": {
+                "command": "detect_f0",
+                "usage": "detect_f0 [conservative|recommended|fine]",
+                "description": "自动探测当前发音人的有效基频分布（P5~P95），给出 conservative / recommended / fine 三档建议，并支持直接应用预设。",
+                "supported_formats": ["conservative", "recommended", "fine"],
+                "examples": [
+                    "detect_f0",
+                    "detect_f0 recommended",
+                ],
+            },
+            "detect_formants": {
+                "command": "detect_formants",
+                "usage": "detect_formants [reco|anti|fine]",
+                "description": "自动评估当前发音人样本的共振峰追踪质量评分，给出系统推荐档 (reco)、低上限复核档 (anti)、高分辨率档 (fine) 三档参数并支持直接应用。",
+                "supported_formats": ["reco", "recommended", "anti", "conservative", "fine"],
+                "examples": [
+                    "detect_formants",
+                    "detect_formants reco",
+                ],
+            },
+            "fix_warnings": {
+                "command": "fix_warnings",
+                "usage": "fix_warnings [apply=true|false] [pitch_floor=<Hz>] [voicing_threshold=<val>]",
+                "description": "扫描当前发音人存在空数据/清音/倍频警告的词条，给出参数调优建议或一键自动微调修复。",
+                "key_value_options": {
+                    "apply": "true（默认，直接自动应用修复参数并重算警告词条）| false（仅诊断不修改）",
+                    "pitch_floor": "指定修复时使用的音高下限（默认自动下调至 50~60 Hz）",
+                    "voicing_threshold": "指定修复时使用的浊音阈值（默认自动下调至 0.18）",
+                },
+                "examples": [
+                    "fix_warnings",
+                    "fix_warnings apply=false",
+                ],
+            },
+            "set_params": {
+                "command": "set_params",
+                "usage": "set_params [key=value ...]",
+                "description": "查看或更新当前发音人的全局声学提取参数。",
+                "key_value_options": {
+                    "analysis_mode": "f0 | formant",
+                    "pts": "插值采样点数（默认 11）",
+                    "db": "VAD 能量阈值（默认 60.0）",
+                    "skip_front": "跳过声母时长秒数（默认 0.0）",
+                    "pitch_floor": "基频下限 Hz（默认 75）",
+                    "pitch_ceiling": "基频上限 Hz（默认 600）",
+                    "voicing_threshold": "浊音阈值（默认 0.25）",
+                    "trim_silence": "true | false（默认 true）",
+                    "formant_max_hz": "共振峰搜索上限 Hz（默认 5500.0）",
+                    "formant_count": "共振峰数量（默认 5）",
+                    "formant_window_length": "共振峰窗长秒数（默认 0.025）",
+                    "formant_pre_emphasis": "共振峰预加重 Hz（默认 50.0）",
+                    "formant_sample_strategy": "整段11点 | 中段均值",
+                    "show_f3": "true | false（默认 false）",
+                },
+                "examples": [
+                    "set_params pitch_floor=60 pitch_ceiling=450 voicing_threshold=0.20",
+                    "set_params analysis_mode=formant formant_max_hz=5500",
+                ],
+            },
+        }
+        # Alias mappings
+        catalog["speaker"] = catalog["speakers"]
+        catalog["add_speaker"] = catalog["speakers"]
+        catalog["switch_speaker"] = catalog["speakers"]
+        catalog["rename_speaker"] = catalog["speakers"]
+        catalog["remove_speaker"] = catalog["speakers"]
+        return catalog
+
+    def _emit_subcommand_help(self, topic: str) -> bool:
+        topic_clean = self._clean_bom_and_whitespace(topic).lower().lstrip("-")
+        catalog = self._get_subcommand_help_catalog()
+        if topic_clean in catalog:
+            info = dict(catalog[topic_clean])
+            if "usage" in info and "syntax" not in info:
+                info["syntax"] = info["usage"]
+            if "key_value_options" in info and "options" not in info:
+                info["options"] = info["key_value_options"]
+            self._emit(
+                True,
+                f"Help for '{topic_clean}'",
+                help=info,
+                **info,
+            )
+            return True
+
+        method = getattr(self, f"do_{topic_clean}", None)
+        if callable(method) and getattr(method, "__doc__", None):
+            doc = inspect.cleandoc(method.__doc__)
+            lines = [ln.strip() for ln in doc.splitlines() if ln.strip()]
+            usage = next((ln.replace("Usage:", "").replace("用法：", "").strip() for ln in lines if ln.lower().startswith("usage:") or ln.startswith("用法：")), topic_clean)
+            self._emit(
+                True,
+                f"Help for '{topic_clean}'",
+                command=topic_clean,
+                usage=usage,
+                syntax=usage,
+                description=" ".join(lines),
+                help={"command": topic_clean, "usage": usage, "syntax": usage, "description": " ".join(lines)},
+            )
+            return True
+        return False
+
     def do_help(self, arg):
-        if not arg:
-            if getattr(self, 'lang', 'en') == 'zh':
-                print("""
-================================================================================
-                            PhonTracer语音学标注与声学分析系统 V1.0 命令行手册 (批处理与开发者指南)
-================================================================================
-AI 操作守则：优先只使用本 CLI。除非用户明确要求，不要直接编辑源码、移动/删除文件、
-不要绕过 CLI 去操作工程数据。需要说明时，请先用 `status`、`list_items`、`agent_guide` 确认。
-
-PhonTracer 是一款高精度的声学声调/共振峰格局分析工具。
-
---- 工作流生命周期 ---
-1. 导入音频：
-   - 导入单条长音频（如整句朗读录音）：
-     `load_long <音频路径>`
-   - 导入批量独立短音频文件：
-     `load_batch <路径1> <路径2> ...`
-2. 导入字词表或 TextGrid（进行音节切分/匹配）：
-   - `apply_wordlist <字词表路径> [匹配模式]`
-     * 字词表格式：支持按分组名、回车或Tab分隔（例如："组1\\n演讲\\n工作"）。
-     * 匹配模式：'fuzzy'（模糊文件名匹配，默认）或 'order'（按物理顺序匹配）。
-   - `apply_textgrid <TextGrid路径>` (仅长音频模式下使用，导入 TextGrid 音段并对齐)
-   - `batch_textgrid_import <TextGrid文件或目录...>` (导入多个 TextGrid 并与已有独立音频做文件名自动匹配)
-   - `textgrid_inspect <TextGrid路径>` (查看任意 TextGrid 的层摘要和推荐层映射)
-   - `textgrid_preview <TextGrid路径> item=<条目层> core=<核心层> [group=<组层|无>] [pair=adjacent] [wordlist=<字表>]`
-   - `textgrid_convert <TextGrid文件或目录...> out=<输出文件或目录> item=<条目层> core=<核心层> [group=<组层|无>] [pair=adjacent] [wordlist=<字表>]`
-3. 微调边界或声学提取参数：
-   - 精细修正某个音节的自动 VAD 时间边界：
-     `modify_bounds <音节ID> <开始时间> <结束时间>`
-   - 精细修正某个音节的 Parselmouth 独立基频提取参数（所见即所得）：
-     `modify_params <音节ID> pitch_floor=30 voicing_threshold=0.20`
-   - 使用最新修改的全局参数，重新批量计算整个项目的所有项：
-     `recalculate`
-4. 数据导出与报告：
-   - `export <格式> <输出路径> [规则] [目标范围] [高级参数=值 ...]`
-     * 支持的导出格式：txt, xlsx, line_chart, kde, wav, merged_wav, textgrid, contour (声调轮廓图), distribution (声调分布图), density (时序密度图), quality (数据质量检查), overview_heatmap (声调组别概览图)
-     * 共振峰专有导出格式：formant_table (共振峰数据表), formant_space (元音舌位图), formant_trajectory (共振峰时序轨迹图), formant_density (共振峰密度分布图), formant_overview_heatmap (共振峰组别概览图)
-   - `report_export <路径.teproj> <输出目录> [md|excel|both] [include_cache=true|false]`
-     * 导出完整项目的方法学研究报告和科学数据归档文件。
-
---- 声学参数与调优指南 ---
-* analysis_mode: 分析模式，可选 'f0' (基频/声调模式) 或 'formant' (共振峰模式，默认：'f0')
-* pts: 等分插值采样点数（默认：11）
-* db: VAD 切分能量落差阈值（默认：60.0）
-* skip_front: 排除声母时长，避免声母辅音浊化干扰（默认：0.0）
-* pitch_floor: 音高分析下限（默认：75 Hz） -> 通用甜点区：75
-* pitch_ceiling: 音高分析上限（默认：600 Hz） -> 通用甜点区：600
-* voicing_threshold: 浊音阈值（默认：0.25） -> 针对汉语三声等低频“气泡音/嘎裂声”，建议手动调低至 0.15 ~ 0.20
-* trim_silence: 自动切除有效声学边界首尾低于 -50dB 的静音区（默认：True）
-* formant_max_hz: Praat Burg 共振峰分析上限（如 5500 Hz，不是 F2 数值上限）
-* formant_count: 共振峰数量（默认：5）
-* formant_window_length: 共振峰分析窗长（秒，默认：0.025）
-* formant_pre_emphasis: 共振峰预加重系数（Hz，默认：50.0）
-* formant_sample_strategy: 共振峰提取采样策略（可选 '整段11点', '中段均值'，默认：'整段11点'）
-* show_f3: 是否显示/导出 F3 共振峰（默认：False）
-
---- 核心命令速查表 ---
-- `status`: 获取项目当前模式、状态指标、警告统计等。
-- `list_items [all|warnings|组名]`: 列表打印当前已切分的数据项及警告状态。
-- `set_params 键=值 ...`: 动态更新全局算法提取参数。
-- `modify_bounds <音节ID> <开始秒数> <结束秒数>`: 手动重写音节声学边界。
-- `modify_params <音节ID> 键=值 ...`: 手动指定单个音节专属的提取参数。
-- `recalculate`: 基于全局最新参数，批量重算整个项目。
-- `detect_f0 [apply_preset]`: 自动估算发音人的 F0 分布并给出保守/推荐/精细范围。可直接应用预设（conservative, recommended, fine）。
-- `project_export <路径.teproj>` / `project_import <路径.teproj>`: 导出或导入完整工程。
-- `project_save`: 保存工程数据到工作区。
-- `autosave on|off|now`: 开启、关闭或立即执行工程自动保存。
-- `project_preview <路径.teproj>`: 预览并展示 teproj 工程内部数据明细与发音人摘要。
-- `project_convert_zip <路径.teproj> <目标.zip>`: 将工程包另存为普通 ZIP 压缩包。
-- `textgrid_inspect <TextGrid路径>`: 查看 TextGrid 层摘要，并返回 CLI/Toolkit 转换器推荐的组层、条目层、核心层。
-- `textgrid_preview <TextGrid路径> item=<条目层> core=<核心层> [group=<组层|无>] [pair=none|adjacent] [wordlist=<字表>] [override=条目ID或标签:组名]`: 预览标准 TextGrid 转换结果和二字组体检。
-- `textgrid_convert <TextGrid文件或目录...> out=<输出文件或目录> [item=<条目层>] [core=<核心层>] [group=<组层|无>] [pair=none|adjacent] [wordlist=<字表>] [override=条目ID或标签:组名] [recursive=true]`: 转换为 PhonTracer 标准 `groups / words / chars` TextGrid，支持批量和辅助字表。
-- `batch_textgrid_import <TextGrid文件或目录...>`: 批量导入 TextGrid 并与已有独立音频做文件名自动匹配。
-- `import_batch_and_export <音频与TextGrid目录> <输出.teproj>`: 一键批量导入并导出为 teproj 工程。
-- `report_export <路径.teproj> <输出目录> [md|excel|both] [include_cache=true|false]`: 导出项目研究方法报告与数据档案。
-- `list_scripts`: 查看自定义脚本库列表。
-- `script_info <脚本ID>`: 查看特定脚本的代码与说明。
-- `run_script <脚本ID>`: 运行指定的自定义脚本。
-- `script_save <脚本ID|new> <名称> <说明> <类型:chart> <代码文件路径>`: 新建或保存自定义脚本。
-- `script_delete <脚本ID>`: 删除自定义脚本。
-- `script_import <脚本JSON路径>`: 导入自定义脚本。
-- `script_export <脚本ID> <目标JSON路径>`: 导出自定义脚本。
-- `script_prompt [键=值 ...]` (别名 `generate_prompt`): 交互式生成 AI 自定义脚本提示词。
-- `tool_merge <输出.wav> <间隔秒> <音频1> <音频2> ...`: 拼接多个短音频。
-- `tool_split <长音频> <字表.txt> <输出目录> [缓冲秒] [trim]`: 按字表拆分长音频。
-- `tool_sort_batch <字表.txt> [音频路径...]`: 按字表模糊排序独立音频。
-- `lang [zh|en]`: 切换命令行显示语言为中文或英文。
-================================================================================
-""")
+        arg_clean = self._clean_bom_and_whitespace(arg)
+        if not arg_clean:
+            text = get_cli_help_text(getattr(self, 'lang', 'en'))
+            if getattr(self, 'json_mode', False):
+                self._emit(True, "CLI Manual", manual=text.strip(), lang=getattr(self, 'lang', 'en'))
             else:
-                print("""
-================================================================================
-                            PhonTracer CLI MANUAL (Agent & Developer Guide)
-================================================================================
-AI operating rule: prefer this CLI as the control surface. Unless the user clearly
-asks for it, do not edit source files, move/delete files, or bypass the CLI to
-change project data. Use `status`, `list_items`, and `agent_guide` to orient first.
-
-PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
-
---- WORKFLOW LIFECYCLE ---
-1. Load Audio:
-   - For single long audio files (e.g. continuous sentence speech):
-     `load_long <filepath>`
-   - For multiple isolated sound files:
-     `load_batch <file1> <file2> ...`
-2. Apply Wordlist or TextGrid (Syllable Segmenting):
-   - `apply_wordlist <wordlist_filepath> [match_mode]`
-     * Wordlist structure: Tab/Newline grouped words (e.g., "group1\\nword1\\nword2").
-     * match_mode: 'fuzzy' (fuzzy filename matching) or 'order' (strict order matching).
-   - `apply_textgrid <textgrid_filepath>` (long audio mode: segment and align by TextGrid)
-   - `batch_textgrid_import <tg_file_or_dir...>` (batch audio mode: import and match TextGrids to audios)
-   - `textgrid_inspect <textgrid_filepath>` (inspect tiers and recommended converter mapping)
-   - `textgrid_preview <textgrid_filepath> item=<item_tier> core=<core_tier> [group=<group_tier|none>] [pair=adjacent] [wordlist=<path>]`
-   - `textgrid_convert <tg_file_or_dir...> out=<output_file_or_dir> item=<item_tier> core=<core_tier> [group=<group_tier|none>] [pair=adjacent] [wordlist=<path>]`
-3. Fine-Tune boundaries or acoustic parameters:
-   - To fine-tune VAD time boundaries of a specific syllable:
-     `modify_bounds <item_id> <start> <end>`
-   - To fine-tune Parselmouth acoustic parameters of a specific syllable (WYSIWYG):
-     `modify_params <item_id> pitch_floor=30 voicing_threshold=0.20`
-   - To recalculate all items globally with updated global parameters:
-     `recalculate`
-4. Export and Reports:
-   - `export <format> <output_file> [rule] [target] [key=val ...]`
-     * format: txt, xlsx, line_chart, kde, wav, merged_wav, textgrid, contour, distribution, density, quality, overview_heatmap
-     * formant formats: formant_table (Excel table), formant_space (vowel chart), formant_trajectory (trajectory), formant_density (density), formant_overview_heatmap (group heatmap)
-   - `report_export <path.teproj> <out_dir> [md|excel|both] [include_cache=true|false]`
-     * Export research methodologies reports and data archives.
-
---- CURRENT CONFIG & SCHEMAS ---
-- Global parameters (modifiable via `set_params`):
-  * analysis_mode: Analysis mode, 'f0' or 'formant' (default: 'f0')
-  * pts: Number of interpolation points (default: 11)
-  * db: VAD energy threshold (default: 60.0)
-  * skip_front: Avoid segmenting consonant onset duration (default: 0.0)
-  * pitch_floor: Minimum F0 range (default: 75) -> Sweet spot: 75
-  * pitch_ceiling: Maximum F0 range (default: 600) -> Sweet spot: 600
-  * voicing_threshold: Voicing tolerance (default: 0.25) -> Adjust lower (0.15~0.20) for creaky voice
-  * trim_silence: Cut prefix/suffix silence under -50dB (default: True)
-  * formant_max_hz: Praat Burg formant-analysis ceiling in Hz (e.g. 5500; not the F2 value limit)
-  * formant_count: Number of formants to track (default: 5)
-  * formant_window_length: Formant analysis window length in seconds (default: 0.025)
-  * formant_pre_emphasis: Formant pre-emphasis filter value (default: 50.0)
-  * formant_sample_strategy: Strategy to sample formant points (e.g., '整段11点', '中段均值')
-  * show_f3: Whether to show/export F3 formant (default: False)
-
---- ALL COMMANDS REFERENCE ---
-- `status`: Show current project state, active parameters, item warnings.
-- `list_items [all|warnings|group_name]`: List segmented items and warning flags.
-- `set_params key=value ...`: Update global extraction parameters.
-- `modify_bounds <item_id> <start> <end>`: Set manual time boundaries.
-- `modify_params <item_id> key=value ...`: Set item-specific custom parameters.
-- `recalculate`: Recalculate VAD boundaries & F0 curves globally.
-- `detect_f0 [apply_preset]`: Estimate speaker F0 distribution and get conservative/recommended/fine range suggestions. Can apply preset directly (conservative, recommended, fine).
-- `project_export <path.teproj>` / `project_import <path.teproj>`: Save or load a full project.
-- `project_save`: Save project data to workspace.
-- `autosave on|off|now`: Enable, disable, or immediately run project autosave.
-- `project_preview <path.teproj>`: Preview metadata and speaker details of a teproj project file.
-- `project_convert_zip <path.teproj> <dest.zip>`: Save teproj archive as a standard ZIP file.
-- `textgrid_inspect <textgrid_filepath>`: Inspect TextGrid tiers and recommended converter mapping.
-- `textgrid_preview <textgrid_filepath> item=<item_tier> core=<core_tier> [group=<group_tier|none>] [pair=none|adjacent] [wordlist=<path>] [override=item_id_or_label:group]`: Preview standard TextGrid conversion and tone-pair diagnostics.
-- `textgrid_convert <tg_file_or_dir...> out=<output_file_or_dir> [item=<item_tier>] [core=<core_tier>] [group=<group_tier|none>] [pair=none|adjacent] [wordlist=<path>] [override=item_id_or_label:group] [recursive=true]`: Convert to PhonTracer standard `groups / words / chars` TextGrid, with batch and auxiliary wordlist support.
-- `batch_textgrid_import <tg_file_or_dir...>`: Import multiple TextGrids and match them to batch audios.
-- `import_batch_and_export <folder_path> <output.teproj>`: One-step import folder and export to teproj.
-- `report_export <path.teproj> <out_dir> [md|excel|both] [include_cache]`: Export research methods report and data archives.
-- `list_scripts`: List all custom scripts in library.
-- `script_info <script_id>`: Show info and source code of a script.
-- `run_script <script_id>`: Run a custom script.
-- `script_save <id|new> <name> <description> <type> <code_file_path>`: Save/create a custom script.
-- `script_delete <script_id>`: Delete a custom script.
-- `script_import <json_path>`: Import a custom script from a JSON file.
-- `script_export <script_id> <dest_json_path>`: Export a custom script to a JSON file.
-- `script_prompt [key=val ...]` (alias `generate_prompt`): Interactively generate AI prompt for custom script writing.
-- `tool_merge <output.wav> <gap_sec> <audio1> <audio2> ...`: Merge short audios.
-- `tool_split <long_audio> <wordlist.txt> <output_dir> [buffer_sec] [trim]`: Split long audio by wordlist.
-- `tool_sort_batch <wordlist.txt> [audio_paths...]`: Fuzzy-sort batch audio paths by wordlist.
-- `lang [zh|en]`: Switch CLI language between Chinese and English.
-================================================================================
-""")
+                print(text)
         else:
-            super().do_help(arg)
+            if self._emit_subcommand_help(arg_clean):
+                return
+            self._emit(
+                False,
+                f"No help found for '{arg_clean}'. Use 'help' or 'agent_guide' to list all commands.",
+                error=f"Unknown help topic: {arg_clean}",
+                hint="可用帮助主题包括：speaker, speakers, export, apply_wordlist, load_batch, load_long, stats, export_bundle, tool_wordlist_convert, detect_f0, detect_formants, fix_warnings, set_params 等。",
+            )
 
     def do_agent_guide(self, arg):
         """
@@ -694,44 +1711,84 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
         """
         self._emit(
             True,
-            "你不是来写自动化脚本的，只能作为 PhonTracer CLI 操作者工作。每次只能输入一个内置命令，读完结果再进行下一步。",
+            "有状态会话最佳实践 (Stateful Session Best Practices)：单步命令交互请携带 `--project <session.teproj>` 或 `--workspace <dir>` 自动持久化状态；确定性批处理请使用 `--script-file <cmds.txt>`。",
+            stateful_session_best_practices={
+                "title": "有状态会话最佳实践 (Stateful Session Best Practices)",
+                "single_step_interactive": "在每次执行单条 CLI 命令时传入 `--project <session.teproj>`（或 `--workspace <dir>`）。CLI 启动时会自动加载已有工程/工作区，命令执行完毕后若状态发生变更会自动保存回该文件/目录，实现真正的单步有状态交互，彻底免去重复 load_long / apply_wordlist。",
+                "deterministic_batch": "针对已知确定流程的批处理，可将命令按行写入 UTF-8 文本文件并使用 `--script-file <cmds.txt>`（或 `--batch-cmds <cmds.txt>`）一次性顺序执行；若某行返回 `success: false` 会立即中止并精准报告 `failed_line` 与 `failed_command`。",
+                "clean_output": "非交互或自动化解析时可附加 `--quiet` 或 `--json` 确保 stdout 100% 为纯净 JSON。",
+            },
             rules=[
-                "你不是来写自动化脚本的，只能作为 PhonTracer CLI 操作者工作。",
-                "每次只能输入一个 PhonTracer CLI 内置命令。",
-                "必须等待并阅读返回结果后再决定下一步，禁止提前生成命令清单或一次性灌入多条命令。",
-                "禁止创建或运行任何额外脚本文件来绕过 CLI，包括 .bat、.cmd、.ps1、.py 等外部自动化脚本（但可以在用户指导下使用内置的 script_save 保存和 run_script 运行 PhonTracer 内置自定义脚本）。",
-                "如果 CLI 返回 success:false、出现警告、路径不匹配、音频和字表无法确认对应关系，或当前 AI 工具无法稳定交互运行 CLI，必须立即停止并向用户说明情况，等待用户确认。",
-                "最终必须先 project_export 导出完整 .teproj 工程包，确保可复现；然后再按用户要求导出 xlsx/TextGrid/wav/图表等结果文件。"
+                "【有状态会话最佳实践 (Stateful Session Best Practices)】推荐单步交互使用 `python cli.py --project <session.teproj> <command>` 或 `python cli.py --workspace <dir> <command>` 自动在单步命令间持久化状态；确定性批处理使用 `python cli.py --script-file <cmds.txt>`，无需使用操作系统管道拼接命令。",
+                "你不是来写外部自动化脚本的，只能作为 PhonTracer CLI 操作者工作。每步执行一个 CLI 命令（或通过 `--script-file` 执行确定性剧本），读取 JSON 反馈后再决定下一步调参或导出。",
+                "禁止创建或运行任何绕过 CLI 的外部处理脚本（如自行用 Python/Praat 解析音频或篡改工程 JSON），但可以使用内置自定义脚本命令（script_save / run_script）。",
+                "使用 `<cmd> --help`、`<cmd> ?` 或 `help <cmd>`（如 `export ?`、`help speaker`、`stats ?`）可随时查询子命令的完整 JSON 参数表与支持格式枚举。",
+                "导出数值供报告或论文引用时，优先运行 `stats` 获取各组/各词条的 F0 均值、极差、五度值与共振峰 JSON 统计摘要，或使用 `export_bundle <out_dir>` 一键生成全套产物。",
+                "最终必须确保完整 `.teproj` 工程包已导出（通过 `--project` 自动保存、`project_export` 或 `export_bundle`），再交付研究图表、高级字表 `.ptwl` 与数据表。"
+            ],
+            supported_commands=[
+                "status", "list_items", "set_params", "lang", "help", "agent_guide",
+                "speakers", "add_speaker", "switch_speaker", "rename_speaker", "remove_speaker",
+                "load_long", "load_batch", "apply_wordlist", "apply_textgrid", "batch_textgrid_import",
+                "textgrid_inspect", "textgrid_preview", "textgrid_convert",
+                "modify_bounds", "modify_params", "recalculate",
+                "detect_f0", "detect_formants", "fix_warnings",
+                "stats", "export", "export_bundle", "report_export",
+                "tool_wordlist_convert", "tool_merge", "tool_split", "tool_sort_batch",
+                "project_export", "project_import", "project_save", "project_load", "project_preview", "project_convert_zip", "autosave",
+                "import_batch_and_export",
+                "list_scripts", "script_info", "run_script", "script_save", "script_delete", "script_import", "script_export", "script_prompt"
             ],
             task_paths={
                 "process_long_audio_from_scratch": {
-                    "description": "从零开始导入并处理单条长音频",
+                    "description": "从零开始导入并处理单条长音频（推荐使用 --project 持久化）",
                     "steps": [
-                        "1. load_long <filepath> (加载长音频)",
-                        "2. apply_wordlist <wordlist_filepath> (切分音节) 或 apply_textgrid <textgrid_filepath>",
-                        "3. status / list_items warnings (检查切分状态/警告)",
-                        "4. modify_bounds / modify_params (可选：对特定项微调边界或参数)",
-                        "5. recalculate (如果进行了微调或全局参数修改，重算全部)",
-                        "6. project_export <output.teproj> (导出完整工程，供用户和后续复现)",
-                        "7. export <format> <output_path> (根据需求导出所需图表或数据表)"
+                        "1. python cli.py --project work.teproj load_long <filepath> (加载长音频并初始化持久工程)",
+                        "2. python cli.py --project work.teproj apply_wordlist <wordlist_filepath> (支持 .txt / .ptwl / .csv 切分音节)",
+                        "3. python cli.py --project work.teproj detect_f0 recommended (自适应探测并应用最佳基频范围)",
+                        "4. python cli.py --project work.teproj list_items warnings / fix_warnings (检查并修复异常警告项)",
+                        "5. python cli.py --project work.teproj stats (获取结构化基频与五度值统计摘要 JSON)",
+                        "6. python cli.py --project work.teproj export <format> <output_path> (导出 xlsx / ptwl / contour / density 等产物)"
+                    ]
+                },
+                "multi_speaker_workflow": {
+                    "description": "多发音人联合建模、跨性别五度值归一化与同图对比工作流",
+                    "steps": [
+                        '1. rename_speaker "发音人 1" <发音人A名称> (将默认发音人重命名为第一位真实发音人，如 F01_女声)',
+                        "2. load_long <女声长音频> 或 load_batch <女声独立音频目录> -> apply_wordlist <字表路径> -> detect_f0 recommended",
+                        "3. add_speaker <发音人B名称> --switch (新增并切换到第二位发音人，如 M01_男声)",
+                        "4. load_long <男声长音频> 或 load_batch <男声独立音频目录> -> apply_wordlist <字表路径> -> detect_f0 recommended",
+                        "5. stats by=group scope=integrated (查看跨发音人归一化五度值与声学对比统计表)",
+                        "6. export xlsx <out.xlsx> continuous integrated (导出多发音人整合 T 值数据表)",
+                        "7. export contour <out.png> integrated scale=t_value groupby=group (导出多发音人同图对比声调轮廓图)",
+                        "8. project_export <multi_speaker.teproj> (保存包含全部发音人的完整工程)"
+                    ]
+                },
+                "batch_audio_with_wordlist_workflow": {
+                    "description": "独立短音频目录/通配符批量加载并与字表对齐工作流",
+                    "steps": [
+                        "1. load_batch <音频目录或通配符路径> (直接传入文件夹或 *.wav 自动按自然顺序加载)",
+                        "2. apply_wordlist <字表路径> fuzzy (支持杂乱 .txt、.csv 或 .ptwl 高级字表模糊匹配)",
+                        "3. detect_f0 recommended (估算并应用发音人基频范围)",
+                        "4. recalculate (基于优化后的参数重算全部音节边界与曲线)",
+                        "5. export ptwl <out.ptwl> / project_export <out.teproj> (导出标准高级字表与完整工程)"
                     ]
                 },
                 "inspect_and_adjust_existing_project": {
                     "description": "加载已有 teproj 工程并进行检查/修改/导出",
                     "steps": [
-                        "1. project_import <filepath.teproj> (载入工程)",
-                        "2. status / list_items (评估已有音节状态)",
-                        "3. set_params / modify_bounds / modify_params (进行参数调优或手动校对)",
-                        "4. recalculate (如果做了调整，执行全局重新计算)",
-                        "5. project_export <filepath.teproj> (再次导出工程以保存进度)",
-                        "6. export <format> <output_path> (导出最终研究产物)"
+                        "1. project_import <filepath.teproj> (或启动时直接传 --project <filepath.teproj>)",
+                        "2. status / speakers / list_items (评估已有发音人与音节状态)",
+                        "3. set_params / modify_bounds / modify_params / fix_warnings (进行参数调优或校对)",
+                        "4. recalculate (如果做了全局调整，执行全局重新计算)",
+                        "5. stats / export_bundle <out_dir> (获取统计摘要或一键导出全部研究产物)"
                     ]
                 },
                 "batch_textgrid_import_workflow": {
                     "description": "批量短音频与批量 TextGrid 对齐后在工程中继续分析",
                     "steps": [
-                        "1. load_batch <audio_paths...> (加载所有音频文件)",
-                        "2. batch_textgrid_import <textgrid_paths...> (导入所有对应的 TextGrid 并与音频做文件名对齐)",
+                        "1. load_batch <audio_dir_or_paths...> (加载所有音频文件)",
+                        "2. batch_textgrid_import <textgrid_dir_or_paths...> (导入所有对应的 TextGrid 并与音频做文件名对齐)",
                         "3. status / list_items (检查匹配和基频提取警告)",
                         "4. project_export <filepath.teproj> (保存为 .teproj 工程)"
                     ]
@@ -755,7 +1812,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                     ]
                 }
             },
-            next_steps=["status", "help", "list_items all"]
+            next_steps=["status", "speakers", "help", "list_items all"]
         )
 
     def do_speakers(self, arg):
@@ -778,24 +1835,94 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
     def do_add_speaker(self, arg):
         """
         Add a new speaker.
-        Usage: add_speaker <name>
+        Usage: add_speaker <name> [--switch|--no-switch] [gender=female|male|child] [formant_max_hz=...]
+        By default, automatically switches to the newly added speaker unless --no-switch is passed.
+        If the initial default shell speaker ('发音人 1' or 'Speaker 1') has no data, it is automatically renamed/reused.
         """
-        name = arg.strip()
+        try:
+            tokens = shlex.split(arg)
+        except ValueError:
+            tokens = arg.strip().split()
+
+        do_switch = True
+        name_parts = []
+        kv_opts = {}
+        for tok in tokens:
+            low = tok.lower().strip()
+            if low in ("--switch", "-s", "switch=true", "switch=1", "active=true"):
+                do_switch = True
+            elif low in ("--no-switch", "switch=false", "switch=0", "active=false"):
+                do_switch = False
+            elif "=" in tok and tok.split("=", 1)[0].strip().lower() in (
+                "gender", "sex", "formant_max_hz", "pitch_floor", "pitch_ceiling", "pts", "db", "analysis_mode"
+            ):
+                k, v = tok.split("=", 1)
+                kv_opts[k.strip().lower()] = v.strip()
+            else:
+                name_parts.append(tok)
+
+        name = " ".join(name_parts).strip()
         if not name:
-            self._emit(False, error="Speaker name required")
+            self._emit(False, error="Speaker name required", hint="用法: add_speaker <发音人名称> [--switch]")
             return
-        new_speaker = self.speaker_manager.add_speaker(name)
+
+        all_speakers = self.speaker_manager.get_all_speakers()
+        replaced_default = False
+        target_speaker = None
+
+        empty_default = None
+        for s in all_speakers:
+            if self._is_empty_default_speaker(s):
+                empty_default = s
+                break
+
+        if empty_default is not None and len(all_speakers) == 1:
+            self.speaker_manager.rename_speaker(empty_default.id, name)
+            target_speaker = empty_default
+            replaced_default = True
+        else:
+            target_speaker = self.speaker_manager.add_speaker(name)
+            if empty_default is not None and empty_default.id != target_speaker.id:
+                self.speaker_manager.remove_speaker(empty_default.id)
+                replaced_default = True
+
+        gender_val = kv_opts.get("gender") or kv_opts.get("sex")
+        if gender_val:
+            g_low = gender_val.lower()
+            if g_low in ("female", "f", "woman", "女", "女性"):
+                target_speaker.last_params["formant_max_hz"] = 5500.0
+            elif g_low in ("male", "m", "man", "男", "男性"):
+                target_speaker.last_params["formant_max_hz"] = 5000.0
+            elif g_low in ("child", "c", "kid", "儿童", "小孩"):
+                target_speaker.last_params["formant_max_hz"] = 8000.0
+        for p_key in ("formant_max_hz", "pitch_floor", "pitch_ceiling", "db"):
+            if p_key in kv_opts:
+                try:
+                    target_speaker.last_params[p_key] = float(kv_opts[p_key])
+                except ValueError:
+                    pass
+
+        if do_switch:
+            self.speaker_manager.set_active_speaker(target_speaker.id)
+
         self._after_state_change("add_speaker")
-        self._emit(True, f"Speaker '{name}' added", speaker_id=new_speaker.id)
+        self._emit(
+            True,
+            f"Speaker '{name}' added",
+            speaker_id=target_speaker.id,
+            name=target_speaker.name,
+            active=(self.speaker_manager.active_speaker_id == target_speaker.id),
+            replaced_default=replaced_default,
+        )
 
     def do_switch_speaker(self, arg):
         """
         Switch the active speaker.
         Usage: switch_speaker <name_or_id>
         """
-        target = arg.strip()
+        target = arg.strip().strip('"').strip("'")
         if not target:
-            self._emit(False, error="Speaker name or id required")
+            self._emit(False, error="Speaker name or id required", hint="用法: switch_speaker <发音人名称或ID>")
             return
         found_id = None
         for s in self.speaker_manager.get_all_speakers():
@@ -805,16 +1932,83 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
 
         if found_id:
             self.speaker_manager.set_active_speaker(found_id)
-            self._emit(True, f"Switched to speaker '{target}'")
+            self._after_state_change("switch_speaker")
+            self._emit(
+                True,
+                f"Switched to speaker '{target}'",
+                speaker_id=found_id,
+                name=self.current_speaker.name,
+                active_speaker_id=found_id,
+                active_speaker=self.current_speaker.name,
+            )
         else:
-            self._emit(False, error=f"Speaker '{target}' not found")
+            available = [s.name for s in self.speaker_manager.get_all_speakers()]
+            self._emit(
+                False,
+                error=f"Speaker '{target}' not found",
+                available_speakers=available,
+                hint="请使用 speakers 查看当前可用发音人列表。",
+            )
+
+    def do_rename_speaker(self, arg):
+        """
+        Rename a speaker or the currently active speaker.
+        Usage: rename_speaker <old_name_or_id> <new_name>
+               rename_speaker <new_name>  (renames the active speaker)
+        """
+        try:
+            args = shlex.split(arg)
+        except ValueError as e:
+            self._emit(False, error=f"Invalid arguments: {e}")
+            return
+
+        if not args:
+            self._emit(False, error="Speaker name required. Usage: rename_speaker [<old_name>] <new_name>")
+            return
+
+        if len(args) == 1:
+            target_spk = self.current_speaker
+            new_name = args[0].strip()
+        else:
+            old_target = args[0].strip()
+            new_name = " ".join(args[1:]).strip()
+            target_spk = None
+            for s in self.speaker_manager.get_all_speakers():
+                if s.id == old_target or s.name == old_target:
+                    target_spk = s
+                    break
+            if target_spk is None:
+                self._emit(False, error=f"Speaker '{old_target}' not found")
+                return
+
+        if not new_name:
+            self._emit(False, error="New speaker name required")
+            return
+
+        old_name = target_spk.name
+        self.speaker_manager.rename_speaker(target_spk.id, new_name)
+        for item in target_spk.items.values():
+            if isinstance(item, dict):
+                item["speaker"] = new_name
+                item["speaker_id"] = target_spk.id
+
+        self._after_state_change("rename_speaker")
+        self._emit(
+            True,
+            f"Speaker '{old_name}' renamed to '{new_name}'",
+            speaker_id=target_spk.id,
+            old_name=old_name,
+            new_name=new_name,
+            name=new_name,
+            active=(self.speaker_manager.active_speaker_id == target_spk.id),
+        )
 
     def do_remove_speaker(self, arg):
         """
         Remove a speaker. Cannot remove the last speaker.
         Usage: remove_speaker <name_or_id>
         """
-        target = arg.strip()
+        target = arg.strip().strip('"').strip("'")
         if not target:
             self._emit(False, error="Speaker name or id required")
             return
@@ -864,21 +2058,27 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
 
     def do_load_batch(self, arg):
         """
-        Load multiple independent audio files.
-        Usage: load_batch <file1> <file2> ...
+        Load multiple independent audio files from file paths, directory paths, or wildcard patterns.
+        Usage: load_batch <file_or_dir_or_glob1> [file_or_dir_or_glob2 ...]
         """
-        args = shlex.split(arg)
-        if not args:
-            self._emit(False, error="Filepaths required")
+        try:
+            args = shlex.split(arg)
+        except ValueError as e:
+            self._emit(False, error=f"Invalid arguments: {e}")
             return
 
-        valid_paths = []
-        for p in args:
-            if os.path.exists(p):
-                valid_paths.append(p)
-            else:
-                self._emit(False, error=f"File not found: {p}")
-                return
+        if not args:
+            self._emit(
+                False,
+                error="Filepaths required",
+                hint="请传入音频文件路径、目录路径（如 load_batch ./female_isolated）或 *.wav 通配符（如 load_batch ./male_isolated/*.wav）。",
+            )
+            return
+
+        valid_paths, err_msg, hint_msg = self._expand_batch_audio_inputs(args)
+        if err_msg:
+            self._emit(False, error=err_msg, hint=hint_msg)
+            return
 
         self.batch_paths = valid_paths
         self.mode = 'batch'
@@ -887,41 +2087,72 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
         self.items.clear()
         self.groups.clear()
         self._after_state_change("load_batch")
-        self._emit(True, f"已加载 {len(self.batch_paths)} 个独立音频。下一步通常是 apply_wordlist。", mode=self.mode, count=len(self.batch_paths))
+        self._emit(
+            True,
+            f"已加载 {len(self.batch_paths)} 个独立音频。下一步通常是 apply_wordlist。",
+            mode=self.mode,
+            count=len(self.batch_paths),
+            paths=self.batch_paths,
+        )
 
     def do_apply_wordlist(self, arg):
         """
-        Apply a wordlist (text file) to split/match the audio.
+        Apply a wordlist (.ptwl, .csv, structured .txt, or messy .txt) to split/match the audio.
         Usage: apply_wordlist <wordlist_filepath> [match_mode]
         match_mode for batch: 'fuzzy' or 'order' (default 'fuzzy')
         """
-        args = shlex.split(arg)
+        try:
+            args = shlex.split(arg)
+        except ValueError as e:
+            self._emit(False, error=f"Invalid arguments: {e}")
+            return
+
         if not args:
             self._emit(False, error="Wordlist filepath required")
             return
 
-        filepath = args[0]
-        match_mode = args[1] if len(args) > 1 else 'fuzzy'
+        filepath = None
+        match_mode = "fuzzy"
+        custom_title = None
+        for tok in args:
+            if "=" in tok:
+                k, v = tok.split("=", 1)
+                k_low = k.strip().lower()
+                if k_low in ("match_mode", "mode", "match"):
+                    match_mode = v.strip().lower()
+                elif k_low == "title":
+                    custom_title = v.strip()
+                elif filepath is None:
+                    filepath = tok
+            else:
+                if filepath is None:
+                    filepath = tok
+                elif tok.lower() in ("fuzzy", "order"):
+                    match_mode = tok.lower()
 
-        if not os.path.exists(filepath):
+        if not filepath or not os.path.exists(filepath):
             self._emit(False, error=f"File not found: {filepath}")
             return
 
-        with open(filepath, 'r', encoding='utf-8') as f:
-            raw_text = f.read()
+        try:
+            doc, groups, flat_words, records = self._load_wordlist_any(filepath, title=custom_title)
+        except Exception as e:
+            self._emit(False, error=f"Failed to load wordlist: {e}")
+            return
 
-        groups, flat_words = parse_wordlist(raw_text)
         if not flat_words:
             self._emit(False, error="No words found in wordlist")
             return
 
-        self.groups = [g['group'] for g in groups]
+        self.wordlist_doc = doc
+        self.groups = [g["group"] for g in groups]
+        self.current_speaker.project_groups = list(self.groups)
         self.items.clear()
 
-        if self.mode == 'long':
-            self._process_long_wordlist(groups, flat_words)
-        elif self.mode == 'batch':
-            self._process_batch_wordlist(groups, flat_words, match_mode)
+        if self.mode in ("long", "single"):
+            self._process_long_wordlist(groups, flat_words, metadata_records=records, wordlist_doc=doc)
+        elif self.mode == "batch":
+            self._process_batch_wordlist(groups, flat_words, match_mode, metadata_records=records, wordlist_doc=doc)
         else:
             self._emit(False, error="No audio loaded. Use load_long or load_batch first.")
 
@@ -940,7 +2171,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
             self._emit(False, error=f"File not found: {filepath}")
             return
 
-        if self.mode != 'long' or not self.long_snd:
+        if self.mode not in ('long', 'single') or not self.long_snd:
             self._emit(False, error="This command requires active long audio mode. Use load_long first.")
             return
 
@@ -1533,25 +2764,42 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
             return rows, False
         return rows[:limit], len(rows) > limit
 
-    def _process_long_wordlist(self, groups, flat_words):
+    def _process_long_wordlist(self, groups, flat_words, metadata_records=None, wordlist_doc=None, emit_result=True):
+        metadata_records = metadata_records or []
         try:
-            pitch_data = extract_f0(self.long_snd, self.params)
-            macro_segments = macroscopic_vad(self.long_snd, expected_count=len(flat_words))
+            snd = self.long_snd
+            if snd is None and self.long_snd_path and os.path.exists(self.long_snd_path):
+                try:
+                    snd = parselmouth.Sound(self.long_snd_path)
+                    self.long_snd = snd
+                except Exception:
+                    snd = None
 
-            pitch_xs = pitch_data['xs']
-            pitch_freqs = pitch_data['freqs']
-            long_valid_indices = np.where(pitch_freqs > 0)[0]
-            long_valid_xs = pitch_xs[long_valid_indices] if len(long_valid_indices) > 0 else np.array([])
+            if snd is not None:
+                pitch_data = extract_f0(snd, self.params)
+                macro_segments = macroscopic_vad(snd, expected_count=len(flat_words))
+                self.current_speaker.current_macro_segments = list(macro_segments)
+                pitch_xs = pitch_data['xs']
+                pitch_freqs = pitch_data['freqs']
+                long_valid_indices = np.where(pitch_freqs > 0)[0]
+                long_valid_xs = pitch_xs[long_valid_indices] if len(long_valid_indices) > 0 else np.array([])
+            else:
+                pitch_data = None
+                macro_segments = []
+                pitch_xs = np.array([])
+                pitch_freqs = np.array([])
+                long_valid_xs = np.array([])
 
             word_idx = 0
             for grp in groups:
                 for word in grp['items']:
                     iid = f"item_{word_idx}"
-                    if word_idx < len(macro_segments):
+                    record = metadata_records[word_idx] if word_idx < len(metadata_records) else None
+                    if snd is not None and word_idx < len(macro_segments):
                         ms, me = macro_segments[word_idx]
 
                         mic_s, mic_e, raw_s, raw_e = core_microscopic_vowel_nucleus(
-                            self.long_snd, pitch_data, ms, me,
+                            snd, pitch_data, ms, me,
                             self.params['db'], self.params['skip_front'], self.params['trim_silence']
                         )
 
@@ -1562,21 +2810,20 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                         syls = split_into_syllables(word)
                         if len(syls) > 1:
                             meta = {}
-                            inner_splits = auto_split_inner_word(self.long_snd, mic_s, mic_e, len(syls), pitch_data=pitch_data, output_meta=meta)
+                            inner_splits = auto_split_inner_word(snd, mic_s, mic_e, len(syls), pitch_data=pitch_data, output_meta=meta)
                             split_warnings = meta.get('split_warnings', [])
                             split_confidence = meta.get('split_confidence', 1.0)
-                            chars_bounds = auto_split_to_chars_bounds(self.long_snd, mic_s, mic_e, inner_splits, len(syls), self.params)
+                            chars_bounds = auto_split_to_chars_bounds(snd, mic_s, mic_e, inner_splits, len(syls), self.params)
                         else:
                             chars_bounds = [[mic_s, mic_e]]
 
-                        # Preview
                         preview_times = np.linspace(mic_s, mic_e, 11)
                         preview_f0 = _calc_preview_f0(preview_times, pitch_xs, pitch_freqs, long_valid_xs)
                         has_empty = any(f == 0.0 for f in preview_f0)
 
-                        self.items[iid] = {
+                        item_dict = {
                             'id': iid, 'label': word, 'group': grp['group'],
-                            'snd': self.long_snd, 'pitch_data': pitch_data,
+                            'snd': snd, 'pitch_data': pitch_data,
                             'macro_start': ms, 'macro_end': me,
                             'start': mic_s, 'end': mic_e,
                             'raw_start': raw_s, 'raw_end': raw_e,
@@ -1588,42 +2835,65 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                             'voicing_threshold': self.params.get('voicing_threshold', 0.25),
                         }
                     else:
-                        self.items[iid] = {
+                        item_dict = {
                             'id': iid, 'label': word, 'group': grp['group'],
                             'missing': True, 'start': None, 'end': None
                         }
+                    self._attach_wordlist_record_to_item(item_dict, record, speaker=self.current_speaker)
+                    self.items[iid] = item_dict
                     word_idx += 1
-            self._after_state_change("apply_wordlist")
-            self._emit(True, f"长音频已按字表处理，共 {len(flat_words)} 个词/字。", total=len(flat_words))
-        except Exception as e:
-            self._emit(False, error=str(e))
 
-    def _process_batch_wordlist(self, groups, flat_words, match_mode):
+            self._after_state_change("apply_wordlist")
+            if emit_result:
+                doc_info = wordlist_doc or self.wordlist_doc or {}
+                self._emit(
+                    True,
+                    f"长音频已按字表处理，共 {len(flat_words)} 个词/字。",
+                    total=len(flat_words),
+                    group_count=len(groups),
+                    wordlist_title=doc_info.get("title", "") if isinstance(doc_info, dict) else "",
+                    schema=doc_info.get("schema", WORDLIST_SCHEMA) if isinstance(doc_info, dict) else WORDLIST_SCHEMA,
+                )
+        except Exception as e:
+            if emit_result:
+                self._emit(False, error=str(e))
+            else:
+                raise
+
+    def _process_batch_wordlist(self, groups, flat_words, match_mode, metadata_records=None, wordlist_doc=None, emit_result=True):
+        metadata_records = metadata_records or []
         tasks = []
+        record_idx = 0
         if match_mode == 'fuzzy':
-            import re
-            def natural_sort_key(s):
-                return [int(text) if text.isdigit() else text.lower() for text in re.split('([0-9]+)', s)]
-            sorted_paths = sorted(self.batch_paths, key=natural_sort_key)
+            sorted_paths = sorted(self.batch_paths, key=self._natural_sort_key)
             used_indices = []
             for grp in groups:
                 for word in grp['items']:
+                    record = metadata_records[record_idx] if record_idx < len(metadata_records) else None
                     idx = fuzzy_match_word_to_path(word, sorted_paths, used_indices)
+                    if idx is None and record:
+                        for alias in (record.get("item_aliases") or record.get("aliases") or []):
+                            idx = fuzzy_match_word_to_path(alias, sorted_paths, used_indices)
+                            if idx is not None:
+                                break
                     if idx is not None:
                         path = sorted_paths[idx]
                         used_indices.append(idx)
-                        tasks.append({'word': word, 'group': grp['group'], 'path': path, 'missing': False})
+                        tasks.append({'word': word, 'group': grp['group'], 'path': path, 'missing': False, 'record': record})
                     else:
-                        tasks.append({'word': word, 'group': grp['group'], 'missing': True})
+                        tasks.append({'word': word, 'group': grp['group'], 'missing': True, 'record': record})
+                    record_idx += 1
         else:
             path_idx = 0
             for grp in groups:
                 for word in grp['items']:
+                    record = metadata_records[record_idx] if record_idx < len(metadata_records) else None
                     if path_idx < len(self.batch_paths):
-                        tasks.append({'word': word, 'group': grp['group'], 'path': self.batch_paths[path_idx], 'missing': False})
+                        tasks.append({'word': word, 'group': grp['group'], 'path': self.batch_paths[path_idx], 'missing': False, 'record': record})
                         path_idx += 1
                     else:
-                        tasks.append({'word': word, 'group': grp['group'], 'missing': True})
+                        tasks.append({'word': word, 'group': grp['group'], 'missing': True, 'record': record})
+                    record_idx += 1
 
         futures = {}
         for i, t in enumerate(tasks):
@@ -1635,7 +2905,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
         results = [None] * len(tasks)
         for i, t in enumerate(tasks):
             if t['missing']:
-                results[i] = {'label': t['word'], 'group': t['group'], 'missing': True}
+                results[i] = {'label': t['word'], 'group': t['group'], 'missing': True, 'start': None, 'end': None}
 
         for future in concurrent.futures.as_completed(futures):
             orig_idx = futures[future]
@@ -1645,7 +2915,6 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                 res['group'] = tasks[orig_idx]['group']
                 res['label'] = tasks[orig_idx]['word']
 
-                # Fix word splits if batch process used filename as label initially
                 word = res['label']
                 if res.get('success'):
                     syls = split_into_syllables(word)
@@ -1662,12 +2931,12 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                         res['split_confidence'] = 1.0
                 results[orig_idx] = res
             except Exception as e:
-                results[orig_idx] = {'label': tasks[orig_idx]['word'], 'group': tasks[orig_idx]['group'], 'missing': True, 'error': str(e)}
+                results[orig_idx] = {'label': tasks[orig_idx]['word'], 'group': tasks[orig_idx]['group'], 'missing': True, 'start': None, 'end': None, 'error': str(e)}
 
         for i, res in enumerate(results):
             iid = f"item_{i}"
+            record = tasks[i].get('record')
             if not res.get('missing') and res.get('success'):
-                # Load sound and pitch data into memory for fast recalculation
                 try:
                     snd = parselmouth.Sound(res['path'])
                     pitch_data = extract_f0(snd, self.params)
@@ -1679,10 +2948,22 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                 except Exception:
                     pass
             res['id'] = iid
+            self._attach_wordlist_record_to_item(res, record, speaker=self.current_speaker)
             self.items[iid] = res
 
         self._after_state_change("apply_wordlist")
-        self._emit(True, f"独立音频已按字表匹配处理，共 {len(tasks)} 个词/字。", total=len(tasks))
+        if emit_result:
+            doc_info = wordlist_doc or self.wordlist_doc or {}
+            matched_cnt = sum(1 for r in results if r and not r.get('missing') and r.get('success'))
+            self._emit(
+                True,
+                f"独立音频已按字表匹配处理，共 {len(tasks)} 个词/字（已匹配音频 {matched_cnt} 项）。",
+                total=len(tasks),
+                matched=matched_cnt,
+                group_count=len(groups),
+                wordlist_title=doc_info.get("title", "") if isinstance(doc_info, dict) else "",
+                schema=doc_info.get("schema", WORDLIST_SCHEMA) if isinstance(doc_info, dict) else WORDLIST_SCHEMA,
+            )
 
     def do_status(self, arg):
         """
@@ -1698,7 +2979,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
             "missing_items": sum(1 for it in self.items.values() if (it.get('missing') or not it.get('success', True)) and not it.get('is_excluded', False)),
             "warnings": sum(1 for it in self.items.values() if self._check_item_has_empty_data(it) and not it.get('is_excluded', False))
         }
-        print(json.dumps({"success": True, "status": status}))
+        self._emit(True, status=status)
 
     def do_list_items(self, arg):
         """
@@ -1718,6 +2999,12 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                 "id": iid,
                 "label": item.get('label'),
                 "group": item.get('group'),
+                "tags": list(item.get('tags') or item.get('item_tags') or []),
+                "note": item.get('note') or item.get('item_note') or "",
+                "fields": dict(item.get('fields') or item.get('custom_fields') or item.get('item_meta') or item.get('meta') or {}),
+                "custom_fields": dict(item.get('custom_fields') or item.get('fields') or item.get('item_meta') or item.get('meta') or {}),
+                "speaker": item.get('speaker') or self.current_speaker.name,
+                "speaker_id": item.get('speaker_id') or self.current_speaker.id,
                 "is_excluded": item.get('is_excluded', False),
             }
             if item.get('is_excluded', False):
@@ -1733,7 +3020,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                 entry['warning'] = self._check_item_has_empty_data(item)
             output.append(entry)
 
-        print(json.dumps({"success": True, "items": output}))
+        self._emit(True, items=output)
 
     def do_modify_bounds(self, arg):
         """
@@ -1878,18 +3165,18 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                 return
 
         self._after_state_change("modify_params")
-        print(json.dumps({
-            "success": True,
-            "message": f"{iid} 的专属参数已更新。",
-            "item_params": {
+        self._emit(
+            True,
+            f"{iid} 的专属参数已更新。",
+            item_params={
                 "pitch_floor": item.get('pitch_floor'),
                 "pitch_ceiling": item.get('pitch_ceiling'),
                 "voicing_threshold": item.get('voicing_threshold'),
             },
-            "warning": item.get('has_empty_data', False),
-            "split_warnings": item.get('split_warnings', []),
-            "split_confidence": item.get('split_confidence', 1.0)
-        }))
+            warning=item.get('has_empty_data', False),
+            split_warnings=item.get('split_warnings', []),
+            split_confidence=item.get('split_confidence', 1.0),
+        )
 
     def do_recalculate(self, arg):
         """
@@ -1898,7 +3185,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
         """
         self._emit(True, status="processing", message="Recalculating... this may take a moment.")
 
-        if self.mode == 'long' and self.long_snd:
+        if self.mode in ('long', 'single') and self.long_snd:
             pitch_data = extract_f0(self.long_snd, self.params)
             pitch_xs = pitch_data['xs']
             pitch_freqs = pitch_data['freqs']
@@ -2031,7 +3318,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
         updated = 0
         skipped = 0
 
-        if self.mode == 'long' and self.long_snd:
+        if self.mode in ('long', 'single') and self.long_snd:
             pitch_data = extract_f0(self.long_snd, self.params)
             pitch_xs = pitch_data['xs']
             pitch_freqs = pitch_data['freqs']
@@ -2199,7 +3486,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
         all_stable_f0 = []
 
         # Determine mode: long or batch
-        if self.mode == 'long':
+        if self.mode in ('long', 'single'):
             snd = self.long_snd
             if snd is None and self.long_snd_path and os.path.exists(self.long_snd_path):
                 try:
@@ -2252,10 +3539,10 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                     continue
 
         if len(all_stable_f0) < 50:
-            print(json.dumps({
-                "success": False,
-                "error": "Too little voiced speech data (< 0.5s) to reliably estimate F0. Please import more audio or ensure there is stable speech."
-            }))
+            self._emit(
+                False,
+                error="Too little voiced speech data (< 0.5s) to reliably estimate F0. Please import more audio or ensure there is stable speech."
+            )
             return
 
         p5 = float(np.percentile(all_stable_f0, 5))
@@ -2314,15 +3601,16 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                 )
                 self._after_state_change("set_params")
             else:
-                print(json.dumps({
-                    "success": False,
-                    "error": f"Invalid preset '{preset_arg}'. Choose from: conservative, recommended, fine"
-                }))
+                self._emit(
+                    False,
+                    error=f"Invalid preset '{preset_arg}'. Choose from: conservative, recommended, fine"
+                )
                 return
 
-        response = {
-            "success": True,
-            "metrics": {
+        self._emit(
+            True,
+            applied_msg if applied else f"F0 distribution estimated. Detected main distribution: {int(p5)}~{int(p95)} Hz.",
+            metrics={
                 "voiced_duration_s": voiced_duration,
                 "stable_frames_count": len(all_stable_f0),
                 "p5": p5,
@@ -2331,49 +3619,183 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                 "p90": p90,
                 "p95": p95
             },
-            "suggestions": {
+            suggestions={
                 "conservative": {"floor": cons_floor, "ceiling": cons_ceil},
                 "recommended": {"floor": reco_floor, "ceiling": reco_ceil},
                 "fine": {"floor": fine_floor, "ceiling": fine_ceil}
             },
-            "applied": applied,
-            "message": applied_msg if applied else f"F0 distribution estimated. Detected main distribution: {int(p5)}~{int(p95)} Hz."
-        }
-        print(json.dumps(response))
+            applied=applied,
+        )
+
+    SUPPORTED_EXPORT_FORMATS = [
+        "xlsx",
+        "txt",
+        "textgrid",
+        "ptwl",
+        "contour",
+        "density",
+        "distribution",
+        "quality",
+        "overview_heatmap",
+        "tone_effect_time",
+        "formant_space",
+        "f1_f2",
+        "duration",
+        "trend",
+        "line_chart",
+        "kde",
+        "wav",
+        "merged_wav",
+        "formant_table",
+        "formant_trajectory",
+        "formant_density",
+        "formant_overview_heatmap",
+    ]
 
     def do_export(self, arg):
         """
         Export data to various formats.
         Usage: export <format> <output_file> [rule] [target] [key=val ...]
         Advanced charts: export <chart_type> <output_file_or_dir> [target] [key=val ...]
-        Formats: txt, xlsx, line_chart, kde, wav, merged_wav, textgrid, contour, distribution, density, quality, overview_heatmap,
-                 formant_table, formant_space, formant_trajectory, formant_density, formant_overview_heatmap
+        Formats: xlsx, txt, textgrid, ptwl, contour, density, distribution, quality, overview_heatmap,
+                 formant_space, f1_f2, duration, trend, line_chart, kde, wav, merged_wav,
+                 formant_table, formant_trajectory, formant_density, formant_overview_heatmap
         Rule: continuous (default) or per_group (For 'wav' and 'merged_wav', rule can also be buffer_sec or gap_sec like 0.5)
         Target (Multi-speaker): active (default), separate (multiple files per speaker), integrated (merged T-value calculation)
-        Example: export xlsx output.xlsx continuous integrated
-        Example: export wav scratch/output_dir 0.1 separate
-        Example: export contour output.svg integrated scale=hz groupby=label facet=group
-        Example: export density output.png integrated normalization=speaker facet=group
-        Example: export contour output.png integrated chart_group=item_tag:目标词,填充词
-        Example: export contour output.png integrated chart_group=meta:结构
         """
-        args = shlex.split(arg)
-        if len(args) < 2:
-            self._emit(False, error="Requires format and output_file")
+        try:
+            args = shlex.split(arg)
+        except ValueError as e:
+            self._emit(False, error=f"Invalid arguments: {e}")
             return
 
-        fmt = args[0]
+        if len(args) == 1 and args[0].strip().lower() in ("?", "--help", "-h", "help"):
+            self._emit_subcommand_help("export")
+            return
+
+        if len(args) < 2:
+            self._emit(
+                False,
+                error="Requires format and output_file",
+                supported_formats=self.SUPPORTED_EXPORT_FORMATS,
+                hint="用法: export <格式> <输出路径> [continuous|per_group] [active|integrated|separate] [key=value ...]。输入 `export ?` 查看完整格式与参数列表。",
+            )
+            return
+
+        fmt_raw = args[0].strip()
+        fmt_low = fmt_raw.lower().lstrip(".")
         out_file = args[1]
 
-        # Scientific/Advanced Visualization Toolbox integration
-        scientific_charts = {'contour', 'distribution', 'density', 'quality', 'overview_heatmap', 'formant_space', 'formant_trajectory', 'formant_density', 'formant_overview_heatmap'}
+        fmt_aliases = {
+            "f1_f2": "formant_space",
+            "f1f2": "formant_space",
+            "vowel_space": "formant_space",
+            "vowel_chart": "formant_space",
+            "wordlist": "ptwl",
+        }
+        valid_formats_set = {f.lower() for f in self.SUPPORTED_EXPORT_FORMATS} | set(fmt_aliases.keys())
+
+        # 1. 格式合法性校验（严格优先于空数据检查！）
+        if fmt_low not in valid_formats_set:
+            self._emit(
+                False,
+                error=f"Unknown format: {fmt_raw}",
+                supported_formats=self.SUPPORTED_EXPORT_FORMATS,
+                hint=f"不支持的导出格式 '{fmt_raw}'。合法格式包括: {', '.join(self.SUPPORTED_EXPORT_FORMATS)}。输入 `export ?` 查看各格式参数说明。",
+            )
+            return
+
+        empty_data_hint = "请先运行 load_long / load_batch + apply_wordlist，或通过 project_import / --project 载入已有工程"
+
+        # 2. 高级字表 (.ptwl) 导出支持
+        if fmt_low in ("ptwl", "wordlist"):
+            custom_title = None
+            for extra in args[2:]:
+                if "=" in extra:
+                    k, v = extra.split("=", 1)
+                    if k.strip().lower() in ("title", "标题"):
+                        custom_title = v.strip().strip('"').strip("'")
+
+            spk = self.current_speaker
+            base_doc = self.wordlist_doc
+            target_items = spk.items if spk and spk.items else {}
+            target_groups = list(self.groups) if self.groups else []
+
+            if not target_items and base_doc is None:
+                for other_spk in self.speaker_manager.get_all_speakers():
+                    if other_spk.items or getattr(other_spk, "wordlist_doc", None) is not None:
+                        target_items = other_spk.items
+                        base_doc = getattr(other_spk, "wordlist_doc", None)
+                        target_groups = getattr(other_spk, "cli_groups", []) or getattr(other_spk, "project_groups", []) or []
+                        break
+
+            has_base_items = bool(
+                isinstance(base_doc, dict)
+                and any(g.get("items") for g in base_doc.get("groups", []) if isinstance(g, dict))
+            )
+            if not target_items and not has_base_items:
+                self._emit(
+                    False,
+                    error="No items to export",
+                    hint=empty_data_hint,
+                )
+                return
+
+            try:
+                doc = build_wordlist_document_from_items(
+                    target_items,
+                    groups_order=target_groups,
+                    base_doc=base_doc,
+                    title=custom_title,
+                )
+                normalized = save_wordlist_file(doc, out_file)
+                self.wordlist_doc = normalized
+                summary = summarize_wordlist_document(normalized)
+                self._emit(
+                    True,
+                    f"Exported ptwl to {out_file}",
+                    path=out_file,
+                    output_file=out_file,
+                    schema=normalized.get("schema", WORDLIST_SCHEMA),
+                    title=normalized.get("title", ""),
+                    groups=summary["groups"],
+                    group_count=summary["groups"],
+                    item_count=summary["items"],
+                )
+            except Exception as e:
+                self._emit(False, error=str(e))
+            return
+
+        # 3. 归一化高级科研图表别名
+        chart_preset_overrides = {}
+        if fmt_low in fmt_aliases:
+            fmt = fmt_aliases[fmt_low]
+        elif fmt_low == "duration":
+            fmt = "contour"
+            chart_preset_overrides["contour_x"] = "duration"
+        elif fmt_low == "trend":
+            fmt = "tone_effect_time"
+        else:
+            fmt = fmt_low
+
+        # 4. 高级科研图表工具箱集成
+        scientific_charts = {
+            "contour",
+            "distribution",
+            "density",
+            "quality",
+            "overview_heatmap",
+            "tone_effect_time",
+            "formant_space",
+            "formant_trajectory",
+            "formant_density",
+            "formant_overview_heatmap",
+        }
         if fmt in scientific_charts:
-            # Parse parameters:
-            # Positional arguments: target
-            # Key-value arguments: key=value
             params = {
-                'chart_type': fmt,
-                'export_scope': 'active',  # default target
+                "chart_type": fmt,
+                "export_scope": "active",
+                **chart_preset_overrides,
             }
 
             def parse_chart_group_rule(value):
@@ -2432,26 +3854,23 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
 
                 return {"source": source, "tag_mode": tag_mode, "selected_values": values, "field_name": ""}
 
-            # Gather positional args and key-value pairs
             pos_args = []
             for item in args[2:]:
-                if '=' in item:
-                    k, v = item.split('=', 1)
+                if "=" in item:
+                    k, v = item.split("=", 1)
                     k = k.strip().lower()
                     v = v.strip()
-                    # Strip surrounding quotes if present
                     if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
                         v = v[1:-1]
-                    # Map some standard aliases for ease of use
-                    if k == 'target':
-                        k = 'export_scope'
-                    elif k == 'facet':
-                        if fmt == 'density':
-                            k = 'density_facet'
-                        elif fmt == 'contour':
-                            k = 'contour_facet'
-                    elif k in ('chart_group', 'chart_group_rule', 'group_rule'):
-                        k = 'chart_group_rule'
+                    if k in ("target", "scope", "export_scope"):
+                        k = "export_scope"
+                    elif k == "facet":
+                        if fmt == "density":
+                            k = "density_facet"
+                        elif fmt == "contour":
+                            k = "contour_facet"
+                    elif k in ("chart_group", "chart_group_rule", "group_rule"):
+                        k = "chart_group_rule"
                         try:
                             v = parse_chart_group_rule(v)
                         except ValueError as exc:
@@ -2461,18 +3880,15 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                 else:
                     pos_args.append(item)
 
-            # Accept both the advanced syntax and the generic export syntax:
-            # `export contour out.png integrated` and `export contour out.png continuous integrated`.
             for pos_arg in pos_args:
                 scope_candidate = pos_arg.lower()
-                if scope_candidate in ('active', 'separate', 'integrated'):
-                    params['export_scope'] = scope_candidate
+                if scope_candidate in ("active", "separate", "integrated"):
+                    params["export_scope"] = scope_candidate
                     break
 
-            scope = params.get('export_scope', 'active')
+            scope = params.get("export_scope", "active")
 
-            # Let's handle parameter values translation or casting (like density_bw to float, etc.)
-            float_params = {'density_bw', 'density_p_low', 'density_p_high', 'density_m_min', 'density_m_max'}
+            float_params = {"density_bw", "density_p_low", "density_p_high", "density_m_min", "density_m_max"}
             for fp in float_params:
                 if fp in params:
                     try:
@@ -2480,154 +3896,1160 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                     except ValueError:
                         pass
 
-            # Resolve file extension
-            if scope == 'separate':
-                ext = "." + params.get('format', 'png').lower()
+            if scope == "separate":
+                ext = "." + params.get("format", "png").lower()
             else:
                 _, ext = os.path.splitext(out_file)
                 if not ext:
-                    # Fallback based on format param or default to .png
-                    ext_param = params.get('format', 'png').lower()
+                    ext_param = params.get("format", "png").lower()
                     ext = f".{ext_param}"
                     out_file = out_file + ext
                 else:
-                    params['format'] = ext[1:]
+                    params["format"] = ext[1:]
 
-            # Instantiate adapter
             adapter = AcousticChartCLIAdapter(self)
-
-            # Instantiate AcousticChartExporter
             all_speakers = self.speaker_manager.get_all_speakers()
             exporter = AcousticChartExporter(project_tree=adapter, app=self, all_speakers=all_speakers)
             exporter.params = params
 
-            # Check if there are speakers and if they have data
-            speakers_to_process = [self.current_speaker] if scope == 'active' else all_speakers
+            speakers_to_process = [self.current_speaker] if scope == "active" else all_speakers
             if not any(len(s.items) > 0 for s in speakers_to_process):
-                self._emit(False, error="No items to export")
+                self._emit(False, error="No items to export", hint=empty_data_hint)
                 return
 
-            old_mode = self.params.get('analysis_mode')
+            old_mode = self.params.get("analysis_mode")
+            old_spk_modes = {s.id: s.last_params.get("analysis_mode") for s in all_speakers}
             try:
-                if fmt.startswith('formant_'):
-                    self.params['analysis_mode'] = 'formant'
-                    params['analysis_mode'] = 'formant'
+                if fmt.startswith("formant_"):
+                    self.params["analysis_mode"] = "formant"
+                    params["analysis_mode"] = "formant"
+                    for s in speakers_to_process:
+                        s.last_params["analysis_mode"] = "formant"
+                        for it in s.items.values():
+                            if not it.get("is_excluded", False):
+                                self._ensure_item_loaded(it, speaker=s)
 
-                if scope == 'separate':
-                    os.makedirs(out_file, exist_ok=True)
-                    for speaker in all_speakers:
-                        data = exporter._extract_active_data([speaker])
-                        if data:
-                            out_path = os.path.join(out_file, f"{speaker.name}_{fmt}{ext}")
-                            exporter._export_dataset(data, out_path, ext)
-                    self._emit(True, f"Exported {fmt} for multiple speakers separately to {out_file}")
-                else:
-                    # active or integrated
-                    data = exporter._get_current_data_entries()
-                    if not data:
-                        self._emit(False, error="No valid data found for export")
-                        return
-                    exporter._export_dataset(data, out_file, ext)
-                    self._emit(True, f"Exported {fmt} ({scope}) to {out_file}")
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", category=RuntimeWarning)
+                    if scope == "separate":
+                        os.makedirs(out_file, exist_ok=True)
+                        for speaker in all_speakers:
+                            data = exporter._extract_active_data([speaker])
+                            if data:
+                                out_path = os.path.join(out_file, f"{speaker.name}_{fmt}{ext}")
+                                exporter._export_dataset(data, out_path, ext)
+                        self._emit(True, f"Exported {fmt} for multiple speakers separately to {out_file}", path=out_file, format=fmt)
+                    else:
+                        os.makedirs(os.path.dirname(os.path.abspath(out_file)) or ".", exist_ok=True)
+                        data = exporter._get_current_data_entries()
+                        if not data and fmt == "formant_space":
+                            ok = self._export_vowel_space_chart(out_file, speakers_to_process, emit_error=False)
+                            if ok:
+                                extra_payload = {"path": out_file, "format": fmt}
+                                if scope == "integrated":
+                                    extra_payload["integrated_summary"] = self._build_integrated_summary(speakers_to_process)
+                                self._emit(True, f"Exported {fmt} ({scope}) to {out_file}", **extra_payload)
+                                return
+                        if not data:
+                            self._emit(False, error="No valid data found for export", hint=empty_data_hint)
+                            return
+                        exporter._export_dataset(data, out_file, ext)
+                        extra_payload = {"path": out_file, "format": fmt}
+                        if scope == "integrated":
+                            extra_payload["integrated_summary"] = self._build_integrated_summary(speakers_to_process)
+                        self._emit(True, f"Exported {fmt} ({scope}) to {out_file}", **extra_payload)
             except Exception as e:
                 self._emit(False, error=str(e))
             finally:
                 if old_mode is not None:
-                    self.params['analysis_mode'] = old_mode
-                elif 'analysis_mode' in self.params:
-                    del self.params['analysis_mode']
+                    self.params["analysis_mode"] = old_mode
+                elif "analysis_mode" in self.params:
+                    del self.params["analysis_mode"]
+                for s in all_speakers:
+                    prev_m = old_spk_modes.get(s.id)
+                    if prev_m is not None:
+                        s.last_params["analysis_mode"] = prev_m
+                    elif "analysis_mode" in s.last_params:
+                        del s.last_params["analysis_mode"]
             return
 
-        rule = args[2] if len(args) > 2 else 'continuous'
-        target = args[3] if len(args) > 3 else 'active'
+        # 5. 常规数据表与音频/TextGrid 导出
+        rule = "continuous"
+        target = "active"
+        pos_rest = []
+        for token in args[2:]:
+            if "=" in token:
+                k, v = token.split("=", 1)
+                k_low = k.strip().lower()
+                v_clean = v.strip().strip('"').strip("'").lower()
+                if k_low in ("target", "scope", "export_scope"):
+                    target = v_clean
+                elif k_low in ("rule", "num_rule"):
+                    rule = v.strip().strip('"').strip("'")
+            else:
+                pos_rest.append(token)
 
-        # Structure setup based on target
-        # For 'active', we just use current speaker's items and groups.
-        # For 'separate' or 'integrated', we need all speakers.
-        speakers_to_process = [self.current_speaker] if target == 'active' else self.speaker_manager.get_all_speakers()
+        for tok in pos_rest:
+            if tok.lower() in ("active", "separate", "integrated"):
+                target = tok.lower()
+            else:
+                rule = tok
+
+        speakers_to_process = [self.current_speaker] if target == "active" else self.speaker_manager.get_all_speakers()
 
         if not any(len(s.items) > 0 for s in speakers_to_process):
-            self._emit(False, error="No items to export")
+            self._emit(False, error="No items to export", hint=empty_data_hint)
             return
 
         try:
-            if fmt == 'formant_table':
+            if fmt == "formant_table":
                 self._export_formant_table(out_file, speakers_to_process)
-                self._emit(True, f"Exported formant_table to {out_file}")
-                return
-            elif fmt == 'formant_space':
-                self._export_vowel_space_chart(out_file, speakers_to_process)
-                self._emit(True, f"Exported formant_space to {out_file}")
+                extra_payload = {"path": out_file, "format": fmt}
+                if target == "integrated":
+                    extra_payload["integrated_summary"] = self._build_integrated_summary(speakers_to_process)
+                self._emit(True, f"Exported formant_table to {out_file}", **extra_payload)
                 return
 
-            if target == 'separate':
-                # Export individually to out_file (treated as directory)
+            if target == "separate":
                 os.makedirs(out_file, exist_ok=True)
                 for s in speakers_to_process:
-                    s_struct = [(grp, [iid for iid, item in s.items.items() if item.get('group') == grp and not item.get('is_excluded', False)]) for grp in getattr(s, 'cli_groups', [])]
+                    s_struct = [
+                        (grp, [iid for iid, item in s.items.items() if item.get("group") == grp and not item.get("is_excluded", False)])
+                        for grp in getattr(s, "cli_groups", [])
+                    ]
                     s_out = os.path.join(out_file, f"{s.name}_{fmt}")
 
-                    if fmt == 'txt':
+                    if fmt == "txt":
                         self._export_txt(f"{s_out}.txt", s_struct, rule, s)
-                    elif fmt == 'xlsx':
+                    elif fmt == "xlsx":
                         self._export_xlsx(f"{s_out}.xlsx", s_struct, rule, s)
-                    elif fmt == 'line_chart':
+                    elif fmt == "line_chart":
                         self._export_line_chart(f"{s_out}.png", s_struct, s)
-                    elif fmt == 'kde':
+                    elif fmt == "kde":
                         self._export_kde_heatmap(f"{s_out}.png", s_struct, s)
-                    elif fmt == 'wav':
+                    elif fmt == "wav":
                         self._export_wav(s_out, s_struct, rule, s)
-                    elif fmt == 'merged_wav':
+                    elif fmt == "merged_wav":
                         self._export_merged_wav(f"{s_out}.wav", s_struct, rule, s)
-                    elif fmt == 'textgrid':
-                        if s.tab_mode == '多条独立音频':
+                    elif fmt == "textgrid":
+                        if s.tab_mode == "多条独立音频":
                             self._export_textgrid(s_out, s_struct, s)
                         else:
                             self._export_textgrid(f"{s_out}.TextGrid", s_struct, s)
                     else:
-                        self._emit(False, error=f"Unknown format: {fmt}")
+                        self._emit(False, error=f"Unknown format: {fmt}", supported_formats=self.SUPPORTED_EXPORT_FORMATS)
                         return
-                self._emit(True, f"Exported {fmt} for multiple speakers to {out_file}")
+                self._emit(True, f"Exported {fmt} for multiple speakers to {out_file}", path=out_file, format=fmt)
 
-            elif target == 'integrated':
-                if fmt not in ('txt', 'xlsx', 'line_chart', 'kde'):
-                    self._emit(False, error=f"Format {fmt} does not support integrated multi-speaker export")
+            elif target == "integrated":
+                if fmt not in ("txt", "xlsx", "line_chart", "kde"):
+                    self._emit(
+                        False,
+                        error=f"Format {fmt} does not support integrated multi-speaker export",
+                        supported_formats=self.SUPPORTED_EXPORT_FORMATS,
+                    )
                     return
-                if fmt == 'txt':
+                if fmt == "txt":
                     self._export_txt_integrated(out_file, speakers_to_process, rule)
-                elif fmt == 'xlsx':
+                elif fmt == "xlsx":
                     self._export_xlsx_integrated(out_file, speakers_to_process, rule)
-                elif fmt == 'line_chart':
+                elif fmt == "line_chart":
                     self._export_line_chart_integrated(out_file, speakers_to_process)
-                elif fmt == 'kde':
+                elif fmt == "kde":
                     self._export_kde_heatmap_integrated(out_file, speakers_to_process)
-                self._emit(True, f"Exported integrated {fmt} to {out_file}")
+                integrated_summary = self._build_integrated_summary(speakers_to_process)
+                self._emit(
+                    True,
+                    f"Exported integrated {fmt} to {out_file}",
+                    path=out_file,
+                    format=fmt,
+                    integrated_summary=integrated_summary,
+                )
 
-            else: # active
+            else:  # active
                 s = self.current_speaker
-                structure = [(grp, [iid for iid, item in s.items.items() if item.get('group') == grp and not item.get('is_excluded', False)]) for grp in self.groups]
-                if fmt == 'txt':
+                structure = [
+                    (grp, [iid for iid, item in s.items.items() if item.get("group") == grp and not item.get("is_excluded", False)])
+                    for grp in self.groups
+                ]
+                if fmt == "txt":
                     self._export_txt(out_file, structure, rule, s)
-                elif fmt == 'xlsx':
+                elif fmt == "xlsx":
                     self._export_xlsx(out_file, structure, rule, s)
-                elif fmt == 'line_chart':
+                elif fmt == "line_chart":
                     self._export_line_chart(out_file, structure, s)
-                elif fmt == 'kde':
+                elif fmt == "kde":
                     self._export_kde_heatmap(out_file, structure, s)
-                elif fmt == 'wav':
+                elif fmt == "wav":
                     self._export_wav(out_file, structure, rule, s)
-                elif fmt == 'merged_wav':
+                elif fmt == "merged_wav":
                     self._export_merged_wav(out_file, structure, rule, s)
-                elif fmt == 'textgrid':
+                elif fmt == "textgrid":
                     self._export_textgrid(out_file, structure, s)
                 else:
-                    self._emit(False, error=f"Unknown format: {fmt}")
+                    self._emit(False, error=f"Unknown format: {fmt}", supported_formats=self.SUPPORTED_EXPORT_FORMATS)
                     return
-                self._emit(True, f"Exported to {out_file}")
+                self._emit(True, f"Exported to {out_file}", path=out_file, format=fmt)
         except Exception as e:
             self._emit(False, error=str(e))
 
-    # --- Export Implementation Helpers (Abstracted from GUI) ---
+    def do_tool_wordlist_convert(self, arg):
+        """
+        Convert any messy .txt, structured .txt, .csv, or legacy wordlist into a standard v2 .ptwl document.
+        Usage: tool_wordlist_convert <in_path> <out_path.ptwl> [title=...]
+        """
+        try:
+            args = shlex.split(arg)
+        except ValueError as e:
+            self._emit(False, error=f"Invalid arguments: {e}")
+            return
+
+        pos_args = []
+        custom_title = None
+        in_path = None
+        out_path = None
+        idx = 0
+        while idx < len(args):
+            tok = args[idx]
+            if tok in ("--title", "-t") and idx + 1 < len(args):
+                custom_title = args[idx + 1].strip()
+                idx += 2
+                continue
+            if "=" in tok:
+                k, v = tok.split("=", 1)
+                k_low = k.strip().lstrip("-").lower()
+                v_clean = v.strip().strip('"').strip("'")
+                if k_low in ("title", "标题"):
+                    custom_title = v_clean
+                elif k_low in ("in", "input", "src"):
+                    in_path = v_clean
+                elif k_low in ("out", "output", "dst"):
+                    out_path = v_clean
+                else:
+                    pos_args.append(tok)
+            else:
+                pos_args.append(tok)
+            idx += 1
+
+        if in_path is None and len(pos_args) >= 1:
+            in_path = pos_args[0]
+        if out_path is None and len(pos_args) >= 2:
+            out_path = pos_args[1]
+        if custom_title is None and len(pos_args) >= 3:
+            custom_title = pos_args[2]
+
+        if not in_path or not out_path:
+            self._emit(
+                False,
+                error="Usage: tool_wordlist_convert <in_path> <out_path.ptwl> [title=...]",
+                hint="示例: tool_wordlist_convert raw_words.txt standard.ptwl",
+            )
+            return
+
+        if not os.path.exists(in_path):
+            self._emit(False, error=f"File not found: {in_path}")
+            return
+
+        try:
+            doc, groups, flat_words, _records = self._load_wordlist_any(in_path, title=custom_title)
+            if custom_title:
+                doc["title"] = custom_title
+            normalized = save_wordlist_file(doc, out_path)
+            summary = summarize_wordlist_document(normalized)
+            self._emit(
+                True,
+                f"已将字表转换并保存为标准 v2 高级字表：{out_path}",
+                input_file=in_path,
+                output_file=out_path,
+                input=in_path,
+                output=out_path,
+                path=out_path,
+                schema=normalized.get("schema", WORDLIST_SCHEMA),
+                title=normalized.get("title", ""),
+                group_count=summary["groups"],
+                item_count=summary["items"],
+                groups=summary["groups"],
+                total_words=summary["items"],
+                summary=summary,
+            )
+        except Exception as e:
+            self._emit(False, error=str(e))
+
+    def do_stats(self, arg):
+        """
+        Compute and return structured acoustic statistics summary.
+        Usage: stats [by=group|item|speaker] [scope=active|integrated] [out=<json_or_md_path>]
+        Example: stats by=group scope=integrated out=stats.json
+        """
+        try:
+            args = shlex.split(arg)
+        except ValueError as e:
+            self._emit(False, error=f"Argument parse error: {e}")
+            return
+
+        if len(args) == 1 and args[0].strip().lower() in ("?", "--help", "-h", "help"):
+            self._emit(
+                True,
+                "stats 命令参数说明",
+                usage="stats [by=group|item|speaker] [scope=active|integrated] [out=<json_or_md_path>]",
+                supported_by=["group", "item", "speaker"],
+                supported_scope=["active", "integrated"],
+            )
+            return
+
+        by_val = "group"
+        scope_val = None
+        out_path = None
+
+        for token in args:
+            if "=" in token:
+                k, v = token.split("=", 1)
+                k = k.strip().lower()
+                v = v.strip()
+                if k in ("by", "group_by", "groupby"):
+                    by_val = v.lower()
+                elif k in ("scope", "target", "export_scope"):
+                    scope_val = v.lower()
+                elif k in ("out", "output", "out_file", "output_file"):
+                    out_path = v
+                else:
+                    self._emit(
+                        False,
+                        error=f"Unknown parameter for stats: {k}. Supported: by=group|item|speaker, scope=active|integrated, out=<path>",
+                    )
+                    return
+            else:
+                tl = token.strip().lower()
+                if tl in ("group", "groups", "item", "items", "word", "label", "speaker", "speakers"):
+                    by_val = tl
+                elif tl in ("active", "integrated"):
+                    scope_val = tl
+                else:
+                    out_path = token.strip()
+
+        if by_val in ("groups", "tone"):
+            by_val = "group"
+        elif by_val in ("items", "word", "words", "label"):
+            by_val = "item"
+        elif by_val in ("speakers", "spk"):
+            by_val = "speaker"
+        if by_val not in ("group", "item", "speaker"):
+            self._emit(False, error=f"Invalid by={by_val}. Must be one of: group, item, speaker")
+            return
+
+        all_speakers = self.speaker_manager.get_all_speakers()
+        speakers_with_items = [s for s in all_speakers if len(s.items) > 0]
+        if not speakers_with_items:
+            self._emit(False, error="No items loaded. Please load audio and apply wordlist/TextGrid or import a project first.")
+            return
+
+        if scope_val is None:
+            scope_val = "active"
+        if scope_val not in ("active", "integrated"):
+            self._emit(False, error=f"Invalid scope={scope_val}. Must be active or integrated")
+            return
+
+        target_spks = [self.current_speaker] if scope_val == "active" else all_speakers
+        for spk in target_spks:
+            for item in spk.items.values():
+                if not item.get("is_excluded", False):
+                    self._ensure_item_loaded(item, speaker=spk)
+
+        from modules.report_generator import compute_acoustic_statistics, build_markdown_acoustic_summary_section
+        project_data = self._build_project_data_dict()
+        stats_res = compute_acoustic_statistics(
+            project_data,
+            zip_ref=None,
+            by=by_val,
+            scope=scope_val,
+            active_speaker_id=self.speaker_manager.active_speaker_id,
+        )
+
+        if out_path:
+            try:
+                abs_out = os.path.abspath(out_path)
+                os.makedirs(os.path.dirname(abs_out) or ".", exist_ok=True)
+                if abs_out.lower().endswith((".md", ".markdown")):
+                    md_lines = ["# PhonTracer 结构化声学统计摘要", ""]
+                    md_lines.extend(build_markdown_acoustic_summary_section(project_data, zip_ref=None))
+                    with open(abs_out, "w", encoding="utf-8") as f:
+                        f.write("\n".join(md_lines))
+                else:
+                    with open(abs_out, "w", encoding="utf-8") as f:
+                        json.dump(stats_res, f, ensure_ascii=False, indent=2)
+                stats_res["output_file"] = abs_out
+            except Exception as e:
+                self._emit(False, error=f"Failed to write stats output file: {e}")
+                return
+
+        self._emit(True, f"声学统计摘要计算完成 (by={by_val}, scope={scope_val})。", **stats_res)
+
+    def do_export_bundle(self, arg):
+        """
+        One-stop research artifact bundle export.
+        Usage: export_bundle <out_dir> [scope=active|integrated|separate] [format=png|svg] [title=<project_title>]
+        Generates under <out_dir>:
+          - <project_title>.teproj
+          - <project_title>.ptwl
+          - acoustic_data.xlsx & acoustic_points.txt
+          - acoustic_stats.json
+          - charts/ (contour, distribution, quality, overview_heatmap, and formant_space if formant data exists)
+          - report/ (研究方法报告.md, 研究档案.xlsx, provenance_meta.json)
+        """
+        try:
+            args = shlex.split(arg)
+        except ValueError as e:
+            self._emit(False, error=f"Argument parse error: {e}")
+            return
+
+        if not args or (len(args) == 1 and args[0].strip().lower() in ("?", "--help", "-h", "help")):
+            self._emit(
+                 len(args) == 1,
+                error=None if len(args) == 1 else "Usage: export_bundle <out_dir> [scope=active|integrated|separate] [format=png|svg]",
+                usage="export_bundle <out_dir> [scope=active|integrated|separate] [format=png|svg]",
+            )
+            return
+
+        out_dir = args[0]
+        scope = None
+        img_fmt = "png"
+        custom_title = None
+
+        for token in args[1:]:
+            if "=" in token:
+                k, v = token.split("=", 1)
+                k = k.strip().lower()
+                v = v.strip()
+                if k in ("scope", "target", "export_scope"):
+                    scope = v.lower()
+                elif k in ("format", "fmt", "img_format"):
+                    img_fmt = v.lower().lstrip(".")
+                elif k in ("title", "project_title", "name"):
+                    custom_title = v
+                else:
+                    self._emit(
+                        False,
+                        error=f"Unknown parameter for export_bundle: {k}. Supported: scope=active|integrated|separate, format=png|svg, title=<name>",
+                    )
+                    return
+            else:
+                tl = token.strip().lower().lstrip(".")
+                if tl in ("active", "integrated", "separate"):
+                    scope = tl
+                elif tl in ("png", "svg", "pdf"):
+                    img_fmt = tl
+
+        all_speakers = self.speaker_manager.get_all_speakers()
+        speakers_with_items = [s for s in all_speakers if len(s.items) > 0]
+        if not speakers_with_items:
+            self._emit(False, error="No items to export. Please load audio and apply wordlist/TextGrid or import a project first.")
+            return
+
+        if scope is None:
+            scope = "integrated" if len(speakers_with_items) > 1 else "active"
+        if scope not in ("active", "integrated", "separate"):
+            self._emit(False, error=f"Invalid scope: {scope}. Must be active, integrated, or separate")
+            return
+        if img_fmt not in ("png", "svg", "pdf"):
+            self._emit(False, error=f"Invalid format: {img_fmt}. Must be png or svg")
+            return
+
+        abs_out_dir = os.path.abspath(out_dir)
+        charts_dir = os.path.join(abs_out_dir, "charts")
+        report_dir = os.path.join(abs_out_dir, "report")
+        os.makedirs(abs_out_dir, exist_ok=True)
+        os.makedirs(charts_dir, exist_ok=True)
+        os.makedirs(report_dir, exist_ok=True)
+
+        # Ensure all items across speakers are loaded
+        orig_active_id = self.speaker_manager.active_speaker_id
+        try:
+            for spk in all_speakers:
+                self.speaker_manager.set_active_speaker(spk.id)
+                if not getattr(spk, "cli_groups", None):
+                    seen_g = []
+                    for it in spk.items.values():
+                        g = it.get("group", "默认组")
+                        if g not in seen_g:
+                            seen_g.append(g)
+                    spk.cli_groups = seen_g
+                for item in spk.items.values():
+                    if not item.get("is_excluded", False):
+                        self._ensure_item_loaded(item, speaker=spk)
+        finally:
+            if orig_active_id:
+                self.speaker_manager.set_active_speaker(orig_active_id)
+
+        # Resolve project title
+        wl_doc = self._build_wordlist_v2_doc_from_project(title=custom_title)
+        raw_title = custom_title or wl_doc.get("title") or ""
+        if not raw_title or raw_title in ("未命名字表", "PhonTracer工程字表", "从普通字表导入"):
+            dir_base = os.path.basename(abs_out_dir.rstrip("/\\"))
+            raw_title = dir_base if dir_base and dir_base not in (".", "output", "out", "bundle") else "phontracer_project"
+        safe_title = re.sub(r'[\\/*?:"<>|\s]+', "_", str(raw_title)).strip("._") or "phontracer_project"
+
+        bundle_files = []
+        errors = []
+
+        # 1. Export <project_title>.teproj
+        teproj_path = os.path.join(abs_out_dir, f"{safe_title}.teproj")
+        project_data = self._build_project_data_dict()
+        try:
+            ok = self.project_manager.export_project(teproj_path)
+            if not ok or not os.path.exists(teproj_path):
+                self._export_fallback_teproj_archive(teproj_path, project_data)
+            if os.path.exists(teproj_path):
+                bundle_files.append(teproj_path)
+        except Exception:
+            try:
+                self._export_fallback_teproj_archive(teproj_path, project_data)
+                if os.path.exists(teproj_path):
+                    bundle_files.append(teproj_path)
+            except Exception as e2:
+                errors.append(f"teproj export failed: {e2}")
+
+        # 2. Export <project_title>.ptwl
+        ptwl_path = os.path.join(abs_out_dir, f"{safe_title}.ptwl")
+        try:
+            from modules.wordlist_v2 import save_wordlist_document
+            save_wordlist_document(wl_doc, ptwl_path)
+            if os.path.exists(ptwl_path):
+                bundle_files.append(ptwl_path)
+        except Exception as e:
+            errors.append(f"ptwl export failed: {e}")
+
+        # 3. Export acoustic_data.xlsx & acoustic_points.txt
+        xlsx_path = os.path.join(abs_out_dir, "acoustic_data.xlsx")
+        txt_path = os.path.join(abs_out_dir, "acoustic_points.txt")
+        target_spks = [self.current_speaker] if scope == "active" else speakers_with_items
+        try:
+            if scope in ("integrated", "separate") and len(speakers_with_items) > 1:
+                self._export_xlsx_integrated(xlsx_path, speakers_with_items, "continuous")
+                self._export_txt_integrated(txt_path, speakers_with_items, "continuous")
+            else:
+                spk_for_table = self.current_speaker if len(self.current_speaker.items) > 0 else speakers_with_items[0]
+                g_list = getattr(spk_for_table, "cli_groups", None) or list(dict.fromkeys(it.get("group", "默认组") for it in spk_for_table.items.values()))
+                struct = [
+                    (grp, [iid for iid, it in spk_for_table.items.items() if it.get("group", "默认组") == grp and not it.get("is_excluded", False)])
+                    for grp in g_list
+                ]
+                self._export_xlsx(xlsx_path, struct, "continuous", spk_for_table)
+                self._export_txt(txt_path, struct, "continuous", spk_for_table)
+            if os.path.exists(xlsx_path):
+                bundle_files.append(xlsx_path)
+            if os.path.exists(txt_path):
+                bundle_files.append(txt_path)
+        except Exception as e:
+            errors.append(f"xlsx/txt export failed: {e}")
+
+        # 4. Export acoustic_stats.json
+        stats_path = os.path.join(abs_out_dir, "acoustic_stats.json")
+        try:
+            from modules.report_generator import compute_acoustic_statistics
+            stats_scope = "active" if scope == "active" else "integrated"
+            stats_group = compute_acoustic_statistics(
+                project_data, zip_ref=None, by="group", scope=stats_scope, active_speaker_id=self.speaker_manager.active_speaker_id
+            )
+            stats_item = compute_acoustic_statistics(
+                project_data, zip_ref=None, by="item", scope=stats_scope, active_speaker_id=self.speaker_manager.active_speaker_id
+            )
+            stats_speaker = compute_acoustic_statistics(
+                project_data, zip_ref=None, by="speaker", scope=stats_scope, active_speaker_id=self.speaker_manager.active_speaker_id
+            )
+            combined_stats = dict(stats_group)
+            combined_stats["by_group"] = stats_group.get("summary", [])
+            combined_stats["by_item"] = stats_item.get("summary", [])
+            combined_stats["by_speaker"] = stats_speaker.get("summary", [])
+            with open(stats_path, "w", encoding="utf-8") as f:
+                json.dump(combined_stats, f, ensure_ascii=False, indent=2)
+            if os.path.exists(stats_path):
+                bundle_files.append(stats_path)
+        except Exception as e:
+            errors.append(f"stats export failed: {e}")
+
+        # 5. Export charts/ (contour, distribution, quality, overview_heatmap, + formant_space if formant data exists)
+        has_any_formant = (
+            self.params.get("analysis_mode") == "formant"
+            or any(
+                it.get("formant_data") is not None or it.get("preview_formants") is not None or it.get("analysis_mode") == "formant"
+                for s in target_spks
+                for it in s.items.values()
+                if not it.get("is_excluded", False)
+            )
+        )
+        chart_types = ["contour", "distribution", "quality", "overview_heatmap"]
+        if has_any_formant:
+            chart_types.append("formant_space")
+
+        adapter = AcousticChartCLIAdapter(self)
+        ext = f".{img_fmt}"
+        chart_scope = "integrated" if (scope != "active" and len(speakers_with_items) > 1) else "active"
+        for ctype in chart_types:
+            c_out = os.path.join(charts_dir, f"{ctype}{ext}")
+            try:
+                exporter = AcousticChartExporter(project_tree=adapter, app=self, all_speakers=all_speakers)
+                c_params = {
+                    "chart_type": ctype,
+                    "export_scope": chart_scope,
+                    "format": img_fmt,
+                    "scale": "t_value" if chart_scope == "integrated" else "t_value",
+                }
+                exporter.params = c_params
+                old_m = self.params.get("analysis_mode")
+                try:
+                    if ctype.startswith("formant_"):
+                        self.params["analysis_mode"] = "formant"
+                        c_params["analysis_mode"] = "formant"
+                    else:
+                        self.params["analysis_mode"] = "f0"
+                    data = exporter._get_current_data_entries()
+                    if data:
+                        exporter._export_dataset(data, c_out, ext)
+                    elif ctype == "formant_space":
+                        self._export_vowel_space_chart(c_out, target_spks, emit_error=False)
+                finally:
+                    if old_m is not None:
+                        self.params["analysis_mode"] = old_m
+                if os.path.exists(c_out):
+                    bundle_files.append(c_out)
+                for p_fn in sorted(os.listdir(charts_dir)):
+                    if p_fn.startswith(f"{ctype}_第") and p_fn.endswith(ext):
+                        p_full = os.path.join(charts_dir, p_fn)
+                        if p_full not in bundle_files:
+                            bundle_files.append(p_full)
+                if scope == "separate" and len(speakers_with_items) > 1:
+                    for spk in speakers_with_items:
+                        sep_out = os.path.join(charts_dir, f"{spk.name}_{ctype}{ext}")
+                        sep_data = exporter._extract_active_data([spk])
+                        if sep_data:
+                            exporter._export_dataset(sep_data, sep_out, ext)
+                            if os.path.exists(sep_out):
+                                bundle_files.append(sep_out)
+            except Exception as e:
+                errors.append(f"chart {ctype} export failed: {e}")
+
+        # 6. Export report/ (研究方法报告.md, 研究档案.xlsx, provenance_meta.json)
+        try:
+            from modules.report_generator import export_reports_from_teproj, calculate_sha256
+            import shutil
+            import time
+            if os.path.exists(teproj_path):
+                rep_files, _ = export_reports_from_teproj(
+                    teproj_path,
+                    report_dir,
+                    export_markdown=True,
+                    export_excel=True,
+                    include_cache_details=False,
+                )
+                for rf in rep_files:
+                    if os.path.exists(rf):
+                        bundle_files.append(rf)
+                        if rf.endswith("_研究方法报告.md"):
+                            canonical_md = os.path.join(report_dir, "研究方法报告.md")
+                            if os.path.abspath(rf) != os.path.abspath(canonical_md):
+                                shutil.copy2(rf, canonical_md)
+                                bundle_files.append(canonical_md)
+                prov_path = os.path.join(report_dir, "provenance_meta.json")
+                prov_data = {
+                    "project_title": safe_title,
+                    "teproj_file": os.path.basename(teproj_path),
+                    "teproj_sha256": calculate_sha256(teproj_path),
+                    "software_version": __version__,
+                    "exported_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "scope": scope,
+                    "chart_format": img_fmt,
+                    "speaker_count": len(speakers_with_items),
+                    "bundle_files": [os.path.relpath(p, abs_out_dir) for p in bundle_files],
+                }
+                with open(prov_path, "w", encoding="utf-8") as f:
+                    json.dump(prov_data, f, ensure_ascii=False, indent=2)
+                bundle_files.append(prov_path)
+        except Exception as e:
+            errors.append(f"report export failed: {e}")
+
+        self._emit(
+            True,
+            f"科研产物包已一站式导出至 {abs_out_dir}（共 {len(bundle_files)} 个文件）。",
+            out_dir=abs_out_dir,
+            project_title=safe_title,
+            scope=scope,
+            format=img_fmt,
+            bundle_files=bundle_files,
+            warnings=errors,
+        )
+
+    def do_detect_formants(self, arg):
+        """
+        Detect optimal formant extraction parameters (max_formant, num_formants, window_length, pre_emphasis)
+        using FormantOptimizer and optionally apply them.
+        Usage: detect_formants [--apply|--no-apply] [preset=recommended|conservative|high_resolution]
+        """
+        try:
+            args = shlex.split(arg)
+        except ValueError as e:
+            self._emit(False, error=f"Argument parse error: {e}")
+            return
+
+        if len(args) == 1 and args[0].strip().lower() in ("?", "--help", "-h", "help"):
+            self._emit(
+                True,
+                "detect_formants 命令参数说明",
+                usage="detect_formants [--apply|--no-apply] [preset=recommended|conservative|high_resolution]",
+            )
+            return
+
+        if not self.items:
+            self._emit(False, error="No items loaded. Please load audio files first.")
+            return
+
+        should_apply = True
+        preset = "recommended"
+
+        for token in args:
+            tl = token.strip().lower()
+            if tl in ("--apply", "-a", "apply"):
+                should_apply = True
+            elif tl in ("--no-apply", "--dry-run", "no-apply", "dry_run"):
+                should_apply = False
+            elif tl in ("recommended", "conservative", "high_resolution", "fine"):
+                preset = "high_resolution" if tl == "fine" else tl
+            elif "=" in tl:
+                k, v = tl.split("=", 1)
+                k = k.strip()
+                v = v.strip()
+                if k == "apply":
+                    should_apply = v not in ("false", "0", "no", "off")
+                elif k == "preset":
+                    preset = "high_resolution" if v == "fine" else v
+                else:
+                    self._emit(False, error=f"Unknown parameter for detect_formants: {k}")
+                    return
+            else:
+                self._emit(False, error=f"Unknown argument for detect_formants: {token}")
+                return
+
+        if preset not in ("recommended", "conservative", "high_resolution"):
+            self._emit(False, error=f"Invalid preset '{preset}'. Choose from: recommended, conservative, high_resolution")
+            return
+
+        for item in self.items.values():
+            if not item.get("is_excluded", False):
+                self._ensure_item_loaded(item, speaker=self.current_speaker)
+
+        from modules.formant_optimizer import FormantOptimizer
+        optimizer = FormantOptimizer()
+        opt_res = optimizer.optimize(
+            self.items,
+            mode=self.mode,
+            long_snd=self.long_snd,
+            long_snd_path=self.long_snd_path,
+        )
+
+        chosen = opt_res.get("suggestions", {}).get(preset) or opt_res.get("best_params", {})
+        max_formant = float(chosen.get("max_formant", chosen.get("formant_max_hz", 5500.0)))
+        num_formants = int(chosen.get("num_formants", chosen.get("formant_count", 5)))
+        win_len = float(chosen.get("formant_window_length", 0.025))
+        pre_emp = float(chosen.get("formant_pre_emphasis", 50.0))
+
+        updated_items = 0
+        if should_apply:
+            self.params["formant_max_hz"] = max_formant
+            self.params["formant_count"] = num_formants
+            self.params["formant_window_length"] = win_len
+            self.params["formant_pre_emphasis"] = pre_emp
+            for item in self.items.values():
+                if item.get("is_excluded", False) or item.get("missing", False):
+                    continue
+                if item.get("snd") is not None:
+                    try:
+                        from modules.audio_core import extract_formants
+                        total_dur = item["snd"].get_total_duration()
+                        s_ref = item.get("macro_start") if item.get("macro_start") is not None else item.get("start")
+                        e_ref = item.get("macro_end") if item.get("macro_end") is not None else item.get("end")
+                        if s_ref is not None and e_ref is not None and total_dur > 5.0 and float(e_ref) > float(s_ref):
+                            seg_s = max(0.0, float(s_ref) - 0.5)
+                            seg_e = min(total_dur, float(e_ref) + 0.5)
+                            part_snd = item["snd"].extract_part(from_time=seg_s, to_time=seg_e)
+                            f_data = extract_formants(part_snd, self.params)
+                            f_data["xs"] = f_data["xs"] + seg_s
+                            item["formant_data"] = f_data
+                        else:
+                            item["formant_data"] = extract_formants(item["snd"], self.params)
+                        updated_items += 1
+                    except Exception:
+                        pass
+            self._after_state_change("detect_formants")
+
+        self._emit(
+            True,
+            f"共振峰最佳参数探测完成：max_formant={int(max_formant)} Hz, num_formants={num_formants}"
+            + (f"（已写入参数并更新 {updated_items} 条目）" if should_apply else "（仅预览建议，未修改参数）"),
+            applied=should_apply,
+            preset=preset,
+            max_formant=max_formant,
+            num_formants=num_formants,
+            formant_max_hz=max_formant,
+            formant_count=num_formants,
+            formant_window_length=win_len,
+            formant_pre_emphasis=pre_emp,
+            best_params=opt_res.get("best_params", {}),
+            suggestions=opt_res.get("suggestions", {}),
+            voiced_duration_s=opt_res.get("voiced_duration_s", 0.0),
+            insufficient_data=opt_res.get("insufficient_data", False),
+            updated_items=updated_items,
+            params=self.params,
+        )
+
+    def do_fix_warnings(self, arg):
+        """
+        Scan all items for acoustic/segmentation warnings (octave_jump, low_f0_coverage,
+        no_clear_valley, tiny_segment), generate item-level and global parameter tuning suggestions,
+        and auto-repair when --apply is passed.
+        Usage: fix_warnings [--apply] [scope=active|all]
+        """
+        try:
+            args = shlex.split(arg)
+        except ValueError as e:
+            self._emit(False, error=f"Argument parse error: {e}")
+            return
+
+        if len(args) == 1 and args[0].strip().lower() in ("?", "--help", "-h", "help"):
+            self._emit(
+                True,
+                "fix_warnings 命令参数说明",
+                usage="fix_warnings [--apply] [scope=active|all]",
+            )
+            return
+
+        should_apply = False
+        scope = "active"
+        for token in args:
+            tl = token.strip().lower()
+            if tl in ("--apply", "-a", "apply"):
+                should_apply = True
+            elif tl in ("--no-apply", "--dry-run"):
+                should_apply = False
+            elif tl in ("active", "all", "integrated"):
+                scope = "all" if tl in ("all", "integrated") else "active"
+            elif "=" in tl:
+                k, v = tl.split("=", 1)
+                k = k.strip()
+                v = v.strip()
+                if k == "apply":
+                    should_apply = v in ("true", "1", "yes", "on")
+                elif k in ("scope", "target"):
+                    scope = "all" if v in ("all", "integrated") else "active"
+                else:
+                    self._emit(False, error=f"Unknown parameter for fix_warnings: {k}")
+                    return
+            else:
+                self._emit(False, error=f"Unknown argument for fix_warnings: {token}")
+                return
+
+        target_speakers = [self.current_speaker] if scope == "active" else self.speaker_manager.get_all_speakers()
+        if not any(len(s.items) > 0 for s in target_speakers):
+            self._emit(False, error="No items loaded.")
+            return
+
+        # Compute speaker median F0 and scan initial warnings
+        spk_medians = {}
+        for spk in target_speakers:
+            f0_pool = []
+            for item in spk.items.values():
+                if item.get("is_excluded", False) or item.get("missing", False):
+                    continue
+                self._ensure_item_loaded(item, speaker=spk)
+                pd = item.get("pitch_data")
+                if isinstance(pd, dict) and pd.get("freqs") is not None:
+                    pf = np.asarray(pd["freqs"], dtype=float)
+                    t_s, t_e = item.get("start"), item.get("end")
+                    if pd.get("xs") is not None and t_s is not None and t_e is not None and float(t_e) > float(t_s):
+                        px = np.asarray(pd["xs"], dtype=float)
+                        pf = pf[(px >= float(t_s)) & (px <= float(t_e))]
+                    f0_pool.extend(pf[np.isfinite(pf) & (pf > 0)].tolist())
+                elif item.get("preview_f0"):
+                    pf = np.asarray(item["preview_f0"], dtype=float)
+                    f0_pool.extend(pf[np.isfinite(pf) & (pf > 0)].tolist())
+            spk_medians[spk.id] = float(np.median(f0_pool)) if f0_pool else 160.0
+
+        before_items = []
+        before_counts = {"octave_jump": 0, "low_f0_coverage": 0, "no_clear_valley": 0, "tiny_segment": 0}
+        for spk in target_speakers:
+            med_f0 = spk_medians.get(spk.id, 160.0)
+            for iid, item in spk.items.items():
+                if item.get("is_excluded", False) or item.get("missing", False):
+                    continue
+                diag = self._scan_item_warnings_detailed(iid, item, spk_median_f0=med_f0)
+                diag["speaker"] = spk.name
+                if diag["issues"]:
+                    before_items.append((spk, iid, item, diag))
+                    for iss in diag["issues"]:
+                        if iss in before_counts:
+                            before_counts[iss] += 1
+
+        warnings_before = len(before_items)
+
+        # Build suggestions
+        item_suggestions = []
+        for spk, iid, item, diag in before_items:
+            med_f0 = spk_medians.get(spk.id, 160.0)
+            rec_f0_min = max(45, int(round(med_f0 * 0.62)))
+            rec_f0_max = min(750, int(round(med_f0 * 1.58)))
+            actions = []
+            recommended_params = {}
+            if "octave_jump" in diag["issues"]:
+                actions.append(
+                    f"开启 despike 去毛刺插值，并按发音人中位数 ({med_f0:.1f}Hz) 收缩 f0_min={rec_f0_min}Hz, f0_max={rec_f0_max}Hz 抑制倍频/半频跳变"
+                )
+                recommended_params["despike"] = True
+                recommended_params["pitch_floor"] = rec_f0_min
+                recommended_params["pitch_ceiling"] = rec_f0_max
+            if "low_f0_coverage" in diag["issues"]:
+                actions.append(
+                    "放宽 voicing_threshold=0.15 与 silence_threshold=0.01，下探 pitch_floor 并对短时清化/嘎裂声间断进行有声段边界对齐与插值重采样"
+                )
+                recommended_params["voicing_threshold"] = 0.15
+                recommended_params["silence_threshold"] = 0.01
+                recommended_params["pitch_floor"] = min(recommended_params.get("pitch_floor", 75), max(40, int(round(med_f0 * 0.55))))
+            if "no_clear_valley" in diag["issues"]:
+                actions.append("结合局部声强谷值搜索 (find_minimum_intensity_valley) 与基频连续性重新校准多音节词内切分点")
+            if "tiny_segment" in diag["issues"]:
+                actions.append("放宽能量跌落阈值 db (+12dB) 并向 raw_start/raw_end 或 macro 边界适度扩展，消除过短音段 (<80ms)")
+                recommended_params["db"] = min(75.0, float(spk.last_params.get("db", 60.0)) + 10.0)
+
+            item_suggestions.append({
+                "speaker": spk.name,
+                "item_id": iid,
+                "label": diag["label"],
+                "group": diag["group"],
+                "issues": diag["issues"],
+                "recommended_params": recommended_params,
+                "suggested_actions": actions,
+            })
+
+        global_suggestions = {
+            "despike": before_counts["octave_jump"] > 0,
+            "voicing_threshold": 0.15 if before_counts["low_f0_coverage"] > 0 else self.params.get("voicing_threshold", 0.25),
+            "silence_threshold": 0.01 if before_counts["low_f0_coverage"] > 0 else self.params.get("silence_threshold", 0.03),
+        }
+        if target_speakers:
+            med0 = spk_medians.get(target_speakers[0].id, 160.0)
+            global_suggestions["recommended_pitch_floor"] = max(45, int(round(med0 * 0.62)))
+            global_suggestions["recommended_pitch_ceiling"] = min(750, int(round(med0 * 1.58)))
+
+        if should_apply and before_items:
+            self.params["despike"] = True
+            if before_counts["low_f0_coverage"] > 0:
+                self.params["voicing_threshold"] = min(float(self.params.get("voicing_threshold", 0.25)), 0.15)
+                self.params["silence_threshold"] = 0.01
+
+            for spk, iid, item, diag in before_items:
+                med_f0 = spk_medians.get(spk.id, 160.0)
+                rec_f0_min = max(45, int(round(med_f0 * 0.62)))
+                rec_f0_max = min(750, int(round(med_f0 * 1.58)))
+                overrides = item.setdefault("param_overrides", {})
+
+                # 1. Fix tiny_segment first (expand bounds if needed)
+                if "tiny_segment" in diag["issues"]:
+                    t_s = float(item.get("start") or 0.0)
+                    t_e = float(item.get("end") or 0.0)
+                    raw_s = item.get("raw_start")
+                    raw_e = item.get("raw_end")
+                    mac_s = item.get("macro_start")
+                    mac_e = item.get("macro_end")
+                    if raw_s is not None and raw_e is not None and (float(raw_e) - float(raw_s)) >= max(0.085, t_e - t_s):
+                        t_s, t_e = float(raw_s), float(raw_e)
+                    elif mac_s is not None and mac_e is not None and (float(mac_e) - float(mac_s)) >= max(0.085, t_e - t_s):
+                        pad = min(0.02, (float(mac_e) - float(mac_s) - 0.085) / 2.0)
+                        t_s, t_e = float(mac_s) + max(0.0, pad), float(mac_e) - max(0.0, pad)
+                    else:
+                        center = 0.5 * (t_s + t_e)
+                        t_s = max(0.0, center - 0.05)
+                        t_e = center + 0.05
+                    item["start"], item["end"] = t_s, t_e
+                    syls = split_into_syllables(item.get("label", ""))
+                    n_syls = max(1, len(syls))
+                    splits = np.linspace(t_s, t_e, n_syls + 1).tolist()
+                    item["inner_splits"] = splits[1:-1]
+                    item["chars_bounds"] = [[splits[k], splits[k + 1]] for k in range(n_syls)]
+                    if "split_warnings" in item and isinstance(item["split_warnings"], list):
+                        item["split_warnings"] = [w for w in item["split_warnings"] if w != "tiny_segment"]
+
+                # 2. Fix octave_jump (narrow f0_min/f0_max around speaker median + despike)
+                if "octave_jump" in diag["issues"]:
+                    item["despike"] = True
+                    item["pitch_floor"] = rec_f0_min
+                    item["pitch_ceiling"] = rec_f0_max
+                    overrides["pitch_floor"] = rec_f0_min
+                    overrides["pitch_ceiling"] = rec_f0_max
+                    overrides["f0_min"] = rec_f0_min
+                    overrides["f0_max"] = rec_f0_max
+                    overrides["despike"] = True
+
+                    if item.get("snd") is not None and getattr(spk, "tab_mode", "") != "单条长音频":
+                        try:
+                            from modules.audio_core import extract_f0
+                            item["pitch_data"] = extract_f0(item["snd"], {
+                                "pitch_floor": rec_f0_min,
+                                "pitch_ceiling": rec_f0_max,
+                                "voicing_threshold": item.get("voicing_threshold", self.params.get("voicing_threshold", 0.20)),
+                            })
+                        except Exception:
+                            pass
+
+                    # Despike pitch_data array in place (copying if shared with long audio)
+                    pd = item.get("pitch_data")
+                    if isinstance(pd, dict) and pd.get("xs") is not None and pd.get("freqs") is not None:
+                        p_xs = np.asarray(pd["xs"], dtype=float).copy()
+                        p_freqs = np.asarray(pd["freqs"], dtype=float).copy()
+                        t_s, t_e = item.get("start"), item.get("end")
+                        mask = (p_xs >= float(t_s)) & (p_xs <= float(t_e)) if (t_s is not None and t_e is not None) else np.ones(len(p_xs), dtype=bool)
+                        idx_in_seg = np.where(mask)[0]
+                        if idx_in_seg.size >= 3:
+                            seg_f = p_freqs[idx_in_seg]
+                            seg_x = p_xs[idx_in_seg]
+                            valid_normal = np.isfinite(seg_f) & (seg_f >= rec_f0_min) & (seg_f <= rec_f0_max)
+                            # Also check detect_pitch_anomaly_points
+                            from modules.anomaly_detection import detect_pitch_anomaly_points
+                            anom = detect_pitch_anomaly_points(seg_x, seg_f, start=t_s, end=t_e)
+                            anom_times = {round(float(at), 5) for at, _ in anom}
+                            for local_i, gx in enumerate(seg_x):
+                                if round(float(gx), 5) in anom_times:
+                                    valid_normal[local_i] = False
+                            if np.sum(valid_normal) >= 2:
+                                seg_f_clean = np.interp(seg_x, seg_x[valid_normal], seg_f[valid_normal])
+                                p_freqs[idx_in_seg] = seg_f_clean
+                            elif np.sum(valid_normal) == 1:
+                                p_freqs[idx_in_seg] = float(seg_f[valid_normal][0])
+                            else:
+                                p_freqs[idx_in_seg] = med_f0
+                            item["pitch_data"] = {"xs": p_xs, "freqs": p_freqs, "engine": pd.get("engine", "praat")}
+
+                # 3. Fix low_f0_coverage (relax voicing_threshold / silence_threshold and re-interpolate)
+                if "low_f0_coverage" in diag["issues"]:
+                    new_vt = min(float(item.get("voicing_threshold", 0.25)), 0.15)
+                    new_pf = max(40, min(int(item.get("pitch_floor", 75)), int(round(med_f0 * 0.55))))
+                    item["voicing_threshold"] = new_vt
+                    item["silence_threshold"] = 0.01
+                    item["pitch_floor"] = new_pf
+                    overrides["voicing_threshold"] = new_vt
+                    overrides["silence_threshold"] = 0.01
+                    overrides["pitch_floor"] = new_pf
+
+                    if item.get("snd") is not None and getattr(spk, "tab_mode", "") != "单条长音频":
+                        try:
+                            from modules.audio_core import extract_f0
+                            item["pitch_data"] = extract_f0(item["snd"], {
+                                "pitch_floor": new_pf,
+                                "pitch_ceiling": item.get("pitch_ceiling", spk.last_params.get("pitch_ceiling", 600)),
+                                "voicing_threshold": new_vt,
+                            })
+                        except Exception:
+                            pass
+
+                    pd = item.get("pitch_data")
+                    t_s, t_e = item.get("start"), item.get("end")
+                    if isinstance(pd, dict) and pd.get("xs") is not None and pd.get("freqs") is not None and t_s is not None and t_e is not None:
+                        p_xs = np.asarray(pd["xs"], dtype=float).copy()
+                        p_freqs = np.asarray(pd["freqs"], dtype=float).copy()
+                        mask = (p_xs >= float(t_s)) & (p_xs <= float(t_e))
+                        seg_idx = np.where(mask)[0]
+                        if seg_idx.size >= 2:
+                            seg_x = p_xs[seg_idx]
+                            seg_f = p_freqs[seg_idx]
+                            voiced = np.isfinite(seg_f) & (seg_f > 0)
+                            if np.sum(voiced) >= 2:
+                                p_freqs[seg_idx] = np.interp(seg_x, seg_x[voiced], seg_f[voiced])
+                            elif np.sum(voiced) == 1:
+                                p_freqs[seg_idx] = float(seg_f[voiced][0])
+                            else:
+                                p_freqs[seg_idx] = med_f0
+                            item["pitch_data"] = {"xs": p_xs, "freqs": p_freqs, "engine": pd.get("engine", "praat")}
+                    if "split_warnings" in item and isinstance(item["split_warnings"], list):
+                        item["split_warnings"] = [w for w in item["split_warnings"] if w != "low_f0_coverage"]
+
+                # 4. Fix no_clear_valley / fallback_equal_split / imbalanced_duration
+                if "no_clear_valley" in diag["issues"]:
+                    t_s, t_e = item.get("start"), item.get("end")
+                    syls = split_into_syllables(item.get("label", ""))
+                    if t_s is not None and t_e is not None and len(syls) > 1 and float(t_e) > float(t_s):
+                        n_syls = len(syls)
+                        prop_splits = [float(t_s) + (float(t_e) - float(t_s)) * (i / n_syls) for i in range(1, n_syls)]
+                        if item.get("snd") is not None:
+                            from modules.audio_core import find_minimum_intensity_valley
+                            refined = []
+                            win = min(0.05, (float(t_e) - float(t_s)) / (3.0 * n_syls))
+                            for sp_t in prop_splits:
+                                refined.append(find_minimum_intensity_valley(item["snd"], sp_t, search_window=win))
+                            refined.sort()
+                            item["inner_splits"] = refined
+                        else:
+                            item["inner_splits"] = prop_splits
+                        all_pts = [float(t_s)] + list(item["inner_splits"]) + [float(t_e)]
+                        item["chars_bounds"] = [[all_pts[i], all_pts[i + 1]] for i in range(len(all_pts) - 1)]
+                    if "split_warnings" in item and isinstance(item["split_warnings"], list):
+                        item["split_warnings"] = [
+                            w for w in item["split_warnings"]
+                            if w not in ("no_clear_valley", "fallback_equal_split", "imbalanced_duration")
+                        ]
+                    item["split_confidence"] = max(float(item.get("split_confidence", 0.8)), 0.85)
+
+                # Recompute preview_f0 and has_empty_data
+                t_s, t_e = item.get("start"), item.get("end")
+                pd = item.get("pitch_data")
+                if isinstance(pd, dict) and pd.get("xs") is not None and pd.get("freqs") is not None and t_s is not None and t_e is not None and float(t_e) > float(t_s):
+                    preview_times = np.linspace(float(t_s), float(t_e), 11)
+                    item["preview_f0"] = _calc_preview_f0(preview_times, np.asarray(pd["xs"], dtype=float), np.asarray(pd["freqs"], dtype=float))
+                    if any(f == 0.0 for f in item["preview_f0"]):
+                        valid_p = [f for f in item["preview_f0"] if f > 0]
+                        fill_v = float(np.mean(valid_p)) if valid_p else med_f0
+                        item["preview_f0"] = [f if f > 0 else fill_v for f in item["preview_f0"]]
+                    item["has_empty_data"] = any(f == 0.0 for f in item["preview_f0"])
+                elif item.get("preview_f0"):
+                    valid_p = [f for f in item["preview_f0"] if f and f > 0]
+                    fill_v = float(np.mean(valid_p)) if valid_p else med_f0
+                    item["preview_f0"] = [float(f) if (f and f > 0) else fill_v for f in item["preview_f0"]]
+                    item["has_empty_data"] = False
+                else:
+                    item["has_empty_data"] = False
+
+            self._after_state_change("fix_warnings")
+
+        # Re-scan after repair
+        after_items = []
+        after_counts = {"octave_jump": 0, "low_f0_coverage": 0, "no_clear_valley": 0, "tiny_segment": 0}
+        for spk in target_speakers:
+            med_f0 = spk_medians.get(spk.id, 160.0)
+            for iid, item in spk.items.items():
+                if item.get("is_excluded", False) or item.get("missing", False):
+                    continue
+                diag = self._scan_item_warnings_detailed(iid, item, spk_median_f0=med_f0)
+                if diag["issues"]:
+                    after_items.append(diag)
+                    for iss in diag["issues"]:
+                        if iss in after_counts:
+                            after_counts[iss] += 1
+
+        warnings_after = len(after_items) if should_apply else warnings_before
+        fixed_count = max(0, warnings_before - warnings_after)
+
+        self._emit(
+            True,
+            (
+                f"异常词条自动修复完成：修复前警告词条 {warnings_before} 项 -> 修复后 {warnings_after} 项（已修复 {fixed_count} 项）。"
+                if should_apply
+                else f"扫描完成：共发现 {warnings_before} 个异常/警告词条。传入 --apply 可一键自动修复。"
+            ),
+            applied=should_apply,
+            warnings_before=warnings_before,
+            warnings_after=warnings_after,
+            fixed_count=fixed_count,
+            before_summary=before_counts,
+            after_summary=after_counts if should_apply else before_counts,
+            global_suggestions=global_suggestions,
+            item_suggestions=item_suggestions,
+        )
+
     def _export_merged_wav(self, out_file, structure, rule, speaker=None):
         speaker = speaker or self.current_speaker
         import numpy as np
@@ -2730,51 +5152,105 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                         f.write(txt_data)
                         global_idx += 1
 
-    def _ensure_item_loaded(self, item):
-        if not item: return
+    def _ensure_item_loaded(self, item, speaker=None):
+        if not item:
+            return
+        spk = speaker
+        if spk is None:
+            for cand_spk in (self.speaker_manager.get_all_speakers() if hasattr(self.speaker_manager, "get_all_speakers") else []):
+                if item in cand_spk.items.values():
+                    spk = cand_spk
+                    break
+            if spk is None:
+                spk = self.current_speaker
+
         has_snd = item.get('snd') is not None
         has_pitch = (item.get('pitch') is not None) or (item.get('pitch_data') is not None)
 
-        if not has_snd and item.get('path'):
+        if not has_snd and item.get('path') and os.path.exists(str(item['path'])):
             try:
-                import parselmouth
-                item['snd'] = parselmouth.Sound(item['path'])
-                has_snd = True
+                from modules.audio_core import load_compatible_sound
+                item['snd'] = load_compatible_sound(item['path'])
+                has_snd = item['snd'] is not None
             except Exception:
                 pass
+
+        if not has_snd and spk is not None:
+            if getattr(spk, 'pending_long_snd', None) is not None:
+                item['snd'] = spk.pending_long_snd
+                has_snd = True
+            else:
+                long_p = getattr(spk, 'cli_long_snd_path', None) or getattr(spk, 'long_audio_path', None)
+                if long_p and os.path.exists(str(long_p)):
+                    try:
+                        from modules.audio_core import load_compatible_sound
+                        spk.pending_long_snd = load_compatible_sound(str(long_p))
+                        item['snd'] = spk.pending_long_snd
+                        has_snd = item['snd'] is not None
+                    except Exception:
+                        pass
+
+        if not item.get('formant_data') and isinstance(item.get('preview_formants'), dict):
+            pf_dict = item['preview_formants']
+            if pf_dict.get('f1') is not None and pf_dict.get('f2') is not None:
+                f1_a = np.asarray(pf_dict['f1'], dtype=float)
+                f2_a = np.asarray(pf_dict['f2'], dtype=float)
+                if 'xs' in pf_dict and pf_dict['xs'] is not None:
+                    xs_a = np.asarray(pf_dict['xs'], dtype=float)
+                elif item.get('start') is not None and item.get('end') is not None:
+                    xs_a = np.linspace(float(item['start']), float(item['end']), len(f1_a))
+                else:
+                    xs_a = np.linspace(0.0, 1.0, len(f1_a))
+                f_dict = {'xs': xs_a, 'f1': f1_a, 'f2': f2_a}
+                if pf_dict.get('f3') is not None:
+                    f_dict['f3'] = np.asarray(pf_dict['f3'], dtype=float)
+                item['formant_data'] = f_dict
 
         if not has_snd:
             return
 
+        eff_params = dict(self.params)
+        if spk is not None and getattr(spk, 'last_params', None):
+            for pk, pv in spk.last_params.items():
+                if pk not in eff_params:
+                    eff_params[pk] = pv
+
         if not has_pitch:
             try:
                 from modules.audio_core import extract_f0
-                pf = item.get('pitch_floor', self.params.get('pitch_floor', 75))
-                pc = item.get('pitch_ceiling', self.params.get('pitch_ceiling', 600))
-                vt = item.get('voicing_threshold', self.params.get('voicing_threshold', 0.25))
-                item['pitch'] = item['snd'].to_pitch_ac(time_step=None, pitch_floor=pf, pitch_ceiling=pc, voicing_threshold=vt, very_accurate=True, octave_jump_cost=0.9)
+                pf = item.get('pitch_floor', eff_params.get('pitch_floor', 75))
+                pc = item.get('pitch_ceiling', eff_params.get('pitch_ceiling', 600))
+                vt = item.get('voicing_threshold', eff_params.get('voicing_threshold', 0.25))
+                item['pitch_data'] = extract_f0(item['snd'], {'pitch_floor': pf, 'pitch_ceiling': pc, 'voicing_threshold': vt})
             except Exception:
                 pass
 
-        if self.params.get('analysis_mode') == 'formant' and not item.get('formant_data'):
+        want_formant = (
+            self.params.get('analysis_mode') == 'formant'
+            or eff_params.get('analysis_mode') == 'formant'
+            or item.get('analysis_mode') == 'formant'
+        )
+        if want_formant and not item.get('formant_data'):
             try:
                 from modules.audio_core import extract_formants
                 total_dur = item['snd'].get_total_duration()
-                if 'macro_start' in item and 'macro_end' in item and total_dur > 15.0:
-                    padding = 1.0
-                    seg_start = max(0.0, item['macro_start'] - padding)
-                    seg_end = min(total_dur, item['macro_end'] + padding)
+                s_ref = item.get('macro_start') if item.get('macro_start') is not None else item.get('start')
+                e_ref = item.get('macro_end') if item.get('macro_end') is not None else item.get('end')
+                if s_ref is not None and e_ref is not None and total_dur > 5.0 and float(e_ref) > float(s_ref):
+                    padding = 0.5
+                    seg_start = max(0.0, float(s_ref) - padding)
+                    seg_end = min(total_dur, float(e_ref) + padding)
                     part_snd = item['snd'].extract_part(from_time=seg_start, to_time=seg_end)
-                    part_formant_data = extract_formants(part_snd, self.params)
+                    part_formant_data = extract_formants(part_snd, eff_params)
                     part_formant_data['xs'] = part_formant_data['xs'] + seg_start
                     item['formant_data'] = part_formant_data
                 else:
-                    item['formant_data'] = extract_formants(item['snd'], self.params)
+                    item['formant_data'] = extract_formants(item['snd'], eff_params)
             except Exception:
                 pass
 
     def _extract_syl_data(self, item, num_points):
-        if item.get('start') is None or not item.get('snd'): return 0, []
+        if item.get('start') is None or (not item.get('snd') and not item.get('pitch_data') and not item.get('pitch')): return 0, []
 
         pitch_data = item.get('pitch_data')
         if pitch_data:
@@ -3216,7 +5692,6 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
         fig.savefig(out_file, dpi=300, bbox_inches='tight')
         plt.close(fig)
 
-
     def _export_txt_integrated(self, out_file, speakers, rule):
         import math
         import numpy as np
@@ -3237,7 +5712,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                     lbl = item.get('label', '')
                     if len(lbl) > max_syls: max_syls = len(lbl)
                     self._ensure_item_loaded(item)
-                    if not item.get('snd') or (not item.get('pitch') and not item.get('pitch_data')):
+                    if not item.get('pitch') and not item.get('pitch_data'):
                         continue
                     total_dur, syl_data = self._extract_syl_data(item, num_points)
                     if total_dur <= 0: continue
@@ -3319,7 +5794,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                     lbl = item.get('label', '')
                     if len(lbl) > max_syls: max_syls = len(lbl)
                     self._ensure_item_loaded(item)
-                    if not item.get('snd') or (not item.get('pitch') and not item.get('pitch_data')):
+                    if not item.get('pitch') and not item.get('pitch_data'):
                         continue
                     total_dur, syl_data = self._extract_syl_data(item, num_points)
                     if total_dur <= 0: continue
@@ -3788,21 +6263,35 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
         self._draw_kde_heatmap_integrated(out_file, speakers, group_norm_points, max_syls)
 
     def _sync_cli_state_after_project_load(self):
+        preserved = getattr(self.project_manager, '_preserved_top_level', {}) or {}
+        top_wl = preserved.get('wordlist_doc')
+        if not isinstance(top_wl, dict) and isinstance(preserved.get('groups'), list) and preserved.get('groups'):
+            top_wl = normalize_wordlist_document({
+                'title': preserved.get('wordlist_title') or '未命名字表',
+                'note': preserved.get('wordlist_note') or '',
+                'groups': preserved.get('groups'),
+            })
+
         for speaker in self.speaker_manager.get_all_speakers():
             if getattr(speaker, 'long_audio_path', None):
                 speaker.cli_long_snd_path = speaker.long_audio_path
             seen = []
             for item in speaker.items.values():
+                if isinstance(item, dict):
+                    item.setdefault('speaker', speaker.name)
+                    item.setdefault('speaker_id', speaker.id)
                 group = item.get('group', '导入内容')
                 if group not in seen:
                     seen.append(group)
             speaker.cli_groups = seen
+            if getattr(speaker, 'wordlist_doc', None) is None and isinstance(top_wl, dict):
+                speaker.wordlist_doc = copy.deepcopy(top_wl)
+
+        if self.current_speaker and getattr(self.current_speaker, 'wordlist_doc', None) is not None:
+            self._wordlist_doc = self.current_speaker.wordlist_doc
 
     def _process_speaker_batch_items(self, spk, sorted_audios, matched_audio_to_tg, params):
         from modules.audio_core import batch_process_worker_with_textgrid, batch_process_worker, extract_f0
-        import parselmouth
-        import concurrent.futures
-        import os
 
         trim = params.get('trim_silence', True)
 
@@ -3831,6 +6320,8 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
             grp_name = res.get('group', '导入内容')
             if res.get('success'):
                 res['group'] = grp_name
+                res['speaker'] = spk.name
+                res['speaker_id'] = spk.id
                 if 'pitch_floor' not in res:
                     res['pitch_floor'] = params['pitch_floor']
                     res['pitch_ceiling'] = params['pitch_ceiling']
@@ -3848,16 +6339,26 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                     pass
 
                 iid = f"batch_tg_{res['label']}_{id(res)}"
+                res['id'] = iid
                 spk.items[iid] = res
             else:
                 iid = f"missing_{res['label']}_{id(res)}"
-                spk.items[iid] = {'label': res['label'], 'group': grp_name, 'snd': None, 'start': None, 'end': None, 'inner_splits': []}
+                spk.items[iid] = {
+                    'id': iid,
+                    'label': res['label'],
+                    'group': grp_name,
+                    'speaker': spk.name,
+                    'speaker_id': spk.id,
+                    'snd': None,
+                    'start': None,
+                    'end': None,
+                    'inner_splits': []
+                }
 
     def _match_audio_to_textgrid(self, sorted_audios, sorted_tgs):
         matched_audio_to_tg = {}
         matched_tg_to_audio = {}
 
-        import os
         tg_base_map = {os.path.splitext(os.path.basename(tp))[0].lower(): tp for tp in sorted_tgs}
         for ap in sorted_audios:
             abase = os.path.splitext(os.path.basename(ap))[0].lower()
@@ -3887,33 +6388,120 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
 
     def do_import_batch_and_export(self, arg):
         """
-        Import a folder containing subfolders of speaker WAV + TextGrid files and export as a .teproj project.
-        Usage: import_batch_and_export <folder_path> <output.teproj>
+        Import a folder containing single-speaker or multi-speaker audio files (+ optional TextGrid or wordlist) and export as a .teproj project.
+        Usage: import_batch_and_export <folder_path> <output.teproj> [wordlist=<path>] [match_mode=fuzzy|order] [--replace-default-speaker]
         """
-        args = shlex.split(arg)
-        if len(args) != 2:
-            self._emit(False, error="Usage: import_batch_and_export <folder_path> <output.teproj>")
+        try:
+            args = shlex.split(arg)
+        except ValueError as e:
+            self._emit(False, error=f"Invalid arguments: {e}")
             return
 
-        dir_path, teproj_path = args[0], args[1]
+        pos_args = []
+        wordlist_path = None
+        match_mode = "fuzzy"
+        replace_default_speaker = True
+
+        idx = 0
+        while idx < len(args):
+            tok = args[idx]
+            low = tok.lower().strip()
+            if low == "--replace-default-speaker":
+                replace_default_speaker = True
+                idx += 1
+                continue
+            if low in ("--no-replace-default-speaker", "--keep-default-speaker"):
+                replace_default_speaker = False
+                idx += 1
+                continue
+            if low in ("--wordlist", "-w") and idx + 1 < len(args):
+                wordlist_path = args[idx + 1].strip()
+                idx += 2
+                continue
+            if low in ("--match-mode", "--mode") and idx + 1 < len(args):
+                match_mode = args[idx + 1].strip().lower()
+                idx += 2
+                continue
+            if "=" in tok:
+                k, v = tok.split("=", 1)
+                k_low = k.strip().lstrip("-").lower()
+                v_clean = v.strip().strip('"').strip("'")
+                if k_low in ("wordlist", "wl", "字表"):
+                    wordlist_path = v_clean
+                elif k_low in ("match_mode", "match-mode", "mode", "match"):
+                    match_mode = v_clean.lower()
+                elif k_low in ("replace_default_speaker", "replace-default-speaker"):
+                    replace_default_speaker = v_clean.lower() in ("true", "1", "yes", "on")
+                else:
+                    pos_args.append(tok)
+            else:
+                pos_args.append(tok)
+            idx += 1
+
+        if len(pos_args) < 2:
+            self._emit(
+                False,
+                error="Usage: import_batch_and_export <folder_path> <output.teproj> [wordlist=<path>] [match_mode=fuzzy|order] [--replace-default-speaker]",
+            )
+            return
+
+        dir_path, teproj_path = pos_args[0], pos_args[1]
+        if len(pos_args) >= 3:
+            if pos_args[2].lower() in ("fuzzy", "order"):
+                match_mode = pos_args[2].lower()
+            elif wordlist_path is None:
+                wordlist_path = pos_args[2]
+        if len(pos_args) >= 4 and pos_args[3].lower() in ("fuzzy", "order"):
+            match_mode = pos_args[3].lower()
+
+        if match_mode not in ("fuzzy", "order"):
+            self._emit(False, error=f"Invalid match_mode '{match_mode}'. Choose from: fuzzy, order")
+            return
+
         if not os.path.isdir(dir_path):
             self._emit(False, error=f"Not a directory: {dir_path}")
             return
 
-        from modules.audio_core import batch_process_worker_with_textgrid, batch_process_worker
-        import re
+        wl_doc = None
+        wl_groups = None
+        wl_flat_words = None
+        wl_records = None
+        if wordlist_path:
+            if not os.path.exists(wordlist_path):
+                self._emit(False, error=f"Wordlist file not found: {wordlist_path}")
+                return
+            try:
+                wl_doc, wl_groups, wl_flat_words, wl_records = self._load_wordlist_any(wordlist_path)
+            except Exception as e:
+                self._emit(False, error=f"Failed to load wordlist: {e}")
+                return
+            if not wl_flat_words:
+                self._emit(False, error="No words found in wordlist")
+                return
 
-        def natural_sort_key(s):
-            return [int(text) if text.isdigit() else text.lower()
-                    for text in re.split('([0-9]+)', s)]
-
-        subdirs = [os.path.join(dir_path, d) for d in os.listdir(dir_path) if os.path.isdir(os.path.join(dir_path, d))]
+        candidate_subdirs = [
+            os.path.join(dir_path, d)
+            for d in os.listdir(dir_path)
+            if os.path.isdir(os.path.join(dir_path, d)) and not d.startswith(".")
+        ]
+        subdirs = []
+        for sd in sorted(candidate_subdirs, key=self._natural_sort_key):
+            has_audio = any(
+                os.path.isfile(os.path.join(sd, f))
+                and f.lower().endswith(self.COMMON_AUDIO_EXTENSIONS)
+                for f in os.listdir(sd)
+            )
+            if has_audio:
+                subdirs.append(sd)
         if not subdirs:
             subdirs = [dir_path]
 
+        if wl_doc is not None:
+            self.wordlist_doc = wl_doc
+
         imported_speakers = []
-        for subdir in sorted(subdirs, key=natural_sort_key):
-            spk_name = os.path.basename(subdir)
+        for subdir in sorted(subdirs, key=self._natural_sort_key):
+            spk_name = os.path.basename(os.path.abspath(subdir))
             if spk_name in (".", "..") or not spk_name.strip():
                 continue
 
@@ -3923,30 +6511,92 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                     spk = s
                     break
             if not spk:
-                spk = self.speaker_manager.add_speaker(spk_name)
+                # Reuse initial empty default speaker if replace_default_speaker is enabled
+                if replace_default_speaker:
+                    for s in self.speaker_manager.get_all_speakers():
+                        if self._is_empty_default_speaker(s):
+                            self.speaker_manager.rename_speaker(s.id, spk_name)
+                            spk = s
+                            break
+                if not spk:
+                    spk = self.speaker_manager.add_speaker(spk_name)
 
             self.speaker_manager.set_active_speaker(spk.id)
             spk = self.current_speaker
             spk.tab_mode = "多条独立音频"
             spk.items.clear()
 
-            wavs = [os.path.join(subdir, f) for f in os.listdir(subdir) if f.lower().endswith('.wav')]
-            textgrids = [os.path.join(subdir, f) for f in os.listdir(subdir) if f.lower().endswith('.textgrid')]
+            audios = [
+                os.path.join(subdir, f)
+                for f in os.listdir(subdir)
+                if os.path.isfile(os.path.join(subdir, f))
+                and f.lower().endswith(self.COMMON_AUDIO_EXTENSIONS)
+            ]
+            textgrids = [
+                os.path.join(subdir, f)
+                for f in os.listdir(subdir)
+                if os.path.isfile(os.path.join(subdir, f))
+                and f.lower().endswith('.textgrid')
+            ]
 
-            sorted_audios = sorted(wavs, key=natural_sort_key)
-            sorted_tgs = sorted(textgrids, key=natural_sort_key)
-
-            matched_audio_to_tg = self._match_audio_to_textgrid(sorted_audios, sorted_tgs)
-
+            sorted_audios = sorted(audios, key=self._natural_sort_key)
+            sorted_tgs = sorted(textgrids, key=self._natural_sort_key)
             spk.pending_batch_paths = sorted_audios
-            self._process_speaker_batch_items(spk, sorted_audios, matched_audio_to_tg, self.params)
+
+            if wl_doc is not None and not sorted_tgs:
+                spk.wordlist_doc = copy.deepcopy(wl_doc)
+                spk.cli_groups = [g["group"] for g in wl_groups]
+                spk.project_groups = list(spk.cli_groups)
+                self._process_batch_wordlist(
+                    wl_groups,
+                    wl_flat_words,
+                    match_mode,
+                    metadata_records=wl_records,
+                    wordlist_doc=wl_doc,
+                    emit_result=False,
+                )
+            else:
+                matched_audio_to_tg = self._match_audio_to_textgrid(sorted_audios, sorted_tgs)
+                self._process_speaker_batch_items(spk, sorted_audios, matched_audio_to_tg, self.params)
+                if wl_doc is not None and wl_records:
+                    spk.wordlist_doc = copy.deepcopy(wl_doc)
+                    spk.cli_groups = [g["group"] for g in wl_groups]
+                    spk.project_groups = list(spk.cli_groups)
+                    item_list = list(spk.items.values())
+                    used_rec_indices = set()
+                    for idx_it, item in enumerate(item_list):
+                        rec = None
+                        if match_mode == "order":
+                            if idx_it < len(wl_records):
+                                rec = wl_records[idx_it]
+                        else:
+                            lbl = str(item.get("label") or "")
+                            for r_idx, cand in enumerate(wl_records):
+                                if r_idx in used_rec_indices:
+                                    continue
+                                cand_lbl = str(cand.get("label") or "")
+                                cand_aliases = cand.get("item_aliases") or []
+                                if cand_lbl == lbl or cand_lbl in lbl or lbl in cand_lbl or any(a in lbl for a in cand_aliases):
+                                    rec = cand
+                                    used_rec_indices.add(r_idx)
+                                    break
+                        self._attach_wordlist_record_to_item(item, rec, speaker=spk)
+                else:
+                    seen_g = []
+                    for item in spk.items.values():
+                        g = item.get('group', '导入内容')
+                        if g not in seen_g:
+                            seen_g.append(g)
+                    spk.cli_groups = seen_g
+                    spk.project_groups = list(seen_g)
 
             imported_speakers.append(spk_name)
 
-        for s_id in list(self.speaker_manager.speakers.keys()):
-            s = self.speaker_manager.speakers[s_id]
-            if s.name == "发音人 1" and not s.items:
-                self.speaker_manager.remove_speaker(s_id)
+        if replace_default_speaker:
+            for s_id in list(self.speaker_manager.speakers.keys()):
+                s = self.speaker_manager.speakers.get(s_id)
+                if self._is_empty_default_speaker(s) and len(self.speaker_manager.speakers) > 1:
+                    self.speaker_manager.remove_speaker(s_id)
 
         all_spks = self.speaker_manager.get_all_speakers()
         if all_spks:
@@ -3964,7 +6614,14 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
 
         ok = self.project_manager.export_project(teproj_path)
         if ok:
-            self._emit(True, f"Imported speakers {imported_speakers} and exported project successfully.", path=teproj_path)
+            self._emit(
+                True,
+                f"Imported speakers {imported_speakers} and exported project successfully.",
+                path=teproj_path,
+                speakers=imported_speakers,
+                wordlist=wordlist_path,
+                match_mode=match_mode if wordlist_path else None,
+            )
         else:
             self._emit(False, error="Project export failed after importing batch folder")
 
@@ -4031,7 +6688,38 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
         """
         try:
             self.project_manager.save_to_workspace()
-            self._emit(True, "工程已保存到内部工作区。若要给别人或下次恢复，请用 project_export。")
+            self._session_dirty = False
+            self._emit(True, "工程已保存到内部工作区。若要给别人或下次恢复，请用 project_export。", workspace=self.project_manager.workspace_dir)
+        except Exception as e:
+            self._emit(False, error=str(e))
+
+    def do_project_load(self, arg):
+        """
+        Load project state from the current workspace directory (or a specified workspace directory / .teproj archive).
+        Usage: project_load [workspace_dir_or_teproj]
+        """
+        args = shlex.split(arg) if arg.strip() else []
+        target = args[0] if args else None
+        try:
+            if target and os.path.isfile(target):
+                ok = self.project_manager.load_project(target)
+            elif target and os.path.isdir(target):
+                self.project_manager.workspace_dir = os.path.abspath(target)
+                ok = self.project_manager.load_from_workspace()
+            else:
+                ok = self.project_manager.load_from_workspace()
+            if ok:
+                self._sync_cli_state_after_project_load()
+                self._emit(
+                    True,
+                    "已从工作区恢复工程状态。",
+                    workspace=self.project_manager.workspace_dir,
+                    speakers=len(self.speaker_manager.get_all_speakers()),
+                    active_speaker=self.current_speaker.name,
+                    total_items=len(self.items),
+                )
+            else:
+                self._emit(False, error="Failed to load project from workspace")
         except Exception as e:
             self._emit(False, error=str(e))
 
@@ -4110,43 +6798,110 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
     def do_tool_sort_batch(self, arg):
         """
         Fuzzy-sort batch audio paths according to a wordlist, like toolkit's auto-sort.
-        Usage: tool_sort_batch <wordlist.txt> [audio1 audio2 ...]
-        If audio paths are omitted, the current loaded batch paths are used.
+        Usage: tool_sort_batch <wordlist> [audio_or_dir_or_glob ...] [--apply]
+        Supports .ptwl, .csv, structured .txt, and messy .txt wordlists.
+        If --apply (or apply=true) is specified, directly updates the session's batch_paths.
         """
-        args = shlex.split(arg)
-        if not args:
-            self._emit(False, error="Requires wordlist.txt")
+        try:
+            args = shlex.split(arg)
+        except ValueError as e:
+            self._emit(False, error=f"Invalid arguments: {e}")
             return
 
-        wordlist_path = args[0]
-        paths = args[1:] if len(args) > 1 else list(self.batch_paths)
+        if not args:
+            self._emit(False, error="Requires wordlist path")
+            return
+
+        apply_to_session = False
+        pos_args = []
+        for tok in args:
+            low = tok.lower().strip()
+            if low in ("--apply", "-a"):
+                apply_to_session = True
+            elif low == "--no-apply":
+                apply_to_session = False
+            elif low.startswith("apply="):
+                val = low.split("=", 1)[1].strip()
+                apply_to_session = val in ("true", "1", "yes", "on")
+            else:
+                pos_args.append(tok)
+
+        if not pos_args:
+            self._emit(False, error="Requires wordlist path")
+            return
+
+        wordlist_path = pos_args[0]
+        raw_audio_args = pos_args[1:]
         if not os.path.exists(wordlist_path):
             self._emit(False, error=f"File not found: {wordlist_path}")
             return
+
+        if raw_audio_args:
+            paths, err_msg, hint_msg = self._expand_batch_audio_inputs(raw_audio_args)
+            if err_msg:
+                self._emit(False, error=err_msg, hint=hint_msg)
+                return
+        else:
+            paths = list(self.batch_paths)
+
         if not paths:
-            self._emit(False, error="No audio paths provided or loaded")
+            self._emit(
+                False,
+                error="No audio paths provided or loaded",
+                hint="请传入音频文件路径、目录路径或 *.wav 通配符，或先运行 load_batch。",
+            )
             return
 
-        with open(wordlist_path, "r", encoding="utf-8") as f:
-            groups, flat_words = parse_wordlist(f.read())
+        try:
+            _doc, _groups, flat_words, records = self._load_wordlist_any(wordlist_path)
+        except Exception as e:
+            self._emit(False, error=f"Failed to load wordlist: {e}")
+            return
 
         sorted_paths = []
         used_indices = []
-        for word in flat_words:
+        for idx_w, word in enumerate(flat_words):
             idx = fuzzy_match_word_to_path(word, paths, used_indices=list(used_indices))
+            if idx is None and idx_w < len(records) and records[idx_w]:
+                for alias in (records[idx_w].get("item_aliases") or records[idx_w].get("aliases") or []):
+                    idx = fuzzy_match_word_to_path(alias, paths, used_indices=list(used_indices))
+                    if idx is not None:
+                        break
             if idx is not None:
                 sorted_paths.append(paths[idx])
                 used_indices.append(idx)
 
         leftovers = [p for i, p in enumerate(paths) if i not in used_indices]
         result = sorted_paths + leftovers
-        self._emit(
-            True,
-            "已按字表给音频排序。需要正式载入时可把 sorted_paths 交给 load_batch。",
-            matched=len(sorted_paths),
-            total_words=len(flat_words),
-            sorted_paths=result
-        )
+
+        if apply_to_session:
+            self.batch_paths = list(result)
+            self.mode = 'batch'
+            self.long_snd = None
+            self.long_snd_path = None
+            self.items.clear()
+            self.groups.clear()
+            self._after_state_change("load_batch")
+            self._emit(
+                True,
+                f"已按字表给音频排序并直接载入当前会话（共 {len(result)} 个音频，匹配 {len(sorted_paths)}/{len(flat_words)} 词）。",
+                applied=True,
+                mode=self.mode,
+                count=len(result),
+                matched=len(sorted_paths),
+                total_words=len(flat_words),
+                sorted_paths=result,
+                batch_paths=result,
+            )
+        else:
+            self._emit(
+                True,
+                "已按字表给音频排序。需要正式载入时可把 sorted_paths 交给 load_batch，或直接加 --apply 参数。",
+                applied=False,
+                matched=len(sorted_paths),
+                total_words=len(flat_words),
+                sorted_paths=result,
+            )
 
     def do_tool_split(self, arg):
         """
@@ -5055,8 +7810,12 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
             self._emit(False, error=str(e))
 
     def _build_project_data_dict(self):
+        wordlist_doc = self._build_wordlist_v2_doc_from_project()
         project_data = {
             "active_speaker_id": self.speaker_manager.active_speaker_id,
+            "wordlist_doc": wordlist_doc,
+            "wordlist_meta": {"title": wordlist_doc.get("title", "")},
+            "groups": wordlist_doc.get("groups", []),
             "speakers": {}
         }
         for spk_id, spk in self.speaker_manager.speakers.items():
@@ -5070,6 +7829,13 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
             }
             for item_id, item in spk.items.items():
                 item_dict = {k: v for k, v in item.items() if k != "snd"} if isinstance(item, dict) else {}
+                tags = list(item.get("item_tags") or item.get("tags") or [])
+                note = item.get("item_note") or item.get("note") or ""
+                custom_fields = {}
+                for fkey in ("meta", "item_meta", "fields", "custom_fields"):
+                    fval = item.get(fkey)
+                    if isinstance(fval, dict):
+                        custom_fields.update(fval)
                 item_dict.update({
                     "item_id": item.get("item_id", item_id),
                     "label": item.get("label"),
@@ -5080,12 +7846,16 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                     "formant_data": item.get("formant_data"),
                     "pitch_data_file": item.get("pitch_data_file"),
                     "formant_data_file": item.get("formant_data_file"),
-                    "wordlist_version": item.get("wordlist_version"),
-                    "wordlist_title": item.get("wordlist_title"),
-                    "item_note": item.get("item_note"),
-                    "item_tags": item.get("item_tags", []) or [],
-                    "item_aliases": item.get("item_aliases", []) or [],
-                    "item_meta": item.get("item_meta", {}) or {},
+                    "wordlist_version": item.get("wordlist_version") or ("v2" if (tags or note or custom_fields) else "v1"),
+                    "wordlist_title": item.get("wordlist_title") or wordlist_doc.get("title", ""),
+                    "item_note": note,
+                    "note": note,
+                    "item_tags": tags,
+                    "tags": tags,
+                    "item_aliases": item.get("item_aliases") or item.get("aliases") or [],
+                    "item_meta": dict(custom_fields),
+                    "fields": dict(custom_fields),
+                    "custom_fields": dict(custom_fields),
                     "group_note": item.get("group_note"),
                     "group_tags": item.get("group_tags", []) or [],
                     "metadata_source": item.get("metadata_source"),
@@ -5103,79 +7873,87 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
         """
         Generate AI prompt for writing a custom script.
         Usage: script_prompt [key=value ...]
-        Valid keys: purpose, data_range, group_by, chart_style, x_axis, y_axis, stats, title, filename, output_table, show_legend, use_chinese, custom_desc
-        Example: script_prompt purpose="绘制 F1/F2 元音空间图" chart_style="散点图" stats="忽略 NaN"
+        Valid keys: template, output_type, scope, analysis_mode, user_request, out, format,
+                    purpose, goal, script_type, prompt_mode, data_range, group_by, chart_style,
+                    x_axis, y_axis, stats, title, filename, img_format, output_table,
+                    show_legend, use_chinese, custom_desc, agent_detail_level,
+                    agent_chart_count, agent_plan_count, agent_project_summary_mode
+        Example: script_prompt template=formant_space scope=integrated user_request="绘制元音空间图" out=prompt.md
         """
-        args = shlex.split(arg)
-        selections = {
-            "script_type": "chart",
-            "prompt_mode": "参数选项",
-            "goal": "绘制 F0 曲线图",
-            "data_range": "只使用纳入分析的条目",
-            "group_by": "按声调/分组",
-            "chart_style": "折线图",
-            "x_axis": "归一化时间 0-1",
-            "y_axis": "F0 Hz",
-            "stats": ["绘制均值", "绘制标准差阴影", "忽略 NaN"],
-            "title": "自定义图表",
-            "filename": "custom_chart.png",
-            "output_table": False,
-            "show_legend": True,
-            "use_chinese": True,
-            "custom_desc": ""
-        }
-        
+        from modules.script_prompt import (
+            generate_ai_prompt,
+            validate_and_normalize_script_prompt_params,
+            VALID_SCRIPT_PROMPT_KEYS,
+            SCRIPT_PROMPT_KEY_ALIASES,
+        )
+
+        try:
+            args = shlex.split(arg)
+        except ValueError as e:
+            self._emit(False, error=f"Invalid argument syntax: {e}", valid_keys=list(VALID_SCRIPT_PROMPT_KEYS))
+            return
+
+        if len(args) == 1 and args[0].strip().lower() in ("?", "--help", "-h", "help"):
+            self._emit(
+                True,
+                "Supported parameters for script_prompt",
+                usage="script_prompt [key=value ...]",
+                valid_keys=list(VALID_SCRIPT_PROMPT_KEYS),
+            )
+            return
+
         fmt = 'json'
-        clean_args = []
+        raw_params = {}
         for kv in args:
             if '=' in kv:
                 k, v = kv.split('=', 1)
-                k = k.strip().lower()
-                if k == 'format':
-                    fmt = v.strip().lower()
-                else:
-                    clean_args.append(kv)
+                k_clean = k.strip()
+                v_clean = v.strip()
+                if k_clean.lower() == 'format':
+                    fmt = v_clean.lower()
+                raw_params[k_clean] = v_clean
             else:
                 val = kv.lower().strip()
                 if val in ('text', 'json'):
                     fmt = val
                 else:
-                    clean_args.append(kv)
-
-        for kv in clean_args:
-            if '=' in kv:
-                k, v = kv.split('=', 1)
-                k = k.strip()
-                if k == 'purpose':
-                    selections['goal'] = v
-                elif k == 'stats':
-                    selections['stats'] = [s.strip() for s in v.split(',') if s.strip()]
-                elif k in ('output_table', 'show_legend', 'use_chinese'):
-                    selections[k] = v.lower() in ('true', '1', 'yes')
-                elif k in ('agent_chart_count', 'agent_plan_count'):
-                    try:
-                        selections[k] = int(v)
-                    except ValueError:
-                        selections[k] = v
-                elif k in ('script_type', 'prompt_mode', 'goal', 'data_range', 'group_by', 'chart_style', 'x_axis', 'y_axis', 'title', 'filename', 'img_format', 'custom_desc', 'agent_detail_level', 'agent_project_summary_mode'):
-                    selections[k] = v
-                else:
-                    self._emit(False, error=f"Unknown key: {k}")
+                    self._emit(
+                        False,
+                        error=f"Invalid parameter format: '{kv}'. Expected key=value. Valid parameters are: {', '.join(VALID_SCRIPT_PROMPT_KEYS)}",
+                        valid_keys=list(VALID_SCRIPT_PROMPT_KEYS),
+                    )
                     return
-            else:
-                self._emit(False, error=f"Invalid parameter format: {kv}")
-                return
-        
-        from modules.script_prompt import generate_ai_prompt
+
+        try:
+            selections = validate_and_normalize_script_prompt_params(raw_params)
+        except ValueError as e:
+            self._emit(
+                False,
+                error=str(e),
+                valid_keys=list(VALID_SCRIPT_PROMPT_KEYS),
+            )
+            return
+
         project_data = self._build_project_data_dict()
         try:
             prompt_text = generate_ai_prompt(project_data, selections)
+            out_path = selections.get("out", "").strip()
+            saved_out = None
+            if out_path:
+                os.makedirs(os.path.dirname(os.path.abspath(out_path)) or ".", exist_ok=True)
+                with open(out_path, "w", encoding="utf-8") as f:
+                    f.write(prompt_text)
+                saved_out = os.path.abspath(out_path)
+
             if fmt == 'text':
                 print(prompt_text)
             else:
-                self._emit(True, "AI prompt generated successfully.", prompt_text=prompt_text)
+                payload = {"prompt_text": prompt_text}
+                if saved_out:
+                    payload["output_file"] = saved_out
+                self._emit(True, "AI prompt generated successfully.", **payload)
         except Exception as e:
-            self._emit(False, error=str(e))
+            self._emit(False, error=str(e), valid_keys=list(VALID_SCRIPT_PROMPT_KEYS))
 
     def do_generate_prompt(self, arg):
         """Alias for script_prompt."""
@@ -5218,7 +7996,8 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
 
     def do_exit(self, arg):
         """Exit the CLI."""
-        print("Exiting...")
+        if not getattr(self, "quiet", False) and not getattr(self, "json_mode", False):
+            print("Exiting...")
         if self.log_file:
             sys.stdout = self.original_stdout
             self.log_file.close()
@@ -5227,7 +8006,6 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
             self._executor.shutdown(wait=False)
             self._executor = None
         return True
-
 
     def _export_formant_table(self, out_file, speakers_to_process):
         try:
@@ -5288,7 +8066,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
 
                 for item in items_in_grp:
                     self._ensure_item_loaded(item)
-                    if not item.get('snd') or not item.get('formant_data'):
+                    if not item.get('formant_data'):
                         continue
 
                     bounds = get_item_syllable_bounds(item)
@@ -5501,7 +8279,7 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                         
         return preview_times.tolist(), preview_f1, preview_f2
 
-    def _export_vowel_space_chart(self, out_file, speakers_to_process):
+    def _export_vowel_space_chart(self, out_file, speakers_to_process, emit_error=True):
         import matplotlib
         matplotlib.use('Agg')
         import matplotlib.pyplot as plt
@@ -5511,8 +8289,8 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
             for item_id, item in spk.items.items():
                 if item.get('is_excluded', False):
                     continue
-                self._ensure_item_loaded(item)
-                if not item.get('snd') or not item.get('formant_data'):
+                self._ensure_item_loaded(item, speaker=spk)
+                if not item.get('formant_data'):
                     continue
                     
                 f_data = item['formant_data']
@@ -5538,8 +8316,9 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
                     })
                     
         if not data_points:
-            self._emit(False, error="No valid formant data found")
-            return
+            if emit_error:
+                self._emit(False, error="No valid formant data found")
+            return False
             
         fig, ax = plt.subplots(figsize=(8, 7), dpi=300)
         
@@ -5578,15 +8357,16 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
         ax.spines['bottom'].set_color('#9CA3AF')
         
         plt.tight_layout()
+        os.makedirs(os.path.dirname(os.path.abspath(out_file)) or ".", exist_ok=True)
         fig.savefig(out_file, bbox_inches='tight')
         plt.close(fig)
+        return True
 
     def do_EOF(self, arg):
         """Exit cleanly when the host closes stdin."""
-        print()
+        if not getattr(self, "quiet", False) and not getattr(self, "json_mode", False):
+            print()
         return self.do_exit(arg)
-
-
 
     def _export_textgrid(self, out_path, structure, speaker=None):
         speaker = speaker or self.current_speaker
@@ -5712,52 +8492,204 @@ PhonTracer is a high-accuracy acoustic tone/formant analysis tool.
 
         tg.write(tg_path)
 
+def _has_cjk_in_args(args_list) -> bool:
+    for item in (args_list or []):
+        if isinstance(item, str) and re.search(r'[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]', item):
+            return True
+    return False
+
+
 def main(argv=None):
-    argv = sys.argv[1:] if argv is None else argv
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    # Clean UTF-8 BOM from every startup argument token
+    raw_argv = [
+        a.lstrip('\ufeff\ufffe\u200b') if isinstance(a, str) else a
+        for a in raw_argv
+    ]
     # Handle multiprocessing bootstrap correctly in frozen Windows builds.
     multiprocessing.freeze_support()
 
     shared_workspace = False
     custom_ws = None
+    project_file = None
+    script_file = None
+    explicit_lang = None
+    quiet_mode = False
+    json_mode = False
+    unknown_option = None
+
     cleaned_argv = []
     i = 0
-    while i < len(argv):
-        arg = argv[i]
-        if arg == "--shared-workspace":
-            shared_workspace = True
-            i += 1
-        elif arg == "--workspace" and i + 1 < len(argv):
-            custom_ws = argv[i + 1]
-            i += 2
-        elif arg.startswith("--workspace="):
-            custom_ws = arg.split("=", 1)[1]
-            i += 1
-        else:
-            cleaned_argv.append(arg)
-            i += 1
+    while i < len(raw_argv):
+        arg = raw_argv[i]
+        arg_clean = arg.strip() if isinstance(arg, str) else ""
+        if not cleaned_argv:
+            # Parse global startup options before the subcommand
+            if arg_clean == "--shared-workspace":
+                shared_workspace = True
+                i += 1
+                continue
+            elif arg_clean == "--workspace" and i + 1 < len(raw_argv):
+                custom_ws = raw_argv[i + 1].lstrip('\ufeff\ufffe\u200b').strip()
+                i += 2
+                continue
+            elif arg_clean.startswith("--workspace="):
+                custom_ws = arg_clean.split("=", 1)[1].strip()
+                i += 1
+                continue
+            elif arg_clean == "--project" and i + 1 < len(raw_argv):
+                project_file = raw_argv[i + 1].lstrip('\ufeff\ufffe\u200b').strip()
+                i += 2
+                continue
+            elif arg_clean.startswith("--project="):
+                project_file = arg_clean.split("=", 1)[1].strip()
+                i += 1
+                continue
+            elif arg_clean in ("--script-file", "--batch-cmds") and i + 1 < len(raw_argv):
+                script_file = raw_argv[i + 1].lstrip('\ufeff\ufffe\u200b').strip()
+                i += 2
+                continue
+            elif arg_clean.startswith("--script-file=") or arg_clean.startswith("--batch-cmds="):
+                script_file = arg_clean.split("=", 1)[1].strip()
+                i += 1
+                continue
+            elif arg_clean == "--lang" and i + 1 < len(raw_argv):
+                explicit_lang = raw_argv[i + 1].lstrip('\ufeff\ufffe\u200b').strip().lower()
+                i += 2
+                continue
+            elif arg_clean.startswith("--lang="):
+                explicit_lang = arg_clean.split("=", 1)[1].strip().lower()
+                i += 1
+                continue
+            elif arg_clean in ("--quiet", "-q"):
+                quiet_mode = True
+                i += 1
+                continue
+            elif arg_clean == "--json":
+                json_mode = True
+                quiet_mode = True
+                i += 1
+                continue
+            elif arg_clean in ("-h", "--help", "-v", "--version") or arg_clean.startswith("--multiprocessing-"):
+                cleaned_argv.append(arg_clean)
+                i += 1
+                continue
+            elif arg_clean.startswith("-"):
+                unknown_option = arg_clean
+                break
+
+        cleaned_argv.append(arg)
+        i += 1
+
+    if unknown_option is not None:
+        print(json.dumps({
+            "success": False,
+            "error": f"Unknown startup option: {unknown_option}",
+            "hint": "Use --help for manual, or pass a CLI command directly (e.g. `PhonTracerCLI.exe status`)."
+        }))
+        return 2
+
+    # Language resolution: explicit --lang zh|en, or auto-detect Chinese characters in raw_argv
+    if explicit_lang in ("zh", "cn", "chinese", "中文"):
+        resolved_lang = "zh"
+    elif explicit_lang in ("en", "english", "英文"):
+        resolved_lang = "en"
+    elif _has_cjk_in_args(raw_argv):
+        resolved_lang = "zh"
+    else:
+        resolved_lang = "en"
+
     argv = cleaned_argv
 
-    cli = PhonTracerCLI(workspace_dir=custom_ws, shared_workspace=shared_workspace)
+    # Handle --version before initializing workspace if no workspace/project work is needed
+    if argv and argv[0].strip().lower() in ("-v", "--version", "version") and not script_file:
+        print(f"{APP_NAME} CLI {__version__}")
+        return 0
+
+    if argv and argv[0].strip().lower().startswith("--multiprocessing-"):
+        return 0
+
+    is_stdin_tty = True
     try:
+        is_stdin_tty = bool(sys.stdin and sys.stdin.isatty())
+    except Exception:
+        is_stdin_tty = True
+
+    is_non_interactive = bool(argv or script_file or not is_stdin_tty or quiet_mode or json_mode)
+
+    cli = PhonTracerCLI(
+        workspace_dir=custom_ws,
+        shared_workspace=shared_workspace,
+        project_path=project_file,
+        lang=resolved_lang,
+        quiet=(quiet_mode or is_non_interactive),
+        json_mode=json_mode,
+    )
+    try:
+        # 1. Batch script file execution mode (--script-file / --batch-cmds)
+        if script_file is not None:
+            if not os.path.exists(script_file):
+                cli._emit(
+                    False,
+                    error=f"Script file not found: {script_file}",
+                    failed_line=0,
+                    failed_command="",
+                )
+                return 1
+            try:
+                with open(script_file, "r", encoding="utf-8-sig") as sf:
+                    script_lines = sf.readlines()
+            except Exception as e:
+                cli._emit(
+                    False,
+                    error=f"Failed to read script file: {e}",
+                    failed_line=0,
+                    failed_command="",
+                )
+                return 1
+
+            for line_no, raw_line in enumerate(script_lines, start=1):
+                cmd_line = PhonTracerCLI._clean_bom_and_whitespace(raw_line)
+                if not cmd_line or cmd_line.startswith("#"):
+                    continue
+                if cmd_line.lower() in ("exit", "quit", "eof"):
+                    break
+                cli._last_emit_success = True
+                cli._last_emit_payload = None
+                cli.onecmd(cmd_line)
+                if cli._last_emit_success is False:
+                    prev_err = ""
+                    if isinstance(cli._last_emit_payload, dict):
+                        prev_err = cli._last_emit_payload.get("error") or cli._last_emit_payload.get("message") or ""
+                    cli._emit(
+                        False,
+                        f"Batch script aborted at line {line_no}: {cmd_line}",
+                        error=prev_err or f"Command failed at line {line_no}: {cmd_line}",
+                        failed_line=line_no,
+                        failed_command=cmd_line,
+                        script_file=script_file,
+                    )
+                    return 1
+            return 0
+
+        # 2. Single command or --help on command line
         if argv:
-            first_arg = argv[0].strip().lower()
-            if first_arg.startswith("--multiprocessing-"):
-                return 0
+            first_arg = PhonTracerCLI._clean_bom_and_whitespace(argv[0]).lower()
             if first_arg in ("-h", "--help", "help", "?"):
-                cli.do_help("")
+                if len(argv) > 1:
+                    cli.do_help(" ".join(argv[1:]))
+                else:
+                    cli.do_help("")
                 return 0
             if first_arg in ("-v", "--version", "version"):
                 print(f"{APP_NAME} CLI {__version__}")
                 return 0
-            # Relaxed startup behavior:
-            # If non-option args are provided, treat them as one CLI command and run once.
-            # Example: PhonTracerCLI.exe status
             if not first_arg.startswith("-"):
-                import shlex
                 if len(argv) == 1 and " " in argv[0]:
-                    command_line = argv[0]
+                    command_line = PhonTracerCLI._clean_bom_and_whitespace(argv[0])
                 else:
-                    command_line = shlex.join(argv)
+                    cleaned_tokens = [PhonTracerCLI._clean_bom_and_whitespace(a) for a in argv]
+                    command_line = shlex.join(cleaned_tokens)
                 cli.onecmd(command_line)
                 return 0
             print(json.dumps({
@@ -5767,11 +8699,24 @@ def main(argv=None):
             }))
             return 2
 
+        # 3. Non-interactive stdin pipe mode (pure JSON stdout without banner/prompts)
+        if not is_stdin_tty or quiet_mode or json_mode:
+            for raw_line in sys.stdin:
+                cmd_line = PhonTracerCLI._clean_bom_and_whitespace(raw_line)
+                if not cmd_line or cmd_line.startswith("#"):
+                    continue
+                if cmd_line.lower() in ("exit", "quit", "eof"):
+                    break
+                stop = cli.onecmd(cmd_line)
+                if stop:
+                    break
+            return 0
+
+        # 4. Interactive TTY REPL mode
         cli.cmdloop()
         return 0
     finally:
         cli.cleanup_workspace()
-        cli.executor.shutdown(wait=False)
 
 
 if __name__ == '__main__':

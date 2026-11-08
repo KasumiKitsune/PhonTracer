@@ -27,6 +27,15 @@ class SpeakerState:
         self.current_macro_segments = []
         self.manual_segments = None
         self.tab_mode = "多条独立音频"
+        self.wordlist_doc = None
+
+    @property
+    def batch_paths(self):
+        return self.pending_batch_paths
+
+    @batch_paths.setter
+    def batch_paths(self, val):
+        self.pending_batch_paths = list(val) if val is not None else []
 
 class SpeakerManager:
     def __init__(self):
@@ -52,7 +61,12 @@ class SpeakerManager:
 
     def rename_speaker(self, speaker_id, new_name):
         if speaker_id in self.speakers:
-            self.speakers[speaker_id].name = new_name
+            spk = self.speakers[speaker_id]
+            spk.name = new_name
+            for item in getattr(spk, "items", {}).values():
+                if isinstance(item, dict):
+                    item["speaker"] = new_name
+                    item["speaker_id"] = spk.id
             return True
         return False
 

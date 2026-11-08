@@ -72,10 +72,244 @@ def _format_meta_pairs(meta, limit=8):
     return _format_sequence(pairs, limit=limit)
 
 
+
+VALID_SCRIPT_PROMPT_KEYS = (
+    "template",
+    "output_type",
+    "scope",
+    "analysis_mode",
+    "user_request",
+    "out",
+    "format",
+    "purpose",
+    "goal",
+    "script_type",
+    "prompt_mode",
+    "data_range",
+    "group_by",
+    "chart_style",
+    "x_axis",
+    "y_axis",
+    "stats",
+    "title",
+    "filename",
+    "img_format",
+    "output_table",
+    "show_legend",
+    "use_chinese",
+    "custom_desc",
+    "agent_detail_level",
+    "agent_chart_count",
+    "agent_plan_count",
+    "agent_project_summary_mode",
+    "agent_detailed_project_summary",
+    "agent_include_project_summary",
+)
+
+SCRIPT_PROMPT_KEY_ALIASES = {
+    "template": "template",
+    "tpl": "template",
+    "output_type": "output_type",
+    "out_type": "output_type",
+    "scope": "scope",
+    "target": "scope",
+    "analysis_mode": "analysis_mode",
+    "mode": "analysis_mode",
+    "user_request": "user_request",
+    "request": "user_request",
+    "prompt": "user_request",
+    "out": "out",
+    "output": "out",
+    "out_file": "out",
+    "output_file": "out",
+    "format": "format",
+    "purpose": "purpose",
+    "goal": "goal",
+    "script_type": "script_type",
+    "type": "script_type",
+    "prompt_mode": "prompt_mode",
+    "data_range": "data_range",
+    "group_by": "group_by",
+    "groupby": "group_by",
+    "chart_style": "chart_style",
+    "style": "chart_style",
+    "x_axis": "x_axis",
+    "y_axis": "y_axis",
+    "stats": "stats",
+    "title": "title",
+    "filename": "filename",
+    "img_format": "img_format",
+    "output_table": "output_table",
+    "show_legend": "show_legend",
+    "use_chinese": "use_chinese",
+    "lang": "use_chinese",
+    "custom_desc": "custom_desc",
+    "desc": "custom_desc",
+    "description": "custom_desc",
+    "agent_detail_level": "agent_detail_level",
+    "detail_level": "agent_detail_level",
+    "agent_chart_count": "agent_chart_count",
+    "chart_count": "agent_chart_count",
+    "agent_plan_count": "agent_plan_count",
+    "plan_count": "agent_plan_count",
+    "agent_project_summary_mode": "agent_project_summary_mode",
+    "summary_mode": "agent_project_summary_mode",
+    "agent_detailed_project_summary": "agent_detailed_project_summary",
+    "agent_include_project_summary": "agent_include_project_summary",
+}
+
+
+def validate_and_normalize_script_prompt_params(raw_params):
+    """
+    校验并归一化 script_prompt 参数白名单。
+    遇到未知的 key 时抛出 ValueError 并附带合法参数列表。
+    """
+    if not isinstance(raw_params, dict):
+        raise ValueError(f"Invalid parameters dictionary. Valid parameters are: {', '.join(VALID_SCRIPT_PROMPT_KEYS)}")
+
+    normalized = {
+        "script_type": "chart",
+        "prompt_mode": "参数选项",
+        "goal": "绘制 F0 曲线图",
+        "data_range": "只使用纳入分析的条目",
+        "group_by": "按声调/分组",
+        "chart_style": "折线图",
+        "x_axis": "归一化时间 0-1",
+        "y_axis": "F0 Hz",
+        "stats": ["绘制均值", "绘制标准差阴影", "忽略 NaN"],
+        "title": "自定义图表",
+        "filename": "custom_chart.png",
+        "img_format": "png",
+        "output_table": False,
+        "show_legend": True,
+        "use_chinese": True,
+        "custom_desc": "",
+        "template": "",
+        "output_type": "",
+        "scope": "active",
+        "analysis_mode": "",
+        "user_request": "",
+        "out": "",
+    }
+
+    explicit_goal = False
+    explicit_axes = False
+
+    for raw_k, raw_v in raw_params.items():
+        k_clean = str(raw_k).strip().lower()
+        canonical = SCRIPT_PROMPT_KEY_ALIASES.get(k_clean)
+        if not canonical:
+            raise ValueError(
+                f"Unknown parameter: {raw_k}. Valid parameters are: {', '.join(VALID_SCRIPT_PROMPT_KEYS)}"
+            )
+
+        if canonical in ("purpose", "goal"):
+            normalized["goal"] = str(raw_v)
+            explicit_goal = True
+        elif canonical in ("x_axis", "y_axis"):
+            normalized[canonical] = str(raw_v)
+            explicit_axes = True
+        elif canonical == "stats":
+            if isinstance(raw_v, (list, tuple)):
+                normalized["stats"] = [str(s).strip() for s in raw_v if str(s).strip()]
+            else:
+                normalized["stats"] = [s.strip() for s in str(raw_v).split(",") if s.strip()]
+        elif canonical in ("output_table", "show_legend", "agent_detailed_project_summary", "agent_include_project_summary"):
+            if isinstance(raw_v, bool):
+                normalized[canonical] = raw_v
+            else:
+                normalized[canonical] = str(raw_v).strip().lower() in ("true", "1", "yes", "y", "是")
+        elif canonical == "use_chinese":
+            if isinstance(raw_v, bool):
+                normalized["use_chinese"] = raw_v
+            else:
+                v_l = str(raw_v).strip().lower()
+                normalized["use_chinese"] = v_l not in ("false", "0", "no", "en", "english", "否")
+        elif canonical in ("agent_chart_count", "agent_plan_count"):
+            try:
+                normalized[canonical] = int(raw_v)
+            except (TypeError, ValueError):
+                normalized[canonical] = raw_v
+        elif canonical == "template":
+            tpl = str(raw_v).strip()
+            normalized["template"] = tpl
+            tpl_l = tpl.lower()
+            if tpl_l in ("data_process", "patch", "clean", "process"):
+                normalized["script_type"] = "data_process"
+            elif tpl_l in ("formant", "formant_space", "vowel_space", "f1_f2"):
+                normalized["analysis_mode"] = normalized["analysis_mode"] or "formant"
+                if not explicit_goal:
+                    normalized["goal"] = "绘制 F1/F2 元音空间图"
+                normalized["chart_style"] = "散点图 + 置信椭圆"
+                if not explicit_axes:
+                    normalized["x_axis"] = "F2 Hz"
+                    normalized["y_axis"] = "F1 Hz"
+            elif tpl_l in ("contour", "tone_contour", "f0_contour"):
+                if not explicit_goal:
+                    normalized["goal"] = "绘制声调五度值/基频轮廓图"
+            elif tpl_l in ("agent", "interactive"):
+                normalized["prompt_mode"] = "Agent协作"
+        elif canonical == "output_type":
+            ot = str(raw_v).strip()
+            normalized["output_type"] = ot
+            ot_l = ot.lower()
+            if ot_l in ("data_process", "patch", "project", "teproj"):
+                normalized["script_type"] = "data_process"
+            elif ot_l in ("table", "csv", "both", "figure_and_table", "chart_and_table"):
+                normalized["output_table"] = True
+        elif canonical == "scope":
+            sc = str(raw_v).strip()
+            normalized["scope"] = sc
+            sc_l = sc.lower()
+            if sc_l in ("integrated", "all_speakers", "multi_speaker"):
+                normalized["data_range"] = "跨发音人整合分析 (所有纳入分析的条目)"
+            elif sc_l in ("active", "current"):
+                normalized["data_range"] = "当前激活发音人纳入分析的条目"
+            elif sc_l in ("all", "include_excluded"):
+                normalized["data_range"] = "全部条目 (含已排除条目)"
+            else:
+                normalized["data_range"] = sc
+        elif canonical == "analysis_mode":
+            am = str(raw_v).strip().lower()
+            normalized["analysis_mode"] = am
+            if am == "formant":
+                if not explicit_goal:
+                    normalized["goal"] = "绘制 F1/F2 元音空间分布与轨迹图"
+                if not explicit_axes:
+                    normalized["x_axis"] = "F2 Hz"
+                    normalized["y_axis"] = "F1 Hz"
+        elif canonical == "user_request":
+            req = str(raw_v).strip()
+            normalized["user_request"] = req
+            if req:
+                if normalized["custom_desc"]:
+                    normalized["custom_desc"] = f"{normalized['custom_desc']}\n{req}"
+                else:
+                    normalized["custom_desc"] = req
+                if not explicit_goal:
+                    normalized["goal"] = req
+        else:
+            normalized[canonical] = raw_v
+
+    return normalized
+
+
+def _extract_item_custom_fields(item):
+    """合并提取词条上的自定义字段（兼容 item_meta, meta, fields, custom_fields）。"""
+    if not isinstance(item, dict):
+        return {}
+    merged = {}
+    for key in ("meta", "item_meta", "fields", "custom_fields"):
+        val = item.get(key)
+        if isinstance(val, dict):
+            for mk, mv in val.items():
+                if mk is not None and str(mk).strip() and mv is not None and str(mv).strip():
+                    merged[str(mk).strip()] = str(mv).strip()
+    return merged
+
+
 def _wordlist_row_key(item):
-    meta = item.get("item_meta") or item.get("meta") or {}
-    if not isinstance(meta, dict):
-        meta = {}
+    meta = _extract_item_custom_fields(item)
     return (
         _truncate_text(item.get("label") or item.get("text") or item.get("name") or "未命名词项", 48),
         tuple(_as_text_list(item.get("item_tags") or item.get("tags"))),
@@ -122,7 +356,7 @@ def _build_detailed_wordlist_summary(items, max_groups=8, max_items_per_group=5)
             global_group_tags[tag] += 1
         for tag in _as_text_list(item.get("item_tags") or item.get("tags")):
             global_item_tags[tag] += 1
-        meta = item.get("item_meta") or item.get("meta") or {}
+        meta = _extract_item_custom_fields(item)
         if isinstance(meta, dict):
             for mk, mv in meta.items():
                 k_text = _truncate_text(mk, 20)
@@ -172,7 +406,7 @@ def _build_detailed_wordlist_summary(items, max_groups=8, max_items_per_group=5)
             item = row["item"]
             for tag in _as_text_list(item.get("item_tags") or item.get("tags")):
                 item_tags[tag] += 1
-            meta = item.get("item_meta") or item.get("meta") or {}
+            meta = _extract_item_custom_fields(item)
             if isinstance(meta, dict):
                 for meta_key, meta_value in meta.items():
                     key_text = _truncate_text(meta_key, 20)
@@ -185,7 +419,7 @@ def _build_detailed_wordlist_summary(items, max_groups=8, max_items_per_group=5)
             item = row["item"]
             label = _truncate_text(item.get("label") or item.get("text") or item.get("name") or "未命名词项", 20)
             tags = _as_text_list(item.get("item_tags") or item.get("tags"))
-            meta = item.get("item_meta") or item.get("meta") or {}
+            meta = _extract_item_custom_fields(item)
             short_parts = []
             if tags:
                 short_parts.append("/".join(tags[:2]))
@@ -213,10 +447,10 @@ def _extract_project_groups_and_title(project_data):
         return {}, ""
     raw_groups = project_data.get("groups", [])
     if isinstance(raw_groups, dict):
-        groups_map = raw_groups
+        groups_map = dict(raw_groups)
     elif isinstance(raw_groups, list):
         groups_map = {
-            (g.get("name") or g.get("group")): g
+            (g.get("name") or g.get("group")): dict(g)
             for g in raw_groups
             if isinstance(g, dict) and (g.get("name") or g.get("group"))
         }
@@ -224,6 +458,22 @@ def _extract_project_groups_and_title(project_data):
         groups_map = {}
     wl_meta = project_data.get("wordlist_meta", {})
     default_title = wl_meta.get("title", "") if isinstance(wl_meta, dict) else ""
+
+    wl_doc = project_data.get("wordlist_doc")
+    if isinstance(wl_doc, dict):
+        if wl_doc.get("title") and not default_title:
+            default_title = str(wl_doc.get("title"))
+        for g in (wl_doc.get("groups") or []):
+            if not isinstance(g, dict):
+                continue
+            gname = g.get("name") or g.get("group")
+            if gname:
+                merged_g = dict(groups_map.get(gname, {}))
+                for gk, gv in g.items():
+                    if gv and not merged_g.get(gk):
+                        merged_g[gk] = gv
+                groups_map[gname] = merged_g
+
     return groups_map, default_title
 
 
@@ -234,15 +484,13 @@ def _enrich_item_with_project_meta(item, groups_map, default_title):
     grp_info = groups_map.get(grp_name, {}) if isinstance(groups_map, dict) else {}
     if not isinstance(grp_info, dict):
         grp_info = {}
-    needs_copy = False
-    if not item.get("group_note") and grp_info.get("note"):
-        needs_copy = True
-    if not item.get("group_tags") and grp_info.get("tags"):
-        needs_copy = True
-    if not item.get("wordlist_title") and default_title:
-        needs_copy = True
-    if not needs_copy:
-        return item
+
+    doc_item_match = {}
+    for cand in (grp_info.get("items") or []):
+        if isinstance(cand, dict) and (cand.get("label") or cand.get("word")) == (item.get("label") or item.get("word")):
+            doc_item_match = cand
+            break
+
     enriched = dict(item)
     if not enriched.get("group_note") and grp_info.get("note"):
         enriched["group_note"] = grp_info.get("note")
@@ -250,6 +498,28 @@ def _enrich_item_with_project_meta(item, groups_map, default_title):
         enriched["group_tags"] = list(grp_info.get("tags") or [])
     if not enriched.get("wordlist_title") and default_title:
         enriched["wordlist_title"] = default_title
+
+    # Sync tags, note, and custom fields from item or wordlist_doc
+    tags = _as_text_list(enriched.get("item_tags") or enriched.get("tags") or doc_item_match.get("tags"))
+    if tags:
+        enriched["tags"] = tags
+        enriched["item_tags"] = tags
+    note = enriched.get("item_note") or enriched.get("note") or doc_item_match.get("note") or ""
+    if note:
+        enriched["note"] = note
+        enriched["item_note"] = note
+    custom_fields = _extract_item_custom_fields(doc_item_match)
+    custom_fields.update(_extract_item_custom_fields(enriched))
+    if isinstance(grp_info.get("meta"), dict):
+        for gk, gv in grp_info["meta"].items():
+            if gk and gv and gk not in custom_fields:
+                custom_fields[str(gk)] = str(gv)
+    if custom_fields:
+        enriched["item_meta"] = dict(custom_fields)
+        enriched["fields"] = dict(custom_fields)
+        enriched["custom_fields"] = dict(custom_fields)
+    if (tags or note or custom_fields or default_title) and not enriched.get("wordlist_version"):
+        enriched["wordlist_version"] = "v2"
     return enriched
 
 
@@ -281,7 +551,7 @@ def _looks_like_v2_wordlist_item(item):
         or bool(item.get("wordlist_title"))
         or bool(item.get("item_tags") or item.get("tags"))
         or bool(item.get("group_tags"))
-        or bool(item.get("item_meta") or item.get("meta"))
+        or bool( _extract_item_custom_fields(item))
         or bool(item.get("item_note") or item.get("note"))
         or bool(item.get("group_note"))
         or bool(item.get("item_aliases") or item.get("aliases"))
@@ -313,7 +583,7 @@ def _build_wordlist_metadata_summary(items, limit=16):
         for tag in (item.get("group_tags") or []):
             if str(tag).strip():
                 group_tags[str(tag).strip()] += 1
-        item_meta = item.get("item_meta") or item.get("meta") or {}
+        item_meta = _extract_item_custom_fields(item)
         if isinstance(item_meta, dict) and item_meta:
             meta_item_count += 1
             for key in item_meta.keys():
@@ -328,22 +598,32 @@ def _build_wordlist_metadata_summary(items, limit=16):
         if item.get("item_aliases") or item.get("aliases"):
             alias_count += 1
 
+    v2_guide_note = (
+        "- v2 高级字表与 `wordlist_doc` 扩展属性说明: "
+        "词条级支持 `tags` (`item_tags`, 如 `['目标词', '阴平']`)、"
+        "`note` (`item_note`, 词项备注)、"
+        "`fields` / `custom_fields` (`item_meta`, 自定义键值对字典，示例字段：`拼音`, `声调`, `韵母`, `结构`, `实验条件`, `词频等级`)、"
+        "`aliases` (`item_aliases`) 及 `metadata_source`；"
+        "工程级 `wordlist_doc` 包含 `schema` (`phontracer.wordlist.v2`), `title`, `note` 及 `groups` (含组级 `tags`, `note`, `meta` 与词项列表)。"
+    )
     if not v2_count:
         return (
-            "- 高级字表元数据: 当前工程未检测到 v2 字表字段；"
-            "如果用户想按标签、结构或实验条件分析，请先确认工程是否使用高级字表导入。"
+            "- 高级字表元数据: 当前工程未检测到已填充的 v2 字表实例字段；"
+            "如果用户想按标签、结构或实验条件分析，请先确认工程是否使用高级字表导入。\n"
+            f"{v2_guide_note}"
         )
 
     return (
         f"- 高级字表元数据: v2 条目 {v2_count}；"
         f"字表标题: {_format_counter(titles, limit=limit)}；"
         f"复核状态: {_format_counter(metadata_sources, limit=limit)}；"
-        f"带词项备注 {item_note_count}；带组备注 {group_note_count}；"
-        f"带别名 {alias_count}；带自定义字段 {meta_item_count}\n"
+        f"带词项备注(note) {item_note_count}；带组备注(group_note) {group_note_count}；"
+        f"带别名(aliases) {alias_count}；带自定义字段(fields/custom_fields/item_meta) {meta_item_count}\n"
         f"- 可用于脚本筛选/分组的高级字表字段: "
-        f"词项标签 {{{_format_counter(item_tags, limit=limit)}}}；"
-        f"组标签 {{{_format_counter(group_tags, limit=limit)}}}；"
-        f"自定义字段 {{{_format_counter(meta_keys, limit=limit)}}}"
+        f"词项标签(tags/item_tags) {{{_format_counter(item_tags, limit=limit)}}}；"
+        f"组标签(group_tags) {{{_format_counter(group_tags, limit=limit)}}}；"
+        f"自定义字段(fields/custom_fields/item_meta) {{{_format_counter(meta_keys, limit=limit)}}}\n"
+        f"{v2_guide_note}"
     )
 
 
@@ -476,7 +756,9 @@ CORE_CHART_API_CONTRACT = f"""### 运行沙箱与硬性 API 契约（违反任�
 ### 条目数据结构与关键防坑规则
 每个 `item` 字典包含：
 - **基础与边界信息**：`speaker_id`, `speaker_name`, `item_id`, `label`, `group`（分组真相，勿从 `label` 末尾数字猜声调）, `is_excluded`, `analysis_mode` (`"f0"` 或 `"formant"`), `start`, `end`, `duration`。
-- **高级字表 v2 元数据**：`wordlist_version`, `wordlist_title`, `group_note`, `group_tags` (`list[str]`), `item_note`, `item_tags` (`list[str]`), `item_aliases` (`list[str]`), `item_meta` (`dict`，如 `(item.get("item_meta") or {{}}).get("结构")`), `metadata_source`（如 `"人工填写"`、`"AI推断，需人工复核"`）。
+- **高级字表 v2 元数据与 `wordlist_doc` 扩展属性**：
+  - 词条级字段：`tags` / `item_tags` (`list[str]`，词项标签，如 `["目标词", "双字组"]`)、`note` / `item_note` (`str`，词项备注)、`fields` / `custom_fields` / `item_meta` (`dict`，自定义扩展字段字典，可通过 `(item.get("fields") or item.get("custom_fields") or item.get("item_meta") or {{}}).get("结构")` 读取；常见示例字段：`拼音`, `声调`, `韵母`, `结构`, `实验条件`, `词频等级`)、`aliases` / `item_aliases` (`list[str]`)、`group_note` (`str`)、`group_tags` (`list[str]`)、`wordlist_version` (`"v2"`)、`wordlist_title`、`metadata_source`（如 `"人工填写"`、`"AI推断，需人工复核"`）。
+  - 工程级 `wordlist_doc` 结构：`project_data.get("wordlist_doc")` 保存完整 v2 高级字表文档（含 `schema: "phontracer.wordlist.v2"`, `title`, `note`, 以及 `groups: [{{id, name, note, tags, meta, items: [{{label, note, tags, aliases, meta/fields/custom_fields, metadata_source}}]}}]`）。
 - **声调/基频字段（必读区别）**：
   - `syl_t_values`：`list[list[float]]`，每个音节 11 个对齐后的五度值（`0~5`），**无效点已是 `np.nan`**（跨发音人声调比较首选）。
   - `syl_data`：`list[tuple[float, list[float]]]`，每个元素为 `(有声段时长秒, 11点Hz列表)`。**关键防坑：其中 `>25ms` 静音间隙被赋值为 `0.0`（而非 `np.nan`），对 `syl_data` 求均值/标准差前必须先将 `<= 0` 替换为 `np.nan`（如 `arr = np.where(arr > 0, arr, np.nan)`）！**
@@ -708,7 +990,7 @@ def _build_data_process_agent_prompt(project_data, selections):
 {project_summary}
 {extra_section}
 ### 三、 数据处理沙箱与受控算子契约
-- **核心定位**：脚本不直接修改本地 `.teproj` 或读写文件，而是返回 `ctx.project_patch(operations, title="...", description="...")`；由 Toolkit 统一校验并另存为新 `.teproj`。
+- **核心定位**：脚本不直接修改本地 `.teproj` 或读写文件，而是返回 `ctx.project_patch(operations, title="...", description="...")`；由 Toolkit 统一校验并另存为新的 `.teproj`。
 - **沙箱安全边界**：
   - 严禁导入 `pandas, seaborn, plotly, requests, os, sys, subprocess`；严禁调用 `.save(), .savefig(), .to_csv(), .write(), open(), eval(), exec()`；严禁使用 `getattr, hasattr`（已放行 `isinstance, type, callable, chr, ord, format, iter, next`）及 `parselmouth.praat`、`scipy.stats.gaussian_kde`。
   - `print(...)` 已自动重定向至 `ctx.log(...)`；长循环中请定期检查 `ctx.is_cancelled()`。
@@ -750,8 +1032,9 @@ def run(ctx):
 
 def generate_ai_prompt(project_data, selections):
     """
-    根据用户在弹窗中选择的各项配置，以及当前工程摘要，生成给 AI 的提示词。
+    根据用户在弹窗或 CLI 中选择的各项配置，以及当前工程摘要，生成给 AI 的提示词。
     """
+    selections = validate_and_normalize_script_prompt_params(selections or {})
     script_type = selections.get("script_type", "chart")
     prompt_mode = selections.get("prompt_mode", "参数选项")
     if script_type == "data_process":
@@ -822,8 +1105,16 @@ def generate_ai_prompt(project_data, selections):
         f"   - 是否使用中文标签: {use_chinese}",
     ]
 
+    if selections.get("template"):
+        requirements.append(f"   - 预设模板 (template): {selections['template']}")
+    if selections.get("output_type"):
+        requirements.append(f"   - 输出类型 (output_type): {selections['output_type']}")
+    if selections.get("scope"):
+        requirements.append(f"   - 作用范围 (scope): {selections['scope']}")
+    if selections.get("analysis_mode"):
+        requirements.append(f"   - 分析模式 (analysis_mode): {selections['analysis_mode']}")
     if custom_desc:
-        requirements.append(f"9. 补充具体需求:\n{custom_desc}")
+        requirements.append(f"9. 补充具体需求 (user_request):\n{custom_desc}")
 
     requirements_text = "\n".join(requirements)
 
