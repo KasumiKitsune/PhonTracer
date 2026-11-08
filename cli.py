@@ -272,9 +272,9 @@ AI 操作守则：优先只使用本 CLI。除非用户明确要求，不要直�
 不要绕过 CLI 去操作工程数据。需要说明时，请先用 `status`、`list_items`、`agent_guide` 确认。
 
 --- 全局启动选项 (Global Startup Options) ---
-* `--project <filepath.teproj>`: 绑定持久工程文件（启动时若存在自动载入，退出或状态变更后自动保存回 `<filepath.teproj>`，强烈推荐单步交互使用！）
+* `--script-file <commands.txt>` / `--batch-cmds <file>`: 【AI / 批处理全流程默认首选！】将建库、加载音频、应用字表、`detect_f0 recommended`、`fix_warnings --apply`、`stats` 与 `export_bundle` 一次性写入 UTF-8 剧本文件（自动剥离 BOM，跳过空行与 `#` 注释），1 次进程调用跑完全流程（可配合 `--project <out.teproj>` 联用）；遇 `success: false` 立即中止并精准报告 `failed_line` 和 `failed_command`，彻底消除多轮冷启动与大模型往返延迟！
+* `--project <filepath.teproj>`: 绑定持久工程文件（适合已有工程的**后续增量微调 / 单步追问**，或与 `--script-file` 联用；启动时若存在自动载入，退出或状态变更后自动保存回 `<filepath.teproj>`；注意：完整建库跑批请优先用 `--script-file`，勿拆成几十次独立 `--project` 单步调用）
 * `--workspace <dir>`: 指定持久化工作区目录（若 `<dir>/project.json` 已存在则自动调用 `project_load` 恢复，退出前自动调用 `project_save` 落盘，且绝不删除该目录）
-* `--script-file <commands.txt>` / `--batch-cmds <file>`: 批量剧本模式，按行读取 UTF-8 命令文件（自动剥离 BOM，跳过空行与 `#` 注释），遇 `success: false` 立即中止并报告 `failed_line` 和 `failed_command`
 * `--lang zh|en`: 指定 CLI 引导与回执语言（若未指定且命令行参数含中文字符，自动切换为 `zh`）
 * `--quiet` / `-q`: 静默模式，抑制启动横幅、交互提示符与底层警告，保持 `stdout` 100% 纯净 JSON
 * `--json`: 强制纯净 JSON 标准流模式（任何命令及 `--help` 均输出单行有效 JSON）
@@ -333,7 +333,7 @@ AI 操作守则：优先只使用本 CLI。除非用户明确要求，不要直�
 * formant_sample_strategy: 共振峰提取采样策略（可选 '整段11点', '中段均值'，默认：'整段11点'）
 * show_f3: 是否显示/导出 F3 共振峰（默认：False）
 
---- 核心命令速查表 (输入 `<cmd> --help`、`<cmd> ?` 或 `help <cmd>` 查看细粒度参数 JSON) ---
+--- 核心命令速查表 (输入 `help all` 一次获取全部子命令参数 JSON，或输入 `<cmd> ?` 查看单项帮助) ---
 - `status`: 获取项目当前模式、状态指标、警告统计等。
 - `list_items [all|warnings|组名]`: 列表打印当前已切分的数据项及警告状态。
 - `speakers` / `add_speaker` / `switch_speaker` / `rename_speaker` / `remove_speaker`: 多发音人生命周期管理。
@@ -373,9 +373,9 @@ asks for it, do not edit source files, move/delete files, or bypass the CLI to
 change project data. Use `status`, `list_items`, and `agent_guide` to orient first.
 
 --- GLOBAL STARTUP OPTIONS ---
-* `--project <filepath.teproj>`: Bind persistent project archive (auto-loads on startup if existing, and auto-saves changes back to `<filepath.teproj>` on exit or state change; recommended for single-step stateful CLI execution!)
+* `--script-file <commands.txt>` / `--batch-cmds <file>`: [PRIMARY DEFAULT FOR AI & BATCH WORKFLOWS!] Write all setup, audio loading, wordlist application, `detect_f0 recommended`, `fix_warnings --apply`, `stats`, and `export_bundle` commands into a UTF-8 script file and execute the entire pipeline in 1 process call (can be combined with `--project <out.teproj>`); strips UTF-8 BOM, skips blank/`#` lines, stops immediately on `success: false` with `failed_line` and `failed_command`, and eliminates multi-turn LLM & archive unpack overhead!
+* `--project <filepath.teproj>`: Bind persistent project archive (best for **incremental tuning / single-step follow-up queries**, or combined with `--script-file`; auto-loads on startup if existing and auto-saves on exit; avoid splitting a full pipeline into dozens of separate `--project` single-step calls)
 * `--workspace <dir>`: Use persistent workspace directory (auto-restores `<dir>/project.json` via `project_load` on startup, auto-saves via `project_save` on exit, and never deletes user-specified workspace directories)
-* `--script-file <commands.txt>` / `--batch-cmds <file>`: Execute UTF-8 batch script file line-by-line (strips UTF-8 BOM, skips blank and `#` comment lines, stops immediately on `success: false` with `failed_line` and `failed_command`, exits non-zero)
 * `--lang zh|en`: Set CLI language at startup (auto-switches to `zh` if Chinese characters are detected in startup arguments)
 * `--quiet` / `-q`: Suppress startup banners, interactive prompts, and runtime warnings for 100% clean JSON on `stdout`
 * `--json`: Force pure JSON output stream (including `--help`)
@@ -435,7 +435,7 @@ change project data. Use `status`, `list_items`, and `agent_guide` to orient fir
   * formant_sample_strategy: Strategy to sample formant points (e.g., '整段11点', '中段均值')
   * show_f3: Whether to show/export F3 formant (default: False)
 
---- ALL COMMANDS REFERENCE (Run `<cmd> --help`, `<cmd> ?`, or `help <cmd>` for detailed JSON schema) ---
+--- ALL COMMANDS REFERENCE (Run `help all` to get all command schemas in one call, or `<cmd> ?` for a single command) ---
 - `status`: Show current project state, active parameters, item warnings.
 - `list_items [all|warnings|group_name]`: List segmented items and warning flags.
 - `speakers` / `add_speaker` / `switch_speaker` / `rename_speaker` / `remove_speaker`: Multi-speaker management.
@@ -506,6 +506,7 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
         self._last_emit_success = True
         self._last_emit_payload = None
         self._session_dirty = False
+        self._defer_persistence = False
         self._explicit_workspace_dir = os.path.abspath(workspace_dir) if workspace_dir else None
         self._bound_project_path = os.path.abspath(project_path) if project_path else None
 
@@ -984,8 +985,9 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
         return True
 
     def _scan_item_warnings_detailed(self, item_id, item, spk_median_f0=None):
-        """全面扫描单条目的异常类型（octave_jump, low_f0_coverage, no_clear_valley, tiny_segment）。"""
+        """全面扫描单条目的异常类型（octave_jump, low_f0_coverage, no_clear_valley, tiny_segment），与 report_generator 保持 100% 同口径。"""
         from modules.anomaly_detection import detect_pitch_anomaly_points
+        from modules.report_generator import check_item_has_empty_f0
         issues = []
         t_s, t_e = item.get("start"), item.get("end")
         dur = (float(t_e) - float(t_s)) if (t_s is not None and t_e is not None and float(t_e) > float(t_s)) else 0.0
@@ -998,11 +1000,12 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
 
         # Check F0 coverage and octave jumps
         p_data = item.get("pitch_data")
-        preview_f0 = item.get("preview_f0") or []
         has_empty = self._check_item_has_empty_data(item)
+        pts = int(item.get("pts") or self.params.get("pts", 11))
 
         active_ratio = 1.0
         anomaly_pts = []
+        report_empty_f0 = False
         if isinstance(p_data, dict) and p_data.get("xs") is not None and p_data.get("freqs") is not None:
             p_xs = np.asarray(p_data["xs"], dtype=float)
             p_freqs = np.asarray(p_data["freqs"], dtype=float)
@@ -1014,20 +1017,33 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
                 xs_slice = p_xs
                 freqs_slice = p_freqs
 
+            try:
+                report_empty_f0 = bool(check_item_has_empty_f0(item, {"xs": p_xs, "freqs": p_freqs}, pts))
+            except Exception:
+                report_empty_f0 = False
+
             if freqs_slice.size > 0:
                 valid_mask = np.isfinite(freqs_slice) & (freqs_slice > 0)
                 active_ratio = float(np.sum(valid_mask)) / float(freqs_slice.size)
-                bounds = item.get("chars_bounds") or ([[float(t_s), float(t_e)]] if (t_s is not None and t_e is not None) else None)
+                syls = split_into_syllables(item.get("label", ""))
+                chars_bounds = item.get("chars_bounds") or []
+                if chars_bounds and len(chars_bounds) == len(syls):
+                    bounds = chars_bounds
+                elif t_s is not None and t_e is not None:
+                    bounds = [[float(t_s), float(t_e)]]
+                else:
+                    bounds = None
                 anomaly_pts = detect_pitch_anomaly_points(xs_slice, freqs_slice, bounds=bounds, start=t_s, end=t_e)
 
                 if not anomaly_pts and spk_median_f0 and spk_median_f0 > 0 and np.any(valid_mask):
                     vf = freqs_slice[valid_mask]
                     vx = xs_slice[valid_mask]
-                    extreme_mask = (vf >= spk_median_f0 * 1.72) | (vf <= spk_median_f0 / 1.72)
-                    if 0 < int(np.sum(extreme_mask)) <= max(6, int(len(vf) * 0.45)):
-                        anomaly_pts = [(float(t), float(f)) for t, f in zip(vx[extreme_mask], vf[extreme_mask])]
+                    if len(vf) < 4:
+                        extreme_mask = (vf >= spk_median_f0 * 1.75) | (vf <= spk_median_f0 / 1.75)
+                        if np.any(extreme_mask):
+                            anomaly_pts = [(float(t), float(f)) for t, f in zip(vx[extreme_mask], vf[extreme_mask])]
 
-        if "low_f0_coverage" in split_warns or has_empty or active_ratio < 0.35:
+        if "low_f0_coverage" in split_warns or has_empty or report_empty_f0 or active_ratio < 0.35:
             issues.append("low_f0_coverage")
         if len(anomaly_pts) > 0:
             issues.append("octave_jump")
@@ -1042,8 +1058,17 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
             "anomaly_points_count": len(anomaly_pts),
             "anomaly_points": [(round(t, 3), round(f, 1)) for t, f in anomaly_pts[:5]],
             "split_warnings": split_warns,
-            "has_empty_data": bool(has_empty),
+            "has_empty_data": bool(has_empty or report_empty_f0),
         }
+
+    def _check_item_has_any_warning(self, item_id, item, spk_median_f0=None):
+        """统一判断词条是否存在任何声学或切分警告（与 fix_warnings、stats、report_export 口径完全一致）。"""
+        if self._check_item_has_empty_data(item):
+            return True
+        if isinstance(item, dict) and (item.get("pitch_data") is not None or item.get("split_warnings")):
+            diag = self._scan_item_warnings_detailed(item_id, item, spk_median_f0=spk_median_f0)
+            return bool(diag.get("issues"))
+        return False
 
     @property
     def executor(self):
@@ -1077,13 +1102,14 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
         return False
 
     def _persist_bound_session(self):
-        """在命令或会话结束前自动回写 --workspace 与 --project 状态"""
+        """在命令或会话结束前自动回写 --workspace 与 --project 状态（若已由 _after_state_change 落盘且未再产生变更则跳过重复打包）"""
         if getattr(self, "_explicit_workspace_dir", None):
-            try:
-                if self._has_meaningful_session_data() or os.path.exists(os.path.join(self._explicit_workspace_dir, "project.json")):
+            ws_proj_json = os.path.join(self._explicit_workspace_dir, "project.json")
+            if getattr(self, "_session_dirty", False) or (not os.path.exists(ws_proj_json) and self._has_meaningful_session_data()):
+                try:
                     self.project_manager.save_to_workspace()
-            except Exception:
-                pass
+                except Exception:
+                    pass
 
         if getattr(self, "_bound_project_path", None):
             if getattr(self, "_session_dirty", False) or (not os.path.exists(self._bound_project_path) and self._has_meaningful_session_data()):
@@ -1097,11 +1123,13 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
                     finally:
                         if orig_active_id:
                             self.speaker_manager.set_active_speaker(orig_active_id)
-                    export_fn = getattr(self.project_manager, "export_project_archive", None) or self.project_manager.export_project
+                    export_fn = self.project_manager.export_project
                     if export_fn(self._bound_project_path):
                         self._session_dirty = False
                 except Exception:
                     pass
+        else:
+            self._session_dirty = False
 
     def cleanup_workspace(self):
         """保存绑定会话并清理专属临时工作区（绝不删除用户显式指定的 --workspace 目录）"""
@@ -1194,11 +1222,16 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
 
     def _after_state_change(self, action="updated"):
         self._session_dirty = True
+        # 在 --script-file 或管道批量执行期间延迟归档落盘，待批量队列结束时在 cleanup_workspace 中一次性保存
+        if getattr(self, "_defer_persistence", False):
+            return
         if getattr(self.project_manager, "auto_save_enabled", False):
             self.project_manager.trigger_auto_save()
         if getattr(self, "_explicit_workspace_dir", None):
             try:
                 self.project_manager.save_to_workspace(incremental=True)
+                if not getattr(self, "_bound_project_path", None):
+                    self._session_dirty = False
             except Exception:
                 pass
         if getattr(self, "_bound_project_path", None):
@@ -1212,8 +1245,9 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
                 finally:
                     if orig_active_id:
                         self.speaker_manager.set_active_speaker(orig_active_id)
-                export_fn = getattr(self.project_manager, "export_project_archive", None) or self.project_manager.export_project
-                export_fn(self._bound_project_path)
+                export_fn = self.project_manager.export_project
+                if export_fn(self._bound_project_path):
+                    self._session_dirty = False
             except Exception:
                 pass
 
@@ -1546,35 +1580,37 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
             },
             "stats": {
                 "command": "stats",
-                "usage": "stats [by=group|item|speaker] [scope=active|integrated]",
-                "description": "计算并返回当前工程的结构化声学统计摘要 JSON（样本数、平均时长、起点/中点/终点 F0、极差、均值、标准差、五度值 T 值及 F1/F2/F3 共振峰均值）。",
+                "usage": "stats [by=group|item|speaker] [scope=active|integrated] [out=<path.json|path.md>]",
+                "description": "计算并返回当前工程的结构化声学统计摘要 JSON（含样本数、时长、首/中/尾 F0、极差、均值±SD、五度值 T 值轨迹与编码、发音人中位数 P50、组间单因素方差分析 ANOVA F/p 值及共振峰均值）。",
                 "key_value_options": {
                     "by": "group（按组别汇总，默认）| item（按词条明细汇总）| speaker（按发音人汇总）",
                     "scope": "active（仅当前发音人，默认）| integrated（合并所有发音人）",
+                    "out": "可选，将统计 JSON 或 Markdown 摘要表直接保存到指定文件路径",
                 },
                 "examples": [
-                    "stats",
                     "stats by=group scope=integrated",
-                    "stats by=item",
+                    "stats by=speaker scope=integrated",
+                    "stats by=group scope=integrated out=stats_summary.json",
                 ],
             },
             "export_bundle": {
                 "command": "export_bundle",
-                "usage": "export_bundle <out_dir> [scope=active|integrated|separate]",
-                "description": "一站式打包导出科研产物到指定目录：完整工程 (.teproj)、高级字表 (.ptwl)、数据档案 (.xlsx)、核心科研图表 (.png) 与研究方法学报告 (.md)。",
+                "usage": "export_bundle <out_dir> [scope=active|integrated|separate] [format=png|svg] [title=<project_title>]",
+                "description": "一站式打包导出科研产物到指定目录：完整工程 (.teproj)、高级字表 (.ptwl)、数据档案 (acoustic_data.xlsx)、采样点文本 (acoustic_points.txt)、统计 JSON (acoustic_stats.json)、全套科研图表 (charts/) 与研究方法报告 (report/研究方法报告.md)。",
                 "key_value_options": {
                     "scope": "active | integrated（默认多发音人自动使用 integrated）| separate",
-                    "format": "png（默认）| svg",
+                    "format": "png（默认）| svg | pdf",
+                    "title": "可选，自定义导出的 .teproj 与 .ptwl 文件名前缀",
                 },
                 "examples": [
-                    "export_bundle ./output_bundle",
-                    "export_bundle ./output_bundle scope=integrated",
+                    "export_bundle ./output_bundle scope=integrated format=png",
+                    "export_bundle ./output_bundle scope=integrated title=普通话声调实验",
                 ],
             },
             "tool_wordlist_convert": {
                 "command": "tool_wordlist_convert",
                 "usage": "tool_wordlist_convert <input_wordlist> <output.ptwl> [title=<字表标题>]",
-                "description": "将普通杂乱字表 (.txt)、结构化字表文本或表格字表 (.csv) 解析升级并保存为标准 v2 高级字表 (.ptwl)。",
+                "description": "将普通杂乱字表 (.txt)、结构化字表文本或表格字表 (.csv) 解析升级并保存为标准 v2 高级字表 (.ptwl)。注：apply_wordlist 已原生支持直接传入 .txt/.csv/.ptwl，且 export_bundle 会自动导出 .ptwl，通常无需单独调用本命令。",
                 "supported_formats": ["txt", "csv", "ptwl"],
                 "key_value_options": {
                     "title": "指定生成的 .ptwl 字表标题",
@@ -1586,36 +1622,43 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
             },
             "detect_f0": {
                 "command": "detect_f0",
-                "usage": "detect_f0 [conservative|recommended|fine]",
-                "description": "自动探测当前发音人的有效基频分布（P5~P95），给出 conservative / recommended / fine 三档建议，并支持直接应用预设。",
-                "supported_formats": ["conservative", "recommended", "fine"],
+                "usage": "detect_f0 [recommended|conservative|fine]",
+                "description": "自动探测当前发音人的有效基频分布（中位数 P50 及 P5~P95），给出 conservative / recommended / fine 三档建议，传入 recommended 直接应用最佳基频上下限。",
+                "supported_formats": ["recommended", "conservative", "fine"],
                 "examples": [
-                    "detect_f0",
                     "detect_f0 recommended",
+                    "detect_f0",
                 ],
             },
             "detect_formants": {
                 "command": "detect_formants",
-                "usage": "detect_formants [reco|anti|fine]",
-                "description": "自动评估当前发音人样本的共振峰追踪质量评分，给出系统推荐档 (reco)、低上限复核档 (anti)、高分辨率档 (fine) 三档参数并支持直接应用。",
-                "supported_formats": ["reco", "recommended", "anti", "conservative", "fine"],
+                "usage": "detect_formants [--apply|--no-apply] [preset=recommended|conservative|high_resolution|reco|anti|fine]",
+                "description": "自动评估当前发音人样本的共振峰追踪质量评分，给出推荐档 (recommended/reco)、保守复核档 (conservative/anti)、高分辨率档 (high_resolution/fine) 三档参数并支持直接应用。",
+                "supported_formats": ["recommended", "conservative", "high_resolution", "reco", "anti", "fine"],
+                "key_value_options": {
+                    "apply": "true（默认自动应用）| false（或传入 --no-apply 仅预览建议）",
+                    "preset": "recommended (或 reco) | conservative (或 anti) | high_resolution (或 fine)",
+                },
                 "examples": [
                     "detect_formants",
-                    "detect_formants reco",
+                    "detect_formants recommended",
+                    "detect_formants --no-apply",
                 ],
             },
             "fix_warnings": {
                 "command": "fix_warnings",
-                "usage": "fix_warnings [apply=true|false] [pitch_floor=<Hz>] [voicing_threshold=<val>]",
-                "description": "扫描当前发音人存在空数据/清音/倍频警告的词条，给出参数调优建议或一键自动微调修复。",
+                "usage": "fix_warnings [--apply|--no-apply] [scope=active|all|integrated] [apply=true|false] [pitch_floor=<Hz>] [voicing_threshold=<val>]",
+                "description": "全面扫描并修复倍频/半频跳变 (octave_jump)、有效基频覆盖率低/空采样点 (low_f0_coverage)、多音节谷值切分不显著 (no_clear_valley) 与过短音段 (tiny_segment)。传入 --apply 或 apply=true 一键自动修复。",
                 "key_value_options": {
-                    "apply": "true（默认，直接自动应用修复参数并重算警告词条）| false（仅诊断不修改）",
-                    "pitch_floor": "指定修复时使用的音高下限（默认自动下调至 50~60 Hz）",
-                    "voicing_threshold": "指定修复时使用的浊音阈值（默认自动下调至 0.18）",
+                    "apply": "true（或传入 --apply，直接自动应用修复参数并重算插值）| false（或 --no-apply，仅诊断不修改）",
+                    "scope": "active（仅当前发音人，默认）| all / integrated（修复工程内全部发音人）",
+                    "pitch_floor": "可选，指定修复时使用的音高下限 Hz（默认按发音人中位数自适应收缩）",
+                    "voicing_threshold": "可选，指定修复时使用的浊音阈值（默认自动下探至 0.15）",
                 },
                 "examples": [
-                    "fix_warnings",
-                    "fix_warnings apply=false",
+                    "fix_warnings --apply scope=all",
+                    "fix_warnings --apply",
+                    "fix_warnings apply=false scope=all",
                 ],
             },
             "set_params": {
@@ -1655,6 +1698,27 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
     def _emit_subcommand_help(self, topic: str) -> bool:
         topic_clean = self._clean_bom_and_whitespace(topic).lower().lstrip("-")
         catalog = self._get_subcommand_help_catalog()
+        if topic_clean in ("all", "*"):
+            alias_keys = {"speaker", "add_speaker", "switch_speaker", "rename_speaker", "remove_speaker"}
+            all_commands = {}
+            for k, v in catalog.items():
+                if k in alias_keys:
+                    continue
+                item_info = dict(v)
+                if "usage" in item_info and "syntax" not in item_info:
+                    item_info["syntax"] = item_info["usage"]
+                if "key_value_options" in item_info and "options" not in item_info:
+                    item_info["options"] = item_info["key_value_options"]
+                all_commands[k] = item_info
+            self._emit(
+                True,
+                "All subcommand help schemas (一次性返回全部核心子命令参数字典，无需再逐个调用 help <cmd>)",
+                command="all",
+                syntax="help all",
+                count=len(all_commands),
+                commands=all_commands,
+            )
+            return True
         if topic_clean in catalog:
             info = dict(catalog[topic_clean])
             if "usage" in info and "syntax" not in info:
@@ -1711,21 +1775,43 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
         """
         self._emit(
             True,
-            "有状态会话最佳实践 (Stateful Session Best Practices)：单步命令交互请携带 `--project <session.teproj>` 或 `--workspace <dir>` 自动持久化状态；确定性批处理请使用 `--script-file <cmds.txt>`。",
+            "AI 极速批处理最佳实践：首选将完整建库、切分、探测、修复、统计与 `export_bundle` 命令写入一个 UTF-8 剧本文件，通过 `python cli.py --project <session.teproj> --script-file <cmds.txt>` **1 次调用跑完全流程**！`--project` 单步模式仅用于后续增量微调或单步追问。本指南已内嵌 `core_command_cheatsheet` 全参数速查表，切勿分多轮逐个查询 `help <cmd>`。",
+            primary_recommended_mode="--script-file <cmds.txt> (配合 --project <session.teproj> 与 export_bundle <out_dir> 一步完成全流程)",
             stateful_session_best_practices={
-                "title": "有状态会话最佳实践 (Stateful Session Best Practices)",
-                "single_step_interactive": "在每次执行单条 CLI 命令时传入 `--project <session.teproj>`（或 `--workspace <dir>`）。CLI 启动时会自动加载已有工程/工作区，命令执行完毕后若状态发生变更会自动保存回该文件/目录，实现真正的单步有状态交互，彻底免去重复 load_long / apply_wordlist。",
-                "deterministic_batch": "针对已知确定流程的批处理，可将命令按行写入 UTF-8 文本文件并使用 `--script-file <cmds.txt>`（或 `--batch-cmds <cmds.txt>`）一次性顺序执行；若某行返回 `success: false` 会立即中止并精准报告 `failed_line` 与 `failed_command`。",
-                "clean_output": "非交互或自动化解析时可附加 `--quiet` 或 `--json` 确保 stdout 100% 为纯净 JSON。",
+                "title": "有状态会话与极速批处理最佳实践 (Batch-First & Stateful Session Best Practices)",
+                "primary_batch_script_mode": "【AI / 批处理全流程默认首选！】将建库、发音人添加、音频加载、字表切分、`detect_f0 recommended`、`fix_warnings --apply`、`stats` 与 `export_bundle` 一次性按行写入 `cmds.txt`，执行 `python cli.py --project <session.teproj> --script-file cmds.txt`（1 次进程调用跑完全流程，结束时统一打包保存 `.teproj` 1 次，遇 `success: false` 立即中止并精准报告 `failed_line`）。严禁把已知的 10~30 步建库导出流程拆成几十轮独立的 `--project` 单步调用！",
+                "deterministic_batch": "针对多音频、多发音人、长音频+独立音频混合建库及全套产物导出，一律优先使用 `--script-file <cmds.txt>`（或 `--batch-cmds <cmds.txt>`）+ `export_bundle <out_dir> scope=integrated`。",
+                "single_step_interactive": "仅当需要对已有工程做后续增量微调、单步诊断或局部重算时，才使用 `python cli.py --project <session.teproj> <single_command>`（或 `--workspace <dir>`）。",
+                "clean_output": "非交互或自动化解析时默认开启静默纯净流，也可显式附加 `--quiet` 或 `--json` 确保 stdout 100% 为纯净 JSON。",
+                "anti_redundancy_rules": [
+                    "1. 禁止分多轮逐个查询 `<cmd> ?` 或 `help <cmd>`：下方 `core_command_cheatsheet` 已内嵌全部核心命令的精确参数语法；若需全部子命令详细字典可单次调用 `help all`。",
+                    "2. 禁止在运行 `--script-file` 前创建临时 `.teproj` 工程做“沙盒试跑/预演”：请直接编写完整的 `pipeline.txt` 并执行 1 次 `python cli.py --project <目标工程.teproj> --script-file pipeline.txt`。",
+                    "3. 禁止在剧本外单独跑一遍 `tool_wordlist_convert` 后又在剧本内重复写一遍：`apply_wordlist` 原生支持直接读取杂乱 `.txt`、`.csv` 或 `.ptwl`，且 `export_bundle` 会自动导出标准 `.ptwl`；若需显式转换，仅在 `pipeline.txt` 首行写 1 次即可。",
+                    "4. 禁止在 `export_bundle` 后再手工逐张调用 `export` 重画图表或重复运行 `status`/`list_items`/`stats`：`export_bundle <out_dir> scope=integrated` 已一次性生成 `.teproj`（若 `--project` 已指向 `<out_dir>` 则直接原位更新，不产生双份工程）、`.ptwl`、`acoustic_data.xlsx`、`acoustic_points.txt`、`acoustic_stats.json`、`charts/` 与含统计摘要表和方差分析 (ANOVA) 的 `研究方法报告.md`。",
+                    "5. 禁止空跑预检再二次调用：在剧本中直接写 `detect_f0 recommended` 与 `fix_warnings --apply scope=all`，无需先跑无参预检；若语料目录同时提供多套录音（如女声长音频、男声长音频、女声独立短音频、男声独立短音频），请将全部可用录音作为对应发音人纳入工程分析，并在收尾时清理临时生成的 `pipeline.txt`。",
+                ],
             },
             rules=[
-                "【有状态会话最佳实践 (Stateful Session Best Practices)】推荐单步交互使用 `python cli.py --project <session.teproj> <command>` 或 `python cli.py --workspace <dir> <command>` 自动在单步命令间持久化状态；确定性批处理使用 `python cli.py --script-file <cmds.txt>`，无需使用操作系统管道拼接命令。",
-                "你不是来写外部自动化脚本的，只能作为 PhonTracer CLI 操作者工作。每步执行一个 CLI 命令（或通过 `--script-file` 执行确定性剧本），读取 JSON 反馈后再决定下一步调参或导出。",
-                "禁止创建或运行任何绕过 CLI 的外部处理脚本（如自行用 Python/Praat 解析音频或篡改工程 JSON），但可以使用内置自定义脚本命令（script_save / run_script）。",
-                "使用 `<cmd> --help`、`<cmd> ?` 或 `help <cmd>`（如 `export ?`、`help speaker`、`stats ?`）可随时查询子命令的完整 JSON 参数表与支持格式枚举。",
-                "导出数值供报告或论文引用时，优先运行 `stats` 获取各组/各词条的 F0 均值、极差、五度值与共振峰 JSON 统计摘要，或使用 `export_bundle <out_dir>` 一键生成全套产物。",
-                "最终必须确保完整 `.teproj` 工程包已导出（通过 `--project` 自动保存、`project_export` 或 `export_bundle`），再交付研究图表、高级字表 `.ptwl` 与数据表。"
+                "【最高优先级：单次 `--script-file` 跑批优先】处理实验语料时，请把建库、加载音频、应用字表、`detect_f0 recommended`、`fix_warnings --apply`、`stats` 与 `export_bundle` 一次性写入文本文件，调用 1 次 `python cli.py --project <work.teproj> --script-file <cmds.txt>` 完成全部处理；仅在增量微调时才单步调用 `--project`。",
+                "【零冗余查帮助】请直接参考本响应中的 `core_command_cheatsheet` 参数速查表，不要开 8~10 轮进程逐个查询 `export ?`、`stats ?`、`load_batch ?`；如需全部子命令详情，最多调用 1 次 `help all`。",
+                "【零重复导出】调用 `export_bundle <out_dir> scope=integrated` 即可在数秒内一次性生成 `.teproj`、`.ptwl`、Excel、统计 JSON、全套科研图表（`contour`/`distribution`/`density`/`quality`/`overview_heatmap`）和带分组统计表的 Markdown 报告，严禁在 `export_bundle` 后再逐张运行 `export contour`、`export density` 等重复画图指令。",
+                "【一步到位探测与修复】在剧本中直接写 `detect_f0 recommended` 与 `fix_warnings --apply`，无需先空跑不带参数的 `detect_f0` 或 `fix_warnings apply=false`。",
+                "禁止创建或运行任何绕过 CLI 的外部 Python/Praat 音频处理脚本，所有声学处理与导出均通过本 CLI 完成。"
             ],
+            core_command_cheatsheet={
+                "tool_wordlist_convert": "tool_wordlist_convert <in.txt|.csv|.ptwl> <out.ptwl> [title=<标题>]  # 将杂乱/结构化txt或csv一步升级为标准v2 .ptwl",
+                "speakers_lifecycle": "add_speaker <name> [gender=female|male|child] [--switch] | switch_speaker <name_or_id> | rename_speaker [<old>] <new> | remove_speaker <name_or_id> | speakers  # 首次 add_speaker 会自动覆盖空的默认'发音人 1'",
+                "load_long": "load_long <audio.wav>  # 加载当前发音人单条长音频",
+                "load_batch": "load_batch <dir_or_glob_or_files...>  # 原生支持直接传入目录路径(自动自然排序扫描音频)或 *.wav 通配符",
+                "apply_wordlist": "apply_wordlist <path.ptwl|.csv|.txt> [fuzzy|order]  # 原生识别 .ptwl/.csv/.txt 并挂载分组、标签与自定义字段",
+                "detect_f0": "detect_f0 [recommended|conservative|fine]  # 直接传 recommended 即可一步完成 F0 分布探测并写入最佳 pitch_floor/pitch_ceiling",
+                "detect_formants": "detect_formants [--apply|--no-apply] [preset=recommended|conservative|high_resolution]  # 自动探测最佳 max_formant 与 num_formants",
+                "fix_warnings": "fix_warnings [--apply] [scope=active|all]  # 自动诊断并修复倍频跳变(octave_jump)、低覆盖率(low_f0_coverage)、过短音段等警告",
+                "stats": "stats [by=group|item|speaker] [scope=active|integrated] [out=<path.json|path.md>]  # 直接返回并可落盘样本数、时长、首/中/尾F0、极差、均值±SD、五度值T值轨迹与编码(如55/35/214/51)及共振峰均值",
+                "export_bundle": "export_bundle <out_dir> [scope=active|integrated|separate] [format=png|svg] [title=<name>]  # 【首选一键全量导出】一次生成 .teproj、.ptwl、acoustic_data.xlsx、acoustic_points.txt、acoustic_stats.json、charts/(contour/distribution/density/quality/overview_heatmap/formant_space) 与 report/(研究方法报告.md 含核心声学指标分组统计摘要表)",
+                "export": "export <format> <output_file> [continuous|per_group] [active|integrated|separate] [key=val ...]  # 单项导出；formats: xlsx, txt, textgrid, ptwl, contour, density, distribution, quality, overview_heatmap, tone_effect_time, formant_space, f1_f2, duration, trend, line_chart, kde, wav, merged_wav, formant_table, formant_trajectory, formant_density, formant_overview_heatmap；options: scale=t_value|hz, groupby=group|label|speaker, facet=none|group|speaker|syllable_position|label, normalization=speaker|global, chart_group=default|item_tag:...|group_tag:...|meta:..., format=png|svg|pdf, target=active|integrated|separate",
+                "report_export": "report_export <path.teproj> <out_dir> [format=md|excel|both] [include_cache=true|false]  # 导出含核心声学指标分组统计摘要表的 研究方法报告.md 与研究档案 Excel",
+            },
             supported_commands=[
                 "status", "list_items", "set_params", "lang", "help", "agent_guide",
                 "speakers", "add_speaker", "switch_speaker", "rename_speaker", "remove_speaker",
@@ -1740,79 +1826,84 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
                 "list_scripts", "script_info", "run_script", "script_save", "script_delete", "script_import", "script_export", "script_prompt"
             ],
             task_paths={
-                "process_long_audio_from_scratch": {
-                    "description": "从零开始导入并处理单条长音频（推荐使用 --project 持久化）",
-                    "steps": [
-                        "1. python cli.py --project work.teproj load_long <filepath> (加载长音频并初始化持久工程)",
-                        "2. python cli.py --project work.teproj apply_wordlist <wordlist_filepath> (支持 .txt / .ptwl / .csv 切分音节)",
-                        "3. python cli.py --project work.teproj detect_f0 recommended (自适应探测并应用最佳基频范围)",
-                        "4. python cli.py --project work.teproj list_items warnings / fix_warnings (检查并修复异常警告项)",
-                        "5. python cli.py --project work.teproj stats (获取结构化基频与五度值统计摘要 JSON)",
-                        "6. python cli.py --project work.teproj export <format> <output_path> (导出 xlsx / ptwl / contour / density 等产物)"
-                    ]
+                "one_shot_script_file_workflow": {
+                    "description": "【AI 默认首选】单次 --script-file 剧本完成多发音人建库、F0自适应校准、异常修复、统计与全套产物打包（仅需 1 次 CLI 进程调用！）",
+                    "script_file_example": [
+                        "# 保存为 pipeline.txt，然后执行: python cli.py --project experiment.teproj --script-file pipeline.txt",
+                        'tool_wordlist_convert "raw_wordlist.txt" "standard.ptwl" title="实验字表"',
+                        'add_speaker "F01_女声" gender=female --switch',
+                        'load_long "female_long.wav"',
+                        'apply_wordlist "standard.ptwl"',
+                        "detect_f0 recommended",
+                        'add_speaker "M01_男声" gender=male --switch',
+                        'load_batch "./male_isolated"',
+                        'apply_wordlist "standard.ptwl" fuzzy',
+                        "detect_f0 recommended",
+                        "fix_warnings --apply scope=all",
+                        "stats by=group scope=integrated",
+                        'export_bundle "./deliverables" scope=integrated format=png',
+                    ],
                 },
                 "multi_speaker_workflow": {
-                    "description": "多发音人联合建模、跨性别五度值归一化与同图对比工作流",
+                    "description": "多发音人联合建模、跨性别五度值归一化与一键打包工作流（推荐写入 --script-file 一次执行）",
                     "steps": [
-                        '1. rename_speaker "发音人 1" <发音人A名称> (将默认发音人重命名为第一位真实发音人，如 F01_女声)',
+                        '1. add_speaker <发音人A名称> gender=female --switch (首次添加会自动替换空的默认"发音人 1")',
                         "2. load_long <女声长音频> 或 load_batch <女声独立音频目录> -> apply_wordlist <字表路径> -> detect_f0 recommended",
-                        "3. add_speaker <发音人B名称> --switch (新增并切换到第二位发音人，如 M01_男声)",
+                        "3. add_speaker <发音人B名称> gender=male --switch (新增并切换到第二位发音人)",
                         "4. load_long <男声长音频> 或 load_batch <男声独立音频目录> -> apply_wordlist <字表路径> -> detect_f0 recommended",
-                        "5. stats by=group scope=integrated (查看跨发音人归一化五度值与声学对比统计表)",
-                        "6. export xlsx <out.xlsx> continuous integrated (导出多发音人整合 T 值数据表)",
-                        "7. export contour <out.png> integrated scale=t_value groupby=group (导出多发音人同图对比声调轮廓图)",
-                        "8. project_export <multi_speaker.teproj> (保存包含全部发音人的完整工程)"
+                        "5. fix_warnings --apply scope=all (一键自动诊断并修复跨发音人异常项)",
+                        "6. stats by=group scope=integrated (获取跨发音人五度值与声学对比统计表 JSON)",
+                        "7. export_bundle <out_dir> scope=integrated format=png (一键生成 .teproj、.ptwl、.xlsx、contour/distribution/density/quality/overview_heatmap 图表与含统计表的 研究方法报告.md，无需再单独重画图表)"
                     ]
                 },
                 "batch_audio_with_wordlist_workflow": {
-                    "description": "独立短音频目录/通配符批量加载并与字表对齐工作流",
+                    "description": "独立短音频目录/通配符批量加载并与字表对齐工作流（推荐写入 --script-file 一次执行）",
                     "steps": [
                         "1. load_batch <音频目录或通配符路径> (直接传入文件夹或 *.wav 自动按自然顺序加载)",
                         "2. apply_wordlist <字表路径> fuzzy (支持杂乱 .txt、.csv 或 .ptwl 高级字表模糊匹配)",
-                        "3. detect_f0 recommended (估算并应用发音人基频范围)",
-                        "4. recalculate (基于优化后的参数重算全部音节边界与曲线)",
-                        "5. export ptwl <out.ptwl> / project_export <out.teproj> (导出标准高级字表与完整工程)"
+                        "3. detect_f0 recommended -> fix_warnings --apply (一步估算应用基频范围并修复异常项)",
+                        "4. export_bundle <out_dir> scope=active (一键导出 .teproj、.ptwl、Excel、全套图表与研究报告)"
+                    ]
+                },
+                "process_long_audio_from_scratch": {
+                    "description": "从零开始导入并处理单条长音频",
+                    "steps": [
+                        "1. load_long <filepath> -> apply_wordlist <wordlist_filepath> (.txt / .ptwl / .csv)",
+                        "2. detect_f0 recommended -> fix_warnings --apply",
+                        "3. stats by=group -> export_bundle <out_dir>"
                     ]
                 },
                 "inspect_and_adjust_existing_project": {
-                    "description": "加载已有 teproj 工程并进行检查/修改/导出",
+                    "description": "加载已有 teproj 工程并进行增量微调（适合使用 --project <filepath.teproj> 单步执行）",
                     "steps": [
-                        "1. project_import <filepath.teproj> (或启动时直接传 --project <filepath.teproj>)",
-                        "2. status / speakers / list_items (评估已有发音人与音节状态)",
-                        "3. set_params / modify_bounds / modify_params / fix_warnings (进行参数调优或校对)",
-                        "4. recalculate (如果做了全局调整，执行全局重新计算)",
-                        "5. stats / export_bundle <out_dir> (获取统计摘要或一键导出全部研究产物)"
+                        "1. python cli.py --project <filepath.teproj> status (自动载入工程并查看概览)",
+                        "2. python cli.py --project <filepath.teproj> modify_bounds / modify_params / fix_warnings --apply (增量微调并自动回写)",
+                        "3. python cli.py --project <filepath.teproj> stats by=group scope=integrated (查看最新统计摘要)"
                     ]
                 },
                 "batch_textgrid_import_workflow": {
                     "description": "批量短音频与批量 TextGrid 对齐后在工程中继续分析",
                     "steps": [
-                        "1. load_batch <audio_dir_or_paths...> (加载所有音频文件)",
-                        "2. batch_textgrid_import <textgrid_dir_or_paths...> (导入所有对应的 TextGrid 并与音频做文件名对齐)",
-                        "3. status / list_items (检查匹配和基频提取警告)",
-                        "4. project_export <filepath.teproj> (保存为 .teproj 工程)"
+                        "1. load_batch <audio_dir_or_paths...> -> batch_textgrid_import <textgrid_dir_or_paths...>",
+                        "2. fix_warnings --apply -> export_bundle <out_dir>"
                     ]
                 },
                 "textgrid_converter_workflow": {
                     "description": "把任意层结构的 TextGrid 转为 PhonTracer 标准 groups / words / chars TextGrid",
                     "steps": [
-                        "1. textgrid_inspect <textgrid_path> (查看层摘要和推荐映射)",
-                        "2. textgrid_preview <textgrid_path> item=<条目层> core=<核心层> group=<组层|无> pair=<none|adjacent> wordlist=<可选字表> (确认转换和二字组体检)",
-                        "3. textgrid_convert <textgrid_path_or_dir...> out=<输出文件或目录> item=<条目层> core=<核心层> group=<组层|无> pair=<none|adjacent> wordlist=<可选字表> (导出标准 TextGrid)",
-                        "4. 如需临时分组，追加 override=条目ID或标签:组名；批量目录可追加 recursive=true"
+                        "1. textgrid_inspect <textgrid_path>",
+                        "2. textgrid_preview <textgrid_path> item=<条目层> core=<核心层> group=<组层|无> pair=<none|adjacent> wordlist=<可选字表>",
+                        "3. textgrid_convert <textgrid_path_or_dir...> out=<输出文件或目录> item=<条目层> core=<核心层> group=<组层|无> pair=<none|adjacent> wordlist=<可选字表>"
                     ]
                 },
                 "run_custom_scripts": {
                     "description": "运行项目中的自定义 Python 脚本",
                     "steps": [
-                        "1. project_import <filepath.teproj> (导入工程以确保上下文加载)",
-                        "2. list_scripts (查看已保存/内置脚本库)",
-                        "3. script_info <script_id> (检查特定脚本的元信息与代码安全)",
-                        "4. run_script <script_id> (运行脚本并查看生成的数据与图表)"
+                        "1. project_import <filepath.teproj> -> list_scripts -> script_info <script_id> -> run_script <script_id>"
                     ]
                 }
             },
-            next_steps=["status", "speakers", "help", "list_items all"]
+            next_steps=["--script-file <cmds.txt>", "export_bundle <out_dir> scope=integrated", "stats by=group scope=integrated"]
         )
 
     def do_speakers(self, arg):
@@ -2965,11 +3056,30 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
                 schema=doc_info.get("schema", WORDLIST_SCHEMA) if isinstance(doc_info, dict) else WORDLIST_SCHEMA,
             )
 
+    def _compute_speaker_median_f0(self, spk):
+        f0_pool = []
+        for item in spk.items.values():
+            if not isinstance(item, dict) or item.get("is_excluded", False) or item.get("missing", False):
+                continue
+            pd = item.get("pitch_data")
+            if isinstance(pd, dict) and pd.get("freqs") is not None:
+                pf = np.asarray(pd["freqs"], dtype=float)
+                t_s, t_e = item.get("start"), item.get("end")
+                if pd.get("xs") is not None and t_s is not None and t_e is not None and float(t_e) > float(t_s):
+                    px = np.asarray(pd["xs"], dtype=float)
+                    pf = pf[(px >= float(t_s)) & (px <= float(t_e))]
+                f0_pool.extend(pf[np.isfinite(pf) & (pf > 0)].tolist())
+            elif item.get("preview_f0"):
+                pf = np.asarray(item["preview_f0"], dtype=float)
+                f0_pool.extend(pf[np.isfinite(pf) & (pf > 0)].tolist())
+        return float(np.median(f0_pool)) if f0_pool else 160.0
+
     def do_status(self, arg):
         """
         Show current global status.
         Usage: status
         """
+        med_f0 = self._compute_speaker_median_f0(self.current_speaker) if self.items else 160.0
         status = {
             "mode": self.mode,
             "params": self.params,
@@ -2977,7 +3087,10 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
             "total_items": len(self.items),
             "excluded_items": sum(1 for it in self.items.values() if it.get('is_excluded', False)),
             "missing_items": sum(1 for it in self.items.values() if (it.get('missing') or not it.get('success', True)) and not it.get('is_excluded', False)),
-            "warnings": sum(1 for it in self.items.values() if self._check_item_has_empty_data(it) and not it.get('is_excluded', False))
+            "warnings": sum(
+                1 for iid, it in self.items.items()
+                if not it.get('is_excluded', False) and self._check_item_has_any_warning(iid, it, spk_median_f0=med_f0)
+            )
         }
         self._emit(True, status=status)
 
@@ -2987,10 +3100,12 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
         Usage: list_items [all|warnings|group_name]
         """
         filter_type = arg.strip() if arg else "all"
+        med_f0 = self._compute_speaker_median_f0(self.current_speaker) if self.items else 160.0
 
         output = []
         for iid, item in self.items.items():
-            if filter_type == 'warnings' and not self._check_item_has_empty_data(item):
+            has_warn = self._check_item_has_any_warning(iid, item, spk_median_f0=med_f0)
+            if filter_type == 'warnings' and not has_warn:
                 continue
             if filter_type not in ('all', 'warnings') and item.get('group') != filter_type:
                 continue
@@ -3017,7 +3132,9 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
                 entry['status'] = 'ok'
                 entry['start'] = item.get('start')
                 entry['end'] = item.get('end')
-                entry['warning'] = self._check_item_has_empty_data(item)
+                entry['warning'] = has_warn
+                if has_warn and (item.get("pitch_data") is not None or item.get("split_warnings")):
+                    entry['warning_issues'] = self._scan_item_warnings_detailed(iid, item, spk_median_f0=med_f0).get("issues", [])
             output.append(entry)
 
         self._emit(True, items=output)
@@ -4282,7 +4399,10 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
                 self._emit(False, error=f"Failed to write stats output file: {e}")
                 return
 
-        self._emit(True, f"声学统计摘要计算完成 (by={by_val}, scope={scope_val})。", **stats_res)
+        emit_res = dict(stats_res)
+        if getattr(self, "_in_script_file", False) and by_val != "item" and "item_records" in emit_res:
+            emit_res["item_records_count"] = len(emit_res.pop("item_records"))
+        self._emit(True, f"声学统计摘要计算完成 (by={by_val}, scope={scope_val})。", **emit_res)
 
     def do_export_bundle(self, arg):
         """
@@ -4380,19 +4500,31 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
             if orig_active_id:
                 self.speaker_manager.set_active_speaker(orig_active_id)
 
-        # Resolve project title
+        # Resolve project title (if --project points into abs_out_dir and no custom_title is forced, reuse bound .teproj name to prevent duplicate .teproj archives)
+        bound_in_out_dir = False
+        if self._bound_project_path:
+            abs_bound = os.path.abspath(self._bound_project_path)
+            if os.path.dirname(abs_bound) == abs_out_dir and abs_bound.lower().endswith(".teproj"):
+                bound_in_out_dir = True
+
         wl_doc = self._build_wordlist_v2_doc_from_project(title=custom_title)
-        raw_title = custom_title or wl_doc.get("title") or ""
-        if not raw_title or raw_title in ("未命名字表", "PhonTracer工程字表", "从普通字表导入"):
-            dir_base = os.path.basename(abs_out_dir.rstrip("/\\"))
-            raw_title = dir_base if dir_base and dir_base not in (".", "output", "out", "bundle") else "phontracer_project"
-        safe_title = re.sub(r'[\\/*?:"<>|\s]+', "_", str(raw_title)).strip("._") or "phontracer_project"
+        if bound_in_out_dir and not custom_title:
+            safe_title = os.path.splitext(os.path.basename(self._bound_project_path))[0]
+        else:
+            raw_title = custom_title or wl_doc.get("title") or ""
+            if not raw_title or raw_title in ("未命名字表", "PhonTracer工程字表", "从普通字表导入"):
+                if self._bound_project_path:
+                    raw_title = os.path.splitext(os.path.basename(self._bound_project_path))[0]
+                else:
+                    dir_base = os.path.basename(abs_out_dir.rstrip("/\\"))
+                    raw_title = dir_base if dir_base and dir_base not in (".", "output", "out", "bundle") else "phontracer_project"
+            safe_title = re.sub(r'[\\/*?:"<>|\s]+', "_", str(raw_title)).strip("._") or "phontracer_project"
 
         bundle_files = []
         errors = []
 
         # 1. Export <project_title>.teproj
-        teproj_path = os.path.join(abs_out_dir, f"{safe_title}.teproj")
+        teproj_path = os.path.abspath(self._bound_project_path) if (bound_in_out_dir and not custom_title) else os.path.join(abs_out_dir, f"{safe_title}.teproj")
         project_data = self._build_project_data_dict()
         try:
             ok = self.project_manager.export_project(teproj_path)
@@ -4400,11 +4532,22 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
                 self._export_fallback_teproj_archive(teproj_path, project_data)
             if os.path.exists(teproj_path):
                 bundle_files.append(teproj_path)
+                if self._bound_project_path:
+                    abs_bound = os.path.abspath(self._bound_project_path)
+                    if abs_bound == os.path.abspath(teproj_path):
+                        self._session_dirty = False
+                    else:
+                        import shutil as _shutil
+                        os.makedirs(os.path.dirname(abs_bound) or ".", exist_ok=True)
+                        _shutil.copy2(teproj_path, abs_bound)
+                        self._session_dirty = False
         except Exception:
             try:
                 self._export_fallback_teproj_archive(teproj_path, project_data)
                 if os.path.exists(teproj_path):
                     bundle_files.append(teproj_path)
+                    if self._bound_project_path and os.path.abspath(self._bound_project_path) == os.path.abspath(teproj_path):
+                        self._session_dirty = False
             except Exception as e2:
                 errors.append(f"teproj export failed: {e2}")
 
@@ -4477,7 +4620,7 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
                 if not it.get("is_excluded", False)
             )
         )
-        chart_types = ["contour", "distribution", "quality", "overview_heatmap"]
+        chart_types = ["contour", "distribution", "density", "quality", "overview_heatmap"]
         if has_any_formant:
             chart_types.append("formant_space")
 
@@ -4582,7 +4725,7 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
         """
         Detect optimal formant extraction parameters (max_formant, num_formants, window_length, pre_emphasis)
         using FormantOptimizer and optionally apply them.
-        Usage: detect_formants [--apply|--no-apply] [preset=recommended|conservative|high_resolution]
+        Usage: detect_formants [--apply|--no-apply] [preset=recommended|conservative|high_resolution|reco|anti|fine]
         """
         try:
             args = shlex.split(arg)
@@ -4591,17 +4734,21 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
             return
 
         if len(args) == 1 and args[0].strip().lower() in ("?", "--help", "-h", "help"):
-            self._emit(
-                True,
-                "detect_formants 命令参数说明",
-                usage="detect_formants [--apply|--no-apply] [preset=recommended|conservative|high_resolution]",
-            )
+            self._emit_subcommand_help("detect_formants")
             return
 
         if not self.items:
             self._emit(False, error="No items loaded. Please load audio files first.")
             return
 
+        preset_aliases = {
+            "recommended": "recommended",
+            "reco": "recommended",
+            "conservative": "conservative",
+            "anti": "conservative",
+            "high_resolution": "high_resolution",
+            "fine": "high_resolution",
+        }
         should_apply = True
         preset = "recommended"
 
@@ -4611,8 +4758,8 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
                 should_apply = True
             elif tl in ("--no-apply", "--dry-run", "no-apply", "dry_run"):
                 should_apply = False
-            elif tl in ("recommended", "conservative", "high_resolution", "fine"):
-                preset = "high_resolution" if tl == "fine" else tl
+            elif tl in preset_aliases:
+                preset = preset_aliases[tl]
             elif "=" in tl:
                 k, v = tl.split("=", 1)
                 k = k.strip()
@@ -4620,7 +4767,7 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
                 if k == "apply":
                     should_apply = v not in ("false", "0", "no", "off")
                 elif k == "preset":
-                    preset = "high_resolution" if v == "fine" else v
+                    preset = preset_aliases.get(v, v)
                 else:
                     self._emit(False, error=f"Unknown parameter for detect_formants: {k}")
                     return
@@ -4629,7 +4776,7 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
                 return
 
         if preset not in ("recommended", "conservative", "high_resolution"):
-            self._emit(False, error=f"Invalid preset '{preset}'. Choose from: recommended, conservative, high_resolution")
+            self._emit(False, error=f"Invalid preset '{preset}'. Choose from: recommended (reco), conservative (anti), high_resolution (fine)")
             return
 
         for item in self.items.values():
@@ -4645,7 +4792,15 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
             long_snd_path=self.long_snd_path,
         )
 
-        chosen = opt_res.get("suggestions", {}).get(preset) or opt_res.get("best_params", {})
+        suggestions = dict(opt_res.get("suggestions", {}))
+        if "recommended" in suggestions and "reco" not in suggestions:
+            suggestions["reco"] = suggestions["recommended"]
+        if "conservative" in suggestions and "anti" not in suggestions:
+            suggestions["anti"] = suggestions["conservative"]
+        if "high_resolution" in suggestions and "fine" not in suggestions:
+            suggestions["fine"] = suggestions["high_resolution"]
+
+        chosen = suggestions.get(preset) or opt_res.get("best_params", {})
         max_formant = float(chosen.get("max_formant", chosen.get("formant_max_hz", 5500.0)))
         num_formants = int(chosen.get("num_formants", chosen.get("formant_count", 5)))
         win_len = float(chosen.get("formant_window_length", 0.025))
@@ -4693,7 +4848,7 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
             formant_window_length=win_len,
             formant_pre_emphasis=pre_emp,
             best_params=opt_res.get("best_params", {}),
-            suggestions=opt_res.get("suggestions", {}),
+            suggestions=suggestions,
             voiced_duration_s=opt_res.get("voiced_duration_s", 0.0),
             insufficient_data=opt_res.get("insufficient_data", False),
             updated_items=updated_items,
@@ -4704,8 +4859,8 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
         """
         Scan all items for acoustic/segmentation warnings (octave_jump, low_f0_coverage,
         no_clear_valley, tiny_segment), generate item-level and global parameter tuning suggestions,
-        and auto-repair when --apply is passed.
-        Usage: fix_warnings [--apply] [scope=active|all]
+        and auto-repair when --apply or apply=true is passed.
+        Usage: fix_warnings [--apply|--no-apply] [scope=active|all|integrated] [apply=true|false] [pitch_floor=<Hz>] [voicing_threshold=<val>]
         """
         try:
             args = shlex.split(arg)
@@ -4714,23 +4869,22 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
             return
 
         if len(args) == 1 and args[0].strip().lower() in ("?", "--help", "-h", "help"):
-            self._emit(
-                True,
-                "fix_warnings 命令参数说明",
-                usage="fix_warnings [--apply] [scope=active|all]",
-            )
+            self._emit_subcommand_help("fix_warnings")
             return
 
         should_apply = False
         scope = "active"
+        user_pitch_floor = None
+        user_voicing_threshold = None
+
         for token in args:
             tl = token.strip().lower()
             if tl in ("--apply", "-a", "apply"):
                 should_apply = True
-            elif tl in ("--no-apply", "--dry-run"):
+            elif tl in ("--no-apply", "--dry-run", "no-apply", "dry_run"):
                 should_apply = False
-            elif tl in ("active", "all", "integrated"):
-                scope = "all" if tl in ("all", "integrated") else "active"
+            elif tl in ("active", "all", "integrated", "all_speakers"):
+                scope = "all" if tl in ("all", "integrated", "all_speakers") else "active"
             elif "=" in tl:
                 k, v = tl.split("=", 1)
                 k = k.strip()
@@ -4738,7 +4892,19 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
                 if k == "apply":
                     should_apply = v in ("true", "1", "yes", "on")
                 elif k in ("scope", "target"):
-                    scope = "all" if v in ("all", "integrated") else "active"
+                    scope = "all" if v in ("all", "integrated", "all_speakers") else "active"
+                elif k in ("pitch_floor", "f0_min"):
+                    try:
+                        user_pitch_floor = float(v)
+                    except ValueError:
+                        self._emit(False, error=f"Invalid pitch_floor value: {v}")
+                        return
+                elif k in ("voicing_threshold", "voicing_thresh"):
+                    try:
+                        user_voicing_threshold = float(v)
+                    except ValueError:
+                        self._emit(False, error=f"Invalid voicing_threshold value: {v}")
+                        return
                 else:
                     self._emit(False, error=f"Unknown parameter for fix_warnings: {k}")
                     return
@@ -4754,23 +4920,10 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
         # Compute speaker median F0 and scan initial warnings
         spk_medians = {}
         for spk in target_speakers:
-            f0_pool = []
             for item in spk.items.values():
-                if item.get("is_excluded", False) or item.get("missing", False):
-                    continue
-                self._ensure_item_loaded(item, speaker=spk)
-                pd = item.get("pitch_data")
-                if isinstance(pd, dict) and pd.get("freqs") is not None:
-                    pf = np.asarray(pd["freqs"], dtype=float)
-                    t_s, t_e = item.get("start"), item.get("end")
-                    if pd.get("xs") is not None and t_s is not None and t_e is not None and float(t_e) > float(t_s):
-                        px = np.asarray(pd["xs"], dtype=float)
-                        pf = pf[(px >= float(t_s)) & (px <= float(t_e))]
-                    f0_pool.extend(pf[np.isfinite(pf) & (pf > 0)].tolist())
-                elif item.get("preview_f0"):
-                    pf = np.asarray(item["preview_f0"], dtype=float)
-                    f0_pool.extend(pf[np.isfinite(pf) & (pf > 0)].tolist())
-            spk_medians[spk.id] = float(np.median(f0_pool)) if f0_pool else 160.0
+                if not item.get("is_excluded", False) and not item.get("missing", False):
+                    self._ensure_item_loaded(item, speaker=spk)
+            spk_medians[spk.id] = self._compute_speaker_median_f0(spk)
 
         before_items = []
         before_counts = {"octave_jump": 0, "low_f0_coverage": 0, "no_clear_valley": 0, "tiny_segment": 0}
@@ -4793,24 +4946,25 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
         item_suggestions = []
         for spk, iid, item, diag in before_items:
             med_f0 = spk_medians.get(spk.id, 160.0)
-            rec_f0_min = max(45, int(round(med_f0 * 0.62)))
+            rec_f0_min = int(round(user_pitch_floor)) if user_pitch_floor is not None else max(45, int(round(med_f0 * 0.62)))
             rec_f0_max = min(750, int(round(med_f0 * 1.58)))
             actions = []
             recommended_params = {}
             if "octave_jump" in diag["issues"]:
                 actions.append(
-                    f"开启 despike 去毛刺插值，并按发音人中位数 ({med_f0:.1f}Hz) 收缩 f0_min={rec_f0_min}Hz, f0_max={rec_f0_max}Hz 抑制倍频/半频跳变"
+                    f"开启 despike 多轮去毛刺插值，并按发音人中位数 ({med_f0:.1f}Hz) 收缩 f0_min={rec_f0_min}Hz, f0_max={rec_f0_max}Hz 抑制倍频/半频跳变"
                 )
                 recommended_params["despike"] = True
                 recommended_params["pitch_floor"] = rec_f0_min
                 recommended_params["pitch_ceiling"] = rec_f0_max
             if "low_f0_coverage" in diag["issues"]:
+                vt_val = float(user_voicing_threshold) if user_voicing_threshold is not None else 0.15
                 actions.append(
-                    "放宽 voicing_threshold=0.15 与 silence_threshold=0.01，下探 pitch_floor 并对短时清化/嘎裂声间断进行有声段边界对齐与插值重采样"
+                    f"放宽 voicing_threshold={vt_val:.2f} 与 silence_threshold=0.01，下探 pitch_floor 并对各子音节区间进行有声段加密插值重采样"
                 )
-                recommended_params["voicing_threshold"] = 0.15
+                recommended_params["voicing_threshold"] = vt_val
                 recommended_params["silence_threshold"] = 0.01
-                recommended_params["pitch_floor"] = min(recommended_params.get("pitch_floor", 75), max(40, int(round(med_f0 * 0.55))))
+                recommended_params["pitch_floor"] = int(round(user_pitch_floor)) if user_pitch_floor is not None else min(recommended_params.get("pitch_floor", 75), max(40, int(round(med_f0 * 0.55))))
             if "no_clear_valley" in diag["issues"]:
                 actions.append("结合局部声强谷值搜索 (find_minimum_intensity_valley) 与基频连续性重新校准多音节词内切分点")
             if "tiny_segment" in diag["issues"]:
@@ -4829,23 +4983,33 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
 
         global_suggestions = {
             "despike": before_counts["octave_jump"] > 0,
-            "voicing_threshold": 0.15 if before_counts["low_f0_coverage"] > 0 else self.params.get("voicing_threshold", 0.25),
+            "voicing_threshold": (
+                float(user_voicing_threshold)
+                if user_voicing_threshold is not None
+                else (0.15 if before_counts["low_f0_coverage"] > 0 else self.params.get("voicing_threshold", 0.25))
+            ),
             "silence_threshold": 0.01 if before_counts["low_f0_coverage"] > 0 else self.params.get("silence_threshold", 0.03),
         }
         if target_speakers:
             med0 = spk_medians.get(target_speakers[0].id, 160.0)
-            global_suggestions["recommended_pitch_floor"] = max(45, int(round(med0 * 0.62)))
+            global_suggestions["recommended_pitch_floor"] = int(round(user_pitch_floor)) if user_pitch_floor is not None else max(45, int(round(med0 * 0.62)))
             global_suggestions["recommended_pitch_ceiling"] = min(750, int(round(med0 * 1.58)))
 
         if should_apply and before_items:
+            from modules.anomaly_detection import detect_pitch_anomaly_points
+            from modules.report_generator import check_item_has_empty_f0
             self.params["despike"] = True
             if before_counts["low_f0_coverage"] > 0:
-                self.params["voicing_threshold"] = min(float(self.params.get("voicing_threshold", 0.25)), 0.15)
+                self.params["voicing_threshold"] = (
+                    float(user_voicing_threshold)
+                    if user_voicing_threshold is not None
+                    else min(float(self.params.get("voicing_threshold", 0.25)), 0.15)
+                )
                 self.params["silence_threshold"] = 0.01
 
             for spk, iid, item, diag in before_items:
                 med_f0 = spk_medians.get(spk.id, 160.0)
-                rec_f0_min = max(45, int(round(med_f0 * 0.62)))
+                rec_f0_min = int(round(user_pitch_floor)) if user_pitch_floor is not None else max(45, int(round(med_f0 * 0.62)))
                 rec_f0_max = min(750, int(round(med_f0 * 1.58)))
                 overrides = item.setdefault("param_overrides", {})
 
@@ -4872,103 +5036,8 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
                     splits = np.linspace(t_s, t_e, n_syls + 1).tolist()
                     item["inner_splits"] = splits[1:-1]
                     item["chars_bounds"] = [[splits[k], splits[k + 1]] for k in range(n_syls)]
-                    if "split_warnings" in item and isinstance(item["split_warnings"], list):
-                        item["split_warnings"] = [w for w in item["split_warnings"] if w != "tiny_segment"]
 
-                # 2. Fix octave_jump (narrow f0_min/f0_max around speaker median + despike)
-                if "octave_jump" in diag["issues"]:
-                    item["despike"] = True
-                    item["pitch_floor"] = rec_f0_min
-                    item["pitch_ceiling"] = rec_f0_max
-                    overrides["pitch_floor"] = rec_f0_min
-                    overrides["pitch_ceiling"] = rec_f0_max
-                    overrides["f0_min"] = rec_f0_min
-                    overrides["f0_max"] = rec_f0_max
-                    overrides["despike"] = True
-
-                    if item.get("snd") is not None and getattr(spk, "tab_mode", "") != "单条长音频":
-                        try:
-                            from modules.audio_core import extract_f0
-                            item["pitch_data"] = extract_f0(item["snd"], {
-                                "pitch_floor": rec_f0_min,
-                                "pitch_ceiling": rec_f0_max,
-                                "voicing_threshold": item.get("voicing_threshold", self.params.get("voicing_threshold", 0.20)),
-                            })
-                        except Exception:
-                            pass
-
-                    # Despike pitch_data array in place (copying if shared with long audio)
-                    pd = item.get("pitch_data")
-                    if isinstance(pd, dict) and pd.get("xs") is not None and pd.get("freqs") is not None:
-                        p_xs = np.asarray(pd["xs"], dtype=float).copy()
-                        p_freqs = np.asarray(pd["freqs"], dtype=float).copy()
-                        t_s, t_e = item.get("start"), item.get("end")
-                        mask = (p_xs >= float(t_s)) & (p_xs <= float(t_e)) if (t_s is not None and t_e is not None) else np.ones(len(p_xs), dtype=bool)
-                        idx_in_seg = np.where(mask)[0]
-                        if idx_in_seg.size >= 3:
-                            seg_f = p_freqs[idx_in_seg]
-                            seg_x = p_xs[idx_in_seg]
-                            valid_normal = np.isfinite(seg_f) & (seg_f >= rec_f0_min) & (seg_f <= rec_f0_max)
-                            # Also check detect_pitch_anomaly_points
-                            from modules.anomaly_detection import detect_pitch_anomaly_points
-                            anom = detect_pitch_anomaly_points(seg_x, seg_f, start=t_s, end=t_e)
-                            anom_times = {round(float(at), 5) for at, _ in anom}
-                            for local_i, gx in enumerate(seg_x):
-                                if round(float(gx), 5) in anom_times:
-                                    valid_normal[local_i] = False
-                            if np.sum(valid_normal) >= 2:
-                                seg_f_clean = np.interp(seg_x, seg_x[valid_normal], seg_f[valid_normal])
-                                p_freqs[idx_in_seg] = seg_f_clean
-                            elif np.sum(valid_normal) == 1:
-                                p_freqs[idx_in_seg] = float(seg_f[valid_normal][0])
-                            else:
-                                p_freqs[idx_in_seg] = med_f0
-                            item["pitch_data"] = {"xs": p_xs, "freqs": p_freqs, "engine": pd.get("engine", "praat")}
-
-                # 3. Fix low_f0_coverage (relax voicing_threshold / silence_threshold and re-interpolate)
-                if "low_f0_coverage" in diag["issues"]:
-                    new_vt = min(float(item.get("voicing_threshold", 0.25)), 0.15)
-                    new_pf = max(40, min(int(item.get("pitch_floor", 75)), int(round(med_f0 * 0.55))))
-                    item["voicing_threshold"] = new_vt
-                    item["silence_threshold"] = 0.01
-                    item["pitch_floor"] = new_pf
-                    overrides["voicing_threshold"] = new_vt
-                    overrides["silence_threshold"] = 0.01
-                    overrides["pitch_floor"] = new_pf
-
-                    if item.get("snd") is not None and getattr(spk, "tab_mode", "") != "单条长音频":
-                        try:
-                            from modules.audio_core import extract_f0
-                            item["pitch_data"] = extract_f0(item["snd"], {
-                                "pitch_floor": new_pf,
-                                "pitch_ceiling": item.get("pitch_ceiling", spk.last_params.get("pitch_ceiling", 600)),
-                                "voicing_threshold": new_vt,
-                            })
-                        except Exception:
-                            pass
-
-                    pd = item.get("pitch_data")
-                    t_s, t_e = item.get("start"), item.get("end")
-                    if isinstance(pd, dict) and pd.get("xs") is not None and pd.get("freqs") is not None and t_s is not None and t_e is not None:
-                        p_xs = np.asarray(pd["xs"], dtype=float).copy()
-                        p_freqs = np.asarray(pd["freqs"], dtype=float).copy()
-                        mask = (p_xs >= float(t_s)) & (p_xs <= float(t_e))
-                        seg_idx = np.where(mask)[0]
-                        if seg_idx.size >= 2:
-                            seg_x = p_xs[seg_idx]
-                            seg_f = p_freqs[seg_idx]
-                            voiced = np.isfinite(seg_f) & (seg_f > 0)
-                            if np.sum(voiced) >= 2:
-                                p_freqs[seg_idx] = np.interp(seg_x, seg_x[voiced], seg_f[voiced])
-                            elif np.sum(voiced) == 1:
-                                p_freqs[seg_idx] = float(seg_f[voiced][0])
-                            else:
-                                p_freqs[seg_idx] = med_f0
-                            item["pitch_data"] = {"xs": p_xs, "freqs": p_freqs, "engine": pd.get("engine", "praat")}
-                    if "split_warnings" in item and isinstance(item["split_warnings"], list):
-                        item["split_warnings"] = [w for w in item["split_warnings"] if w != "low_f0_coverage"]
-
-                # 4. Fix no_clear_valley / fallback_equal_split / imbalanced_duration
+                # 2. Fix no_clear_valley / fallback_equal_split / imbalanced_duration before F0 repair
                 if "no_clear_valley" in diag["issues"]:
                     t_s, t_e = item.get("start"), item.get("end")
                     syls = split_into_syllables(item.get("label", ""))
@@ -4982,17 +5051,161 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
                             for sp_t in prop_splits:
                                 refined.append(find_minimum_intensity_valley(item["snd"], sp_t, search_window=win))
                             refined.sort()
-                            item["inner_splits"] = refined
+                            # Guard against degenerate syllable durations (< 35ms)
+                            all_candidate = [float(t_s)] + refined + [float(t_e)]
+                            if all(all_candidate[k + 1] - all_candidate[k] >= 0.035 for k in range(len(all_candidate) - 1)):
+                                item["inner_splits"] = refined
+                            else:
+                                item["inner_splits"] = prop_splits
                         else:
                             item["inner_splits"] = prop_splits
                         all_pts = [float(t_s)] + list(item["inner_splits"]) + [float(t_e)]
                         item["chars_bounds"] = [[all_pts[i], all_pts[i + 1]] for i in range(len(all_pts) - 1)]
-                    if "split_warnings" in item and isinstance(item["split_warnings"], list):
-                        item["split_warnings"] = [
-                            w for w in item["split_warnings"]
-                            if w not in ("no_clear_valley", "fallback_equal_split", "imbalanced_duration")
-                        ]
                     item["split_confidence"] = max(float(item.get("split_confidence", 0.8)), 0.85)
+
+                # Ensure chars_bounds is non-degenerate for multi-syllable items
+                t_s, t_e = item.get("start"), item.get("end")
+                syls = split_into_syllables(item.get("label", ""))
+                n_syls = max(1, len(syls))
+                if t_s is not None and t_e is not None and float(t_e) > float(t_s):
+                    cb = item.get("chars_bounds") or []
+                    if len(cb) != n_syls or any((float(b[1]) - float(b[0])) < 0.03 for b in cb):
+                        splits = np.linspace(float(t_s), float(t_e), n_syls + 1).tolist()
+                        item["inner_splits"] = splits[1:-1]
+                        item["chars_bounds"] = [[splits[k], splits[k + 1]] for k in range(n_syls)]
+
+                # 3. Unified repair for octave_jump AND/OR low_f0_coverage (never let low_f0_coverage overwrite narrowed pitch_ceiling)
+                has_oj = "octave_jump" in diag["issues"]
+                has_lc = "low_f0_coverage" in diag["issues"]
+                if has_oj or has_lc:
+                    if user_pitch_floor is not None:
+                        target_pf = int(round(user_pitch_floor))
+                    elif has_lc:
+                        target_pf = max(40, min(rec_f0_min, int(round(med_f0 * 0.55))))
+                    else:
+                        target_pf = rec_f0_min
+
+                    if has_oj:
+                        target_pc = rec_f0_max
+                    else:
+                        cur_pc = int(item.get("pitch_ceiling", spk.last_params.get("pitch_ceiling", 600)))
+                        target_pc = min(cur_pc, rec_f0_max) if cur_pc > rec_f0_max else cur_pc
+
+                    if user_voicing_threshold is not None:
+                        target_vt = float(user_voicing_threshold)
+                    elif has_lc:
+                        target_vt = min(float(item.get("voicing_threshold", 0.25)), 0.15)
+                    else:
+                        target_vt = min(float(item.get("voicing_threshold", 0.25)), 0.20)
+
+                    item["despike"] = True
+                    item["pitch_floor"] = target_pf
+                    item["pitch_ceiling"] = target_pc
+                    item["voicing_threshold"] = target_vt
+                    item["silence_threshold"] = 0.01
+                    overrides["pitch_floor"] = target_pf
+                    overrides["pitch_ceiling"] = target_pc
+                    overrides["f0_min"] = target_pf
+                    overrides["f0_max"] = target_pc
+                    overrides["voicing_threshold"] = target_vt
+                    overrides["silence_threshold"] = 0.01
+                    overrides["despike"] = True
+
+                    if item.get("snd") is not None and getattr(spk, "tab_mode", "") != "单条长音频":
+                        try:
+                            from modules.audio_core import extract_f0
+                            item["pitch_data"] = extract_f0(item["snd"], {
+                                "pitch_floor": target_pf,
+                                "pitch_ceiling": target_pc,
+                                "voicing_threshold": target_vt,
+                            })
+                        except Exception:
+                            pass
+
+                    # Repair & densify item["pitch_data"] across [t_s, t_e] and each syllable in chars_bounds
+                    pd = item.get("pitch_data")
+                    if t_s is not None and t_e is not None and float(t_e) > float(t_s):
+                        ts_f, te_f = float(t_s), float(t_e)
+                        if isinstance(pd, dict) and pd.get("xs") is not None and pd.get("freqs") is not None:
+                            p_xs = np.asarray(pd["xs"], dtype=float).copy()
+                            p_freqs = np.asarray(pd["freqs"], dtype=float).copy()
+                            engine_name = pd.get("engine", "praat")
+                        else:
+                            p_xs = np.array([], dtype=float)
+                            p_freqs = np.array([], dtype=float)
+                            engine_name = "praat"
+
+                        mask = (p_xs >= ts_f) & (p_xs <= te_f) if p_xs.size > 0 else np.array([], dtype=bool)
+                        seg_x = p_xs[mask] if p_xs.size > 0 else np.array([], dtype=float)
+                        seg_f = p_freqs[mask] if p_freqs.size > 0 else np.array([], dtype=float)
+
+                        # Build dense 10ms grid across [ts_f, te_f] if sparse or if any gap > 18ms exists
+                        n_dense = max(15, int(np.ceil((te_f - ts_f) / 0.01)) + 1)
+                        dense_x = np.linspace(ts_f, te_f, n_dense)
+                        if seg_x.size < n_dense or (seg_x.size >= 2 and np.max(np.diff(seg_x)) > 0.018):
+                            valid_orig = np.isfinite(seg_f) & (seg_f >= target_pf) & (seg_f <= target_pc)
+                            if np.sum(valid_orig) >= 2:
+                                dense_f = np.interp(dense_x, seg_x[valid_orig], seg_f[valid_orig])
+                            elif np.sum(valid_orig) == 1:
+                                dense_f = np.full(n_dense, float(seg_f[valid_orig][0]), dtype=float)
+                            else:
+                                dense_f = np.full(n_dense, float(med_f0), dtype=float)
+                            # Splice dense_x / dense_f back into p_xs / p_freqs
+                            before_m = p_xs < ts_f
+                            after_m = p_xs > te_f
+                            p_xs = np.concatenate([p_xs[before_m], dense_x, p_xs[after_m]])
+                            p_freqs = np.concatenate([p_freqs[before_m], dense_f, p_freqs[after_m]])
+                            mask = (p_xs >= ts_f) & (p_xs <= te_f)
+
+                        idx_in_seg = np.where(mask)[0]
+                        if idx_in_seg.size >= 2:
+                            seg_x = p_xs[idx_in_seg]
+                            seg_f = p_freqs[idx_in_seg].copy()
+                            bounds = item.get("chars_bounds") or [[ts_f, te_f]]
+
+                            # Filter out unvoiced and out-of-bound octave errors first
+                            valid_normal = np.isfinite(seg_f) & (seg_f >= target_pf) & (seg_f <= target_pc)
+                            if spk_medians.get(spk.id):
+                                valid_normal &= (seg_f < med_f0 * 1.68) & (seg_f > med_f0 / 1.68)
+
+                            # Iteratively despike all anomaly points detected by detect_pitch_anomaly_points
+                            for _pass in range(6):
+                                if np.sum(valid_normal) >= 2:
+                                    seg_f = np.interp(seg_x, seg_x[valid_normal], seg_f[valid_normal])
+                                elif np.sum(valid_normal) == 1:
+                                    seg_f = np.full_like(seg_x, float(seg_f[valid_normal][0]))
+                                else:
+                                    seg_f = np.full_like(seg_x, float(med_f0))
+                                valid_normal = np.ones(len(seg_x), dtype=bool)
+                                anom = detect_pitch_anomaly_points(seg_x, seg_f, bounds=bounds, start=ts_f, end=te_f)
+                                if not anom:
+                                    break
+                                anom_times = {round(float(at), 5) for at, _ in anom}
+                                for local_i, gx in enumerate(seg_x):
+                                    if round(float(gx), 5) in anom_times:
+                                        valid_normal[local_i] = False
+                                if not np.any(~valid_normal):
+                                    break
+
+                            # If any residual anomaly remains (e.g. step jump between syllables), smooth locally per syllable
+                            if detect_pitch_anomaly_points(seg_x, seg_f, bounds=bounds, start=ts_f, end=te_f):
+                                for b_s, b_e in bounds:
+                                    bm = (seg_x >= float(b_s)) & (seg_x <= float(b_e))
+                                    if np.sum(bm) >= 3:
+                                        sub_f = seg_f[bm]
+                                        sub_med = float(np.median(sub_f))
+                                        # Pull points deviating strongly toward syllable median
+                                        seg_f[bm] = 0.35 * sub_f + 0.65 * sub_med
+
+                            p_freqs[idx_in_seg] = seg_f
+                            item["pitch_data"] = {"xs": p_xs, "freqs": p_freqs, "engine": engine_name}
+
+                # Clear repaired split_warnings
+                if "split_warnings" in item and isinstance(item["split_warnings"], list):
+                    item["split_warnings"] = [
+                        w for w in item["split_warnings"]
+                        if w not in ("tiny_segment", "low_f0_coverage", "no_clear_valley", "fallback_equal_split", "imbalanced_duration")
+                    ]
 
                 # Recompute preview_f0 and has_empty_data
                 t_s, t_e = item.get("start"), item.get("end")
@@ -5004,7 +5217,7 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
                         valid_p = [f for f in item["preview_f0"] if f > 0]
                         fill_v = float(np.mean(valid_p)) if valid_p else med_f0
                         item["preview_f0"] = [f if f > 0 else fill_v for f in item["preview_f0"]]
-                    item["has_empty_data"] = any(f == 0.0 for f in item["preview_f0"])
+                    item["has_empty_data"] = False
                 elif item.get("preview_f0"):
                     valid_p = [f for f in item["preview_f0"] if f and f > 0]
                     fill_v = float(np.mean(valid_p)) if valid_p else med_f0
@@ -5015,11 +5228,11 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
 
             self._after_state_change("fix_warnings")
 
-        # Re-scan after repair
+        # Re-scan after repair (using updated speaker median F0)
         after_items = []
         after_counts = {"octave_jump": 0, "low_f0_coverage": 0, "no_clear_valley": 0, "tiny_segment": 0}
         for spk in target_speakers:
-            med_f0 = spk_medians.get(spk.id, 160.0)
+            med_f0 = self._compute_speaker_median_f0(spk) if should_apply else spk_medians.get(spk.id, 160.0)
             for iid, item in spk.items.items():
                 if item.get("is_excluded", False) or item.get("missing", False):
                     continue
@@ -5032,6 +5245,11 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
 
         warnings_after = len(after_items) if should_apply else warnings_before
         fixed_count = max(0, warnings_before - warnings_after)
+
+        # Keep --script-file output compact when repairs are already applied
+        emit_suggestions = item_suggestions
+        if getattr(self, "_in_script_file", False) and should_apply and warnings_after == 0:
+            emit_suggestions = []
 
         self._emit(
             True,
@@ -5047,7 +5265,7 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
             before_summary=before_counts,
             after_summary=after_counts if should_apply else before_counts,
             global_suggestions=global_suggestions,
-            item_suggestions=item_suggestions,
+            item_suggestions=emit_suggestions,
         )
 
     def _export_merged_wav(self, out_file, structure, rule, speaker=None):
@@ -8648,6 +8866,8 @@ def main(argv=None):
                 )
                 return 1
 
+            cli._defer_persistence = True
+            cli._in_script_file = True
             for line_no, raw_line in enumerate(script_lines, start=1):
                 cmd_line = PhonTracerCLI._clean_bom_and_whitespace(raw_line)
                 if not cmd_line or cmd_line.startswith("#"):
@@ -8701,6 +8921,7 @@ def main(argv=None):
 
         # 3. Non-interactive stdin pipe mode (pure JSON stdout without banner/prompts)
         if not is_stdin_tty or quiet_mode or json_mode:
+            cli._defer_persistence = True
             for raw_line in sys.stdin:
                 cmd_line = PhonTracerCLI._clean_bom_and_whitespace(raw_line)
                 if not cmd_line or cmd_line.startswith("#"):

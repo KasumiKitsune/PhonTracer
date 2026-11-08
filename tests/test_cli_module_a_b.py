@@ -216,6 +216,63 @@ class TestCliModuleAB(unittest.TestCase):
         self.assertEqual(fail_lines[-1]["failed_line"], 4)
         self.assertEqual(fail_lines[-1]["failed_command"], "export invalid_format_xyz out.png")
 
+    def test_round2_help_all_and_cheatsheet_and_script_priority(self):
+        # 1. help all returns all command schemas in one call
+        res_all = run_cli("help all")
+        self.assertEqual(res_all.returncode, 0)
+        payload_all = json.loads(res_all.stdout.strip())
+        self.assertTrue(payload_all["success"])
+        self.assertEqual(payload_all["command"], "all")
+        self.assertIn("commands", payload_all)
+        for k in ("export", "export_bundle", "stats", "apply_wordlist", "load_batch", "detect_f0", "fix_warnings", "speakers"):
+            self.assertIn(k, payload_all["commands"])
+
+        # 2. agent_guide prioritizes --script-file + export_bundle and embeds core_command_cheatsheet
+        res_ag = run_cli("agent_guide")
+        payload_ag = json.loads(res_ag.stdout.strip())
+        self.assertTrue(payload_ag["success"])
+        self.assertIn("--script-file", payload_ag["primary_recommended_mode"])
+        self.assertIn("core_command_cheatsheet", payload_ag)
+        self.assertIn("export", payload_ag["core_command_cheatsheet"])
+        self.assertIn("export_bundle", payload_ag["core_command_cheatsheet"])
+        self.assertIn("stats", payload_ag["core_command_cheatsheet"])
+        self.assertIn("one_shot_script_file_workflow", payload_ag["task_paths"])
+        self.assertIn("anti_redundancy_rules", payload_ag["stateful_session_best_practices"])
+
+    def test_round2_no_duplicate_teproj_save_on_single_step_and_deferred_batch(self):
+        from cli import PhonTracerCLI
+        from unittest.mock import patch
+
+        proj_path = self.tmp_dir / "single_save_check.teproj"
+        cli = PhonTracerCLI(project_path=str(proj_path), quiet=True)
+        try:
+            with patch.object(cli.project_manager, "export_project", wraps=cli.project_manager.export_project) as mock_exp:
+                cli.onecmd("add_speaker Alice gender=female")
+                self.assertEqual(mock_exp.call_count, 1)
+                self.assertFalse(cli._session_dirty)
+                # Calling _persist_bound_session (as cleanup_workspace does on exit) must NOT save a 2nd time!
+                cli._persist_bound_session()
+                self.assertEqual(mock_exp.call_count, 1)
+        finally:
+            cli.cleanup_workspace()
+
+        # Verify deferred persistence in batch mode saves only once at the end of multiple state-changing commands
+        proj_batch = self.tmp_dir / "batch_deferred.teproj"
+        cli_batch = PhonTracerCLI(project_path=str(proj_batch), quiet=True)
+        try:
+            cli_batch._defer_persistence = True
+            with patch.object(cli_batch.project_manager, "export_project", wraps=cli_batch.project_manager.export_project) as mock_b_exp:
+                cli_batch.onecmd("add_speaker S1 gender=female")
+                cli_batch.onecmd("add_speaker S2 gender=male")
+                cli_batch.onecmd("set_params pitch_floor=65")
+                self.assertEqual(mock_b_exp.call_count, 0)
+                self.assertTrue(cli_batch._session_dirty)
+                cli_batch._persist_bound_session()
+                self.assertEqual(mock_b_exp.call_count, 1)
+                self.assertFalse(cli_batch._session_dirty)
+        finally:
+            cli_batch.cleanup_workspace()
+
 
 if __name__ == "__main__":
     unittest.main()

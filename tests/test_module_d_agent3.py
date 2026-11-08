@@ -48,6 +48,12 @@ class TestModuleDAgent3(unittest.TestCase):
         self.assertEqual(payload_grp["by"], "group")
         self.assertEqual(payload_grp["scope"], "integrated")
         self.assertIn("speaker_baselines", payload_grp)
+        self.assertIn("anova_summary", payload_grp)
+        for bl in payload_grp["speaker_baselines"].values():
+            self.assertIn("median_f0", bl)
+            self.assertIn("p50_f0", bl)
+            self.assertIn("p5_f0", bl)
+            self.assertIn("p95_f0", bl)
         self.assertTrue(len(payload_grp["summary"]) >= 16)
         first_row = payload_grp["summary"][0]
         for key in (
@@ -75,7 +81,7 @@ class TestModuleDAgent3(unittest.TestCase):
         self.assertTrue(payload_spk["success"])
         self.assertEqual(len(payload_spk["summary"]), 3)
 
-        # 3. report_export generates 研究方法报告.md containing 核心声学指标分组统计摘要表
+        # 3. report_export generates 研究方法报告.md containing 核心声学指标分组统计摘要表, P50, and One-Way ANOVA
         rep_dir = self.tmp_dir / "reports"
         res_rep = run_cli(f'report_export "{proj_copy}" "{rep_dir}" format=md')
         payload_rep = json.loads(res_rep.stdout.strip())
@@ -84,6 +90,8 @@ class TestModuleDAgent3(unittest.TestCase):
         self.assertEqual(len(md_files), 1)
         md_text = md_files[0].read_text(encoding="utf-8")
         self.assertIn("## 核心声学指标分组统计摘要表", md_text)
+        self.assertIn("F0 中位数 P50 (Hz)", md_text)
+        self.assertIn("组间单因素方差分析 (One-Way ANOVA)", md_text)
         self.assertIn("分组核心声学指标汇总表", md_text)
         self.assertIn("各词项核心声学数据速览表", md_text)
 
@@ -132,17 +140,90 @@ class TestModuleDAgent3(unittest.TestCase):
         self.assertFalse(payload_bad["success"])
         self.assertIn("valid_keys", payload_bad)
 
-        # P2: detect_formants & fix_warnings
-        res_df = run_cli("--project", str(proj_copy), "detect_formants --no-apply")
+        # P2: detect_formants & fix_warnings (including reco/anti/fine aliases & pitch_floor/voicing_threshold params)
+        res_df = run_cli("--project", str(proj_copy), "detect_formants reco --no-apply")
         payload_df = json.loads(res_df.stdout.strip())
         self.assertTrue(payload_df["success"])
         self.assertIn("suggestions", payload_df)
+        self.assertIn("reco", payload_df["suggestions"])
 
-        res_fw = run_cli("--project", str(proj_copy), "fix_warnings --apply")
+        res_fw = run_cli("--project", str(proj_copy), "fix_warnings --apply scope=all pitch_floor=60 voicing_threshold=0.15")
         payload_fw = json.loads(res_fw.stdout.strip())
         self.assertTrue(payload_fw["success"])
         self.assertIn("warnings_before", payload_fw)
-        self.assertIn("warnings_after", payload_fw)
+        self.assertEqual(payload_fw["warnings_after"], 0)
+
+    def test_round3_audit_fixes_cooccurring_warnings_and_no_duplicate_teproj(self):
+        """验证第 3 轮审计修复：
+        1. octave_jump 与 low_f0_coverage 同时存在时 fix_warnings --apply 不会因顺序覆盖导致残留跳变或空音节；
+        2. fix_warnings、status、list_items warnings、stats 四处警告计数完全一致；
+        3. --project 指向 export_bundle 输出目录内时复用同一 .teproj，不生成两份重复工程；
+        4. --script-file 模式下自动精简冗长明细数组。
+        """
+        import numpy as np
+        from cli import PhonTracerCLI
+
+        bundle_dir = self.tmp_dir / "deliverables"
+        bundle_dir.mkdir(parents=True, exist_ok=True)
+        bound_teproj = bundle_dir / "experiment_session.teproj"
+        shutil.copy2(self.example_teproj, bound_teproj)
+
+        cli = PhonTracerCLI(project_path=str(bound_teproj), quiet=True)
+        try:
+            # Inject a pathological 2-syllable item with BOTH octave_jump (380Hz spike on male speaker) AND low_f0_coverage (0Hz in syllable 2)
+            spk = cli.current_speaker
+            target_iid = next(iter(spk.items.keys()))
+            item = spk.items[target_iid]
+            item["label"] = "学习"
+            item["start"] = 0.10
+            item["end"] = 0.50
+            item["inner_splits"] = [0.30]
+            item["chars_bounds"] = [[0.10, 0.30], [0.30, 0.50]]
+            xs = np.linspace(0.0, 0.60, 61)
+            freqs = np.full_like(xs, 140.0)
+            # Add octave jump spike in syllable 1 (at 0.18s -> 390 Hz)
+            freqs[18] = 390.0
+            # Make syllable 2 mostly unvoiced (0 Hz) so low_f0_coverage AND check_item_has_empty_f0 trigger simultaneously
+            freqs[25:52] = 0.0
+            item["pitch_data"] = {"xs": xs, "freqs": freqs, "engine": "praat"}
+            item["preview_f0"] = [140.0, 390.0, 140.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+            item["has_empty_data"] = True
+            item["split_warnings"] = ["low_f0_coverage", "no_clear_valley"]
+
+            # Before fix_warnings: status, list_items warnings, and _scan_item_warnings_detailed all detect the warning
+            diag_before = cli._scan_item_warnings_detailed(target_iid, item, spk_median_f0=140.0)
+            self.assertIn("octave_jump", diag_before["issues"])
+            self.assertIn("low_f0_coverage", diag_before["issues"])
+            self.assertTrue(cli._check_item_has_any_warning(target_iid, item, spk_median_f0=140.0))
+
+            # Run fix_warnings --apply scope=all
+            cli.onecmd("fix_warnings --apply scope=all")
+            self.assertTrue(cli._last_emit_success)
+            fw_payload = cli._last_emit_payload
+            self.assertEqual(fw_payload["warnings_after"], 0)
+            self.assertEqual(fw_payload["after_summary"]["octave_jump"], 0)
+            self.assertEqual(fw_payload["after_summary"]["low_f0_coverage"], 0)
+            # Verify pitch_ceiling was narrowed and NOT overwritten by 600
+            self.assertLess(item["pitch_ceiling"], 400)
+
+            # Verify status, list_items warnings, and stats all report 0 warnings
+            cli.onecmd("status")
+            self.assertEqual(cli._last_emit_payload["status"]["warnings"], 0)
+
+            cli.onecmd("list_items warnings")
+            self.assertEqual(len(cli._last_emit_payload["items"]), 0)
+
+            cli.onecmd("stats by=group scope=integrated")
+            self.assertEqual(cli._last_emit_payload["warning_count"], 0)
+
+            # Verify export_bundle into bundle_dir reuses bound_teproj and creates only 1 .teproj file
+            cli.onecmd(f'export_bundle "{bundle_dir}" scope=integrated format=png')
+            self.assertTrue(cli._last_emit_success)
+            teproj_files = list(bundle_dir.glob("*.teproj"))
+            self.assertEqual(len(teproj_files), 1)
+            self.assertEqual(teproj_files[0].resolve(), bound_teproj.resolve())
+        finally:
+            cli.cleanup_workspace()
 
 
 if __name__ == "__main__":

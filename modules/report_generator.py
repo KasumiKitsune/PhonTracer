@@ -1030,11 +1030,20 @@ def compute_acoustic_statistics(
             s_max = float(np.max(spk_f0_values))
             s_mean = float(np.mean(spk_f0_values))
             s_sd = float(np.std(spk_f0_values))
+            s_p50 = float(np.median(spk_f0_values))
+            s_p5 = float(np.percentile(spk_f0_values, 5))
+            s_p95 = float(np.percentile(spk_f0_values, 95))
+            s_q25, s_q75 = np.percentile(spk_f0_values, [25, 75])
             speaker_baselines[spk_name] = {
                 "min_f0": round(s_min, 2),
                 "max_f0": round(s_max, 2),
                 "mean_f0": round(s_mean, 2),
                 "sd_f0": round(s_sd, 2),
+                "median_f0": round(s_p50, 2),
+                "p50_f0": round(s_p50, 2),
+                "p5_f0": round(s_p5, 2),
+                "p95_f0": round(s_p95, 2),
+                "iqr_f0": round(float(s_q75 - s_q25), 2),
                 "count": len(spk_records),
                 "valid_f0_count": sum(1 for r in spk_records if r["has_valid_f0"]),
             }
@@ -1045,6 +1054,11 @@ def compute_acoustic_statistics(
                 "max_f0": None,
                 "mean_f0": None,
                 "sd_f0": None,
+                "median_f0": None,
+                "p50_f0": None,
+                "p5_f0": None,
+                "p95_f0": None,
+                "iqr_f0": None,
                 "count": len(spk_records),
                 "valid_f0_count": 0,
             }
@@ -1114,6 +1128,55 @@ def compute_acoustic_statistics(
             "f3_mean": _round_or_none(rec["f3_mean"], 1),
         })
 
+    # Compute one-way ANOVA across buckets (when >= 2 groups have >= 2 samples)
+    anova_summary = {}
+    if len(buckets) >= 2:
+        try:
+            from scipy.stats import f_oneway
+            dur_groups = [
+                [float(r["duration_ms"]) for r in recs if r.get("duration_ms") is not None and np.isfinite(r["duration_ms"])]
+                for recs in buckets.values()
+            ]
+            dur_groups = [g for g in dur_groups if len(g) >= 2]
+            if len(dur_groups) >= 2:
+                f_val, p_val = f_oneway(*dur_groups)
+                if np.isfinite(f_val) and np.isfinite(p_val):
+                    anova_summary["duration_ms"] = {
+                        "f_stat": round(float(f_val), 4),
+                        "p_value": round(float(p_val), 6),
+                        "significant_p05": bool(p_val < 0.05),
+                    }
+
+            f0_groups = [
+                [float(r["f0_mean"]) for r in recs if r.get("f0_mean") is not None and np.isfinite(r["f0_mean"])]
+                for recs in buckets.values()
+            ]
+            f0_groups = [g for g in f0_groups if len(g) >= 2]
+            if len(f0_groups) >= 2:
+                f_val, p_val = f_oneway(*f0_groups)
+                if np.isfinite(f_val) and np.isfinite(p_val):
+                    anova_summary["f0_mean_hz"] = {
+                        "f_stat": round(float(f_val), 4),
+                        "p_value": round(float(p_val), 6),
+                        "significant_p05": bool(p_val < 0.05),
+                    }
+
+            rng_groups = [
+                [float(r["f0_range"]) for r in recs if r.get("f0_range") is not None and np.isfinite(r["f0_range"])]
+                for recs in buckets.values()
+            ]
+            rng_groups = [g for g in rng_groups if len(g) >= 2]
+            if len(rng_groups) >= 2:
+                f_val, p_val = f_oneway(*rng_groups)
+                if np.isfinite(f_val) and np.isfinite(p_val):
+                    anova_summary["f0_range_hz"] = {
+                        "f_stat": round(float(f_val), 4),
+                        "p_value": round(float(p_val), 6),
+                        "significant_p05": bool(p_val < 0.05),
+                    }
+        except Exception:
+            pass
+
     result = {
         "by": by_norm,
         "scope": scope_norm,
@@ -1121,6 +1184,7 @@ def compute_acoustic_statistics(
         "valid_f0_count": sum(1 for r in all_records if r["has_valid_f0"]),
         "warning_count": sum(1 for r in all_records if r["warning_count"] > 0),
         "speaker_baselines": speaker_baselines,
+        "anova_summary": anova_summary,
         "summary": summary_list,
         "stats": keyed_map,
         "item_records": serialized_items,
@@ -1147,18 +1211,24 @@ def build_markdown_acoustic_summary_section(state: Dict[str, Any], zip_ref: Opti
     if baselines:
         md_lines.append("### 发音人基频基线 (Speaker F0 Baselines)")
         md_lines.append("")
-        md_lines.append("| 发音人 | 样本数 (有效F0) | F0 极小值 (Hz) | F0 极大值 (Hz) | F0 均值 ± 标准差 (Hz) |")
-        md_lines.append("| :--- | :--- | :--- | :--- | :--- |")
+        md_lines.append("| 发音人 | 样本数 (有效F0) | F0 极小值 (Hz) | F0 极大值 (Hz) | F0 中位数 P50 (Hz) | P5~P95 分布区间 (Hz) | F0 均值 ± 标准差 (Hz) |")
+        md_lines.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
         for spk_name, bl in baselines.items():
             cnt_str = f"{bl.get('count', 0)} ({bl.get('valid_f0_count', 0)})"
             min_s = f"{bl['min_f0']:.1f}" if bl.get("min_f0") is not None else "-"
             max_s = f"{bl['max_f0']:.1f}" if bl.get("max_f0") is not None else "-"
+            p50_s = f"{bl['median_f0']:.1f}" if bl.get("median_f0") is not None else "-"
+            p5_p95_s = (
+                f"{bl['p5_f0']:.1f} ~ {bl['p95_f0']:.1f}"
+                if bl.get("p5_f0") is not None and bl.get("p95_f0") is not None
+                else "-"
+            )
             mean_sd_s = (
                 f"{bl['mean_f0']:.1f} ± {bl['sd_f0']:.1f}"
                 if bl.get("mean_f0") is not None and bl.get("sd_f0") is not None
                 else "-"
             )
-            md_lines.append(f"| {spk_name} | {cnt_str} | {min_s} | {max_s} | {mean_sd_s} |")
+            md_lines.append(f"| {spk_name} | {cnt_str} | {min_s} | {max_s} | {p50_s} | {p5_p95_s} | {mean_sd_s} |")
         md_lines.append("")
 
     def _fmt_row(label_col: str, row: Dict[str, Any]) -> str:
@@ -1214,6 +1284,24 @@ def build_markdown_acoustic_summary_section(state: Dict[str, Any], zip_ref: Opti
     else:
         md_lines.append("当前工程暂无有效声学数据可供统计汇总。")
     md_lines.append("")
+
+    anova_info = stats_group.get("anova_summary", {})
+    if anova_info:
+        md_lines.append("### 组间单因素方差分析 (One-Way ANOVA)")
+        md_lines.append("")
+        md_lines.append("| 检验维度 | F 统计量 (F-statistic) | p 值 (p-value) | 显著性判定 (α=0.05) |")
+        md_lines.append("| :--- | :--- | :--- | :--- |")
+        dim_labels = {
+            "duration_ms": "音段时长 (Duration, ms)",
+            "f0_mean_hz": "平均基频 (Mean F0, Hz)",
+            "f0_range_hz": "基频极差 (F0 Range, Hz)",
+        }
+        for dk, dlabel in dim_labels.items():
+            if dk in anova_info:
+                ainfo = anova_info[dk]
+                sig_str = "显著 (p < 0.05)" if ainfo.get("significant_p05") else "不显著 (p ≥ 0.05)"
+                md_lines.append(f"| {dlabel} | F = {ainfo['f_stat']:.4f} | p = {ainfo['p_value']:.6f} | {sig_str} |")
+        md_lines.append("")
 
     item_records = stats_group.get("item_records", [])
     md_lines.append("### 各词项核心声学数据速览表")
