@@ -54,3 +54,15 @@ def test_toolkit_loads_plain_csv_and_ptwl_wordlists(tmp_path):
     ptwl_loaded = ToolkitApp._load_wordlist_source(str(ptwl_path))
     assert ptwl_loaded["flat_words"] == ["妈", "麻"]
     assert "【A组】" in ptwl_loaded["text"]
+
+
+def test_toolkit_app_initialization():
+    """验证 ToolkitApp 能正常完整实例化、setup_ui 走完且不抛出 KeyError 等异常。"""
+    app = ToolkitApp()
+    try:
+        assert hasattr(app, "tabview")
+        assert "purple_soft" in app.colors
+        app.update()
+    finally:
+        app.destroy()
+

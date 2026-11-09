@@ -24,14 +24,16 @@ def _startup_debug(message):
 _startup_debug(f"捕获启动参数: {STARTUP_ARGS!r}")
 
 # 全局打补丁：使所有 CTkCheckBox 在未勾选时为圆角矩形(6)，勾选后为圆形(1000)
-_orig_checkbox_draw = ctk.CTkCheckBox._draw
+_orig_checkbox_draw = getattr(ctk.CTkCheckBox, "_orig_unpatched_draw", ctk.CTkCheckBox._draw)
+ctk.CTkCheckBox._orig_unpatched_draw = _orig_checkbox_draw
 def _patched_checkbox_draw(self, no_color_updates=False):
-    if self._check_state:
+    if getattr(self, "_check_state", False):
         self._corner_radius = 1000
     else:
         self._corner_radius = 6
-    _orig_checkbox_draw(self, no_color_updates)
+    return _orig_checkbox_draw(self, no_color_updates)
 ctk.CTkCheckBox._draw = _patched_checkbox_draw
+ctk.CTkCheckBox._phontracer_dynamic_radius_patched = True
 
 from modules.version import APP_NAME, __version__
 

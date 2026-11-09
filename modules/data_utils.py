@@ -2,6 +2,131 @@ import os
 import textgrid
 from typing import List, Dict, Optional, Any, Tuple
 import numpy as np
+
+
+DEFAULT_F0_BOUNDS = (75.0, 600.0)
+
+
+def compute_speaker_f0_bounds(f0_values, method="p5_p95_iqr"):
+    """
+    权威统一的发音人五度值基频上下限 (f_min, f_max) 计算函数。
+
+    Parameters
+    ----------
+    f0_values : Iterable[float] or Dict[str, Iterable[float]]
+        发音人有效基频采样序列，或按调类分组的基频字典。
+    method : str
+        - "p5_p95_iqr" (默认): 样本数 >= 16 时先以 1.5*IQR 剔除八度跳变等离群点，再取 5%–95% 分位数；
+          极小样本 (< 16) 回退为绝对极值 min/max。
+        - "raw_minmax": 直接使用有效正值的绝对极值 (min, max)。
+        - "group_mean_minmax": 按各组均值曲线的极值计算。
+    """
+    if method == "group_mean_minmax" and isinstance(f0_values, dict):
+        group_vals = []
+        for vals in f0_values.values():
+            arr = np.asarray(list(vals), dtype=float).ravel()
+            valid = arr[np.isfinite(arr) & (arr > 0.0)]
+            if valid.size > 0:
+                group_vals.append(float(np.min(valid)))
+                group_vals.append(float(np.max(valid)))
+        if len(group_vals) >= 2:
+            f_min, f_max = float(np.min(group_vals)), float(np.max(group_vals))
+            if f_max > f_min > 0.0:
+                return f_min, f_max
+
+    if isinstance(f0_values, dict):
+        flat = []
+        for vals in f0_values.values():
+            flat.extend(vals)
+        arr = np.asarray(flat, dtype=float).ravel()
+    else:
+        arr = np.asarray(list(f0_values) if not isinstance(f0_values, np.ndarray) else f0_values, dtype=float).ravel()
+
+    arr = arr[np.isfinite(arr) & (arr > 0.0)]
+    if arr.size == 0:
+        return DEFAULT_F0_BOUNDS
+
+    if method == "raw_minmax" or arr.size < 16:
+        s_min = float(np.min(arr))
+        s_max = float(np.max(arr))
+        if s_max > s_min > 0.0:
+            return s_min, s_max
+        return DEFAULT_F0_BOUNDS
+
+    robust_arr = arr
+    if arr.size >= 8:
+        q1, q3 = np.percentile(arr, [25.0, 75.0])
+        iqr = q3 - q1
+        if iqr > 0.0:
+            low = q1 - 1.5 * iqr
+            high = q3 + 1.5 * iqr
+            filtered = arr[(arr >= low) & (arr <= high)]
+            if filtered.size >= max(8, int(arr.size * 0.5)):
+                robust_arr = filtered
+
+    s_min = float(np.percentile(robust_arr, 5.0))
+    s_max = float(np.percentile(robust_arr, 95.0))
+    if s_max > s_min and s_min > 0.0:
+        return s_min, s_max
+    s_min = float(np.min(arr))
+    s_max = float(np.max(arr))
+    if s_max > s_min and s_min > 0.0:
+        return s_min, s_max
+    return DEFAULT_F0_BOUNDS
+
+
+def hz_to_t_value(f0_hz, f_min, f_max, clip=True):
+    """
+    权威统一的赵元任/石锋五度值 T 值换算公式（映射到 [0.0, 5.0] 区间）：
+        T = 5.0 * (log10(f) - log10(f_min)) / (log10(f_max) - log10(f_min))
+
+    支持标量或 numpy 数组输入；对 <= 0 或 NaN 的无效频率返回 None（标量）或 np.nan（数组）。
+    """
+    import math
+    if f0_hz is None:
+        return None
+
+    valid_bounds = (
+        f_min is not None
+        and f_max is not None
+        and np.isfinite(f_min)
+        and np.isfinite(f_max)
+        and float(f_min) > 0.0
+        and float(f_max) > float(f_min)
+    )
+    if valid_bounds:
+        log_min = math.log10(float(f_min))
+        log_diff = math.log10(float(f_max)) - log_min
+    else:
+        log_min = 0.0
+        log_diff = 1.0
+
+    if np.isscalar(f0_hz):
+        try:
+            hz = float(f0_hz)
+        except (TypeError, ValueError):
+            return None
+        if not np.isfinite(hz) or hz <= 0.0:
+            return None
+        if not valid_bounds or log_diff <= 1e-12:
+            return 2.5
+        t_val = 5.0 * (math.log10(hz) - log_min) / log_diff
+        if clip:
+            t_val = float(np.clip(t_val, 0.0, 5.0))
+        return float(t_val)
+
+    arr = np.asarray(f0_hz, dtype=float)
+    out = np.full(arr.shape, np.nan, dtype=float)
+    valid = np.isfinite(arr) & (arr > 0.0)
+    if np.any(valid):
+        if valid_bounds and log_diff > 1e-12:
+            t_vals = 5.0 * (np.log10(arr[valid]) - log_min) / log_diff
+            if clip:
+                t_vals = np.clip(t_vals, 0.0, 5.0)
+            out[valid] = t_vals
+        else:
+            out[valid] = 2.5
+    return out
 try:
     import parselmouth
 except ImportError:
@@ -325,10 +450,11 @@ def sample_formant_points_by_bounds_extended(
             "f3": dummy_nans
         }
 
-    xs = f_data['xs']
-    f1_arr = f_data['f1']
-    f2_arr = f_data['f2']
-    f3_arr = f_data.get('f3') if include_f3 else None
+    xs = np.asarray(f_data['xs'], dtype=float)
+    f1_arr = np.asarray(f_data['f1'], dtype=float)
+    f2_arr = np.asarray(f_data['f2'], dtype=float)
+    f3_raw = f_data.get('f3') if include_f3 else None
+    f3_arr = np.asarray(f3_raw, dtype=float) if f3_raw is not None else None
 
     all_times = []
     all_f1 = []
@@ -1178,24 +1304,32 @@ def build_five_point_chart(workbook, target_sheet, dict_data, avg_points_map,
     group_series = []  # [(name, [x_vals], [y_vals]), ...]
 
     for g_idx, (grp, st) in enumerate(dict_data.items()):
-        cnt_dur = st['syl_counts'][0] if st['syl_counts'][0] > 0 else 1
-        avg_dur = st['syl_dur_sums'][0] / cnt_dur
-        if avg_dur > max_avg_dur:
-            max_avg_dur = avg_dur
-
         x_vals = []
         y_vals = []
         has_valid = False
-        syl_avgs = avg_points_map[grp][0] if grp in avg_points_map else [0.0] * num_points
-        for i in range(num_points):
-            x_vals.append((i) * (avg_dur / (num_points - 1)) if num_points > 1 else 0)
-            avg_hz = syl_avgs[i]
-            if avg_hz > 0 and max_hz > min_hz and min_hz > 0:
-                t_val = 5 * (math.log(avg_hz) - math.log(min_hz)) / (math.log(max_hz) - math.log(min_hz))
-                y_vals.append(round(t_val, 4))
-                has_valid = True
-            else:
-                y_vals.append(None)
+        acc_dur = 0.0
+        grp_syl_avgs = avg_points_map.get(grp, [])
+        n_syls_grp = min(max_syls, len(st.get('syl_counts', [])))
+        for k in range(max(1, n_syls_grp)):
+            cnt_dur = st['syl_counts'][k] if k < len(st['syl_counts']) and st['syl_counts'][k] > 0 else 0
+            if cnt_dur <= 0:
+                continue
+            avg_dur = st['syl_dur_sums'][k] / cnt_dur
+            syl_avgs = grp_syl_avgs[k] if k < len(grp_syl_avgs) else [0.0] * num_points
+            for i in range(num_points):
+                x_pt = acc_dur + ((i) * (avg_dur / (num_points - 1)) if num_points > 1 else 0.0)
+                x_vals.append(round(x_pt, 6))
+                avg_hz = syl_avgs[i] if i < len(syl_avgs) else 0.0
+                t_val = hz_to_t_value(avg_hz, min_hz, max_hz, clip=False)
+                if t_val is not None:
+                    y_vals.append(round(float(t_val), 4))
+                    has_valid = True
+                else:
+                    y_vals.append(None)
+            acc_dur += avg_dur
+
+        if acc_dur > max_avg_dur:
+            max_avg_dur = acc_dur
 
         if has_valid:
             group_series.append((grp, x_vals, y_vals))

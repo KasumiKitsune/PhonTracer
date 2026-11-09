@@ -203,7 +203,7 @@ class TestModuleCAgent2(unittest.TestCase):
         ptwl_out = os.path.join(self.tmp_dir, "converted.ptwl")
         res_conv = self._run_cmd(f'tool_wordlist_convert "{messy_in}" "{ptwl_out}" title="升级后的高级字表"')
         self.assertTrue(res_conv["success"])
-        self.assertEqual(res_conv["output_file"], ptwl_out)
+        self.assertEqual(os.path.normpath(res_conv["output_file"]), os.path.normpath(ptwl_out))
         self.assertEqual(res_conv["title"], "升级后的高级字表")
         self.assertEqual(res_conv["group_count"], 2)
         self.assertEqual(res_conv["item_count"], 4)

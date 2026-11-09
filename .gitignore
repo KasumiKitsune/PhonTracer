@@ -30,6 +30,8 @@
 # 5. 本地归档目录（集中存放无需上传 GitHub 的资料、测试样本、构建产物）
 _archive/
 _archive/**
+Example/
+Example/**
 
 # 6. 强制排除：即使在白名单目录内也绝对不跟踪的东西
 **/__pycache__/

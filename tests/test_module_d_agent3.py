@@ -28,8 +28,8 @@ class TestModuleDAgent3(unittest.TestCase):
     def setUp(self):
         self.tmp_dir = Path(tempfile.mkdtemp(prefix="test_te_agent3_"))
         self.example_dir = ROOT / "Example" / "wordlist_tone16"
-        self.example_teproj = self.example_dir / "普通话双字组声调基频格局与连读变调实验.teproj"
-        self.example_ptwl = self.example_dir / "普通话双字组声调基频格局与连读变调实验字表.ptwl"
+        self.example_teproj = self.example_dir / "普通话双字组16种声调实验.teproj"
+        self.example_ptwl = self.example_dir / "普通话双字组16种声调实验字表.ptwl"
 
     def tearDown(self):
         shutil.rmtree(self.tmp_dir, ignore_errors=True)

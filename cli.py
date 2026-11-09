@@ -134,7 +134,9 @@ class AcousticChartCLIAdapter:
     def _get_items_by_group_for_dict(self, items_dict):
         groups = {}
         for k, v in items_dict.items():
-            g = v.get('group', '导入内容')
+            if isinstance(v, dict) and v.get('is_excluded', False):
+                continue
+            g = v.get('group', '导入内容') if isinstance(v, dict) else '导入内容'
             if g not in groups: groups[g] = []
             groups[g].append(k)
         return [(g, groups[g]) for g in groups]
@@ -3809,6 +3811,13 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
             "vowel_space": "formant_space",
             "vowel_chart": "formant_space",
             "wordlist": "ptwl",
+            "tone_sandhi": "tone_sandhi",
+            "sandhi_grid": "tone_sandhi",
+            "formant_pillai": "formant_pillai",
+            "pillai_matrix": "formant_pillai",
+            "vowel_merger": "formant_pillai",
+            "spaghetti_qc": "spaghetti_qc",
+            "raincloud": "distribution",
         }
         valid_formats_set = {f.lower() for f in self.SUPPORTED_EXPORT_FORMATS} | set(fmt_aliases.keys())
 
@@ -3903,10 +3912,13 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
             "quality",
             "overview_heatmap",
             "tone_effect_time",
+            "tone_sandhi",
+            "spaghetti_qc",
             "formant_space",
             "formant_trajectory",
             "formant_density",
             "formant_overview_heatmap",
+            "formant_pillai",
         }
         if fmt in scientific_charts:
             params = {
@@ -4005,6 +4017,14 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
 
             scope = params.get("export_scope", "active")
 
+            bool_params = {
+                "sort_by_anomaly", "show_chao_five_level_axis", "show_spaghetti", "show_kde_bg",
+                "show_convex_hull", "show_diphthong_arrows", "show_f3", "overview_show_deviation",
+                "show_title", "legend_outside", "formant_axis_lock", "praat_axes",
+            }
+            for bp in bool_params:
+                if bp in params and isinstance(params[bp], str):
+                    params[bp] = params[bp].strip().lower() in ("true", "1", "yes", "on", "是")
             float_params = {"density_bw", "density_p_low", "density_p_high", "density_m_min", "density_m_max"}
             for fp in float_params:
                 if fp in params:

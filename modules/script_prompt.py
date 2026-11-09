@@ -733,24 +733,32 @@ SPECTROGRAM_SCRIPT_GUIDE = """语谱图与 Parselmouth 受控接口：
 
 
 CORE_CHART_API_CONTRACT = f"""### 运行沙箱与硬性 API 契约（违反任一条将直接报错）
-1. **入口与返回**：
+1. **入口、声明式交互参数 (`PARAMS`) 与多产物联合返回**：
    - 脚本开头前两行必须固定为：`# 脚本名称：<简短中文名>` 与 `# 功能说明：<一句话说明>`。
+   - **可选声明式交互参数 (`PARAMS`)**：推荐在脚本顶部定义 `PARAMS = [...]` 列表（每项为字面量字典，支持 `type` 为 `"choice"`, `"int"`, `"float"`, `"bool"`, `"str"`，包含 `key`, `label`, `default` 以及可选 `choices`, `min`, `max`）；工具箱会自动在运行栏渲染下拉框/复选框/输入框，脚本内通过 `ctx.params.get("key", default)` 读取当前参数值。
    - 必须定义 `def run(ctx):` 作为唯一入口。
-   - 返回 `ctx.figure(fig, filename="xxx.png", title="图表标题")`（支持 `.png/.svg/.pdf/.jpg`，系统自动 300 DPI 保存）、`ctx.table(rows, columns, title="表格标题")`，或同时返回 `[ctx.figure(...), ctx.table(...)]`。
+   - **多格式同步导出与多产物联合返回**：
+     - `ctx.figure(fig, filename="xxx.png", title="图表标题", formats=("png", "pdf", "svg"), dpi=300)` 支持通过 `formats` 单次运行同步导出多种位图/矢量图格式，并在画布内自动生成 200 DPI 高清预览。
+     - `ctx.table(df_or_rows, columns=None, title="表格标题")` 支持直接传入 `pandas.DataFrame` 或 `(rows, columns)`，在工作台内置表格预览器中直接展示并支持排序与复制 TSV。
+     - 支持返回单个结果或任意组合列表 `[ctx.figure(...), ctx.table(...), ctx.project_patch(...)]`（允许同时返回诊断图表、统计表格与工程修改补丁 `ProjectPatchResult`）。
 2. **预置库与字体环境**：
-   - 已注入 `ctx.np` (`numpy`)、`ctx.plt` (`matplotlib.pyplot`)、`ctx.scipy` (`scipy`)、`ctx.parselmouth` (`parselmouth`)；也可导入标准库 `math, statistics, collections, itertools, re, time, warnings`。
-   - Matplotlib 中文字体与负号显示已由系统自动预配置，**严禁脚本自行修改 `plt.rcParams['font.sans-serif']`**（以免覆盖为不存在的字体导致中文乱码）。
+   - 已注入 `ctx.np` (`numpy`)、`ctx.pd` (`pandas`)、`ctx.plt` (`matplotlib.pyplot`)、`ctx.scipy` (`scipy`)、`ctx.parselmouth` (`parselmouth`)；也可直接 `import pandas as pd`、`from scipy.stats import gaussian_kde` 或导入标准库 `math, statistics, collections, itertools, re, time, warnings`。
+   - Matplotlib 中文字体、国际音标 (IPA) 回退链与 PDF Type 42 矢量字体已由系统自动预配置，**严禁脚本自行修改 `plt.rcParams['font.sans-serif']`**（以免覆盖为不存在的字体导致中文乱码）。
    - 沙箱中 `print(...)` 已自动重定向至 `ctx.log(...)`；长循环中请定期检查 `if ctx.is_cancelled(): break`。
 3. **沙箱安全禁令（AST 静态拦截）**：
-   - **禁止第三方与系统库**：严禁导入 `pandas, seaborn, plotly, requests, os, sys, subprocess`（仅内置只读受控 `os.path`）。
-   - **禁止直接输出与文件写入**：严禁调用任何名为 `.save(), .savefig(), .imsave(), .savetxt(), .savez(), .dump(), .to_csv(), .to_excel(), .to_file(), .write(), .write_bytes(), .write_text(), open(), eval(), exec()` 的函数或方法（**哪怕向 `BytesIO` 调用 `fig.savefig()` 也会被 AST 静态拦截**，请始终通过 `ctx.figure(fig, ...)` 返回）。
-   - **禁止反射与高危属性**：严禁使用 `getattr, hasattr, setattr, delattr, globals, locals, vars` 及访问 `_` 开头的私有属性（只读内置函数 `isinstance, issubclass, type, callable, chr, ord, format, iter, next` 及字典 `.get()` 已放行）。
-   - **禁止 `parselmouth.praat` 与 `scipy.stats.gaussian_kde`**：运行器 AST 检查会直接拦截（点数多时易阻塞后台线程）；核密度或平滑请改用 `np.histogram` / `np.histogram2d` + `scipy.ndimage.gaussian_filter`，或 `ax.hist2d` / `ax.hexbin`。
-4. **核心上下文辅助方法**：
-   - `ctx.dataset.included_items()`：获取所有未排除条目（已过滤 `is_excluded=True`；若需全部条目用 `ctx.dataset.items`）。
-   - `ctx.dataset.groups()` / `ctx.dataset.speakers()`：获取排序后的分组列表 / 发音人列表。
-   - `ctx.dataset.pitch_points(item)` / `ctx.dataset.formant_points(item)`：获取原始轨迹字典。
-   - `ctx.get_f0_bounds(f0_values)`：计算发音人稳健五度值调域上下限 `[s_min, s_max]`（1.5×IQR 剔除八度跳变离群值 + P5/P95 分位数）。
+   - **禁止危险外部与系统库**：严禁导入 `seaborn, plotly, requests, os, sys, subprocess`（仅内置只读受控 `os.path`；内存级 `pandas` 与 `scipy.stats.gaussian_kde` 已放行）。
+   - **禁止磁盘读写调用**：严禁调用 `open(), eval(), exec(), .savefig(), .to_csv(), .to_excel(), .to_parquet(), .to_file(), pd.read_csv(), pd.read_excel()` 等磁盘读写方法（请始终通过 `ctx.figure(fig, ...)` 或 `ctx.table(...)` 返回结果）。
+   - **禁止反射与双下划线属性**：严禁使用 `getattr, hasattr, setattr, delattr, globals, locals, vars` 及访问 `__xxx__` 双下划线属性或 `ctx._*` 内部私有属性。
+   - **禁止 `parselmouth.praat`**：请使用 `ctx.extract_voice_quality`、`ctx.extract_spectral_moments`、`ctx.load_item_sound` 和 `Sound.to_spectrogram` 等受控高阶接口。
+4. **核心上下文辅助方法（优先推荐使用预展开长宽表 API，3行代码即可完成分组统计）**：
+   - **【首选】`df_pts = ctx.dataset.to_point_table(included_only=True, as_df=True)`**：获取预展开的 **采样点级长表 DataFrame**（每行=某词条某音节的第 `point_idx` (1..11) 个采样点），已自动将 `<=0` Hz 清洗为 `np.nan`，预置列：`speaker_id, speaker_name, item_id, word, label, char, syl_idx, syl_count, group, point_idx, norm_time, phys_time_ms, f0_hz, t_value, semitone, f1_hz, f2_hz, f3_hz, bark_f1, bark_f2, lobanov_f1, lobanov_f2, tags` 及所有平铺自定义字段 `field_<字段名>`。
+   - **【首选】`df_syl = ctx.dataset.to_syllable_table(included_only=True, as_df=True)`**：获取预展开的 **音节级汇总宽表 DataFrame**（每行=1个音节），预置列：`speaker_id, speaker_name, item_id, word, label, char, syl_idx, syl_count, group, dur_ms, f0_mean, f0_min, f0_max, f0_range, f0_slope, t_onset, t_mid, t_offset, t_range, t_code, f1_mid, f2_mid, f3_mid, f1_20, f2_20, f1_80, f2_80, tl_hz, tags` 及 `field_<字段名>`。
+   - **`df_frm = ctx.dataset.to_frame_table(item_or_items=None, included_only=True, as_df=True)`**：获取原始物理时间帧表（`speaker_name, item_id, word, syl_idx, time_s, rel_time, f0_hz, f1_hz, f2_hz, f3_hz`）。
+   - **高阶声学特征算子**：
+     - `vq = ctx.extract_voice_quality(item, syl_idx=None)`：提取嗓音发声态指标 `{"jitter_local", "shimmer_local", "hnr_db", "cpp_db", "h1_h2_db", "h1_a1_db", "h1_a3_db"}`。
+     - `sm = ctx.extract_spectral_moments(item, time_window=None, pre_emphasis=80.0)`：提取擦音/辅音频谱四阶矩 `{"cog_hz", "sd_hz", "skewness", "kurtosis"}`。
+     - `df_norm = ctx.normalize_formants(df_or_items, method="lobanov" | "nearey1" | "bark" | "erb" | "watt_fabricius")`：跨发音人元音归一化。
+   - `ctx.dataset.included_items()` / `ctx.dataset.groups()` / `ctx.dataset.speakers()` / `ctx.get_f0_bounds(f0_values)`。
    - {SPECTROGRAM_SCRIPT_GUIDE}
 
 ### 条目数据结构与关键防坑规则
@@ -989,10 +997,12 @@ def _build_data_process_agent_prompt(project_data, selections):
 ### 二、 当前工程摘要
 {project_summary}
 {extra_section}
-### 三、 数据处理沙箱与受控算子契约
-- **核心定位**：脚本不直接修改本地 `.teproj` 或读写文件，而是返回 `ctx.project_patch(operations, title="...", description="...")`；由 Toolkit 统一校验并另存为新的 `.teproj`。
-- **沙箱安全边界**：
-  - 严禁导入 `pandas, seaborn, plotly, requests, os, sys, subprocess`；严禁调用 `.save(), .savefig(), .to_csv(), .write(), open(), eval(), exec()`；严禁使用 `getattr, hasattr`（已放行 `isinstance, type, callable, chr, ord, format, iter, next`）及 `parselmouth.praat`、`scipy.stats.gaussian_kde`。
+### 三、 数据处理沙箱、声明式参数 (`PARAMS`) 与受控算子契约
+- **核心定位与多产物联合返回**：脚本不直接修改本地 `.teproj` 或读写文件，而是返回 `ctx.project_patch(operations, title="...", description="...")`；由 Toolkit 统一校验并另存为新的 `.teproj`；**强烈推荐联合返回 `[ctx.figure(...), ctx.table(...), ctx.project_patch(...)]`**，让研究者先在工作台预览“清洗前后对比诊断图”与“异常词条明细表”，再点击 `[应用补丁并另存工程 (.teproj)]` 确认落盘。
+- **声明式交互参数 (`PARAMS`)**：可在脚本顶部定义 `PARAMS = [{{"key": "...", "label": "...", "type": "float|int|bool|choice|str", "default": ...}}]`，并在 `run(ctx)` 中通过 `ctx.params.get("key", default)` 读取阈值或开关参数。
+- **预展开表与沙箱安全边界**：
+  - 可直接使用 `ctx.dataset.to_point_table()`、`ctx.dataset.to_syllable_table()`、`ctx.extract_voice_quality()`、`ctx.extract_spectral_moments()` 以及内存级 `pandas` (`ctx.pd`) 与 `scipy` (`ctx.scipy`)。
+  - 严禁导入 `seaborn, plotly, requests, os, sys, subprocess`；严禁调用 `.save(), .savefig(), .to_csv(), .write(), open(), eval(), exec()`；严禁使用 `getattr, hasattr`（已放行 `isinstance, type, callable, chr, ord, format, iter, next`）及 `parselmouth.praat`。
   - `print(...)` 已自动重定向至 `ctx.log(...)`；长循环中请定期检查 `ctx.is_cancelled()`。
 - **6 大受控算子（放入 `operations` 列表）**：
   1. `ctx.set_item_fields(item, fields, reason="...")`

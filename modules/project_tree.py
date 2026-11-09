@@ -2668,8 +2668,9 @@ class ProjectTreePanel:
             row = ctk.CTkFrame(scroll_frame, fg_color="transparent")
             row.pack(fill=tk.X, padx=5, pady=2)
             cb = ctk.CTkCheckBox(row, text=f"{spk.name} ({len(spk.items)}项)", variable=val, font=self.font_main,
-                                 corner_radius=1000,
-                                 fg_color=("#3B82F6", "#2563EB"), hover_color=("#9CA3AF", "#4B5563"), border_color=("#4B5563", "#9CA3AF"))
+                                 checkbox_width=18, checkbox_height=18, border_width=2,
+                                 corner_radius=1000, checkmark_color="#FFFFFF",
+                                 fg_color=("#2563EB", "#1D4ED8"), hover_color=("#9CA3AF", "#4B5563"), border_color=("#4B5563", "#9CA3AF"))
             cb.pack(side=tk.LEFT, padx=10, pady=1)
             checkboxes[spk] = val
 
@@ -2691,8 +2692,9 @@ class ProjectTreePanel:
         # 6. Populate Integration option card
         integrate_var = ctk.BooleanVar(value=False)
         cb_integrate = ctk.CTkCheckBox(opt_card, text="整合选中发音人的结果", variable=integrate_var, font=self.font_main,
-                                       corner_radius=1000,
-                                       fg_color=("#3B82F6", "#2563EB"), hover_color=("#9CA3AF", "#4B5563"), border_color=("#4B5563", "#9CA3AF"))
+                                       checkbox_width=18, checkbox_height=18, border_width=2,
+                                       corner_radius=1000, checkmark_color="#FFFFFF",
+                                       fg_color=("#2563EB", "#1D4ED8"), hover_color=("#9CA3AF", "#4B5563"), border_color=("#4B5563", "#9CA3AF"))
         cb_integrate.pack(anchor="w", padx=15, pady=(8, 2))
 
         ctk.CTkLabel(opt_card, text="※ 将采用 T值归一化整合不同发音人数据进行对比分析", font=ctk.CTkFont(family="Microsoft YaHei", size=10),
@@ -3323,31 +3325,35 @@ class ProjectTreePanel:
         speaker_stats = {}
         speaker_rows = {}
         max_syls = 1
+        from .data_utils import compute_speaker_f0_bounds, hz_to_t_value
+        bounds_method = getattr(self, 'f0_bounds_method', 'p5_p95_iqr')
         for speaker in all_speakers:
             s_struct = self._get_items_by_group_for_dict(speaker.items)
             rows = []
             f0_values = []
             orig_items = self.items
-            self.items = speaker.items
-            for grp_name, children in s_struct:
-                for child in children:
-                    item = self.items[child]
-                    lbl = item.get('label', '')
-                    if len(lbl) > max_syls: max_syls = len(lbl)
-                    self._ensure_item_loaded(item)
-                    if not item.get('snd') or (not item.get('pitch') and not item.get('pitch_data')):
-                        continue
-                    total_dur, syl_data = self._extract_syl_data(item, num_points)
-                    if total_dur <= 0: continue
-                    rows.append({'group': grp_name, 'label': lbl, 'total_dur': total_dur, 'syl_data': syl_data, 'raw_item': item})
-                    for _, freqs in syl_data:
-                        for f in freqs:
-                            if f > 0: f0_values.append(f)
-            self.items = orig_items
+            try:
+                self.items = speaker.items
+                for grp_name, children in s_struct:
+                    for child in children:
+                        item = self.items[child]
+                        lbl = item.get('label', '')
+                        if len(lbl) > max_syls: max_syls = len(lbl)
+                        self._ensure_item_loaded(item)
+                        if not item.get('snd') or (not item.get('pitch') and not item.get('pitch_data')):
+                            continue
+                        total_dur, syl_data = self._extract_syl_data(item, num_points)
+                        if total_dur <= 0: continue
+                        rows.append({'group': grp_name, 'label': lbl, 'total_dur': total_dur, 'syl_data': syl_data, 'raw_item': item})
+                        for _, freqs in syl_data:
+                            for f in freqs:
+                                if f > 0: f0_values.append(f)
+            finally:
+                self.items = orig_items
             if f0_values:
-                import numpy as np
-                speaker_stats[speaker.id] = (float(np.min(f0_values)), float(np.max(f0_values)))
-            else: speaker_stats[speaker.id] = (0.0, 0.0)
+                speaker_stats[speaker.id] = compute_speaker_f0_bounds(f0_values, method=bounds_method)
+            else:
+                speaker_stats[speaker.id] = (0.0, 0.0)
             speaker_rows[speaker.id] = rows
 
         if format_mode == 'xlsx':
@@ -3422,7 +3428,7 @@ class ProjectTreePanel:
                             stats['syl_counts'][k] += 1
                         for i, f in enumerate(freqs):
                             if f > 0 and has_valid_range:
-                                t_val = round(((math.log10(f) - log_min) / log_diff) * 5.0, 2)
+                                t_val = round(float(hz_to_t_value(f, s_min, s_max, clip=True)), 2)
                                 ws_data.write(row_idx, col_idx, t_val, style.t_val_fmt)
                                 sample_r.append(t_val)
                                 if k < max_syls:
