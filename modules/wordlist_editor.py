@@ -1121,17 +1121,8 @@ class VisualWordlistEditor(ctk.CTkFrame):
 
     @staticmethod
     def _read_text_file_with_fallback(path, encodings=("utf-8-sig", "utf-8", "gbk")):
-        last_error = None
-        for encoding in encodings:
-            try:
-                with open(path, "r", encoding=encoding) as f:
-                    return f.read()
-            except UnicodeDecodeError as e:
-                last_error = e
-        if last_error:
-            raise last_error
-        with open(path, "r", encoding=encodings[0]) as f:
-            return f.read()
+        from .core.text_io import read_text_file_with_fallback
+        return read_text_file_with_fallback(path, encodings=encodings, strict=True)
 
     def import_v1_dialog(self):
         path = filedialog.askopenfilename(filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")])

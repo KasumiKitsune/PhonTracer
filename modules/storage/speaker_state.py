@@ -1,0 +1,88 @@
+import uuid
+
+
+class SpeakerState:
+    def __init__(self, name):
+        self.id = str(uuid.uuid4())
+        self.name = name
+        self.items = {}
+        self.audio_cache = {}
+        self.last_params = {
+            'pts': 11,
+            'db': 60.0,
+            'skip_front': 0.00,
+            'pitch_floor': 75,
+            'pitch_ceiling': 600,
+            'voicing_threshold': 0.25,
+            'analysis_mode': 'f0',
+            'formant_max_hz': 5500.0,
+            'formant_count': 5,
+            'formant_window_length': 0.025,
+            'formant_pre_emphasis': 50.0,
+            'formant_sample_strategy': '整段11点'
+        }
+        self.pending_long_snd = None
+        self.long_audio_path = None
+        self.long_pitch_data_file = None
+        self.pending_batch_paths = []
+        self.current_macro_segments = []
+        self.manual_segments = None
+        self.tab_mode = "多条独立音频"
+        self.wordlist_doc = None
+
+    @property
+    def batch_paths(self):
+        return self.pending_batch_paths
+
+    @batch_paths.setter
+    def batch_paths(self, val):
+        self.pending_batch_paths = list(val) if val is not None else []
+
+
+class SpeakerManager:
+    def __init__(self):
+        default_speaker = SpeakerState("发音人 1")
+        self.speakers = {default_speaker.id: default_speaker}
+        self.active_speaker_id = default_speaker.id
+
+    def get_active_speaker(self):
+        return self.speakers[self.active_speaker_id]
+
+    def add_speaker(self, name):
+        new_speaker = SpeakerState(name)
+        self.speakers[new_speaker.id] = new_speaker
+        return new_speaker
+
+    def remove_speaker(self, speaker_id):
+        if speaker_id in self.speakers and len(self.speakers) > 1:
+            del self.speakers[speaker_id]
+            if self.active_speaker_id == speaker_id:
+                self.active_speaker_id = list(self.speakers.keys())[0]
+            return True
+        return False
+
+    def rename_speaker(self, speaker_id, new_name):
+        if speaker_id in self.speakers:
+            spk = self.speakers[speaker_id]
+            spk.name = new_name
+            for item in getattr(spk, "items", {}).values():
+                if isinstance(item, dict):
+                    item["speaker"] = new_name
+                    item["speaker_id"] = spk.id
+            return True
+        return False
+
+    def set_active_speaker(self, speaker_id):
+        if speaker_id in self.speakers:
+            self.active_speaker_id = speaker_id
+            return True
+        return False
+
+    def get_all_speakers(self):
+        return list(self.speakers.values())
+
+
+__all__ = [
+    "SpeakerState",
+    "SpeakerManager",
+]

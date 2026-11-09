@@ -4,129 +4,11 @@ from typing import List, Dict, Optional, Any, Tuple
 import numpy as np
 
 
-DEFAULT_F0_BOUNDS = (75.0, 600.0)
-
-
-def compute_speaker_f0_bounds(f0_values, method="p5_p95_iqr"):
-    """
-    权威统一的发音人五度值基频上下限 (f_min, f_max) 计算函数。
-
-    Parameters
-    ----------
-    f0_values : Iterable[float] or Dict[str, Iterable[float]]
-        发音人有效基频采样序列，或按调类分组的基频字典。
-    method : str
-        - "p5_p95_iqr" (默认): 样本数 >= 16 时先以 1.5*IQR 剔除八度跳变等离群点，再取 5%–95% 分位数；
-          极小样本 (< 16) 回退为绝对极值 min/max。
-        - "raw_minmax": 直接使用有效正值的绝对极值 (min, max)。
-        - "group_mean_minmax": 按各组均值曲线的极值计算。
-    """
-    if method == "group_mean_minmax" and isinstance(f0_values, dict):
-        group_vals = []
-        for vals in f0_values.values():
-            arr = np.asarray(list(vals), dtype=float).ravel()
-            valid = arr[np.isfinite(arr) & (arr > 0.0)]
-            if valid.size > 0:
-                group_vals.append(float(np.min(valid)))
-                group_vals.append(float(np.max(valid)))
-        if len(group_vals) >= 2:
-            f_min, f_max = float(np.min(group_vals)), float(np.max(group_vals))
-            if f_max > f_min > 0.0:
-                return f_min, f_max
-
-    if isinstance(f0_values, dict):
-        flat = []
-        for vals in f0_values.values():
-            flat.extend(vals)
-        arr = np.asarray(flat, dtype=float).ravel()
-    else:
-        arr = np.asarray(list(f0_values) if not isinstance(f0_values, np.ndarray) else f0_values, dtype=float).ravel()
-
-    arr = arr[np.isfinite(arr) & (arr > 0.0)]
-    if arr.size == 0:
-        return DEFAULT_F0_BOUNDS
-
-    if method == "raw_minmax" or arr.size < 16:
-        s_min = float(np.min(arr))
-        s_max = float(np.max(arr))
-        if s_max > s_min > 0.0:
-            return s_min, s_max
-        return DEFAULT_F0_BOUNDS
-
-    robust_arr = arr
-    if arr.size >= 8:
-        q1, q3 = np.percentile(arr, [25.0, 75.0])
-        iqr = q3 - q1
-        if iqr > 0.0:
-            low = q1 - 1.5 * iqr
-            high = q3 + 1.5 * iqr
-            filtered = arr[(arr >= low) & (arr <= high)]
-            if filtered.size >= max(8, int(arr.size * 0.5)):
-                robust_arr = filtered
-
-    s_min = float(np.percentile(robust_arr, 5.0))
-    s_max = float(np.percentile(robust_arr, 95.0))
-    if s_max > s_min and s_min > 0.0:
-        return s_min, s_max
-    s_min = float(np.min(arr))
-    s_max = float(np.max(arr))
-    if s_max > s_min and s_min > 0.0:
-        return s_min, s_max
-    return DEFAULT_F0_BOUNDS
-
-
-def hz_to_t_value(f0_hz, f_min, f_max, clip=True):
-    """
-    权威统一的赵元任/石锋五度值 T 值换算公式（映射到 [0.0, 5.0] 区间）：
-        T = 5.0 * (log10(f) - log10(f_min)) / (log10(f_max) - log10(f_min))
-
-    支持标量或 numpy 数组输入；对 <= 0 或 NaN 的无效频率返回 None（标量）或 np.nan（数组）。
-    """
-    import math
-    if f0_hz is None:
-        return None
-
-    valid_bounds = (
-        f_min is not None
-        and f_max is not None
-        and np.isfinite(f_min)
-        and np.isfinite(f_max)
-        and float(f_min) > 0.0
-        and float(f_max) > float(f_min)
-    )
-    if valid_bounds:
-        log_min = math.log10(float(f_min))
-        log_diff = math.log10(float(f_max)) - log_min
-    else:
-        log_min = 0.0
-        log_diff = 1.0
-
-    if np.isscalar(f0_hz):
-        try:
-            hz = float(f0_hz)
-        except (TypeError, ValueError):
-            return None
-        if not np.isfinite(hz) or hz <= 0.0:
-            return None
-        if not valid_bounds or log_diff <= 1e-12:
-            return 2.5
-        t_val = 5.0 * (math.log10(hz) - log_min) / log_diff
-        if clip:
-            t_val = float(np.clip(t_val, 0.0, 5.0))
-        return float(t_val)
-
-    arr = np.asarray(f0_hz, dtype=float)
-    out = np.full(arr.shape, np.nan, dtype=float)
-    valid = np.isfinite(arr) & (arr > 0.0)
-    if np.any(valid):
-        if valid_bounds and log_diff > 1e-12:
-            t_vals = 5.0 * (np.log10(arr[valid]) - log_min) / log_diff
-            if clip:
-                t_vals = np.clip(t_vals, 0.0, 5.0)
-            out[valid] = t_vals
-        else:
-            out[valid] = 2.5
-    return out
+from .core.acoustic_math import (
+    DEFAULT_F0_BOUNDS,
+    compute_speaker_f0_bounds,
+    hz_to_t_value,
+)
 try:
     import parselmouth
 except ImportError:
@@ -135,118 +17,15 @@ except ImportError:
     _sys.modules.setdefault("parselmouth", parselmouth)
     _sys.modules.setdefault("parselmouth.praat", parselmouth.praat)
 import re  # 新增正则库用于支持多种分隔符拆分
-
-def parse_wordlist(raw_text: str) -> Tuple[List[Dict[str, Any]], List[str]]:
-    groups = []
-    flat_words =[]
-    curr_group = "未分组"
-    curr_items =[]
-    raw_text = raw_text.lstrip('\ufeff')
-    for line in raw_text.split('\n'):
-        line = line.strip()
-        if not line or line.startswith('```'): continue
-        if line.startswith('【') or line.startswith('[') or line.startswith('［') or line.startswith('#'):
-            if curr_items:
-                groups.append({"group": curr_group, "items": curr_items})
-                curr_items = []
-            curr_group = line.replace('【', '').replace('】', '').replace('[', '').replace(']', '').replace('［', '').replace('］', '').replace('#', '').strip()
-        else:
-            words = [w.strip() for w in re.split(r'[,\s\t，、;；]+', line) if w.strip()]
-            curr_items.extend(words)
-            flat_words.extend(words)
-
-    if curr_items: groups.append({"group": curr_group, "items": curr_items})
-    return groups, flat_words
-
-def has_cjk(word: str) -> bool:
-    if not word: return False
-    return bool(re.search(r'[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]', word))
-
-def split_into_syllables(word: str) -> List[str]:
-    if not word: return []
-    if '/' in word:
-        return [s.strip() for s in word.split('/') if s.strip()]
-    if has_cjk(word):
-        return re.findall(r'[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]', word)
-    cleaned = word.strip()
-    return [cleaned] if cleaned else []
-
-_UUID_TOKEN_RE = re.compile(
-    r'^(?:[0-9a-fA-F]{32}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})_+'
+from .core.text_io import (
+    _UUID_TOKEN_RE,
+    clean_str,
+    fuzzy_match_word_to_path,
+    has_cjk,
+    make_textgrid_export_stem,
+    parse_wordlist,
+    split_into_syllables,
 )
-
-def make_textgrid_export_stem(path: str = "", fallback_label: str = "", default: str = "audio") -> str:
-    name = os.path.splitext(os.path.basename(str(path or "")))[0].strip()
-    if not name or name.lower() == "unknown":
-        name = str(fallback_label or "").strip()
-
-    norm_path = str(path or "").replace("\\", "/").lower()
-    is_project_managed_audio = (
-        norm_path.startswith("audio/")
-        or "/.phon_tracer/workspace/audio/" in norm_path
-    )
-
-    if is_project_managed_audio:
-        batch_match = re.match(r"^.+?_batch_\d+_(.+)$", name)
-        if batch_match and batch_match.group(1):
-            name = batch_match.group(1)
-        else:
-            previous = None
-            while previous != name:
-                previous = name
-                name = _UUID_TOKEN_RE.sub("", name)
-                name = re.sub(r"^batch_\d+_", "", name)
-
-    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", name).strip(" ._")
-    return name or str(default or "audio")
-
-def clean_str(s, is_cjk_mode=None):
-    if not s: return ""
-    import unicodedata
-    s = s.replace('\ufeff', '')
-    s = unicodedata.normalize('NFC', s)
-    if is_cjk_mode is None:
-        is_cjk_mode = has_cjk(s)
-    if is_cjk_mode:
-        # 只保留 CJK 字符
-        s = "".join(re.findall(r'[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]', s))
-    else:
-        # 只保留字母(包括带声调的拉丁字母)，无视数字、斜杠、下划线及其他特殊字符
-        s = "".join(re.findall(r'[^\W\d_]', s))
-    return s.lower().strip()
-
-def fuzzy_match_word_to_path(word: str, available_paths: List[str], used_indices: Optional[List[int]] = None) -> Optional[int]:
-    is_cjk_mode = has_cjk(word)
-    if used_indices is None: used_indices = []
-    word_clean = clean_str(word, is_cjk_mode)
-    if not word_clean: return None
-
-    exact_matches = []
-    substring_matches = []
-
-    for i, p in enumerate(available_paths):
-        fname_raw = os.path.splitext(os.path.basename(p))[0]
-        fname_clean = clean_str(fname_raw, is_cjk_mode)
-
-        if fname_clean == word_clean:
-            exact_matches.append(i)
-        elif word_clean in fname_clean or fname_clean in word_clean:
-            substring_matches.append(i)
-
-    def sort_key(idx):
-        is_used = 1 if idx in used_indices else 0
-        len_diff = abs(len(os.path.splitext(os.path.basename(available_paths[idx]))[0]) - len(word))
-        return (is_used, len_diff)
-
-    if exact_matches:
-        exact_matches.sort(key=sort_key)
-        return exact_matches[0]
-
-    if substring_matches:
-        substring_matches.sort(key=sort_key)
-        return substring_matches[0]
-
-    return None
 
 def get_export_text_for_item(item: Dict[str, Any], real_index: int, num_points: int, pitch_floor: float = 75.0, pitch_ceiling: float = 600.0, voicing_threshold: float = 0.25) -> str:
     if item.get('start') is None or item.get('end') is None: return ""

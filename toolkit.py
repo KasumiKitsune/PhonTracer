@@ -35,116 +35,16 @@ from modules.ui_widgets import (
 )
 from modules.visual_splitter import VisualSplitter
 
-SCRIPT_EDITOR_DEFAULT_NAME = "新建自定义脚本"
-SCRIPT_EDITOR_DEFAULT_DESC = "自定义分析说明"
-SCRIPT_META_NAME_KEYS = ("脚本名称", "脚本名", "名称")
-SCRIPT_META_DESC_KEYS = ("功能说明", "脚本说明", "功能", "说明")
-
-
-def _parse_script_meta_comment_line(line):
-    text = line.strip()
-    if not text.startswith("#"):
-        return None, ""
-    text = text[1:].strip()
-    if not text:
-        return None, ""
-
-    match = re.match(r"^([^:：\-—]+)\s*[:：\-—]\s*(.+)$", text)
-    if not match:
-        return None, ""
-
-    key = match.group(1).strip()
-    value = match.group(2).strip()
-    if key in SCRIPT_META_NAME_KEYS:
-        return "name", value
-    if key in SCRIPT_META_DESC_KEYS:
-        return "description", value
-    return None, ""
-
-
-def strip_markdown_code_fence(code):
-    """自动剥离脚本首尾可能附带的 ```python ... ``` 或 ``` ... ``` 代码块围栏。
-    若包含自然语言开场白且包含 ```python ... ``` 围栏块，亦自动安全提取。"""
-    if not isinstance(code, str):
-        return "" if code is None else str(code)
-    text = code.strip()
-    if not text:
-        return ""
-    lines = text.splitlines()
-    if len(lines) >= 2 and lines[0].strip().startswith("```") and lines[-1].strip() == "```":
-        return "\n".join(lines[1:-1]).strip("\r\n")
-    if lines and lines[0].strip().startswith("```"):
-        body = lines[1:]
-        if body and body[-1].strip() == "```":
-            body = body[:-1]
-        return "\n".join(body).strip("\r\n")
-    if lines and lines[-1].strip() == "```":
-        return "\n".join(lines[:-1]).strip("\r\n")
-    m = re.search(r"```(?:python)?\s*\r?\n(.*?)\r?\n```", text, re.DOTALL)
-    if m:
-        extracted = m.group(1).strip("\r\n")
-        try:
-            compile(extracted, "<extracted_check>", "exec")
-            return extracted
-        except SyntaxError:
-            pass
-    return code
-
-
-def parse_script_metadata_comments(code):
-    """
-    从脚本头部注释中解析脚本名称和功能说明（自动剥离 Markdown 代码围栏，并兼容首行编码声明）。
-    期望格式：
-    # 脚本名称：声调均值曲线
-    # 功能说明：按分组绘制 F0 均值和离散区间
-    """
-    metadata = {"name": "", "description": ""}
-    if not code:
-        return metadata
-
-    clean_code = strip_markdown_code_fence(code)
-    for idx, raw_line in enumerate(clean_code.splitlines()):
-        if idx >= 15:
-            break
-        stripped = raw_line.strip()
-        if not stripped:
-            continue
-        if not stripped.startswith("#"):
-            break
-        key, value = _parse_script_meta_comment_line(stripped)
-        if key is None:
-            continue
-        if value and not metadata.get(key):
-            metadata[key] = value
-        if metadata["name"] and metadata["description"]:
-            break
-
-    return metadata
-
-
-def extract_error_line_number(err_text):
-    """从脚本报错日志或堆栈信息中解析 <custom_script> 的报错行号 line N。"""
-    if not err_text:
-        return None
-    text = str(err_text)
-    custom_matches = re.findall(r'File\s+"<(?:custom_script|unknown|string)>"\s*,\s*line\s+(\d+)', text, flags=re.IGNORECASE)
-    if custom_matches:
-        try:
-            val = int(custom_matches[-1])
-            if val > 0:
-                return val
-        except ValueError:
-            pass
-    line_matches = re.findall(r"(?:line\s+(\d+)|第\s*(\d+)\s*行)", text, flags=re.IGNORECASE)
-    for m_a, m_b in reversed(line_matches):
-        raw_n = m_a or m_b
-        try:
-            val = int(raw_n)
-            if val > 0:
-                return val
-        except ValueError:
-            pass
-    return None
+from modules.scripting.meta_parser import (
+    SCRIPT_EDITOR_DEFAULT_DESC,
+    SCRIPT_EDITOR_DEFAULT_NAME,
+    SCRIPT_META_DESC_KEYS,
+    SCRIPT_META_NAME_KEYS,
+    _parse_script_meta_comment_line,
+    extract_error_line_number,
+    parse_script_metadata_comments,
+    strip_markdown_code_fence,
+)
 
 
 # CTkFont 别名（不再全局拦截或强行常驻引用，避免内存泄漏）
@@ -169,6 +69,8 @@ import uuid
 import zipfile
 import json
 from modules.data_utils import fuzzy_match_word_to_path, make_textgrid_export_stem, parse_wordlist as parse_grouped_wordlist
+from modules.core.paths import get_asset_path
+from modules.core.text_io import parse_flat_wordlist, read_text_file_with_fallback
 from modules.project_manager import read_project_metadata_from_archive
 from modules.report_generator import get_pitch_floor, get_pitch_ceiling
 from modules.textgrid_converter import (
@@ -349,16 +251,7 @@ class CTkScriptList(ctk.CTkScrollableFrame):
 
 def parse_wordlist(raw_text: str):
     """解析字表，兼容主程序的【组别】格式"""
-    flat_words = []
-    raw_text = raw_text.lstrip('\ufeff')
-    for line in raw_text.split('\n'):
-        line = line.strip()
-        if not line: continue
-        if line.startswith('【') or line.startswith('[') or line.startswith('［') or line.startswith('#'):
-            continue
-        words = [w.strip() for w in re.split(r'[,\s\t，、;；]+', line) if w.strip()]
-        flat_words.extend(words)
-    return flat_words
+    return parse_flat_wordlist(raw_text)
 
 class ExportReportDialog(ctk.CTkToplevel):
     def __init__(self, parent, callback):
@@ -593,8 +486,8 @@ class ToolkitApp(ctk.CTk):
         self.setup_ui()
 
         # 设置窗口图标
-        ico_path = os.path.join(os.path.dirname(__file__), "assets", "toolkit.ico")
-        png_path = os.path.join(os.path.dirname(__file__), "assets", "toolkit.png")
+        ico_path = get_asset_path("toolkit.ico")
+        png_path = get_asset_path("toolkit.png")
 
         if os.path.exists(ico_path) and sys.platform == "win32":
             try:
@@ -686,9 +579,7 @@ class ToolkitApp(ctk.CTk):
         super().after(delay, self.process_gui_queue)
 
     def setup_icons(self):
-        icon_path = os.path.join("assets", "icons")
-        if not os.path.exists(icon_path):
-            icon_path = os.path.join(os.path.dirname(__file__), "assets", "icons")
+        icon_path = get_asset_path("icons")
 
         self.icons = {}
         self._icon_dark_map = {}
@@ -736,7 +627,7 @@ class ToolkitApp(ctk.CTk):
                 self.icons[f"{key}_dark"] = None
 
         # 加载软件 Logo
-        logo_path = os.path.join(os.path.dirname(__file__), "assets", "toolkit.png")
+        logo_path = get_asset_path("toolkit.png")
         if os.path.exists(logo_path):
             img = Image.open(logo_path)
             self.icons["logo"] = ctk.CTkImage(light_image=img, dark_image=img, size=(32, 32))
@@ -2245,17 +2136,7 @@ class ToolkitApp(ctk.CTk):
 
     @staticmethod
     def _read_text_file_with_fallback(path, encodings=("utf-8-sig", "utf-8", "gbk")):
-        last_error = None
-        for encoding in encodings:
-            try:
-                with open(path, "r", encoding=encoding) as f:
-                    return f.read()
-            except UnicodeDecodeError as e:
-                last_error = e
-        if last_error:
-            raise last_error
-        with open(path, "r", encoding=encodings[0]) as f:
-            return f.read()
+        return read_text_file_with_fallback(path, encodings=encodings, strict=True)
 
     @classmethod
     def _load_wordlist_source(cls, path):
@@ -2793,9 +2674,7 @@ class ToolkitApp(ctk.CTk):
         # 生成白色的 play 和 pause 图标
         for icon_key, filename in [("play_white", "play.png"), ("pause_white", "pause.png")]:
             try:
-                icon_path = os.path.join("assets", "icons", filename)
-                if not os.path.exists(icon_path):
-                    icon_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "icons", filename)
+                icon_path = get_asset_path("icons", filename)
                 if os.path.exists(icon_path):
                     from PIL import Image
                     img = Image.open(icon_path).convert("RGBA")

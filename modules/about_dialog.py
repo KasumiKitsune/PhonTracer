@@ -5,6 +5,7 @@ import tkinter as tk
 import customtkinter as ctk
 from PIL import Image
 from modules.version import __version__, APP_NAME
+from modules.core.paths import get_asset_path, get_exe_dir, resolve_sibling_command
 
 class AboutDialog(ctk.CTkToplevel):
     def __init__(self, parent, check_update_callback):
@@ -45,13 +46,9 @@ class AboutDialog(ctk.CTkToplevel):
         logo_w, logo_h = 75, 75
         logo_img = None
         
-        if hasattr(sys, '_MEIPASS'):
-            base_dir = sys._MEIPASS
-        else:
-            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        logo_path = os.path.join(base_dir, "assets", "icon.png")
+        logo_path = get_asset_path("icon.png")
         if not os.path.exists(logo_path):
-            logo_path = os.path.join(base_dir, "assets", "logo.png")
+            logo_path = get_asset_path("logo.png")
             
         if os.path.exists(logo_path):
             try:
@@ -206,11 +203,7 @@ class AboutDialog(ctk.CTkToplevel):
             self.parent.after(100, lambda: self.check_update_callback(is_manual=True))
 
     def open_manual(self):
-        if hasattr(sys, '_MEIPASS'):
-            base_dir = sys._MEIPASS
-        else:
-            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        manual_path = os.path.join(base_dir, "assets", "manual", "manual.html")
+        manual_path = get_asset_path("manual", "manual.html")
         if os.path.exists(manual_path):
             webbrowser.open(f"file:///{manual_path.replace(os.sep, '/')}")
         else:
@@ -219,45 +212,21 @@ class AboutDialog(ctk.CTkToplevel):
 
     def launch_toolkit(self):
         import subprocess
-        # 检查是否是在打包后的环境中运行
-        if getattr(sys, 'frozen', False):
-            base_dir = os.path.dirname(sys.executable)
-            exe_path = os.path.join(base_dir, "Toolkit.exe")
-            if os.path.exists(exe_path):
-                subprocess.Popen([exe_path])
-            else:
-                tk.messagebox.showerror("错误", f"未找到工具箱可执行程序：{exe_path}", parent=self)
+        cmd = resolve_sibling_command("Toolkit")
+        if cmd:
+            subprocess.Popen(cmd)
         else:
-            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            script_path = os.path.join(base_dir, "toolkit.py")
-            if os.path.exists(script_path):
-                subprocess.Popen([sys.executable, script_path])
-            else:
-                tk.messagebox.showerror("错误", f"未找到工具箱脚本：{script_path}", parent=self)
+            expected = os.path.join(str(get_exe_dir()), "Toolkit.exe" if getattr(sys, "frozen", False) else "toolkit.py")
+            tk.messagebox.showerror("错误", f"未找到工具箱程序：{expected}", parent=self)
 
     def launch_cli(self):
         import subprocess
-        # 检查是否是在打包后的环境中运行
-        if getattr(sys, 'frozen', False):
-            base_dir = os.path.dirname(sys.executable)
-            exe_path = os.path.join(base_dir, "PhonTracerCLI.exe")
-            if os.path.exists(exe_path):
-                kwargs = {}
-                if sys.platform == 'win32':
-                    kwargs['creationflags'] = subprocess.CREATE_NEW_CONSOLE
-                subprocess.Popen([exe_path], **kwargs)
-            else:
-                tk.messagebox.showerror("错误", f"未找到命令行接口可执行程序：{exe_path}", parent=self)
+        cmd = resolve_sibling_command("PhonTracerCLI")
+        if cmd:
+            kwargs = {}
+            if sys.platform == 'win32':
+                kwargs['creationflags'] = subprocess.CREATE_NEW_CONSOLE
+            subprocess.Popen(cmd, **kwargs)
         else:
-            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            script_path = os.path.join(base_dir, "cli.py")
-            if os.path.exists(script_path):
-                python_exe = sys.executable
-                if python_exe.endswith("pythonw.exe"):
-                    python_exe = python_exe.replace("pythonw.exe", "python.exe")
-                kwargs = {}
-                if sys.platform == 'win32':
-                    kwargs['creationflags'] = subprocess.CREATE_NEW_CONSOLE
-                subprocess.Popen([python_exe, script_path], **kwargs)
-            else:
-                tk.messagebox.showerror("错误", f"未找到命令行脚本：{script_path}", parent=self)
+            expected = os.path.join(str(get_exe_dir()), "PhonTracerCLI.exe" if getattr(sys, "frozen", False) else "cli.py")
+            tk.messagebox.showerror("错误", f"未找到命令行程序：{expected}", parent=self)

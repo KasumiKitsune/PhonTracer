@@ -36,6 +36,7 @@ ctk.CTkCheckBox._draw = _patched_checkbox_draw
 ctk.CTkCheckBox._phontracer_dynamic_radius_patched = True
 
 from modules.version import APP_NAME, __version__
+from modules.core.paths import get_asset_path
 
 # 配置日志
 logging.basicConfig(
@@ -94,9 +95,9 @@ def show_splash_and_load(startup_files=None):
 
     try:
         from PIL import Image
-        logo_path = os.path.join(os.path.dirname(__file__), "assets", "logo.png")
+        logo_path = get_asset_path("logo.png")
         if not os.path.exists(logo_path):
-            logo_path = os.path.join(os.path.dirname(__file__), "assets", "icon.png")
+            logo_path = get_asset_path("icon.png")
         
         if os.path.exists(logo_path):
             img = Image.open(logo_path)

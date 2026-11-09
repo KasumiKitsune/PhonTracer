@@ -132,23 +132,8 @@ def calculate_sha256(filepath: str) -> str:
     except Exception:
         return "无法计算指纹"
 
-def split_into_syllables(label: str) -> List[str]:
-    if not label:
-        return []
-    # Strip (缺失) or other suffixes
-    clean_lbl = label.replace(" (缺失)", "").replace(" (未匹配)", "").strip()
-    if "/" in clean_lbl:
-        return [s.strip() for s in clean_lbl.split("/") if s.strip()]
-
-    # Check if CJK
-    has_cjk = bool(re_cjk.search(clean_lbl)) if 're_cjk' in globals() else bool(any(ord(c) > 127 for c in clean_lbl))
-    if has_cjk:
-        import re
-        return re.findall(r'[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]', clean_lbl)
-    return [clean_lbl]
-
 import re
-re_cjk = re.compile(r'[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]')
+from .core.text_io import _CJK_RE as re_cjk, split_into_syllables
 
 def load_item_cache_if_any(item: Dict[str, Any], zip_ref: Optional[zipfile.ZipFile], spk: Optional[Dict[str, Any]] = None) -> Tuple[Any, Any, str, str]:
     pitch_data = None
@@ -604,82 +589,11 @@ def generate_natural_language_summary(state: Dict[str, Any]) -> str:
     return summary
 
 
-def hz_to_chao_t(hz_val: Optional[float], s_min: float, s_max: float) -> Optional[float]:
-    """将 Hz 转换为统一五度值（T-value, 0.0 ~ 5.0 对数标度，全工程统一调用 data_utils.hz_to_t_value）。"""
-    from .data_utils import hz_to_t_value
-    return hz_to_t_value(hz_val, s_min, s_max, clip=True)
-
-
-def _t_to_5deg_continuous(val: float) -> float:
-    """将 [0.0, 5.0] 连续 T 值映射为 [1.0, 5.0] 连续度值（[0,1]->1度, ..., [4,5]->5度）。"""
-    v = float(np.clip(val, 0.0, 5.0))
-    return 1.0 + 0.8 * v
-
-
-def fit_chao_tone_code(
-    t_contour: List[float],
-    t_start: Optional[float] = None,
-    t_mid: Optional[float] = None,
-    t_end: Optional[float] = None,
-) -> str:
-    """根据 5 点代表性 T 值轨迹（[0.0, 5.0] 标度）与首/中/尾 T 值拟合整型声调五度值编码建议（如 "55", "35", "214", "51"）。"""
-    raw_valid = [float(v) for v in (t_contour or []) if v is not None and np.isfinite(v)]
-    if not raw_valid:
-        if t_start is not None and t_end is not None and np.isfinite(t_start) and np.isfinite(t_end):
-            raw_valid = [float(t_start), float(t_mid) if (t_mid is not None and np.isfinite(t_mid)) else float((t_start + t_end) / 2.0), float(t_end)]
-        else:
-            return ""
-
-    valid = [_t_to_5deg_continuous(v) for v in raw_valid]
-    t0 = _t_to_5deg_continuous(float(t_start)) if (t_start is not None and np.isfinite(t_start)) else valid[0]
-    t2 = _t_to_5deg_continuous(float(t_mid)) if (t_mid is not None and np.isfinite(t_mid)) else valid[len(valid) // 2]
-    t4 = _t_to_5deg_continuous(float(t_end)) if (t_end is not None and np.isfinite(t_end)) else valid[-1]
-
-    d_start = int(np.clip(round(t0), 1, 5))
-    d_end = int(np.clip(round(t4), 1, 5))
-
-    span = float(max(valid) - min(valid))
-    if span < 0.60 and abs(t4 - t0) < 0.50:
-        d_avg = int(np.clip(round(float(np.mean(valid))), 1, 5))
-        return f"{d_avg}{d_avg}"
-
-    inner = valid[1:-1] if len(valid) >= 3 else [t2]
-    inner_min = float(min(inner))
-    inner_max = float(max(inner))
-    dip_depth = min(t0, t4) - inner_min
-    peak_height = inner_max - max(t0, t4)
-
-    if dip_depth >= 0.45 and dip_depth >= peak_height:
-        d_turn = int(np.clip(round(inner_min), 1, 5))
-        if d_turn == d_start and (t0 - inner_min) >= 0.55 and d_turn > 1:
-            d_turn -= 1
-        if d_turn == d_end and (t4 - inner_min) >= 0.55 and d_turn > 1:
-            d_turn -= 1
-        if d_turn < d_start and d_turn < d_end:
-            return f"{d_start}{d_turn}{d_end}"
-
-    if peak_height >= 0.45:
-        d_turn = int(np.clip(round(inner_max), 1, 5))
-        if d_turn == d_start and (inner_max - t0) >= 0.55 and d_turn < 5:
-            d_turn += 1
-        if d_turn == d_end and (inner_max - t4) >= 0.55 and d_turn < 5:
-            d_turn += 1
-        if d_turn > d_start and d_turn > d_end:
-            return f"{d_start}{d_turn}{d_end}"
-
-    if d_start == d_end:
-        if (t4 - t0) >= 0.55:
-            if d_end < 5:
-                d_end += 1
-            elif d_start > 1:
-                d_start -= 1
-        elif (t0 - t4) >= 0.55:
-            if d_end > 1:
-                d_end -= 1
-            elif d_start < 5:
-                d_start += 1
-
-    return f"{d_start}{d_end}"
+from .core.acoustic_math import (
+    _t_to_5deg_continuous,
+    fit_chao_tone_code,
+    hz_to_chao_t,
+)
 
 
 def _extract_item_acoustic_record(

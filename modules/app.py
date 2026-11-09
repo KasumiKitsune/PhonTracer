@@ -40,6 +40,7 @@ from .project_tree import ProjectTreePanel
 from .speaker_manager import SpeakerManager
 from .project_manager import ProjectManager
 from .version import APP_NAME, __version__
+from .core.paths import get_asset_path
 import sys
 
 def _startup_debug(message):
@@ -82,9 +83,7 @@ class PhoneticsApp:
 
         # 设置窗口图标
         try:
-            icon_file = os.path.join("assets", "icon.ico")
-            if not os.path.exists(icon_file):
-                icon_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "icon.ico")
+            icon_file = get_asset_path("icon.ico")
             if os.path.exists(icon_file):
                 self.root.iconbitmap(icon_file)
         except Exception:
@@ -747,9 +746,7 @@ class PhoneticsApp:
 
     def setup_icons(self):
         # 预加载所有图标
-        icon_path = os.path.join("assets", "icons")
-        if not os.path.exists(icon_path):
-            icon_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "icons")
+        icon_path = get_asset_path("icons")
 
         self.icons = {}
         icon_files = {
@@ -870,16 +867,12 @@ class PhoneticsApp:
                 self.icons[key] = None
                 self.tk_icons[key] = None
 
-        logo_path = os.path.join("assets", "icon.png")
-        if not os.path.exists(logo_path):
-            logo_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "icon.png")
+        logo_path = get_asset_path("icon.png")
         if os.path.exists(logo_path):
             img = Image.open(logo_path)
             self.icons["logo"] = ctk.CTkImage(light_image=img, dark_image=img, size=(45, 45))
 
-        brand_logo_path = os.path.join("assets", "logo.png")
-        if not os.path.exists(brand_logo_path):
-            brand_logo_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "logo.png")
+        brand_logo_path = get_asset_path("logo.png")
         if os.path.exists(brand_logo_path):
             img = Image.open(brand_logo_path)
             orig_w, orig_h = img.size

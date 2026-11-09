@@ -25,50 +25,14 @@ warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*Degrees of
 warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*All-NaN slice encountered.*")
 
 
-def _safe_nanmean(arr, axis=None, default=np.nan):
-    a = np.asarray(arr, dtype=float)
-    if a.size == 0:
-        return default
-    if axis is None:
-        valid = a[np.isfinite(a)]
-        return float(np.mean(valid)) if valid.size > 0 else default
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", category=RuntimeWarning)
-        if a.ndim == 2 and axis == 0:
-            out = np.full(a.shape[1], default, dtype=float)
-            for col_idx in range(a.shape[1]):
-                col = a[:, col_idx]
-                valid = col[np.isfinite(col)]
-                if valid.size > 0:
-                    out[col_idx] = float(np.mean(valid))
-            return out
-        return np.nanmean(a, axis=axis)
-
-
-def _safe_nanstd(arr, axis=None, default=np.nan):
-    a = np.asarray(arr, dtype=float)
-    if a.size == 0:
-        return default
-    if axis is None:
-        valid = a[np.isfinite(a)]
-        return float(np.std(valid)) if valid.size > 0 else default
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", category=RuntimeWarning)
-        if a.ndim == 2 and axis == 0:
-            out = np.full(a.shape[1], default, dtype=float)
-            for col_idx in range(a.shape[1]):
-                col = a[:, col_idx]
-                valid = col[np.isfinite(col)]
-                if valid.size > 0:
-                    out[col_idx] = float(np.std(valid))
-            return out
-        return np.nanstd(a, axis=axis)
-
-
-def _safe_nanmax(arr, default=np.nan):
-    a = np.asarray(arr, dtype=float)
-    valid = a[np.isfinite(a)]
-    return float(np.max(valid)) if valid.size > 0 else default
+from .core.acoustic_math import (
+    _compute_2d_convex_hull_and_area,
+    _compute_pillai_bartlett_trace,
+    _safe_nanmax,
+    _safe_nanmean,
+    _safe_nanstd,
+    fit_chao_tone_code,
+)
 
 from scipy.stats import gaussian_kde
 try:
@@ -84,16 +48,6 @@ from .data_utils import (
     compute_speaker_f0_bounds,
     hz_to_t_value,
 )
-try:
-    from .report_generator import fit_chao_tone_code
-except Exception:
-    def fit_chao_tone_code(t_contour, t_start=None, t_mid=None, t_end=None):
-        vals = [float(v) for v in (t_contour or []) if v is not None and np.isfinite(v)]
-        if not vals:
-            return "33"
-        d0 = int(np.clip(math.floor(vals[0]) + 1, 1, 5))
-        d1 = int(np.clip(math.floor(vals[-1]) + 1, 1, 5))
-        return f"{d0}{d1}"
 
 
 PUBLICATION_PRESETS = {
@@ -212,98 +166,6 @@ PUBLICATION_PRESETS = {
     },
 }
 
-
-def _compute_2d_convex_hull_and_area(points_xy):
-    """Compute 2D convex hull polygon vertices and enclosed area (VSA)."""
-    pts = np.asarray(points_xy, dtype=float)
-    if pts.ndim != 2 or pts.shape[1] < 2:
-        return np.empty((0, 2)), 0.0
-    valid = np.isfinite(pts[:, 0]) & np.isfinite(pts[:, 1])
-    pts = pts[valid, :2]
-    if len(pts) < 3:
-        return pts, 0.0
-
-    # Deduplicate near-identical points
-    unique_pts = np.unique(np.round(pts, 6), axis=0)
-    if len(unique_pts) < 3:
-        return unique_pts, 0.0
-
-    if ConvexHull is not None:
-        try:
-            hull = ConvexHull(unique_pts)
-            verts = unique_pts[hull.vertices]
-            # In 2D scipy.spatial.ConvexHull, hull.volume is the polygon area and hull.area is perimeter
-            area = float(hull.volume)
-            return verts, area
-        except Exception:
-            pass
-
-    # Fallback: Andrew's monotone chain 2D convex hull + Shoelace area formula
-    sorted_pts = unique_pts[np.lexsort((unique_pts[:, 1], unique_pts[:, 0]))]
-
-    def _cross(o, a, b):
-        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
-
-    lower = []
-    for p in sorted_pts:
-        while len(lower) >= 2 and _cross(lower[-2], lower[-1], p) <= 0:
-            lower.pop()
-        lower.append(p)
-    upper = []
-    for p in reversed(sorted_pts):
-        while len(upper) >= 2 and _cross(upper[-2], upper[-1], p) <= 0:
-            upper.pop()
-        upper.append(p)
-    hull_pts = np.asarray(lower[:-1] + upper[:-1], dtype=float)
-    if len(hull_pts) < 3:
-        return hull_pts, 0.0
-    x = hull_pts[:, 0]
-    y = hull_pts[:, 1]
-    area = 0.5 * float(np.abs(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1))))
-    return hull_pts, area
-
-
-def _compute_pillai_bartlett_trace(pts_a, pts_b):
-    """
-    Compute two-group MANOVA Pillai-Bartlett Trace (Pillai score in [0, 1])
-    and centroid Euclidean distance in F1-F2 (or F1-F2-F3) acoustic space.
-    Small Pillai score (~0) indicates high overlap / vowel merger;
-    large Pillai score (~1) indicates distinct / separated vowel categories.
-    """
-    a = np.asarray(pts_a, dtype=float)
-    b = np.asarray(pts_b, dtype=float)
-    if a.ndim == 1:
-        a = a.reshape(-1, 1)
-    if b.ndim == 1:
-        b = b.reshape(-1, 1)
-    a = a[np.all(np.isfinite(a), axis=1)]
-    b = b[np.all(np.isfinite(b), axis=1)]
-    if len(a) == 0 or len(b) == 0:
-        return np.nan, np.nan
-
-    mean_a = np.mean(a, axis=0)
-    mean_b = np.mean(b, axis=0)
-    diff = mean_a - mean_b
-    euclid_dist = float(np.linalg.norm(diff))
-    if euclid_dist < 1e-10 and a.shape == b.shape and np.allclose(a, b, atol=1e-8):
-        return 0.0, 0.0
-
-    n_a = float(len(a))
-    n_b = float(len(b))
-    p = a.shape[1]
-    B = (n_a * n_b / (n_a + n_b)) * np.outer(diff, diff)
-    da = a - mean_a
-    db = b - mean_b
-    W = da.T @ da + db.T @ db
-    T = B + W
-    reg = 1e-6 * max(1.0, float(np.trace(T)) / float(p)) * np.eye(p)
-    try:
-        mat = np.linalg.solve(T + reg, B)
-        pillai = float(np.trace(mat))
-    except Exception:
-        pillai = float(np.trace(B) / max(1e-9, np.trace(T)))
-    pillai = float(np.clip(pillai, 0.0, 1.0))
-    return pillai, euclid_dist
 
 _GUI_IMPORT_ERROR = None
 
