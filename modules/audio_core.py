@@ -72,6 +72,12 @@ VAD_TIME_STEP = 0.01
 VAD_MIN_DURATION = 0.1
 VAD_CLEAR_GAP_THRESHOLD = 0.12
 
+def _get_mono_values(part: parselmouth.Sound) -> np.ndarray:
+    """将多声道音频均值混合为单声道一维数组，避免右声道录音被误判为静音。"""
+    if part.values.ndim > 1 and part.values.shape[0] > 1:
+        return np.mean(part.values, axis=0)
+    return part.values[0]
+
 def trim_bounds_by_amplitude(start: float, end: float, xs, values, threshold: float = SILENCE_AMPLITUDE_THRESHOLD) -> Tuple[float, float]:
     """
     根据片段内相对时间轴和振幅，返回剔除首尾静音后的绝对时间边界。
@@ -108,7 +114,7 @@ def detect_vowel_onset(snd: parselmouth.Sound, rough_start: float, rough_end: fl
         return rough_start
 
     part = snd.extract_part(from_time=part_s, to_time=part_e)
-    vals = part.values[0]
+    vals = _get_mono_values(part)
     sr = part.sampling_frequency
 
     # 设定 10ms 窗口，2ms 步长（高分辨率时间轴）
@@ -298,7 +304,7 @@ def core_microscopic_vowel_nucleus(snd: parselmouth.Sound, global_pitch_or_array
 
         if trim_silence:
             trim_part = snd.extract_part(from_time=temp_s, to_time=temp_e)
-            vals = trim_part.values[0]
+            vals = _get_mono_values(trim_part)
             trim_xs = trim_part.xs()
             final_s, final_e = trim_bounds_by_amplitude(temp_s, temp_e, trim_xs, vals)
 
@@ -329,7 +335,7 @@ def recalculate_bounds_fast(snd: parselmouth.Sound, global_pitch_or_arrays: Unio
 
         if trim_silence:
             trim_part = snd.extract_part(from_time=temp_s, to_time=temp_e) if temp_s != 0 or temp_e != snd.get_total_duration() else snd
-            vals = trim_part.values[0]
+            vals = _get_mono_values(trim_part)
             trim_xs = trim_part.xs()
             final_s, final_e = trim_bounds_by_amplitude(temp_s, temp_e, trim_xs, vals)
 
@@ -603,6 +609,27 @@ def extract_formants(snd: parselmouth.Sound, params: Dict[str, Any]) -> Dict[str
     }
 
 
+def _sample_preview_f0(p_xs: np.ndarray, p_freqs: np.ndarray, mic_s: float, mic_e: float, pts: int = 11) -> List[float]:
+    """统一 11 点（或指定点数）基频采样逻辑：使用 np.interp 线性插值，并在有效点距离 > 25ms 时归零。"""
+    preview_times = np.linspace(mic_s, mic_e, pts)
+    p_xs_arr = np.asarray(p_xs, dtype=float)
+    p_freqs_arr = np.asarray(p_freqs, dtype=float)
+    p_freqs_clean = np.where(np.isnan(p_freqs_arr) | (p_freqs_arr <= 0), 0.0, p_freqs_arr)
+
+    if len(p_xs_arr) == 0:
+        return [0.0] * pts
+
+    preview_f0 = np.interp(preview_times, p_xs_arr, p_freqs_clean).tolist()
+    valid_xs = p_xs_arr[p_freqs_clean > 0]
+    if len(valid_xs) == 0:
+        return [0.0] * pts
+
+    for j, t in enumerate(preview_times):
+        if np.min(np.abs(valid_xs - t)) > 0.025:
+            preview_f0[j] = 0.0
+    return preview_f0
+
+
 def _sample_formants_helper(snd: parselmouth.Sound, mic_s: float, mic_e: float, params: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     formant_data = extract_formants(snd, params)
     pts = int(params.get('pts', 11))
@@ -650,26 +677,53 @@ def _sample_formants_helper(snd: parselmouth.Sound, mic_s: float, mic_e: float, 
     return formant_data, {"f1": preview_f1, "f2": preview_f2}
 
 
-def auto_split_to_chars_bounds(snd: parselmouth.Sound, mic_s: float, mic_e: float, inner_splits: List[float], label_len: int, params: Dict[str, float]) -> List[List[float]]:
+def auto_split_to_chars_bounds(snd: parselmouth.Sound, mic_s: float, mic_e: float, inner_splits: List[float], label_len: int, params: Dict[str, float], pitch_data: Union[Dict[str, Any], Tuple[np.ndarray, np.ndarray], parselmouth.Pitch] = None) -> List[List[float]]:
     splits = [mic_s] + [s for s in inner_splits if mic_s < s < mic_e] + [mic_e]
     if len(splits) != label_len + 1:
         splits = np.linspace(mic_s, mic_e, label_len + 1).tolist()
+
+    cached_xs = None
+    cached_freqs = None
+    if pitch_data is not None:
+        try:
+            if isinstance(pitch_data, dict):
+                cached_xs = np.asarray(pitch_data['xs'], dtype=float)
+                cached_freqs = np.asarray(pitch_data['freqs'], dtype=float)
+            elif isinstance(pitch_data, tuple) and len(pitch_data) == 2:
+                cached_xs = np.asarray(pitch_data[0], dtype=float)
+                cached_freqs = np.asarray(pitch_data[1], dtype=float)
+            elif hasattr(pitch_data, 'xs'):
+                cached_xs = np.asarray(pitch_data.xs(), dtype=float)
+                cached_freqs = np.asarray(pitch_data.selected_array['frequency'], dtype=float)
+                cached_freqs = np.where(np.isnan(cached_freqs) | (cached_freqs <= 0), 0.0, cached_freqs)
+        except Exception:
+            cached_xs = None
+            cached_freqs = None
 
     chars_bounds = []
     for i in range(len(splits) - 1):
         c_s, c_e = splits[i], splits[i+1]
         try:
             if c_e - c_s > 0.01:
-                c_snd = snd.extract_part(from_time=c_s, to_time=c_e)
-                c_pitch_data = extract_f0(c_snd, params)
-                p_xs = c_pitch_data['xs'] + c_s
-                p_freqs = c_pitch_data['freqs']
-                valid_idx = np.where(p_freqs > 0)[0]
-                if len(valid_idx) >= 2:
-                    v_start, v_end = p_xs[valid_idx[0]], p_xs[valid_idx[-1]]
-                    chars_bounds.append([v_start, v_end])
+                if cached_xs is not None and cached_freqs is not None and len(cached_xs) > 0:
+                    mask = (cached_xs >= c_s) & (cached_xs <= c_e) & (cached_freqs > 0)
+                    valid_xs = cached_xs[mask]
+                    if len(valid_xs) >= 2:
+                        v_start, v_end = float(valid_xs[0]), float(valid_xs[-1])
+                        chars_bounds.append([v_start, v_end])
+                    else:
+                        chars_bounds.append([c_s, c_e])
                 else:
-                    chars_bounds.append([c_s, c_e])
+                    c_snd = snd.extract_part(from_time=c_s, to_time=c_e)
+                    c_pitch_data = extract_f0(c_snd, params)
+                    p_xs = c_pitch_data['xs'] + c_s
+                    p_freqs = c_pitch_data['freqs']
+                    valid_idx = np.where(p_freqs > 0)[0]
+                    if len(valid_idx) >= 2:
+                        v_start, v_end = float(p_xs[valid_idx[0]]), float(p_xs[valid_idx[-1]])
+                        chars_bounds.append([v_start, v_end])
+                    else:
+                        chars_bounds.append([c_s, c_e])
             else:
                 chars_bounds.append([c_s, c_e])
         except Exception:
@@ -704,28 +758,16 @@ def batch_process_worker(path: str, params: Dict[str, float], trim_silence: bool
             inner_splits = auto_split_inner_word(snd, raw_s, raw_e, len(syls), pitch_data=pitch_data, output_meta=meta)
             split_warnings = meta.get('split_warnings', [])
             split_confidence = meta.get('split_confidence', 1.0)
-            chars_bounds = auto_split_to_chars_bounds(snd, raw_s, raw_e, inner_splits, len(syls), params)
+            chars_bounds = auto_split_to_chars_bounds(snd, raw_s, raw_e, inner_splits, len(syls), params, pitch_data=pitch_data)
             if chars_bounds:
                 mic_s = chars_bounds[0][0]
                 mic_e = chars_bounds[-1][1]
         else:
             chars_bounds = [[mic_s, mic_e]]
 
-        preview_times = np.linspace(mic_s, mic_e, 11)
         p_xs = pitch_data['xs']
         p_freqs = pitch_data['freqs']
-        preview_f0 = np.interp(preview_times, p_xs, p_freqs).tolist()
-
-        # 修正：跨越静音区（>25ms）时强制归零，避免产生假数据桥接
-        for j, t in enumerate(preview_times):
-            valid_indices = np.where(p_freqs > 0)[0]
-            if len(valid_indices) == 0:
-                preview_f0[j] = 0.0
-                continue
-            valid_xs = p_xs[valid_indices]
-            if np.min(np.abs(valid_xs - t)) > 0.025:
-                preview_f0[j] = 0.0
-
+        preview_f0 = _sample_preview_f0(p_xs, p_freqs, mic_s, mic_e, 11)
         has_empty_data = any(f == 0.0 for f in preview_f0)
 
         formant_data = None
@@ -754,7 +796,8 @@ def batch_process_worker(path: str, params: Dict[str, float], trim_silence: bool
             'split_confidence': split_confidence
         }
     except Exception as e:
-        return {'success': False, 'error': str(e), 'path': path}
+        fallback_lbl = word_label if word_label else os.path.splitext(os.path.basename(str(path or '')))[0]
+        return {'label': fallback_lbl or '未知条目', 'group': '独立文件', 'success': False, 'error': str(e), 'path': path}
 
 
 def find_minimum_intensity_valley(snd: parselmouth.Sound, t_ref: float, search_window: float = 0.08) -> float:
@@ -820,6 +863,7 @@ def long_process_worker(snd_values: np.ndarray, snd_sf: float, pitch_xs: np.ndar
         split_confidence = 1.0
         from .data_utils import split_into_syllables
         syls = split_into_syllables(word_label) if word_label else []
+        local_p_data = {'xs': shifted_xs, 'freqs': pitch_freqs}
         if locked_chars_bounds:
             chars_bounds = [[s + ms, e + ms] for s, e in locked_chars_bounds]
             inner_splits = [end for _start, end in chars_bounds[:-1]]
@@ -833,12 +877,11 @@ def long_process_worker(snd_values: np.ndarray, snd_sf: float, pitch_xs: np.ndar
                 splits = [find_minimum_intensity_valley(snd_part, t_ref) for t_ref in local_ref_splits]
             else:
                 meta = {}
-                p_data = {'xs': shifted_xs, 'freqs': pitch_freqs}
-                splits = auto_split_inner_word(snd_part, raw_s, raw_e, len(syls), pitch_data=p_data, output_meta=meta)
+                splits = auto_split_inner_word(snd_part, raw_s, raw_e, len(syls), pitch_data=local_p_data, output_meta=meta)
                 split_warnings = meta.get('split_warnings', [])
                 split_confidence = meta.get('split_confidence', 1.0)
 
-            local_chars_bounds = auto_split_to_chars_bounds(snd_part, raw_s, raw_e, splits, len(syls), params)
+            local_chars_bounds = auto_split_to_chars_bounds(snd_part, raw_s, raw_e, splits, len(syls), params, pitch_data=local_p_data)
             chars_bounds = [[s + ms, e + ms] for s, e in local_chars_bounds]
             inner_splits = [t + ms for t in splits]  # 复原到全局时间轴
             if local_chars_bounds:
@@ -852,16 +895,7 @@ def long_process_worker(snd_values: np.ndarray, snd_sf: float, pitch_xs: np.ndar
         raw_s += ms
         raw_e += ms
 
-        preview_times = np.linspace(mic_s, mic_e, 11)
-        preview_f0 = []
-        for t in preview_times:
-            idx = np.argmin(np.abs(pitch_xs - t))
-            if np.abs(pitch_xs[idx] - t) < 0.1:
-                f = pitch_freqs[idx]
-            else:
-                f = 0.0
-            preview_f0.append(0.0 if np.isnan(f) else f)
-
+        preview_f0 = _sample_preview_f0(pitch_xs, pitch_freqs, mic_s, mic_e, 11)
         has_empty_data = any(f == 0.0 for f in preview_f0)
 
         formant_data = None
@@ -878,6 +912,7 @@ def long_process_worker(snd_values: np.ndarray, snd_sf: float, pitch_xs: np.ndar
             'raw_s': raw_s, 'raw_e': raw_e,
             'inner_splits': inner_splits,
             'chars_bounds': chars_bounds,
+            'preview_f0': preview_f0,
             'formant_data': formant_data,
             'preview_formants': preview_formants,
             'has_empty_data': has_empty_data,
@@ -906,6 +941,7 @@ def process_single_long_word(snd_values: np.ndarray, snd_sf: float, word: str, m
             'raw_end': res['raw_e'],
             'inner_splits': res.get('inner_splits', []),
             'chars_bounds': res.get('chars_bounds', []),
+            'preview_f0': res.get('preview_f0', []),
             'formant_data': res.get('formant_data'),
             'preview_formants': res.get('preview_formants'),
             'has_empty_data': res.get('has_empty_data', False),
@@ -1021,20 +1057,9 @@ def batch_process_worker_with_textgrid(path: str, tg_path: str, params: Dict[str
                 params['db'], params['skip_front'], trim_silence
             )
 
-        preview_times = np.linspace(mic_s, mic_e, 11)
         p_xs = pitch_data['xs']
         p_freqs = pitch_data['freqs']
-        preview_f0 = np.interp(preview_times, p_xs, p_freqs).tolist()
-
-        for j, t in enumerate(preview_times):
-            valid_indices = np.where(p_freqs > 0)[0]
-            if len(valid_indices) == 0:
-                preview_f0[j] = 0.0
-                continue
-            valid_xs = p_xs[valid_indices]
-            if np.min(np.abs(valid_xs - t)) > 0.025:
-                preview_f0[j] = 0.0
-
+        preview_f0 = _sample_preview_f0(p_xs, p_freqs, mic_s, mic_e, 11)
         has_empty_data = any(f == 0.0 for f in preview_f0)
 
         formant_data = None
@@ -1062,4 +1087,5 @@ def batch_process_worker_with_textgrid(path: str, tg_path: str, params: Dict[str
             'has_empty_data': has_empty_data
         }
     except Exception as e:
-        return {'success': False, 'error': str(e), 'path': path}
+        fallback_lbl = os.path.splitext(os.path.basename(str(path or '')))[0]
+        return {'label': fallback_lbl or '未知条目', 'group': '导入内容', 'success': False, 'error': str(e), 'path': path}

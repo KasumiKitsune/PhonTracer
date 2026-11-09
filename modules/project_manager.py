@@ -39,6 +39,7 @@ from .project_adaptor import (
     prune_unreferenced_resources,
     validate_project_resources,
     normalize_independent_item_boundaries,
+    load_compatible_sound,
     _iter_state_resource_refs
 )
 
@@ -513,10 +514,10 @@ class ProjectManager:
                 with self._timer_lock:
                     if (
                         self.auto_save_enabled
-                        and generation == self._auto_save_generation
+                        and generation != self._auto_save_generation
                         and self._auto_save_timer is None
                     ):
-                        self._schedule_auto_save(self.auto_save_interval, generation)
+                        self._schedule_auto_save(self.auto_save_delay, self._auto_save_generation)
 
         self._auto_save_timer = threading.Timer(delay, run_save)
         self._auto_save_timer.daemon = True
@@ -631,8 +632,7 @@ class ProjectManager:
         t.start()
 
     def save_autosave_snapshot(self):
-        self.save_to_workspace(incremental=True)
-        self._trigger_async_backup()
+        return self.save_to_workspace(incremental=True)
 
     def save_to_workspace(self, incremental=False):
         with self._save_lock:
@@ -1169,7 +1169,7 @@ class ProjectManager:
             if long_audio_rel:
                 spk.long_audio_path = self._resolve_project_path(long_audio_rel, workspace_dir=workspace_dir)
                 if os.path.exists(spk.long_audio_path):
-                    spk.pending_long_snd = parselmouth.Sound(spk.long_audio_path)
+                    spk.pending_long_snd = load_compatible_sound(spk.long_audio_path)
 
             if spk.pending_long_snd:
                 spk.tab_mode = "单条长音频"
@@ -1215,7 +1215,7 @@ class ProjectManager:
 
                 item_path = item.get('path')
                 if item_path and os.path.exists(item_path):
-                    item['snd'] = parselmouth.Sound(item_path)
+                    item['snd'] = load_compatible_sound(item_path)
                     normalize_independent_item_boundaries(
                         item,
                         item['snd'].duration,

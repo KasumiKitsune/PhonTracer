@@ -228,8 +228,6 @@ class CanvasButton(tk.Canvas):
             self._bg_images[name] = ImageTk.PhotoImage(resized_img)
 
     def draw(self):
-        self.delete("all")
-
         # Determine which pre-cached background image to use
         if self.is_active:
             bg_name = "active_hover" if self.hovered else "active"
@@ -238,11 +236,17 @@ class CanvasButton(tk.Canvas):
 
         bg_img = self._bg_images.get(bg_name)
         if bg_img:
-            self.create_image(self.size//2, self.size//2, image=bg_img)
+            if getattr(self, "_bg_item_id", None) is None:
+                self._bg_item_id = self.create_image(self.size // 2, self.size // 2, image=bg_img)
+            else:
+                self.itemconfig(self._bg_item_id, image=bg_img)
 
         # Draw the icon in the center
         if self.image:
-            self.create_image(self.size//2, self.size//2, image=self.image)
+            if getattr(self, "_icon_item_id", None) is None:
+                self._icon_item_id = self.create_image(self.size // 2, self.size // 2, image=self.image)
+            else:
+                self.itemconfig(self._icon_item_id, image=self.image)
 
     def configure_button(self, image=None, is_active=None):
         if image is not None:
@@ -258,10 +262,14 @@ class CanvasButton(tk.Canvas):
         self.draw()
 
     def on_enter(self, event):
+        if self.hovered:
+            return
         self.hovered = True
         self.draw()
 
     def on_leave(self, event):
+        if not self.hovered:
+            return
         self.hovered = False
         self.draw()
 
@@ -624,11 +632,16 @@ class ItemPropertiesDialog(ctk.CTkToplevel):
             val.grid(row=r, column=c+1, sticky="ew", padx=(0, 10), pady=2)
             val_labels.append(val)
 
+        last_col_width = [None]
+
         def on_configure(event):
             if event.widget == grid_frame:
                 col_width = (event.width - 220 - 30) // 2
                 if col_width < 100:
                     col_width = 100
+                if col_width == last_col_width[0]:
+                    return
+                last_col_width[0] = col_width
                 for v_lbl in val_labels:
                     v_lbl.configure(wraplength=col_width)
 
@@ -1590,23 +1603,23 @@ class ProjectTreePanel:
         self.text_preview.delete('1.0', tk.END)
         self.text_preview.insert(tk.END, text)
 
-        self.text_preview.tag_config("zero", background="#FEE2E2", foreground="#DC2626")
-        self.text_preview.tag_config("fatal_msg", foreground="#EF4444")
-        self.text_preview.tag_config("warning_msg", foreground="#F59E0B")
-        self.text_preview.tag_config("tip_msg", foreground="#3B82F6")
-        self.text_preview.tag_config("table_header", foreground="#64748B")
-        self.text_preview.tag_config("duration_line", foreground="#475569")
-        if hasattr(self.text_preview, "_textbox"):
-            try:
-                self.text_preview._textbox.tag_config("table_header", font=("Microsoft YaHei", 10, "bold"))
-                self.text_preview._textbox.tag_config("duration_line", font=("Microsoft YaHei", 10, "bold"))
-            except Exception:
-                pass
+        if not getattr(self, "_preview_tags_initialized", False):
+            self.text_preview.tag_config("zero", background="#FEE2E2", foreground="#DC2626")
+            self.text_preview.tag_config("fatal_msg", foreground="#EF4444")
+            self.text_preview.tag_config("warning_msg", foreground="#F59E0B")
+            self.text_preview.tag_config("tip_msg", foreground="#3B82F6")
+            self.text_preview.tag_config("table_header", foreground="#64748B")
+            self.text_preview.tag_config("duration_line", foreground="#475569")
+            if hasattr(self.text_preview, "_textbox"):
+                try:
+                    self.text_preview._textbox.tag_config("table_header", font=("Microsoft YaHei", 10, "bold"))
+                    self.text_preview._textbox.tag_config("duration_line", font=("Microsoft YaHei", 10, "bold"))
+                except Exception:
+                    pass
 
-        # Configure the 21-step Pastel Heatmap gradient palette
-        # Low pitch: light blue #EFF6FF (239, 246, 255) -> Mid: light cyan #F0FDF4 (240, 253, 244) -> High: light amber #FEF3C7 (254, 243, 199)
-        # Text foreground unified dark gray #1E293B
-        if mode != 'formant':
+            # Configure the 21-step Pastel Heatmap gradient palette
+            # Low pitch: light blue #EFF6FF (239, 246, 255) -> Mid: light cyan #F0FDF4 (240, 253, 244) -> High: light amber #FEF3C7 (254, 243, 199)
+            # Text foreground unified dark gray #1E293B
             blue_rgb = (239, 246, 255)
             cyan_rgb = (240, 253, 244)
             amber_rgb = (254, 243, 199)
@@ -1624,6 +1637,7 @@ class ProjectTreePanel:
                     bg_b = int(cyan_rgb[2] + t * (amber_rgb[2] - cyan_rgb[2]))
                 bg_hex = f"#{bg_r:02X}{bg_g:02X}{bg_b:02X}"
                 self.text_preview.tag_config(f"f0_grad_{i}", background=bg_hex, foreground="#1E293B")
+            self._preview_tags_initialized = True
 
         lines = text.splitlines()
         for line_idx, line in enumerate(lines, start=1):
@@ -2501,6 +2515,8 @@ class ProjectTreePanel:
             else:
                 if group_stats is None:
                     group_stats, speaker_stats = self._compute_group_and_speaker_stats()
+                    self._cached_group_stats = group_stats
+                    self._cached_speaker_stats = speaker_stats
                 warnings = self.analyze_item_anomalies(item, group_stats, speaker_stats)
                 item['warnings'] = warnings
 
@@ -2609,6 +2625,51 @@ class ProjectTreePanel:
 
         item.pop('warnings', None)
         self._check_item_has_empty_data(item)
+
+        search_query = ""
+        if hasattr(self, 'search_var') and self.search_var:
+            search_query = self.search_var.get().strip().lower()
+        status_filter = "全部"
+        if hasattr(self, 'filter_var') and self.filter_var:
+            status_filter = self.filter_var.get()
+
+        if self.tree.exists(iid) and status_filter == "全部" and not search_query:
+            group_stats = getattr(self, '_cached_group_stats', None)
+            speaker_stats = getattr(self, '_cached_speaker_stats', None)
+            if group_stats is None or speaker_stats is None:
+                group_stats, speaker_stats = self._compute_group_and_speaker_stats()
+                self._cached_group_stats = group_stats
+                self._cached_speaker_stats = speaker_stats
+            warnings = self.analyze_item_anomalies(item, group_stats, speaker_stats)
+            item['warnings'] = warnings
+
+            needs_check = any(w.startswith("[致命]") or w.startswith("[警告]") for w in warnings) and not item.get('is_excluded', False)
+            was_in_warning = iid in getattr(self, 'warning_iids', {})
+
+            if needs_check == was_in_warning:
+                if item.get('is_excluded', False):
+                    img = self.tk_icons.get('gray_dot', '') if self.tk_icons else ''
+                else:
+                    if needs_check:
+                        img = self.tk_icons.get('warning', '') if self.tk_icons else ''
+                    elif item.get('is_manual_edited'):
+                        img = self.tk_icons.get('blue_dot', '') if self.tk_icons else ''
+                    else:
+                        img = ''
+                info_text = self._get_item_info_text(item)
+                try:
+                    self.tree.item(iid, image=img, values=(info_text,))
+                    if was_in_warning:
+                        w_iid = self.warning_iids.get(iid)
+                        if w_iid and self.tree.exists(w_iid):
+                            w_img = self.tk_icons.get('warning', '') if self.tk_icons else ''
+                            self.tree.item(w_iid, image=w_img, values=(info_text,))
+                except tk.TclError:
+                    pass
+                if self.current_iid == iid:
+                    self.update_preview()
+                return
+
         self._schedule_rebuild(delay=10, reanalyze=True)
 
     def export_project(self):

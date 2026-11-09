@@ -914,13 +914,22 @@ class ToolkitApp(ctk.CTk):
     @staticmethod
     def _decode_drop_path(raw_path):
         if isinstance(raw_path, bytes):
-            for enc in ("gbk", "utf-8"):
+            import locale
+            candidates = []
+            for enc in ("utf-8", locale.getpreferredencoding(False) or "utf-8", "gbk", "gb18030"):
                 try:
-                    return raw_path.decode(enc)
-                except UnicodeDecodeError:
+                    s = raw_path.decode(enc).strip().strip('"\'')
+                    if s and s not in candidates:
+                        candidates.append(s)
+                except (UnicodeDecodeError, LookupError):
                     continue
-            return raw_path.decode(errors="ignore")
-        return str(raw_path)
+            for s in candidates:
+                if os.path.exists(s):
+                    return s
+            if candidates:
+                return candidates[0]
+            return raw_path.decode("utf-8", errors="ignore").strip().strip('"\'')
+        return str(raw_path).strip().strip('"\'')
 
     def _insert_merge_file(self, path):
         display_p = self._short_path(path, max_parts=2)

@@ -199,6 +199,7 @@ def _install_custom_dropdown_popover(dropdown):
         border_hex = "#475569" if is_dark else "#CBD5E1"
 
         pop = tk.Toplevel(dropdown)
+        pop.withdraw()
         pop.wm_overrideredirect(True)
         try:
             pop.attributes("-topmost", True)
@@ -340,6 +341,8 @@ def _install_custom_dropdown_popover(dropdown):
         opened_time = time.monotonic()
         try:
             pop.update_idletasks()
+            pop.deiconify()
+            pop.lift()
         except Exception:
             pass
 
@@ -393,6 +396,19 @@ def _install_custom_dropdown_popover(dropdown):
         def _on_escape(_event=None):
             _close_active_dropdown_popover(mark_closed_owner=False)
 
+        def _on_global_scroll(_event=None):
+            if _ACTIVE_DROPDOWN_POPOVER.get("window") is not pop:
+                return
+            try:
+                if use_scroll:
+                    px, py = dropdown.winfo_pointerxy()
+                    px0, py0, pw, ph = _get_pop_rect()
+                    if px0 <= px <= px0 + pw and py0 <= py <= py0 + ph:
+                        return
+            except Exception:
+                pass
+            _close_active_dropdown_popover(mark_closed_owner=False)
+
         def _on_top_configure(event=None):
             if event is not None and getattr(event, "widget", None) is not top:
                 return
@@ -421,6 +437,9 @@ def _install_custom_dropdown_popover(dropdown):
             for seq, fn in (
                 ("<ButtonPress-1>", _on_global_press),
                 ("<ButtonPress-3>", _on_global_press),
+                ("<MouseWheel>", _on_global_scroll),
+                ("<Button-4>", _on_global_scroll),
+                ("<Button-5>", _on_global_scroll),
                 ("<Escape>", _on_escape),
                 ("<Configure>", _on_top_configure),
             ):
@@ -445,34 +464,38 @@ def _install_custom_dropdown_popover(dropdown):
 
         def _poll_mouse_outside():
             poll_state["job"] = None
-            if _ACTIVE_DROPDOWN_POPOVER.get("window") is not pop or _get_key_state is None:
+            if _ACTIVE_DROPDOWN_POPOVER.get("window") is not pop:
                 return
             try:
-                if not pop.winfo_exists():
+                if not pop.winfo_exists() or not dropdown.winfo_exists() or not dropdown.winfo_ismapped():
+                    _close_active_dropdown_popover(mark_closed_owner=False)
                     return
-                pressed = any((_get_key_state(vk) & 0x8000) != 0 for vk in (0x01, 0x02, 0x04))
-                if not pressed:
-                    poll_state["seen_release"] = True
-                elif poll_state["seen_release"] and (time.monotonic() - opened_time) >= 0.12:
-                    px, py = pop.winfo_pointerxy()
-                    px0, py0, pw, ph = _get_pop_rect()
-                    if not (px0 <= px <= px0 + pw and py0 <= py <= py0 + ph):
-                        dx0, dy0 = int(dropdown.winfo_rootx()), int(dropdown.winfo_rooty())
-                        dw, dh = int(dropdown.winfo_width()), int(dropdown.winfo_height())
-                        if dx0 <= px <= dx0 + dw and dy0 <= py <= dy0 + dh:
-                            _close_active_dropdown_popover(mark_closed_owner=True)
-                        else:
-                            _close_active_dropdown_popover(mark_closed_owner=False)
-                        return
+                curr_dx, curr_dy = int(dropdown.winfo_rootx()), int(dropdown.winfo_rooty())
+                if abs(curr_dx - rx) > 2 or abs(curr_dy - ry) > 2:
+                    _close_active_dropdown_popover(mark_closed_owner=False)
+                    return
+                if _get_key_state is not None:
+                    pressed = any((_get_key_state(vk) & 0x8000) != 0 for vk in (0x01, 0x02, 0x04))
+                    if not pressed:
+                        poll_state["seen_release"] = True
+                    elif poll_state["seen_release"] and (time.monotonic() - opened_time) >= 0.12:
+                        px, py = pop.winfo_pointerxy()
+                        px0, py0, pw, ph = _get_pop_rect()
+                        if not (px0 <= px <= px0 + pw and py0 <= py <= py0 + ph):
+                            dw, dh = int(dropdown.winfo_width()), int(dropdown.winfo_height())
+                            if curr_dx <= px <= curr_dx + dw and curr_dy <= py <= curr_dy + dh:
+                                _close_active_dropdown_popover(mark_closed_owner=True)
+                            else:
+                                _close_active_dropdown_popover(mark_closed_owner=False)
+                            return
                 poll_state["job"] = pop.after(40, _poll_mouse_outside)
             except Exception:
                 pass
 
-        if _get_key_state is not None:
-            try:
-                poll_state["job"] = pop.after(60, _poll_mouse_outside)
-            except Exception:
-                pass
+        try:
+            poll_state["job"] = pop.after(40, _poll_mouse_outside)
+        except Exception:
+            pass
 
         def _cleanup_bindings():
             if poll_state.get("job") is not None:
@@ -559,15 +582,38 @@ class CTkReleaseButton(ctk.CTkButton):
         # 3. 绑定左键按下与松开事件至控件及其子控件，以防止下拉菜单等浮层关闭时产生的释放穿透问题
         self._is_pressed = False
         if self._release_command:
-            widgets = [self]
-            for attr in ("_canvas", "_text_label", "_image_label"):
-                if hasattr(self, attr):
-                    w = getattr(self, attr)
-                    if w:
-                        widgets.append(w)
-            for w in widgets:
-                w.bind("<ButtonPress-1>", self._on_press, add="+")
-                w.bind("<ButtonRelease-1>", self._on_release, add="+")
+            self._bind_release_events()
+
+    def _bind_release_events(self):
+        widgets = [self]
+        for attr in ("_canvas", "_text_label", "_image_label"):
+            if hasattr(self, attr):
+                w = getattr(self, attr)
+                if w:
+                    widgets.append(w)
+        for w in widgets:
+            if not getattr(w, "_release_events_bound", False):
+                try:
+                    w.bind("<ButtonPress-1>", self._on_press, add="+")
+                    w.bind("<ButtonRelease-1>", self._on_release, add="+")
+                    w._release_events_bound = True
+                except Exception:
+                    pass
+
+    def configure(self, require_redraw=False, **kwargs):
+        if "command" in kwargs:
+            self._release_command = kwargs.pop("command")
+        res = super().configure(require_redraw=require_redraw, **kwargs)
+        if self._release_command:
+            self._bind_release_events()
+        return res
+
+    config = configure
+
+    def cget(self, attribute_name: str):
+        if attribute_name == "command":
+            return self._release_command
+        return super().cget(attribute_name)
 
     def _on_press(self, event):
         if self.cget("state") == "disabled":
@@ -611,7 +657,10 @@ class ToolTip:
         # 仅全局绑定一次，当发生任何鼠标滚动或点击时，立即消失当前 ToolTip
         if not ToolTip._global_bound:
             try:
-                toplevel = self.widget.winfo_toplevel()
+                try:
+                    toplevel = self.widget.nametowidget(".")
+                except Exception:
+                    toplevel = self.widget.winfo_toplevel()
                 toplevel.bind_all("<MouseWheel>", ToolTip.hide_current_tip, add="+")
                 toplevel.bind_all("<ButtonPress>", ToolTip.hide_current_tip, add="+")
                 toplevel.bind_all("<Button-4>", ToolTip.hide_current_tip, add="+")
@@ -1075,6 +1124,7 @@ class ModernContextMenu:
             master_widget = getattr(tk, "_default_root", None)
 
         pop = tk.Toplevel(master_widget)
+        pop.withdraw()
         pop.wm_overrideredirect(True)
         try:
             pop.attributes("-topmost", True)
@@ -1295,6 +1345,8 @@ class ModernContextMenu:
         self._opened_monotonic = time.monotonic()
         try:
             pop.update_idletasks()
+            pop.deiconify()
+            pop.lift()
         except Exception:
             pass
 

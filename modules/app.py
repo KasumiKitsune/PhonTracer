@@ -33,7 +33,7 @@ from .wordlist_v2 import (
     looks_like_structured_wordlist_text,
     validate_wordlist_document,
 )
-from .audio_core import core_microscopic_vowel_nucleus, batch_process_worker, macroscopic_vad, check_audio_segments, long_process_worker, recalculate_bounds_fast, auto_split_inner_word, extract_f0, batch_process_worker_with_textgrid
+from .audio_core import core_microscopic_vowel_nucleus, batch_process_worker, macroscopic_vad, check_audio_segments, long_process_worker, recalculate_bounds_fast, auto_split_inner_word, extract_f0, batch_process_worker_with_textgrid, load_compatible_sound
 from .visual_splitter import VisualSplitter
 from .spectrogram_panel import SpectrogramPanel
 from .project_tree import ProjectTreePanel
@@ -112,6 +112,8 @@ class PhoneticsApp:
         self.executor = concurrent.futures.ProcessPoolExecutor(max_workers=max_workers)
 
         def on_closing():
+            if hasattr(self, "spectrogram_panel") and self.spectrogram_panel and hasattr(self.spectrogram_panel, "stop_playback"):
+                self.spectrogram_panel.stop_playback()
             self.flush_eraser_changes()
             if getattr(self, 'has_changes', False):
                 ans = messagebox.askyesnocancel("保存项目", "项目已被修改，是否在关闭前保存？")
@@ -201,7 +203,10 @@ class PhoneticsApp:
         # 绑定拖拽事件
         try:
             import windnd
-            windnd.hook_dropfiles(self.root, func=self.on_files_dropped)
+            try:
+                windnd.hook_dropfiles(self.root, func=self.on_files_dropped, force_unicode=True)
+            except TypeError:
+                windnd.hook_dropfiles(self.root, func=self.on_files_dropped)
         except Exception:
             pass
 
@@ -445,18 +450,33 @@ class PhoneticsApp:
         self.active_chart_dialog = None
         return False
 
+    @staticmethod
+    def _decode_dropped_file_path(f):
+        if isinstance(f, bytes):
+            import locale
+            candidates = []
+            for enc in ('utf-8', locale.getpreferredencoding(False) or 'utf-8', 'gbk', 'gb18030'):
+                try:
+                    s = f.decode(enc).strip().strip('"\'')
+                    if s and s not in candidates:
+                        candidates.append(s)
+                except (UnicodeDecodeError, LookupError):
+                    continue
+            for s in candidates:
+                if os.path.exists(s):
+                    return s
+            if candidates:
+                return candidates[0]
+            return f.decode('utf-8', errors='replace').strip().strip('"\'')
+        return str(f).strip().strip('"\'')
+
     def _process_dlg_dropped_files(self, files):
         if not getattr(self, 'active_import_dlg', None) or not self.active_import_dlg.winfo_exists():
             return
 
         decoded_paths = []
         for f in files:
-            if isinstance(f, bytes):
-                try: path_str = f.decode('gbk')
-                except UnicodeDecodeError: path_str = f.decode('utf-8')
-            else:
-                path_str = str(f)
-            path_str = path_str.strip().strip('"\'')
+            path_str = self._decode_dropped_file_path(f)
             if path_str:
                 decoded_paths.append(path_str)
 
@@ -615,12 +635,7 @@ class PhoneticsApp:
             return
         decoded_paths = []
         for f in files:
-            if isinstance(f, bytes):
-                try: path_str = f.decode('gbk')
-                except UnicodeDecodeError: path_str = f.decode('utf-8')
-            else:
-                path_str = str(f)
-            path_str = path_str.strip().strip('"\'')
+            path_str = self._decode_dropped_file_path(f)
             if path_str:
                 decoded_paths.append(path_str)
 
@@ -632,8 +647,22 @@ class PhoneticsApp:
             ProjectImportPreviewDialog(self.root, self, path)
             return
 
-        # 检查字表文件（.txt、.csv、.ptwl、.TextGrid）
+        audio_paths = [p for p in decoded_paths if p.lower().endswith(('.wav', '.mp3'))]
         wordlist_files = [p for p in decoded_paths if p.lower().endswith(('.txt', '.csv', '.ptwl', '.textgrid'))]
+
+        # 若同时拖入了多条音频与 TextGrid 文件，直接设置待分析音频列表并自动进行 TextGrid 匹配
+        if audio_paths and wordlist_files:
+            self.mark_modified()
+            tg_only = [p for p in wordlist_files if p.lower().endswith('.textgrid')]
+            if len(audio_paths) > 1 and tg_only:
+                self.tabview.set("多条独立音频")
+                self.pending_batch_paths = audio_paths
+                self.lbl_batch_files.configure(text=f"已选 {len(audio_paths)} 个文件 (从拖拽)", text_color="#2563EB")
+                self.lbl_status.configure(text="独立音频与 TextGrid 就绪，正在匹配分析...", text_color="#10B981")
+                self.process_batch_with_textgrid(tg_only)
+                return
+
+        # 检查字表文件（.txt、.csv、.ptwl、.TextGrid）
         if wordlist_files:
             self.mark_modified()
             current_tab = self.tabview.get()
@@ -678,7 +707,7 @@ class PhoneticsApp:
                     # 避免在主线程加载 Sound，如果在后台加载可以防止卡顿和可能的 GIL 崩溃
                     snd = None
                     if seg_count > 1:
-                        snd = parselmouth.Sound(path)
+                        snd = load_compatible_sound(path)
 
                     def update_ui():
                         self.stop_loading()
@@ -1304,6 +1333,69 @@ class PhoneticsApp:
             app=self
         )
         self.spectrogram_panel.switch_trim_silence = self.switch_trim_silence
+        self._bind_global_shortcuts()
+
+    def _is_text_input_focused(self, event=None):
+        widget = getattr(event, "widget", None)
+        if widget is None and hasattr(self, "root") and self.root:
+            try:
+                widget = self.root.focus_get()
+            except Exception:
+                widget = None
+        while widget is not None:
+            if isinstance(widget, (tk.Entry, tk.Text, ctk.CTkEntry, ctk.CTkTextbox)):
+                return True
+            try:
+                wclass = str(widget.winfo_class())
+                if wclass in ("Entry", "TEntry", "Text", "Spinbox"):
+                    return True
+            except Exception:
+                pass
+            widget = getattr(widget, "master", None)
+        return False
+
+    def _bind_global_shortcuts(self):
+        if not hasattr(self, "root") or not self.root:
+            return
+
+        def on_space(event=None):
+            if self._is_text_input_focused(event):
+                return
+            if hasattr(self, "spectrogram_panel") and self.spectrogram_panel and hasattr(self.spectrogram_panel, "play_selected"):
+                self.spectrogram_panel.play_selected()
+                return "break"
+
+        def on_eraser(event=None):
+            if self._is_text_input_focused(event):
+                return
+            if hasattr(self, "spectrogram_panel") and self.spectrogram_panel and hasattr(self.spectrogram_panel, "toggle_eraser_mode"):
+                self.spectrogram_panel.toggle_eraser_mode()
+                return "break"
+
+        def on_undo(event=None):
+            if self._is_text_input_focused(event):
+                return
+            if hasattr(self, "spectrogram_panel") and self.spectrogram_panel and hasattr(self.spectrogram_panel, "undo_last_action"):
+                self.spectrogram_panel.undo_last_action()
+                return "break"
+
+        def on_redo(event=None):
+            if self._is_text_input_focused(event):
+                return
+            if hasattr(self, "spectrogram_panel") and self.spectrogram_panel and hasattr(self.spectrogram_panel, "redo_last_action"):
+                self.spectrogram_panel.redo_last_action()
+                return "break"
+
+        try:
+            self.root.bind("<space>", on_space, add="+")
+            self.root.bind("<KeyPress-e>", on_eraser, add="+")
+            self.root.bind("<KeyPress-E>", on_eraser, add="+")
+            self.root.bind("<Control-z>", on_undo, add="+")
+            self.root.bind("<Control-Z>", on_undo, add="+")
+            self.root.bind("<Control-y>", on_redo, add="+")
+            self.root.bind("<Control-Y>", on_redo, add="+")
+        except Exception:
+            pass
 
     # --- 交互回调 ---
     def on_tree_item_selected(self, iid):
@@ -1325,19 +1417,29 @@ class PhoneticsApp:
                 self.root.after(0, lambda: self.set_status(f"正在读取音频: {item['label']}...", "#2563EB", "status_loading"))
 
                 if has_path:
-                    snd = parselmouth.Sound(item['path'])
+                    snd = load_compatible_sound(item['path'])
                     pitch_data = extract_f0(snd, self.last_params)
                 elif has_long:
                     snd = long_snd
+                    total_dur = snd.get_total_duration()
                     macro_start = float(item.get('macro_start', 0.0))
-                    macro_end = float(item.get('macro_end', snd.get_total_duration()))
+                    macro_end = float(item.get('macro_end', total_dur))
                     ms = max(0.0, macro_start - 0.05)
-                    me = macro_end + 0.05
-                    full_pitch = extract_f0(snd, self.last_params)
-                    xs = full_pitch['xs']
-                    freqs = full_pitch['freqs']
-                    mask = (xs >= ms) & (xs <= me)
-                    pitch_data = {'xs': xs[mask].copy(), 'freqs': freqs[mask].copy()}
+                    me = min(total_dur, macro_end + 0.05)
+                    if me > ms and total_dur > (me - ms) + 0.5:
+                        part_snd = snd.extract_part(from_time=ms, to_time=me)
+                        part_pitch = extract_f0(part_snd, self.last_params)
+                        pitch_data = {
+                            'xs': (part_pitch['xs'] + ms).copy(),
+                            'freqs': part_pitch['freqs'].copy(),
+                            'engine': part_pitch.get('engine', 'praat')
+                        }
+                    else:
+                        full_pitch = extract_f0(snd, self.last_params)
+                        xs = full_pitch['xs']
+                        freqs = full_pitch['freqs']
+                        mask = (xs >= ms) & (xs <= me)
+                        pitch_data = {'xs': xs[mask].copy(), 'freqs': freqs[mask].copy()}
                 else:
                     return
 
@@ -1363,41 +1465,33 @@ class PhoneticsApp:
 
     def _sync_ui_and_plot(self, item):
         # 同步侧边栏 UI 参数为当前选中项的独立参数（所见即所得）
+        def _set_entry_if_changed(entry, target_str):
+            if entry.get() != target_str:
+                entry.delete(0, tk.END)
+                entry.insert(0, target_str)
+            entry._last_val = target_str
+
         if hasattr(self, 'entry_pitch_floor'):
             pitch_floor = item.get('pitch_floor', self.last_params.get('pitch_floor', 75))
-            self.entry_pitch_floor.delete(0, tk.END)
-            self.entry_pitch_floor.insert(0, str(int(pitch_floor)))
-            self.entry_pitch_floor._last_val = str(int(pitch_floor))
+            _set_entry_if_changed(self.entry_pitch_floor, str(int(pitch_floor)))
         if hasattr(self, 'entry_pitch_ceiling'):
             pitch_ceiling = item.get('pitch_ceiling', self.last_params.get('pitch_ceiling', 600))
-            self.entry_pitch_ceiling.delete(0, tk.END)
-            self.entry_pitch_ceiling.insert(0, str(int(pitch_ceiling)))
-            self.entry_pitch_ceiling._last_val = str(int(pitch_ceiling))
+            _set_entry_if_changed(self.entry_pitch_ceiling, str(int(pitch_ceiling)))
         if hasattr(self, 'entry_voicing_threshold'):
             voicing_threshold = item.get('voicing_threshold', self.last_params.get('voicing_threshold', 0.25))
-            self.entry_voicing_threshold.delete(0, tk.END)
-            self.entry_voicing_threshold.insert(0, str(float(voicing_threshold)))
-            self.entry_voicing_threshold._last_val = str(float(voicing_threshold))
+            _set_entry_if_changed(self.entry_voicing_threshold, str(float(voicing_threshold)))
         if hasattr(self, 'entry_formant_max_hz'):
             formant_max_hz = item.get('formant_max_hz', self.last_params.get('formant_max_hz', 5500.0))
-            self.entry_formant_max_hz.delete(0, tk.END)
-            self.entry_formant_max_hz.insert(0, str(float(formant_max_hz)))
-            self.entry_formant_max_hz._last_val = str(float(formant_max_hz))
+            _set_entry_if_changed(self.entry_formant_max_hz, str(float(formant_max_hz)))
         if hasattr(self, 'entry_formant_count'):
             formant_count = item.get('formant_count', self.last_params.get('formant_count', 5))
-            self.entry_formant_count.delete(0, tk.END)
-            self.entry_formant_count.insert(0, str(int(formant_count)))
-            self.entry_formant_count._last_val = str(int(formant_count))
+            _set_entry_if_changed(self.entry_formant_count, str(int(formant_count)))
         if hasattr(self, 'entry_formant_window_length'):
             formant_window_length = item.get('formant_window_length', self.last_params.get('formant_window_length', 0.025))
-            self.entry_formant_window_length.delete(0, tk.END)
-            self.entry_formant_window_length.insert(0, f"{float(formant_window_length):.3f}")
-            self.entry_formant_window_length._last_val = f"{float(formant_window_length):.3f}"
+            _set_entry_if_changed(self.entry_formant_window_length, f"{float(formant_window_length):.3f}")
         if hasattr(self, 'entry_formant_pre_emphasis'):
             formant_pre_emphasis = item.get('formant_pre_emphasis', self.last_params.get('formant_pre_emphasis', 50.0))
-            self.entry_formant_pre_emphasis.delete(0, tk.END)
-            self.entry_formant_pre_emphasis.insert(0, str(float(formant_pre_emphasis)))
-            self.entry_formant_pre_emphasis._last_val = str(float(formant_pre_emphasis))
+            _set_entry_if_changed(self.entry_formant_pre_emphasis, str(float(formant_pre_emphasis)))
 
         if hasattr(self, 'option_formant_sample_strategy'):
             strategy = item.get('formant_sample_strategy', self.last_params.get('formant_sample_strategy', '整段11点'))
@@ -1426,10 +1520,14 @@ class PhoneticsApp:
 
         self.mark_modified()
         self.tree_panel.update_preview()
-        for iid, it in list(self.items.items()):
-            if it is item:
-                self.tree_panel.update_item_icon(iid)
-                break
+        cur_iid = getattr(self.spectrogram_panel, 'current_item_iid', None) if hasattr(self, 'spectrogram_panel') and self.spectrogram_panel else None
+        if cur_iid and self.items.get(cur_iid) is item:
+            self.tree_panel.update_item_icon(cur_iid)
+        else:
+            for iid, it in list(self.items.items()):
+                if it is item:
+                    self.tree_panel.update_item_icon(iid)
+                    break
 
     def on_export_callback(self):
         self.tree_panel.export_project()
@@ -1443,32 +1541,49 @@ class PhoneticsApp:
         if self.spectrogram_panel:
             self.spectrogram_panel.discard_eraser_changes()
         snd = item['snd']
-
-        # 重新提取 F0 / Formant，以还原橡皮擦抹去的数据点
-        from .audio_core import extract_f0, extract_formants
-        try:
-            item['pitch_data'] = extract_f0(snd, self.last_params)
-            item['_dirty_pitch'] = True
-            if 'pitch' in item:
-                del item['pitch']
-        except Exception:
-            pass
-        try:
-            item['formant_data'] = extract_formants(snd, self.last_params)
-            item['_dirty_formant'] = True
-            self._stamp_formant_params_on_item(item)
-        except Exception:
-            pass
-        item.pop('preview_f0', None)
-        item.pop('preview_formants', None)
-        item.pop('has_empty_data', None)
-
-        pitch = item.get('pitch_data', item.get('pitch'))
         mac_s, mac_e = self._get_item_base_boundaries(item)
+        params_snapshot = dict(self.last_params)
 
         def run():
             try:
                 self.root.after(0, lambda: self.start_loading("正在智能识别..."))
+                from .audio_core import extract_f0, extract_formants, auto_split_to_chars_bounds
+
+                total_dur = snd.get_total_duration()
+                is_long_slice = total_dur > (mac_e - mac_s) + 1.0 and mac_e > mac_s
+                if is_long_slice:
+                    seg_start = max(0.0, mac_s - 0.15)
+                    seg_end = min(total_dur, mac_e + 0.15)
+                    work_snd = snd.extract_part(from_time=seg_start, to_time=seg_end)
+                else:
+                    seg_start = 0.0
+                    work_snd = snd
+
+                # 重新提取 F0 / Formant，以还原橡皮擦抹去的数据点
+                try:
+                    p_data = extract_f0(work_snd, params_snapshot)
+                    if seg_start > 0.0:
+                        p_data['xs'] = p_data['xs'] + seg_start
+                    item['pitch_data'] = p_data
+                    item['_dirty_pitch'] = True
+                    if 'pitch' in item:
+                        del item['pitch']
+                except Exception:
+                    pass
+                try:
+                    f_data = extract_formants(work_snd, params_snapshot)
+                    if seg_start > 0.0:
+                        f_data['xs'] = f_data['xs'] + seg_start
+                    item['formant_data'] = f_data
+                    item['_dirty_formant'] = True
+                    self._stamp_formant_params_on_item(item, params_snapshot)
+                except Exception:
+                    pass
+                item.pop('preview_f0', None)
+                item.pop('preview_formants', None)
+                item.pop('has_empty_data', None)
+
+                pitch = item.get('pitch_data', item.get('pitch'))
                 mic_s, mic_e, raw_s, raw_e = self._microscopic_vowel_nucleus(snd, pitch, mac_s, mac_e)
 
                 label = item['label'].replace(" (缺失)", "")
@@ -1480,8 +1595,7 @@ class PhoneticsApp:
                     inner_splits = auto_split_inner_word(snd, raw_s, raw_e, len(syls), pitch_data=pitch, output_meta=meta)
                     split_warnings = meta.get('split_warnings', [])
                     split_confidence = meta.get('split_confidence', 1.0)
-                    from modules.audio_core import auto_split_to_chars_bounds
-                    chars_bounds = auto_split_to_chars_bounds(snd, raw_s, raw_e, inner_splits, len(syls), self.last_params)
+                    chars_bounds = auto_split_to_chars_bounds(snd, raw_s, raw_e, inner_splits, len(syls), params_snapshot, pitch_data=pitch)
                     if chars_bounds:
                         mic_s = chars_bounds[0][0]
                         mic_e = chars_bounds[-1][1]
@@ -1504,13 +1618,25 @@ class PhoneticsApp:
                     if item.get('snd') and item.get('formant_data'):
                         pts = int(self.last_params.get('pts', 11))
                         strategy = self.last_params.get('formant_sample_strategy', '整段11点')
-                        _, preview_f1, preview_f2 = self.sample_formant_points(item, pts, strategy)
-                        item['preview_formants'] = {"f1": preview_f1, "f2": preview_f2}
+                        show_f3 = bool(item.get("show_f3", self.last_params.get("show_f3", False)))
+                        if show_f3:
+                            _, preview_f1, preview_f2, preview_f3 = self.sample_formant_points_with_f3(item, pts, strategy)
+                            item['preview_formants'] = {"f1": preview_f1, "f2": preview_f2, "f3": preview_f3}
+                        else:
+                            _, preview_f1, preview_f2 = self.sample_formant_points(item, pts, strategy)
+                            item['preview_formants'] = {"f1": preview_f1, "f2": preview_f2}
 
-                    self.spectrogram_panel.var_t_start.set(f"{mic_s:.3f}")
-                    self.spectrogram_panel.var_t_end.set(f"{mic_e:.3f}")
-                    self.spectrogram_panel.plot_item_spectrogram()
-                    self.spectrogram_panel.update_ui_times()
+                    if self.spectrogram_panel and self.spectrogram_panel.current_item is item:
+                        self.spectrogram_panel.var_t_start.set(f"{mic_s:.3f}")
+                        self.spectrogram_panel.var_t_end.set(f"{mic_e:.3f}")
+                        self.spectrogram_panel.plot_item_spectrogram()
+                        self.spectrogram_panel.update_ui_times()
+                    else:
+                        self.tree_panel.update_preview()
+                        for iid, it in list(self.items.items()):
+                            if it is item:
+                                self.tree_panel.update_item_icon(iid)
+                                break
                     self.mark_modified()
                     self.stop_loading("识别完成，可点击 F0/共振峰检测获取建议参数")
                 self.root.after(0, update_ui)
@@ -2405,7 +2531,10 @@ class PhoneticsApp:
 
     def recalculate_all_audio(self, only_trim_silence=False, recompute_pitch=True, only_pitch_changed=False):
         if hasattr(self, 'spectrogram_panel') and self.spectrogram_panel:
-            self.spectrogram_panel.discard_eraser_changes()
+            if only_trim_silence or not recompute_pitch:
+                self.flush_eraser_changes()
+            else:
+                self.spectrogram_panel.discard_eraser_changes()
         if not self.items: return
 
         # Capture parameter values before sync
@@ -2554,9 +2683,14 @@ class PhoneticsApp:
                         valid_items.append(item)
 
                 if tasks:
-                    # 使用 ProcessPoolExecutor 进行 CPU 密集型任务
-                    max_workers = min(os.cpu_count() or 4, 8)
-                    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+                    # 复用常驻 ProcessPoolExecutor 进行 CPU 密集型任务
+                    executor = getattr(self, 'executor', None)
+                    own_executor = False
+                    if executor is None or getattr(executor, '_broken', False) or getattr(executor, '_shutdown_thread', False):
+                        max_workers = min(os.cpu_count() or 4, 8)
+                        executor = concurrent.futures.ProcessPoolExecutor(max_workers=max_workers)
+                        own_executor = True
+                    try:
                         futures = {}
                         for idx, task in enumerate(tasks):
                             if task.get('type') == 'batch':
@@ -2628,6 +2762,9 @@ class PhoneticsApp:
                             completed += 1
                             if completed % max(1, len(futures)//10) == 0 or completed == len(futures):
                                 self.root.after(0, lambda v=completed/len(futures): self.set_progress(v))
+                    finally:
+                        if own_executor:
+                            executor.shutdown(wait=False)
 
             def finalize():
                 if self.spectrogram_panel.current_item:
@@ -2648,7 +2785,10 @@ class PhoneticsApp:
     def recalculate_current_item(self, only_trim_silence=False, recompute_pitch=False, recompute_formant_only=False, preserve_bounds=False, completion_text=None, param_overrides=None):
         """仅针对当前正在编辑的项重新计算参数（暂不影响全局）"""
         if hasattr(self, 'spectrogram_panel') and self.spectrogram_panel:
-            self.spectrogram_panel.discard_eraser_changes()
+            if not recompute_pitch and not recompute_formant_only:
+                self.flush_eraser_changes()
+            else:
+                self.spectrogram_panel.discard_eraser_changes()
         item = self.spectrogram_panel.current_item
         if not item: return
 
@@ -2692,7 +2832,7 @@ class PhoneticsApp:
 
                 # 如果是独立音频模式且没有加载 Sound 对象
                 if not item.get('snd') and item.get('path'):
-                    item['snd'] = parselmouth.Sound(item['path'])
+                    item['snd'] = load_compatible_sound(item['path'])
                     # 总是为单项重新生成 pitch 确保准确性
                     if not recompute_formant_only:
                         item['pitch_data'] = get_segmented_f0(item['snd'], worker_params)
@@ -2783,7 +2923,7 @@ class PhoneticsApp:
                             split_warnings = meta.get('split_warnings', [])
                             split_confidence = meta.get('split_confidence', 1.0)
                             from modules.audio_core import auto_split_to_chars_bounds
-                            item['chars_bounds'] = auto_split_to_chars_bounds(item['snd'], raw_s, raw_e, item['inner_splits'], len(syls), worker_params)
+                            item['chars_bounds'] = auto_split_to_chars_bounds(item['snd'], raw_s, raw_e, item['inner_splits'], len(syls), worker_params, pitch_data=current_pitch)
                             if item['chars_bounds']:
                                 item['start'] = item['chars_bounds'][0][0]
                                 item['end'] = item['chars_bounds'][-1][1]
@@ -2801,14 +2941,13 @@ class PhoneticsApp:
                         p_xs = item['pitch_data']['xs']
                         p_freqs = item['pitch_data']['freqs']
                         preview_f0 = np.interp(preview_times, p_xs, p_freqs).tolist()
-                        for j, t in enumerate(preview_times):
-                            valid_indices = np.where(p_freqs > 0)[0]
-                            if len(valid_indices) == 0:
-                                preview_f0[j] = 0.0
-                                continue
-                            valid_xs = p_xs[valid_indices]
-                            if np.min(np.abs(valid_xs - t)) > 0.025:
-                                preview_f0[j] = 0.0
+                        valid_xs = p_xs[p_freqs > 0]
+                        if len(valid_xs) == 0:
+                            preview_f0 = [0.0] * len(preview_times)
+                        else:
+                            for j, t in enumerate(preview_times):
+                                if np.min(np.abs(valid_xs - t)) > 0.025:
+                                    preview_f0[j] = 0.0
                     else:
                         preview_f0 = [item['pitch'].get_value_at_time(t) for t in preview_times]
                         preview_f0 = [0.0 if (np.isnan(hz) or hz <= 0) else hz for hz in preview_f0]
@@ -2820,8 +2959,13 @@ class PhoneticsApp:
                 if item.get('snd') and item.get('formant_data'):
                     pts = int(worker_params.get('pts', 11))
                     strategy = worker_params.get('formant_sample_strategy', '整段11点')
-                    _, preview_f1, preview_f2 = self.sample_formant_points(item, pts, strategy)
-                    item['preview_formants'] = {"f1": preview_f1, "f2": preview_f2}
+                    show_f3 = bool(item.get("show_f3", worker_params.get("show_f3", self.last_params.get("show_f3", False))))
+                    if show_f3:
+                        _, preview_f1, preview_f2, preview_f3 = self.sample_formant_points_with_f3(item, pts, strategy)
+                        item['preview_formants'] = {"f1": preview_f1, "f2": preview_f2, "f3": preview_f3}
+                    else:
+                        _, preview_f1, preview_f2 = self.sample_formant_points(item, pts, strategy)
+                        item['preview_formants'] = {"f1": preview_f1, "f2": preview_f2}
 
                 def finalize():
                     self.spectrogram_panel.plot_item_spectrogram()
@@ -2860,7 +3004,7 @@ class PhoneticsApp:
         def run():
             self.root.after(0, lambda: self.start_loading(f"正在加载: {os.path.basename(path)}"))
             try:
-                snd = parselmouth.Sound(path)
+                snd = load_compatible_sound(path)
                 def done():
                     self.pending_long_snd = snd
                     self.long_audio_path = path
@@ -3001,7 +3145,8 @@ class PhoneticsApp:
             from modules.audio_core import auto_split_to_chars_bounds
             item['chars_bounds'] = auto_split_to_chars_bounds(
                 item['snd'], item['start'], item['end'],
-                item['inner_splits'], len(syls), self.last_params
+                item['inner_splits'], len(syls), self.last_params,
+                pitch_data=item.get('pitch_data', item.get('pitch'))
             )
         else:
             item['chars_bounds'] = [[item['start'], item['end']]]
@@ -3029,7 +3174,7 @@ class PhoneticsApp:
             split_warnings = meta.get('split_warnings', [])
             split_confidence = meta.get('split_confidence', 1.0)
             from modules.audio_core import auto_split_to_chars_bounds
-            item['chars_bounds'] = auto_split_to_chars_bounds(item['snd'], raw_s, raw_e, item['inner_splits'], len(syls), self.last_params)
+            item['chars_bounds'] = auto_split_to_chars_bounds(item['snd'], raw_s, raw_e, item['inner_splits'], len(syls), self.last_params, pitch_data=p_data)
             if item['chars_bounds']:
                 item['start'] = item['chars_bounds'][0][0]
                 item['end'] = item['chars_bounds'][-1][1]
@@ -3247,8 +3392,13 @@ class PhoneticsApp:
                     else:
                         tasks.append({'word': word, 'group': grp['group'], 'missing': True, 'metadata_record': metadata_record})
 
-            # 多进程执行
-            with concurrent.futures.ProcessPoolExecutor(max_workers=min(os.cpu_count() or 4, 8)) as executor:
+            # 多进程执行（优先复用常驻进程池）
+            executor = getattr(self, 'executor', None)
+            own_executor = False
+            if executor is None or getattr(executor, '_broken', False) or getattr(executor, '_shutdown_thread', False):
+                executor = concurrent.futures.ProcessPoolExecutor(max_workers=min(os.cpu_count() or 4, 8))
+                own_executor = True
+            try:
                 futures = {}
                 for idx, task in enumerate(tasks):
                     if not task.get('missing'):
@@ -3271,6 +3421,7 @@ class PhoneticsApp:
                         tasks[idx]['raw_e'] = res['raw_e']
                         tasks[idx]['inner_splits'] = res.get('inner_splits', [])
                         if 'chars_bounds' in res: tasks[idx]['chars_bounds'] = res['chars_bounds']
+                        tasks[idx]['preview_f0'] = res.get('preview_f0', [])
                         tasks[idx]['has_empty_data'] = res.get('has_empty_data', False)
                         tasks[idx]['split_warnings'] = res.get('split_warnings', [])
                         tasks[idx]['split_confidence'] = res.get('split_confidence', 1.0)
@@ -3282,6 +3433,9 @@ class PhoneticsApp:
                     completed_count += 1
                     if completed_count % 10 == 0 or completed_count == len(futures):
                         self.root.after(0, lambda v=completed_count/len(futures) if len(futures) else 1: self.set_progress(v))
+            finally:
+                if own_executor:
+                    executor.shutdown(wait=False)
 
             results = tasks
 
@@ -3391,7 +3545,11 @@ class PhoneticsApp:
 
             results = []
             futures = {}
-            executor = concurrent.futures.ProcessPoolExecutor(max_workers=min(os.cpu_count() or 4, 8))
+            executor = getattr(self, 'executor', None)
+            own_executor = False
+            if executor is None or getattr(executor, '_broken', False) or getattr(executor, '_shutdown_thread', False):
+                executor = concurrent.futures.ProcessPoolExecutor(max_workers=min(os.cpu_count() or 4, 8))
+                own_executor = True
             for i, p in enumerate(self.pending_batch_paths):
                 cached = self._get_audio_cache(p, params)
                 if cached is not None:
@@ -3432,6 +3590,11 @@ class PhoneticsApp:
                         img = self.tk_icons.get('warning', '') if has_empty else ''
                         self.tree_panel.tree.insert(gid, tk.END, iid=iid, text=res['label'], tags=('item',), image=img)
                         self.tree_panel.update_item_icon(iid)
+                    else:
+                        lbl = res.get('label') or os.path.splitext(os.path.basename(res.get('path', '')))[0] or f"条目_{i+1}"
+                        iid = f"missing_{lbl}_{id(res)}"
+                        self.tree_panel.tree.insert(gid, tk.END, iid=iid, text=f"{lbl} (失败)", tags=('item',))
+                        self.items[iid] = {'label': lbl, 'group': "独立文件", 'snd': None, 'start': None, 'end': None, 'inner_splits': [], 'error': res.get('error', '')}
 
                 self.set_status(f"批量并行提取完成 ({len(results)}/{total})")
                 self.stop_loading()
@@ -3484,7 +3647,11 @@ class PhoneticsApp:
     def _process_batch_tasks(self, tasks, params, trim):
         results = [None] * len(tasks)
         futures = {}
-        executor = concurrent.futures.ProcessPoolExecutor(max_workers=min(os.cpu_count() or 4, 8))
+        executor = getattr(self, 'executor', None)
+        own_executor = False
+        if executor is None or getattr(executor, '_broken', False) or getattr(executor, '_shutdown_thread', False):
+            executor = concurrent.futures.ProcessPoolExecutor(max_workers=min(os.cpu_count() or 4, 8))
+            own_executor = True
         for i, t in enumerate(tasks):
             if t['missing']:
                 results[i] = {'label': t['word'], 'group': t['group'], 'success': False, 'missing': True}
@@ -3513,7 +3680,8 @@ class PhoneticsApp:
         else:
             self.root.after(0, lambda: self.set_progress(1.0))
 
-        executor.shutdown(wait=False)
+        if own_executor:
+            executor.shutdown(wait=False)
         return results
 
     def _fix_batch_mismatches(self, tasks, results):
@@ -3526,14 +3694,14 @@ class PhoneticsApp:
                 cached_syls = split_into_syllables(cached_label)
                 if len(syls) > 1 and (len(cached_syls) != len(syls) or ('/' in word and cached_label != word)):
                     try:
-                        snd = parselmouth.Sound(res['path'])
+                        snd = load_compatible_sound(res['path'])
                         meta = {}
                         p_data = res.get('pitch_data')
                         r_s = res.get('raw_start', res['start'])
                         r_e = res.get('raw_end', res['end'])
                         res['inner_splits'] = auto_split_inner_word(snd, r_s, r_e, len(syls), pitch_data=p_data, output_meta=meta)
                         from modules.audio_core import auto_split_to_chars_bounds
-                        res['chars_bounds'] = auto_split_to_chars_bounds(snd, r_s, r_e, res['inner_splits'], len(syls), self.last_params)
+                        res['chars_bounds'] = auto_split_to_chars_bounds(snd, r_s, r_e, res['inner_splits'], len(syls), self.last_params, pitch_data=p_data)
                         if res['chars_bounds']:
                             res['start'] = res['chars_bounds'][0][0]
                             res['end'] = res['chars_bounds'][-1][1]
@@ -4082,7 +4250,10 @@ class PhoneticsApp:
 
         try:
             import windnd
-            windnd.hook_dropfiles(dlg, func=lambda files: self.drop_queue.put(('dlg', files)))
+            try:
+                windnd.hook_dropfiles(dlg, func=lambda files: self.drop_queue.put(('dlg', files)), force_unicode=True)
+            except TypeError:
+                windnd.hook_dropfiles(dlg, func=lambda files: self.drop_queue.put(('dlg', files)))
         except Exception as e:
             import logging
             logging.getLogger(__name__).warning(f"Failed to hook dropfiles on import dialog: {e}")
@@ -4214,9 +4385,10 @@ class PhoneticsApp:
                         self.tree_panel.update_item_icon(iid)
                         matched_count += 1
                     else:
-                        iid = f"missing_{res['label']}_{id(res)}"
-                        self.tree_panel.tree.insert(gid, tk.END, iid=iid, text=res['label'] + " (失败)", tags=('item',))
-                        self.items[iid] = {'label': res['label'], 'group': grp_name, 'snd': None, 'start': None, 'end': None, 'inner_splits': []}
+                        lbl = res.get('label') or os.path.splitext(os.path.basename(res.get('path', '')))[0] or "未知条目"
+                        iid = f"missing_{lbl}_{id(res)}"
+                        self.tree_panel.tree.insert(gid, tk.END, iid=iid, text=lbl + " (失败)", tags=('item',))
+                        self.items[iid] = {'label': lbl, 'group': grp_name, 'snd': None, 'start': None, 'end': None, 'inner_splits': [], 'error': res.get('error', '')}
 
                 self.stop_loading(f"TextGrid 导入并匹配完成: {matched_count}/{total}")
                 self.tree_panel.select_first_item()
@@ -4688,7 +4860,7 @@ class PhoneticsApp:
             if snd is None and curr_item.get('path'):
                 try:
                     import parselmouth
-                    snd = parselmouth.Sound(curr_item['path'])
+                    snd = load_compatible_sound(curr_item['path'])
                 except Exception as e:
                     messagebox.showerror("错误", f"加载当前项音频失败: {e}")
                     return
@@ -4847,7 +5019,7 @@ class PhoneticsApp:
                 if tab_mode == "单条长音频":
                     snd = pending_long_snd
                     if snd is None and long_audio_path and os.path.exists(long_audio_path):
-                        snd = parselmouth.Sound(long_audio_path)
+                        snd = load_compatible_sound(long_audio_path)
                     if snd is None:
                         self.root.after(0, self.stop_loading)
                         self.root.after(0, lambda: messagebox.showwarning("提示", "未找到已加载的长音频。"))
@@ -4900,7 +5072,7 @@ class PhoneticsApp:
                         item_snd = item.get('snd')
                         if item_snd is None:
                             try:
-                                item_snd = parselmouth.Sound(item['path'])
+                                item_snd = load_compatible_sound(item['path'])
                             except Exception:
                                 return []
 
@@ -5093,7 +5265,7 @@ class PhoneticsApp:
         if tab_mode == "单条长音频":
             snd = pending_long_snd
             if snd is None and long_audio_path and os.path.exists(long_audio_path):
-                snd = parselmouth.Sound(long_audio_path)
+                snd = load_compatible_sound(long_audio_path)
             if snd:
                 for item in items_snapshot:
                     macro_bounds = self._get_valid_macro_bounds(item)
@@ -5112,7 +5284,7 @@ class PhoneticsApp:
                 item_snd = item.get('snd')
                 if item_snd is None and item.get('path') and os.path.exists(item['path']):
                     try:
-                        item_snd = parselmouth.Sound(item['path'])
+                        item_snd = load_compatible_sound(item['path'])
                     except Exception:
                         pass
                 if item_snd:
@@ -5354,7 +5526,7 @@ class PhoneticsApp:
             if snd is None and curr_item.get('path'):
                 try:
                     import parselmouth
-                    snd = parselmouth.Sound(curr_item['path'])
+                    snd = load_compatible_sound(curr_item['path'])
                 except Exception as e:
                     messagebox.showerror("错误", f"加载当前项音频失败: {e}")
                     return
@@ -5544,7 +5716,7 @@ class PhoneticsApp:
                 snd = item.get('snd')
                 if not snd and item.get('path') and os.path.exists(item['path']):
                     try:
-                        snd = parselmouth.Sound(item['path'])
+                        snd = load_compatible_sound(item['path'])
                         item['snd'] = snd
                     except Exception:
                         pass

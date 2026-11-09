@@ -4668,7 +4668,7 @@ class AcousticChartExporter:
                 return str(meta[sorted(meta.keys())[0]] or "未标注")
         return entry['group']
 
-    def _draw_confidence_ellipse(self, x, y, ax, n_std=1.5152, facecolor='none', **kwargs):
+    def _draw_confidence_ellipse(self, x, y, ax, n_std=1.5152, facecolor='none', center=None, **kwargs):
         if len(x) < 3:
             return None
         from matplotlib.patches import Ellipse
@@ -4680,7 +4680,17 @@ class AcousticChartExporter:
             y = y[finite]
             if len(x) < 3:
                 return None
-            # 移除硬性 [5%, 95%] 矩形分位数裁剪，避免人为低估元音分布椭圆面积 (BUG-M06)
+            if len(x) >= 4:
+                med_x = float(np.median(x))
+                med_y = float(np.median(y))
+                mad_x = float(np.median(np.abs(x - med_x))) * 1.4826
+                mad_y = float(np.median(np.abs(y - med_y))) * 1.4826
+                sx = max(mad_x, float(np.std(x)) * 0.25, 1e-6)
+                sy = max(mad_y, float(np.std(y)) * 0.25, 1e-6)
+                inlier = (np.abs(x - med_x) <= 3.0 * sx) & (np.abs(y - med_y) <= 3.0 * sy)
+                if np.count_nonzero(inlier) >= 3:
+                    x = x[inlier]
+                    y = y[inlier]
             cov = np.cov(x, y, ddof=1)
             if np.any(np.isnan(cov)) or np.any(np.isinf(cov)):
                 return None
@@ -4692,7 +4702,12 @@ class AcousticChartExporter:
             theta = np.degrees(np.arctan2(*vecs[:, 0][::-1]))
             width, height = 2.0 * float(n_std) * np.sqrt(np.maximum(vals, 0))
 
-            ellipse = Ellipse(xy=(np.mean(x), np.mean(y)), width=width, height=height,
+            if center is not None and len(center) == 2 and np.isfinite(center[0]) and np.isfinite(center[1]):
+                cx, cy = float(center[0]), float(center[1])
+            else:
+                cx, cy = float(np.mean(x)), float(np.mean(y))
+
+            ellipse = Ellipse(xy=(cx, cy), width=width, height=height,
                               angle=theta, facecolor=facecolor, **kwargs)
             return ax.add_patch(ellipse)
         except Exception:
@@ -4894,17 +4909,47 @@ class AcousticChartExporter:
                 f2_arr = np.asarray(entry.get('raw_f2', []), dtype=float)
 
                 if len(xs) > 0 and len(f1_arr) > 0 and len(f2_arr) > 0:
-                    mask = (xs >= c_s) & (xs <= c_e) & np.isfinite(f1_arr) & np.isfinite(f2_arr) & (f2_arr > f1_arr)
+                    base_valid = np.isfinite(f1_arr) & np.isfinite(f2_arr) & (f1_arr > 0) & (f2_arr > f1_arr)
+                    dur = max(0.0, float(c_e - c_s))
+                    core_s = c_s + 0.20 * dur
+                    core_e = c_e - 0.20 * dur
+                    core_mask = (xs >= core_s) & (xs <= core_e) & base_valid
+                    if np.count_nonzero(core_mask) >= 3:
+                        mask = core_mask
+                    else:
+                        mask = (xs >= c_s) & (xs <= c_e) & base_valid
                     s_f1 = f1_arr[mask]
                     s_f2 = f2_arr[mask]
                 else:
                     s_f1 = np.asarray(syl.get('f1', []), dtype=float)
                     s_f2 = np.asarray(syl.get('f2', []), dtype=float)
-                    mask_s = np.isfinite(s_f1) & np.isfinite(s_f2) & (s_f2 > s_f1)
-                    s_f1, s_f2 = s_f1[mask_s], s_f2[mask_s]
+                    n_s = len(s_f1)
+                    if n_s >= 5 and len(s_f2) == n_s:
+                        si0 = int(math.floor(0.2 * n_s))
+                        si1 = max(si0 + 1, int(math.ceil(0.8 * n_s)))
+                        sub_s1, sub_s2 = s_f1[si0:si1], s_f2[si0:si1]
+                        mask_sub = np.isfinite(sub_s1) & np.isfinite(sub_s2) & (sub_s1 > 0) & (sub_s2 > sub_s1)
+                        if np.count_nonzero(mask_sub) >= 3:
+                            s_f1, s_f2 = sub_s1[mask_sub], sub_s2[mask_sub]
+                        else:
+                            mask_s = np.isfinite(s_f1) & np.isfinite(s_f2) & (s_f2 > s_f1)
+                            s_f1, s_f2 = s_f1[mask_s], s_f2[mask_s]
+                    else:
+                        mask_s = np.isfinite(s_f1) & np.isfinite(s_f2) & (s_f2 > s_f1)
+                        s_f1, s_f2 = s_f1[mask_s], s_f2[mask_s]
 
                 if len(s_f1) == 0:
                     continue
+
+                if len(s_f1) >= 4:
+                    med1 = float(np.median(s_f1))
+                    med2 = float(np.median(s_f2))
+                    mad1 = max(float(np.median(np.abs(s_f1 - med1))) * 1.4826, 25.0 if med1 > 50.0 else 0.18)
+                    mad2 = max(float(np.median(np.abs(s_f2 - med2))) * 1.4826, 45.0 if med2 > 50.0 else 0.25)
+                    inlier_s = (np.abs(s_f1 - med1) <= 2.5 * mad1) & (np.abs(s_f2 - med2) <= 2.5 * mad2)
+                    if np.count_nonzero(inlier_s) >= 3:
+                        s_f1 = s_f1[inlier_s]
+                        s_f2 = s_f2[inlier_s]
 
                 spk_name = entry.get('speaker_name')
                 if transform_fn is not None:
@@ -4916,7 +4961,8 @@ class AcousticChartExporter:
                 cat = self._get_syl_category(entry, syl, groupby_val)
                 if cat not in category_data:
                     category_data[cat] = {
-                        'f1': [], 'f2': [], 'token_f1': [], 'token_f2': [],
+                        'f1': [], 'f2': [], 'steady_f1': [], 'steady_f2': [],
+                        'token_f1': [], 'token_f2': [],
                         'entries_labels': [], 'syl_chars': [],
                         'trajs_f1': [], 'trajs_f2': []
                     }
@@ -4942,8 +4988,16 @@ class AcousticChartExporter:
                     sub1, sub2 = traj_f1[i0:i1], traj_f2[i0:i1]
                     v_sub = np.isfinite(sub1) & np.isfinite(sub2)
                     if np.any(v_sub):
-                        tok_f1 = float(np.mean(sub1[v_sub]))
-                        tok_f2 = float(np.mean(sub2[v_sub]))
+                        v1, v2 = sub1[v_sub], sub2[v_sub]
+                        if len(v1) >= 4:
+                            m1_sub, m2_sub = float(np.median(v1)), float(np.median(v2))
+                            s1_sub = max(float(np.median(np.abs(v1 - m1_sub))) * 1.4826, float(np.std(v1)) * 0.25, 1e-6)
+                            s2_sub = max(float(np.median(np.abs(v2 - m2_sub))) * 1.4826, float(np.std(v2)) * 0.25, 1e-6)
+                            keep = (np.abs(v1 - m1_sub) <= 2.5 * s1_sub) & (np.abs(v2 - m2_sub) <= 2.5 * s2_sub)
+                            if np.any(keep):
+                                v1, v2 = v1[keep], v2[keep]
+                        tok_f1 = float(np.mean(v1))
+                        tok_f2 = float(np.mean(v2))
                     else:
                         tok_f1 = _safe_nanmean(s_f1)
                         tok_f2 = _safe_nanmean(s_f2)
@@ -4954,6 +5008,17 @@ class AcousticChartExporter:
                 if np.isfinite(tok_f1) and np.isfinite(tok_f2):
                     category_data[cat]['token_f1'].append(tok_f1)
                     category_data[cat]['token_f2'].append(tok_f2)
+                    if len(s_f1) >= 3:
+                        t_idx = np.linspace(-0.5, 0.5, len(s_f1))
+                        slope1 = float(np.polyfit(t_idx, s_f1, 1)[0]) if np.std(s_f1) > 1e-6 else 0.0
+                        slope2 = float(np.polyfit(t_idx, s_f2, 1)[0]) if np.std(s_f2) > 1e-6 else 0.0
+                        det1 = (s_f1 - (np.mean(s_f1) + slope1 * t_idx)) + tok_f1
+                        det2 = (s_f2 - (np.mean(s_f2) + slope2 * t_idx)) + tok_f2
+                        category_data[cat]['steady_f1'].append(det1)
+                        category_data[cat]['steady_f2'].append(det2)
+                    else:
+                        category_data[cat]['steady_f1'].append(s_f1)
+                        category_data[cat]['steady_f2'].append(s_f2)
 
         if not category_data:
             ax.text(0.5, 0.5, "没有找到有效的共振峰分析数据！", ha='center', va='center', color='red', fontsize=12)
@@ -5067,8 +5132,17 @@ class AcousticChartExporter:
                         lbl_x = v_f2[mid_idx]
                         lbl_y = v_f1[mid_idx]
 
-            ellipse_f1_pts = tok_f1_arr if len(tok_f1_arr) >= 3 else f1_list
-            ellipse_f2_pts = tok_f2_arr if len(tok_f2_arr) >= 3 else f2_list
+            is_intra_token_ellipse = (len(tok_f1_arr) < 3)
+            if not is_intra_token_ellipse:
+                ellipse_f1_pts = tok_f1_arr
+                ellipse_f2_pts = tok_f2_arr
+                ellipse_center = None
+            else:
+                steady_f1_list = category_data[cat].get('steady_f1', [])
+                steady_f2_list = category_data[cat].get('steady_f2', [])
+                ellipse_f1_pts = np.concatenate(steady_f1_list) if steady_f1_list else f1_list
+                ellipse_f2_pts = np.concatenate(steady_f2_list) if steady_f2_list else f2_list
+                ellipse_center = (mean_f2, mean_f1)
 
             if np.isnan(lbl_x) or np.isnan(lbl_y):
                 ax.scatter(mean_f2, mean_f1, color=color, s=135, marker=marker, edgecolors='black', linewidth=1.1, zorder=6, label=str(cat))
@@ -5102,10 +5176,11 @@ class AcousticChartExporter:
 
             if "1-sigma" in str(ellipse_mode) or "68%" in str(ellipse_mode):
                 ax._error_band_label = "Ellipse: 68% (1σ)"
-                self._draw_confidence_ellipse(ellipse_f2_pts, ellipse_f1_pts, ax, n_std=1.5152, facecolor='none', edgecolor=color, linestyle='--', linewidth=1.5, zorder=4)
+                self._draw_confidence_ellipse(ellipse_f2_pts, ellipse_f1_pts, ax, n_std=1.5152, facecolor='none', center=ellipse_center, edgecolor=color, linestyle='--', linewidth=1.5, zorder=4)
             elif "2-sigma" in str(ellipse_mode) or "95%" in str(ellipse_mode):
                 ax._error_band_label = "Ellipse: 95% CI"
-                self._draw_confidence_ellipse(ellipse_f2_pts, ellipse_f1_pts, ax, n_std=2.4477, facecolor='none', edgecolor=color, linestyle='-.', linewidth=1.5, zorder=4)
+                n_std_val = 1.5152 if is_intra_token_ellipse else 2.4477
+                self._draw_confidence_ellipse(ellipse_f2_pts, ellipse_f1_pts, ax, n_std=n_std_val, facecolor='none', center=ellipse_center, edgecolor=color, linestyle='-.', linewidth=1.5, zorder=4)
 
         # Outer Convex Hull & Vowel Space Area (VSA)
         vsa_area = 0.0
@@ -6082,44 +6157,8 @@ class AcousticChartExporter:
         )
         self.cb_formant_show_raw.pack(anchor="w", pady=(4, 4))
 
-        self.cb_formant_time_gradient = self._make_checkbox(
-            self.dynamic_content_frame,
-            text="显示时序渐变轨迹线 (红→蓝)",
-            variable=self.var_formant_time_gradient,
-            command=self.update_preview
-        )
-        self.cb_formant_time_gradient.pack(anchor="w", pady=(4, 4))
-
-        self.cb_formant_density_overlay = self._make_checkbox(
-            self.dynamic_content_frame,
-            text="叠加时空密度热力层 (红→蓝)",
-            variable=self.var_formant_density_overlay,
-            command=self.update_preview
-        )
-        self.cb_formant_density_overlay.pack(anchor="w", pady=(4, 4))
-
-        bw_val_frame = ctk.CTkFrame(self.dynamic_content_frame, fg_color="transparent")
-        bw_val_frame.pack(fill=tk.X, pady=(4, 2))
-        ctk.CTkLabel(bw_val_frame, text="密度带宽 (越小越清晰):", font=self.font_small).pack(side=tk.LEFT)
-        self.lbl_formant_density_bw = ctk.CTkLabel(bw_val_frame, text=f"{self.var_formant_density_bw.get():.2f}", font=self.font_small)
-        self.lbl_formant_density_bw.pack(side=tk.RIGHT)
-        self.slider_formant_density_bw = ctk.CTkSlider(
-            self.dynamic_content_frame,
-            from_=0.06,
-            to=0.32,
-            number_of_steps=26,
-            command=self._on_formant_density_bw_changed
-        )
-        self.slider_formant_density_bw.set(float(self.var_formant_density_bw.get()))
-        self.slider_formant_density_bw.pack(fill=tk.X, pady=(0, 6))
-
-        self.cb_formant_density_show_contours = self._make_checkbox(
-            self.dynamic_content_frame,
-            text="叠加等密度轮廓线",
-            variable=self.var_formant_density_show_contours,
-            command=self.update_preview
-        )
-        self.cb_formant_density_show_contours.pack(anchor="w", pady=(2, 4))
+        self.var_formant_time_gradient.set(False)
+        self.var_formant_density_overlay.set(False)
 
         ctk.CTkLabel(self.dynamic_content_frame, text="分面子图排版 (Facet):", font=self.font_small).pack(anchor="w", pady=(6, 2))
         self.combo_formant_density_facet = ctk.CTkOptionMenu(
@@ -7329,6 +7368,11 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         self.trigger_preview_update()
 
     def _on_filter_scroll_wheel(self, event):
+        try:
+            from .ui_widgets import _close_active_dropdown_popover
+            _close_active_dropdown_popover(mark_closed_owner=False)
+        except Exception:
+            pass
         canvas = getattr(self.filter_scroll, "_parent_canvas", None)
         if canvas is None:
             return "break"
@@ -7360,6 +7404,11 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             self._bind_filter_scroll_wheel_recursive(child)
 
     def _on_left_scroll_wheel(self, event):
+        try:
+            from .ui_widgets import _close_active_dropdown_popover
+            _close_active_dropdown_popover(mark_closed_owner=False)
+        except Exception:
+            pass
         if hasattr(self, 'filter_scroll') and self.filter_scroll:
             try:
                 if str(event.widget).startswith(str(self.filter_scroll)):
@@ -8767,6 +8816,50 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
             logging.getLogger(__name__).error(f"Render chart error: {e}", exc_info=True)
 
     # --- CONFIRM & EXPORT CONTROLLER ---
+    def _copy_png_bytes_to_system_clipboard(self, png_bytes):
+        try:
+            import io
+            import ctypes
+            from PIL import Image
+
+            img = Image.open(io.BytesIO(png_bytes)).convert("RGB")
+            bmp_buf = io.BytesIO()
+            img.save(bmp_buf, format="BMP")
+            dib_data = bmp_buf.getvalue()[14:]
+
+            GMEM_MOVEABLE = 0x0002
+            CF_DIB = 8
+            kernel32 = ctypes.windll.kernel32
+            user32 = ctypes.windll.user32
+
+            kernel32.GlobalAlloc.argtypes = [ctypes.c_uint, ctypes.c_size_t]
+            kernel32.GlobalAlloc.restype = ctypes.c_void_p
+            kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+            kernel32.GlobalLock.restype = ctypes.c_void_p
+            kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+            user32.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.c_void_p]
+            user32.SetClipboardData.restype = ctypes.c_void_p
+
+            if not user32.OpenClipboard(0):
+                return False
+            try:
+                user32.EmptyClipboard()
+                h_mem = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(dib_data))
+                if not h_mem:
+                    return False
+                p_mem = kernel32.GlobalLock(h_mem)
+                if not p_mem:
+                    return False
+                ctypes.memmove(p_mem, dib_data, len(dib_data))
+                kernel32.GlobalUnlock(h_mem)
+                if not user32.SetClipboardData(CF_DIB, h_mem):
+                    return False
+                return True
+            finally:
+                user32.CloseClipboard()
+        except Exception:
+            return False
+
     def copy_figure_to_clipboard(self):
         fig = getattr(self, "active_figure", None)
         if fig is None:
@@ -8777,8 +8870,47 @@ class AcousticChartExportDialog(ctk.CTkToplevel, AcousticChartExporter):
         buf = io.BytesIO()
         fig.savefig(buf, format="png", dpi=300, bbox_inches="tight")
         png_bytes = buf.getvalue()
+        self._clipboard_png_bytes = png_bytes
+        self._copy_png_bytes_to_system_clipboard(png_bytes)
+
+        if hasattr(self, "btn_copy_image"):
+            try:
+                if getattr(self, "_copy_btn_restore_job", None) is not None:
+                    self.after_cancel(self._copy_btn_restore_job)
+            except Exception:
+                pass
+            try:
+                self.btn_copy_image.configure(text="✅ 已复制!", fg_color="#10B981", hover_color="#059669")
+                def _restore_copy_btn():
+                    self._copy_btn_restore_job = None
+                    try:
+                        if self.btn_copy_image.winfo_exists():
+                            self.btn_copy_image.configure(text="📋 复制图片", fg_color="#6366F1", hover_color="#4F46E5")
+                    except Exception:
+                        pass
+                self._copy_btn_restore_job = self.after(1800, _restore_copy_btn)
+            except Exception:
+                pass
+
         if hasattr(self, "lbl_qc_hover_status"):
-            self.lbl_qc_hover_status.configure(text=f"✅ 已生成 300 DPI 高清图像至内存剪贴板缓冲区 ({len(png_bytes) // 1024} KB)")
+            msg = f"✅ 已复制 300 DPI 高清图表至系统剪贴板 ({len(png_bytes) // 1024} KB)，可直接 Ctrl+V 粘贴"
+            self.lbl_qc_hover_status.configure(text=msg, text_color="#059669")
+            try:
+                if hasattr(self.lbl_qc_hover_status, "grid"):
+                    self.lbl_qc_hover_status.grid(row=4, column=0, sticky="ew", padx=4, pady=(0, 3))
+                if getattr(self, "_copy_status_hide_job", None) is not None:
+                    self.after_cancel(self._copy_status_hide_job)
+                def _hide_copy_status():
+                    self._copy_status_hide_job = None
+                    try:
+                        if getattr(self, "work_mode", "publication") != "qc" and self.lbl_qc_hover_status.winfo_exists():
+                            self.lbl_qc_hover_status.grid_remove()
+                    except Exception:
+                        pass
+                if hasattr(self, "after"):
+                    self._copy_status_hide_job = self.after(2800, _hide_copy_status)
+            except Exception:
+                pass
         return True
 
     def export_chart_table_data(self):

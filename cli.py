@@ -6580,10 +6580,11 @@ Type 'help' or '?' to list commands. Type 'status' for workspace overview.
                 res['id'] = iid
                 spk.items[iid] = res
             else:
-                iid = f"missing_{res['label']}_{id(res)}"
+                lbl = res.get('label') or os.path.splitext(os.path.basename(res.get('path', '')))[0] or "未知条目"
+                iid = f"missing_{lbl}_{id(res)}"
                 spk.items[iid] = {
                     'id': iid,
-                    'label': res['label'],
+                    'label': lbl,
                     'group': grp_name,
                     'speaker': spk.name,
                     'speaker_id': spk.id,

@@ -1339,9 +1339,59 @@ def _install_headless_gui_and_audio_stubs_if_missing() -> None:
         tk_mod = types.ModuleType("tkinter")
 
         class _DummyWidget:
+            def _draw(self, *args: Any, **kwargs: Any) -> None:
+                pass
+
+            def __call__(self, *args: Any, **kwargs: Any) -> Any:
+                return None
+
+            def __iter__(self):
+                return iter(())
+
+            def __contains__(self, item: Any) -> bool:
+                return False
+
+            def items(self):
+                return ()
+
+            def values(self):
+                return ()
+
+            def keys(self):
+                return ()
+
+            def theme_use(self, *args: Any, **kwargs: Any) -> str:
+                return "default"
+
+            def map(self, *args: Any, **kwargs: Any) -> None:
+                pass
+
+            def __getattr__(self, name: str) -> Any:
+                if name.startswith("_"):
+                    if name in ("_segmented_button", "_text_label", "_image_label", "_canvas", "_entry", "_textbox", "_dropdown_menu"):
+                        child = _DummyWidget()
+                        object.__setattr__(self, name, child)
+                        return child
+                    if name in ("_select_button_by_value", "_draw", "_create_grid"):
+                        return lambda *args, **kwargs: None
+                    raise AttributeError(name)
+                return lambda *args, **kwargs: None
             def __init__(self, *args: Any, **kwargs: Any):
                 self._cfg = dict(kwargs)
                 self.children = {}
+                self.master = args[0] if args else kwargs.get("master")
+                self._manager = ""
+                self._grid_info = {}
+                self._bindings = {}
+                self._check_state = False
+                self._corner_radius = kwargs.get("corner_radius", 6)
+                self.tk = "tk"
+                self._after_depth = 0
+                self._segmented_button = self
+                self._buttons_dict = {}
+                self._values = kwargs.get("values", [])
+                self._current_value = self._values[0] if self._values else ""
+                self._geom = "200x120+0+0" 
 
             def _mouse_wheel_all(self, *args: Any, **kwargs: Any) -> None:
                 pass
@@ -1350,22 +1400,31 @@ def _install_headless_gui_and_audio_stubs_if_missing() -> None:
                 return self
 
             def pack(self, *args: Any, **kwargs: Any) -> None:
-                pass
+                self._manager = "pack"
 
             def pack_forget(self, *args: Any, **kwargs: Any) -> None:
-                pass
+                self._manager = ""
 
             def pack_propagate(self, *args: Any, **kwargs: Any) -> None:
                 pass
 
             def grid(self, *args: Any, **kwargs: Any) -> None:
-                pass
+                self._manager = "grid"
+                self._grid_info = dict(kwargs) if kwargs else {"row": 0}
 
             def grid_forget(self, *args: Any, **kwargs: Any) -> None:
-                pass
+                self._manager = ""
+                self._grid_info = {}
 
             def grid_remove(self, *args: Any, **kwargs: Any) -> None:
-                pass
+                self._manager = ""
+                self._grid_info = {}
+
+            def grid_info(self) -> Dict[str, Any]:
+                return dict(self._grid_info)
+
+            def winfo_manager(self) -> str:
+                return self._manager
 
             def grid_propagate(self, *args: Any, **kwargs: Any) -> None:
                 pass
@@ -1388,8 +1447,13 @@ def _install_headless_gui_and_audio_stubs_if_missing() -> None:
             def place_forget(self, *args: Any, **kwargs: Any) -> None:
                 pass
 
-            def bind(self, *args: Any, **kwargs: Any) -> None:
-                pass
+            def bind(self, sequence: Any = None, func: Any = None, add: Any = None) -> Any:
+                if sequence is None:
+                    return tuple(self._bindings.keys())
+                self._bindings[str(sequence)] = func
+                if str(sequence) == "<Control-c>":
+                    self._bindings["<Control-Key-c>"] = func
+                return "bind_id"
 
             def unbind(self, *args: Any, **kwargs: Any) -> None:
                 pass
@@ -1438,8 +1502,73 @@ def _install_headless_gui_and_audio_stubs_if_missing() -> None:
             def title(self, *args: Any) -> None:
                 pass
 
-            def geometry(self, *args: Any) -> None:
+            def geometry(self, *args: Any) -> Any:
+                if args:
+                    self._geom = str(args[0])
+                return getattr(self, "_geom", "200x120+0+0")
+
+            def minsize(self, *args: Any, **kwargs: Any) -> None:
                 pass
+
+            def maxsize(self, *args: Any, **kwargs: Any) -> None:
+                pass
+
+            def resizable(self, *args: Any, **kwargs: Any) -> None:
+                pass
+
+            def withdraw(self, *args: Any, **kwargs: Any) -> None:
+                pass
+
+            def deiconify(self, *args: Any, **kwargs: Any) -> None:
+                pass
+
+            def iconbitmap(self, *args: Any, **kwargs: Any) -> None:
+                pass
+
+            def iconphoto(self, *args: Any, **kwargs: Any) -> None:
+                pass
+
+            def wm_iconphoto(self, *args: Any, **kwargs: Any) -> None:
+                pass
+
+            def grab_set(self, *args: Any, **kwargs: Any) -> None:
+                pass
+
+            def grab_release(self, *args: Any, **kwargs: Any) -> None:
+                pass
+
+            def wait_window(self, *args: Any, **kwargs: Any) -> None:
+                pass
+
+            def nametowidget(self, *args: Any, **kwargs: Any) -> "_DummyWidget":
+                return self
+
+            def itemconfigure(self, *args: Any, **kwargs: Any) -> None:
+                pass
+
+            def create_image(self, *args: Any, **kwargs: Any) -> int:
+                return 1
+
+            def bind_all(self, *args: Any, **kwargs: Any) -> None:
+                pass
+
+            def unbind_all(self, *args: Any, **kwargs: Any) -> None:
+                pass
+
+            def winfo_rootx(self) -> int:
+                return 0
+
+            def winfo_rooty(self) -> int:
+                return 0
+
+            def winfo_reqwidth(self) -> int:
+                return 100
+
+            def winfo_reqheight(self) -> int:
+                return 30
+
+            def winfo_pointerxy(self) -> Tuple[int, int]:
+                return (100, 100)
 
             def transient(self, *args: Any) -> None:
                 pass
@@ -1448,8 +1577,14 @@ def _install_headless_gui_and_audio_stubs_if_missing() -> None:
                 pass
 
             def after(self, _ms: int, func: Any = None, *args: Any) -> str:
-                if callable(func):
-                    func(*args)
+                if callable(func) and getattr(func, "__name__", "") != "process_gui_queue":
+                    depth = getattr(self, "_after_depth", 0)
+                    if depth < 2:
+                        self._after_depth = depth + 1
+                        try:
+                            func(*args)
+                        finally:
+                            self._after_depth = depth
                 return "after_id"
 
             def after_cancel(self, *args: Any) -> None:
@@ -1471,10 +1606,14 @@ def _install_headless_gui_and_audio_stubs_if_missing() -> None:
                 self._cfg["value"] = val
 
             def select(self) -> None:
-                self._cfg["value"] = True
+                self._check_state = True
+                self._cfg["value"] = 1
+                self._draw()
 
             def deselect(self) -> None:
-                self._cfg["value"] = False
+                self._check_state = False
+                self._cfg["value"] = 0
+                self._draw()
 
             def insert(self, *args: Any, **kwargs: Any) -> str:
                 return "item"
@@ -1526,6 +1665,17 @@ def _install_headless_gui_and_audio_stubs_if_missing() -> None:
                 return "trace"
 
         for const_name, const_val in {
+            "NO": False,
+            "YES": True,
+            "TRUE": True,
+            "FALSE": False,
+            "WORD": "word",
+            "FLAT": "flat",
+            "SOLID": "solid",
+            "RAISED": "raised",
+            "SUNKEN": "sunken",
+            "GROOVE": "groove",
+            "RIDGE": "ridge",
             "LEFT": "left",
             "RIGHT": "right",
             "TOP": "top",
@@ -1617,13 +1767,26 @@ def _install_headless_gui_and_audio_stubs_if_missing() -> None:
         sd_dlg_mod.askinteger = lambda *a, **kw: None
         sd_dlg_mod.askfloat = lambda *a, **kw: None
 
+        font_mod = types.ModuleType("tkinter.font")
+        class _DummyFont(_DummyWidget):
+            def measure(self, text=""):
+                return len(str(text)) * 8
+            def metrics(self, *a, **kw):
+                return {"ascent": 10, "descent": 2, "linespace": 14}
+        font_mod.Font = _DummyFont
+        font_mod.nametofont = lambda *a, **kw: _DummyFont()
+        font_mod.families = lambda *a, **kw: ("Microsoft YaHei", "Consolas", "Arial")
+
+        tk_mod.__path__ = []
         tk_mod.ttk = ttk_mod
+        tk_mod.font = font_mod
         tk_mod.messagebox = mb_mod
         tk_mod.filedialog = fd_mod
         tk_mod.simpledialog = sd_dlg_mod
 
         sys.modules["tkinter"] = tk_mod
         sys.modules["tkinter.ttk"] = ttk_mod
+        sys.modules["tkinter.font"] = font_mod
         sys.modules["tkinter.messagebox"] = mb_mod
         sys.modules["tkinter.filedialog"] = fd_mod
         sys.modules["tkinter.simpledialog"] = sd_dlg_mod
@@ -1660,6 +1823,7 @@ def _install_headless_gui_and_audio_stubs_if_missing() -> None:
             ctk_mod.DoubleVar = tk_mod.DoubleVar
             ctk_mod.BooleanVar = tk_mod.BooleanVar
             ctk_mod.set_appearance_mode = lambda *a, **kw: None
+            ctk_mod.get_appearance_mode = lambda *a, **kw: "Light"
             ctk_mod.set_default_color_theme = lambda *a, **kw: None
             for const_name in ("LEFT", "RIGHT", "TOP", "BOTTOM", "BOTH", "X", "Y", "END", "NORMAL", "DISABLED"):
                 setattr(ctk_mod, const_name, getattr(tk_mod, const_name))
