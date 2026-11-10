@@ -38,9 +38,10 @@ PUBLICATION_PRESETS = {
         "show_title": False,
         "subplot_label_prefix": True,
         "font_sans": [
-            "SimSun", "Songti SC", "Source Han Serif SC", "Noto Serif CJK SC",
-            "Times New Roman", "Microsoft YaHei", "Charis SIL", "Doulos SIL",
-            "Segoe UI", "DejaVu Serif", "DejaVu Sans",
+            "SimSun", "Songti SC", "Source Han Serif SC", "Noto Serif CJK SC", "Noto Serif CJK JP",
+            "Noto Sans CJK SC", "Noto Sans CJK JP", "Times New Roman", "Microsoft YaHei", "PingFang SC",
+            "WenQuanYi Micro Hei", "Droid Sans Fallback", "Charis SIL",
+            "Doulos SIL", "Segoe UI", "DejaVu Serif", "DejaVu Sans",
         ],
         "pdf_fonttype": 42,
         "ps_fonttype": 42,
@@ -77,8 +78,9 @@ PUBLICATION_PRESETS = {
         "show_title": False,
         "subplot_label_prefix": True,
         "font_sans": [
-            "Microsoft YaHei", "Arial", "Helvetica", "Times New Roman", "Charis SIL", "Doulos SIL",
-            "Noto Sans CJK SC", "Segoe UI", "DejaVu Sans",
+            "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", "Noto Sans CJK JP",
+            "Noto Serif CJK SC", "Noto Serif CJK JP", "WenQuanYi Micro Hei", "Droid Sans Fallback",
+            "Arial", "Helvetica", "Times New Roman", "Charis SIL", "Doulos SIL", "Segoe UI", "DejaVu Sans",
         ],
         "pdf_fonttype": 42,
         "ps_fonttype": 42,
@@ -113,8 +115,8 @@ PUBLICATION_PRESETS = {
         "show_title": True,
         "subplot_label_prefix": True,
         "font_sans": [
-            "Microsoft YaHei", "Arial", "Noto Sans CJK SC", "Charis SIL",
-            "Doulos SIL", "Segoe UI", "DejaVu Sans",
+            "Microsoft YaHei", "Arial", "Noto Sans CJK SC", "Noto Serif CJK SC",
+            "Charis SIL", "Doulos SIL", "Segoe UI", "DejaVu Sans",
         ],
         "pdf_fonttype": 42,
         "ps_fonttype": 42,
@@ -198,13 +200,22 @@ class ChartPresetsMixin:
 
     def _get_series_style(self, idx):
         preset = self.get_publication_preset()
-        colors = preset["colors"]
-        linestyles = preset["linestyles"]
-        markers = preset["markers"]
+        preset_name = preset.get("name", "chinese_journal")
+        base_colors = list(preset["colors"])
+        extra_colors_map = {
+            "chinese_journal": ["#0F766E", "#9D174D", "#4338CA", "#B45309", "#15803D", "#6D28D9"],
+            "intl_journal": ["#332288", "#882255", "#44AA99", "#999933", "#AA4499", "#117733"],
+            "presentation": ["#BE185D", "#0D9488", "#7C2D12", "#334155", "#047857", "#6D28D9"],
+        }
+        ext_colors = base_colors + [c for c in extra_colors_map.get(preset_name, extra_colors_map["chinese_journal"]) if c not in base_colors]
+        ext_markers = list(preset["markers"]) + [m for m in ["p", "h", "<", ">", "d", "H"] if m not in preset["markers"]]
+        ext_linestyles = list(preset["linestyles"]) + [
+            (0, (4, 1, 1, 1)), (0, (6, 2)), (0, (2, 1)), (0, (3, 2, 1, 2)),
+        ]
         return {
-            "color": colors[idx % len(colors)],
-            "linestyle": linestyles[idx % len(linestyles)],
-            "marker": markers[idx % len(markers)],
+            "color": ext_colors[idx % len(ext_colors)],
+            "linestyle": ext_linestyles[idx % len(ext_linestyles)],
+            "marker": ext_markers[idx % len(ext_markers)],
             "linewidth": float(preset.get("linewidth", 2.0)),
             "markersize": float(preset.get("markersize", 5.0)),
         }
@@ -231,6 +242,11 @@ class ChartPresetsMixin:
             and not getattr(ax, "_is_chao_axis", False)
             and not getattr(ax, "_is_colorbar_axis", False)
             and ax.get_label() != "<colorbar>"
+        ]
+        chao_axes = [
+            ax for ax in all_axes
+            if getattr(ax, "get_visible", lambda: True)()
+            and getattr(ax, "_is_chao_axis", False)
         ]
 
         show_title_param = self.get_param("show_title", None)
@@ -274,6 +290,9 @@ class ChartPresetsMixin:
                     right=(not is_chao_parent and not is_heatmap_chart),
                     labelsize=max(7.5, base_fs - 0.5),
                 )
+                if is_chao_parent:
+                    ax.yaxis.set_ticks_position("left")
+                    ax.tick_params(axis="y", which="both", right=False, labelright=False)
             elif preset_key == "intl_journal":
                 if is_vowel_space and praat_axes:
                     ax.spines["top"].set_visible(True)
@@ -318,23 +337,26 @@ class ChartPresetsMixin:
             except Exception:
                 pass
 
-            # Subplot (a), (b) numbering & top title handling
+            # Subplot (a), (b) numbering & top title handling (clear center/right title first to prevent collision!)
             orig_title = getattr(ax, "_original_title", None)
             if orig_title is None:
-                orig_title = ax.get_title() or ""
+                orig_title = ax.get_title(loc="center") or ax.get_title(loc="left") or ""
                 ax._original_title = orig_title
 
             if len(primary_axes) > 1:
                 letter = chr(97 + (idx % 26))
                 clean_t = re.sub(r"^\([a-z]\)\s*", "", str(orig_title).strip())
                 sub_lbl = f"({letter}) {clean_t}".strip() if clean_t else f"({letter})"
+                ax.set_title("", loc="center")
+                ax.set_title("", loc="right")
                 ax.set_title(sub_lbl, loc="left", fontsize=title_fs, fontweight="bold")
             else:
-                if show_title:
-                    if orig_title:
-                        ax.set_title(orig_title, fontsize=title_fs, fontweight="bold")
+                ax.set_title("", loc="left")
+                ax.set_title("", loc="right")
+                if show_title and orig_title:
+                    ax.set_title(orig_title, loc="center", fontsize=title_fs, fontweight="bold")
                 else:
-                    ax.set_title("")
+                    ax.set_title("", loc="center")
 
             # Legend refinement
             leg = ax.get_legend()
@@ -355,6 +377,49 @@ class ChartPresetsMixin:
                 elif preset_key == "presentation":
                     for txt in leg.get_texts():
                         txt.set_fontsize(max(11.0, base_fs - 1.5))
+
+        # Sync all secondary Chao 5-level axes strictly to their parent Y limits
+        tick_dir = str(preset.get("tick_direction", "in"))
+        for ca in chao_axes:
+            try:
+                if "right" in ca.spines:
+                    ca.spines["right"].set_visible(True)
+                    ca.spines["right"].set_color("#111827")
+                    ca.spines["right"].set_linewidth(0.9)
+                for sp_hide in ("top", "left", "bottom"):
+                    if sp_hide in ca.spines:
+                        ca.spines[sp_hide].set_visible(False)
+            except Exception:
+                pass
+            try:
+                ca.yaxis.set_ticks_position("right")
+                ca.tick_params(
+                    axis="y",
+                    which="both",
+                    direction=tick_dir,
+                    right=True,
+                    left=False,
+                    labelright=True,
+                    labelleft=False,
+                    labelsize=max(7.5, base_fs - 1.0),
+                )
+            except Exception:
+                pass
+            parent_ax = getattr(ca, "_parent_ax", None)
+            if parent_ax is not None:
+                try:
+                    parent_ax.yaxis.set_ticks_position("left")
+                    parent_ax.tick_params(axis="y", which="both", right=False, labelright=False)
+                except Exception:
+                    pass
+                try:
+                    ca.set_yticks([0.5, 1.5, 2.5, 3.5, 4.5])
+                    ca.set_yticklabels(["1度 [0-1]", "2度 [1-2]", "3度 [2-3]", "4度 [3-4]", "5度 [4-5]"], fontsize=max(7.5, base_fs - 1.0))
+                    ca.autoscale(enable=False, axis="y")
+                    ca.set_autoscale_on(False)
+                    ca.set_ylim(parent_ax.get_ylim())
+                except Exception:
+                    pass
 
         if not show_title and getattr(fig, "_suptitle", None) is not None:
             try:

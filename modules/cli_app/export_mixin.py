@@ -73,25 +73,29 @@ class CLIExportMixin:
         "xlsx",
         "txt",
         "textgrid",
+        "collection",
         "ptwl",
         "contour",
+        "tone_sandhi",
+        "tone_effect_time",
         "density",
         "distribution",
+        "duration",
         "quality",
+        "spaghetti_qc",
         "overview_heatmap",
-        "tone_effect_time",
         "formant_space",
         "f1_f2",
-        "duration",
+        "formant_trajectory",
+        "formant_density",
+        "formant_overview_heatmap",
+        "formant_pillai",
+        "formant_table",
         "trend",
         "line_chart",
         "kde",
         "wav",
         "merged_wav",
-        "formant_table",
-        "formant_trajectory",
-        "formant_density",
-        "formant_overview_heatmap",
     ]
 
 
@@ -135,6 +139,8 @@ class CLIExportMixin:
             "vowel_space": "formant_space",
             "vowel_chart": "formant_space",
             "wordlist": "ptwl",
+            "praat_collection": "collection",
+            "praat": "collection",
             "tone_sandhi": "tone_sandhi",
             "sandhi_grid": "tone_sandhi",
             "formant_pillai": "formant_pillai",
@@ -220,9 +226,13 @@ class CLIExportMixin:
         chart_preset_overrides = {}
         if fmt_low in fmt_aliases:
             fmt = fmt_aliases[fmt_low]
-        elif fmt_low == "duration":
+            if fmt_low == "f1_f2":
+                chart_preset_overrides["formant_show_raw"] = True
+                chart_preset_overrides["formant_ellipse"] = "不显示"
+                chart_preset_overrides["_f1_f2_scatter_mode"] = True
+        elif fmt_low == "line_chart":
             fmt = "contour"
-            chart_preset_overrides["contour_x"] = "duration"
+            chart_preset_overrides["contour_content"] = "average"
         elif fmt_low == "trend":
             fmt = "tone_effect_time"
         else:
@@ -232,6 +242,7 @@ class CLIExportMixin:
         scientific_charts = {
             "contour",
             "distribution",
+            "duration",
             "density",
             "quality",
             "overview_heatmap",
@@ -254,14 +265,16 @@ class CLIExportMixin:
             def parse_chart_group_rule(value):
                 text = str(value or "").strip()
                 lowered = text.lower()
-                if lowered in ("default", "group", "原始组", "默认组"):
+                if lowered in ("default", "group", "原始组", "默认组", "按字表组别", "按组别"):
                     return {"source": "default", "tag_mode": "each", "selected_values": [], "field_name": ""}
-                if lowered in ("review", "metadata_source", "复核状态"):
+                if lowered in ("review", "metadata_source", "复核状态", "按复核状态"):
                     return {"source": "metadata_source", "tag_mode": "each", "selected_values": [], "field_name": ""}
-                if lowered in ("label", "word", "词项"):
+                if lowered in ("label", "word", "词项", "词语", "按词语", "按词项"):
                     return {"source": "label", "tag_mode": "each", "selected_values": [], "field_name": ""}
-                if lowered in ("speaker", "speaker_name", "发音人"):
+                if lowered in ("speaker", "speaker_name", "发音人", "按发音人"):
                     return {"source": "speaker_name", "tag_mode": "each", "selected_values": [], "field_name": ""}
+                if lowered in ("syl_char", "char", "syllable", "按单字音节", "按单字/音节"):
+                    return {"source": "default", "tag_mode": "each", "selected_values": [], "field_name": ""}
 
                 if ":" in text:
                     prefix, rest = text.split(":", 1)
@@ -284,6 +297,8 @@ class CLIExportMixin:
                     "meta": "item_meta",
                     "field": "item_meta",
                     "item_meta": "item_meta",
+                    "custom": "item_meta",
+                    "按自定义字段": "item_meta",
                     "自定义字段": "item_meta",
                     "字段": "item_meta",
                     "contains_item_tag": "item_tags",
@@ -307,7 +322,25 @@ class CLIExportMixin:
 
                 return {"source": source, "tag_mode": tag_mode, "selected_values": values, "field_name": ""}
 
+            formant_norm_aliases = {
+                "hz": "原始频率 (Hz)",
+                "raw": "原始频率 (Hz)",
+                "原始频率": "原始频率 (Hz)",
+                "原始频率 (hz)": "原始频率 (Hz)",
+                "lobanov": "Lobanov (发音人 Z-score)",
+                "lobanov z": "Lobanov (发音人 Z-score)",
+                "lobanov z-score": "Lobanov (发音人 Z-score)",
+                "l-归一化": "Lobanov (发音人 Z-score)",
+                "z-score": "Lobanov (发音人 Z-score)",
+                "zscore": "Lobanov (发音人 Z-score)",
+                "z": "Lobanov (发音人 Z-score)",
+                "bark": "Bark (听觉巴克)",
+                "erb": "ERB (等效矩形带宽)",
+                "mel": "Mel (美尔)",
+            }
+
             pos_args = []
+            explicit_chart_group_rule = False
             for item in args[2:]:
                 if "=" in item:
                     k, v = item.split("=", 1)
@@ -316,19 +349,56 @@ class CLIExportMixin:
                     if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
                         v = v[1:-1]
                     if k in ("target", "scope", "export_scope"):
-                        k = "export_scope"
+                        params["export_scope"] = v
+                        continue
                     elif k == "facet":
+                        params["facet_by"] = v
                         if fmt == "density":
-                            k = "density_facet"
+                            params["density_facet"] = v
                         elif fmt == "contour":
-                            k = "contour_facet"
+                            params["contour_facet"] = v
+                        elif fmt in ("formant_space", "formant_density"):
+                            params["formant_density_facet"] = v
+                        continue
                     elif k in ("chart_group", "chart_group_rule", "group_rule"):
-                        k = "chart_group_rule"
                         try:
-                            v = parse_chart_group_rule(v)
+                            rule_obj = parse_chart_group_rule(v)
                         except ValueError as exc:
                             self._emit(False, error=str(exc))
                             return
+                        params["chart_group_rule"] = rule_obj
+                        explicit_chart_group_rule = True
+                        if "groupby" not in params:
+                            if rule_obj["source"] == "label":
+                                params["groupby"] = "label"
+                            elif rule_obj["source"] == "speaker_name":
+                                params["groupby"] = "speaker"
+                            elif rule_obj["source"] == "default":
+                                params["groupby"] = "group"
+                        continue
+                    elif k in ("groupby", "color_by"):
+                        params["groupby"] = v
+                        params["color_by"] = v
+                        if not explicit_chart_group_rule:
+                            try:
+                                params["chart_group_rule"] = parse_chart_group_rule(v)
+                            except ValueError as exc:
+                                self._emit(False, error=str(exc))
+                                return
+                        continue
+                    elif k in ("normalization", "norm", "formant_norm", "formant_normalization"):
+                        v_low = v.strip().lower()
+                        if k in ("formant_norm", "formant_normalization"):
+                            params["formant_normalization"] = formant_norm_aliases.get(v_low, v)
+                        else:
+                            params["normalization"] = v
+                            if v_low in formant_norm_aliases:
+                                params["formant_normalization"] = formant_norm_aliases[v_low]
+                            elif fmt.startswith("formant_") and v_low in ("speaker", "发音人", "per_speaker"):
+                                params["formant_normalization"] = "Lobanov (发音人 Z-score)"
+                            elif any(tok in v_low for tok in ("lobanov", "bark", "erb", "mel")):
+                                params["formant_normalization"] = v
+                        continue
                     params[k] = v
                 else:
                     pos_args.append(item)
@@ -390,6 +460,11 @@ class CLIExportMixin:
                         for it in s.items.values():
                             if not it.get("is_excluded", False):
                                 self._ensure_item_loaded(it, speaker=s)
+                elif fmt == "duration":
+                    for s in speakers_to_process:
+                        for it in s.items.values():
+                            if not it.get("is_excluded", False):
+                                self._ensure_item_loaded(it, speaker=s)
 
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore", category=RuntimeWarning)
@@ -397,6 +472,8 @@ class CLIExportMixin:
                         os.makedirs(out_file, exist_ok=True)
                         for speaker in all_speakers:
                             data = exporter._extract_active_data([speaker])
+                            if not data and fmt == "duration":
+                                data = exporter._extract_duration_only_entries([speaker])
                             if data:
                                 out_path = os.path.join(out_file, f"{speaker.name}_{fmt}{ext}")
                                 exporter._export_dataset(data, out_path, ext)
@@ -404,6 +481,8 @@ class CLIExportMixin:
                     else:
                         os.makedirs(os.path.dirname(os.path.abspath(out_file)) or ".", exist_ok=True)
                         data = exporter._get_current_data_entries()
+                        if not data and fmt == "duration":
+                            data = exporter._extract_duration_only_entries(speakers_to_process)
                         if not data and fmt == "formant_space":
                             ok = self._export_vowel_space_chart(out_file, speakers_to_process, emit_error=False)
                             if ok:
@@ -435,9 +514,10 @@ class CLIExportMixin:
                         del s.last_params["analysis_mode"]
             return
 
-        # 5. 常规数据表与音频/TextGrid 导出
+        # 5. 常规数据表与音频/TextGrid/Collection 导出
         rule = "continuous"
         target = "active"
+        use_binary = True
         pos_rest = []
         for token in args[2:]:
             if "=" in token:
@@ -448,12 +528,18 @@ class CLIExportMixin:
                     target = v_clean
                 elif k_low in ("rule", "num_rule"):
                     rule = v.strip().strip('"').strip("'")
+                elif k_low == "binary":
+                    use_binary = v_clean not in ("false", "0", "no", "off", "text")
             else:
                 pos_rest.append(token)
 
         for tok in pos_rest:
             if tok.lower() in ("active", "separate", "integrated"):
                 target = tok.lower()
+            elif tok.lower() == "text" and fmt == "collection":
+                use_binary = False
+            elif tok.lower() == "binary" and fmt == "collection":
+                use_binary = True
             else:
                 rule = tok
 
@@ -498,13 +584,15 @@ class CLIExportMixin:
                             self._export_textgrid(s_out, s_struct, s)
                         else:
                             self._export_textgrid(f"{s_out}.TextGrid", s_struct, s)
+                    elif fmt == "collection":
+                        self._export_collection(os.path.join(out_file, f"{s.name}.Collection"), s_struct, s, binary=use_binary)
                     else:
                         self._emit(False, error=f"Unknown format: {fmt}", supported_formats=self.SUPPORTED_EXPORT_FORMATS)
                         return
                 self._emit(True, f"Exported {fmt} for multiple speakers to {out_file}", path=out_file, format=fmt)
 
             elif target == "integrated":
-                if fmt not in ("txt", "xlsx", "line_chart", "kde"):
+                if fmt not in ("txt", "xlsx", "line_chart", "kde", "collection"):
                     self._emit(
                         False,
                         error=f"Format {fmt} does not support integrated multi-speaker export",
@@ -519,6 +607,8 @@ class CLIExportMixin:
                     self._export_line_chart_integrated(out_file, speakers_to_process)
                 elif fmt == "kde":
                     self._export_kde_heatmap_integrated(out_file, speakers_to_process)
+                elif fmt == "collection":
+                    self._export_collection_integrated(out_file, speakers_to_process, binary=use_binary)
                 integrated_summary = self._build_integrated_summary(speakers_to_process)
                 self._emit(
                     True,
@@ -548,6 +638,8 @@ class CLIExportMixin:
                     self._export_merged_wav(out_file, structure, rule, s)
                 elif fmt == "textgrid":
                     self._export_textgrid(out_file, structure, s)
+                elif fmt == "collection":
+                    self._export_collection(out_file, structure, s, binary=use_binary)
                 else:
                     self._emit(False, error=f"Unknown format: {fmt}", supported_formats=self.SUPPORTED_EXPORT_FORMATS)
                     return
@@ -1337,55 +1429,101 @@ class CLIExportMixin:
     def _export_line_chart(self, out_file, structure, speaker=None):
         speaker = speaker or self.current_speaker
         import matplotlib.pyplot as plt
+        from modules.acoustic_exporter import AcousticChartExporter, PUBLICATION_PRESETS
+        from modules.core.acoustic_math import fit_chao_tone_code
+
+        # Prefer unified AcousticChartExporter contour pipeline when speaker items are available
+        if speaker is not None and getattr(speaker, "items", None):
+            adapter = AcousticChartCLIAdapter(self)
+            exporter = AcousticChartExporter(project_tree=adapter, app=self, all_speakers=[speaker])
+            exporter.active_speaker = speaker
+            exporter.params = {
+                "chart_type": "contour",
+                "export_scope": "active",
+                "scale": "t_value",
+                "groupby": "group",
+                "contour_facet": "none",
+                "contour_content": "average",
+            }
+            entries = exporter._extract_active_data([speaker])
+            if entries:
+                _, ext = os.path.splitext(out_file)
+                exporter._export_dataset(entries, out_file, ext or ".png")
+                return
+
         data, max_syls = self._collect_group_avg_data(structure, speaker)
         if not data:
             raise Exception("No valid data for charting")
 
+        preset = PUBLICATION_PRESETS["chinese_journal"]
         num_points = speaker.last_params['pts']
-        plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
+        plt.rcParams['font.sans-serif'] = list(preset["font_sans"])
         plt.rcParams['axes.unicode_minus'] = False
 
-        fig, ax = plt.subplots(figsize=(6 + 4 * max_syls, 6))
+        fig, ax = plt.subplots(figsize=(5.6 + 2.2 * max_syls, 4.8))
+        fig.patch.set_facecolor("#FFFFFF")
+        ax.set_facecolor("#FFFFFF")
         total_points = max_syls * num_points
         x_vals = list(range(1, total_points + 1))
 
-        colors = ['#2563EB', '#DC2626', '#16A34A', '#9333EA', '#EA580C', '#0891B2', '#CA8A04', '#6366F1']
+        colors = preset["colors"]
+        linestyles = preset["linestyles"]
+        markers = preset["markers"]
 
         for i, (name, t_vals) in enumerate(data.items()):
             color = colors[i % len(colors)]
+            ls = linestyles[i % len(linestyles)]
+            mk = markers[i % len(markers)]
+            syl_codes = []
+            for k in range(max_syls):
+                seg = [float(v) for v in t_vals[k * num_points:(k + 1) * num_points] if v is not None]
+                if seg:
+                    c = fit_chao_tone_code(seg, t_start=seg[0], t_mid=seg[len(seg) // 2], t_end=seg[-1])
+                    if c:
+                        syl_codes.append(c)
+            t_code = "-".join(syl_codes)
+            lbl_text = f"{name} [{t_code}]" if t_code else str(name)
             label_added = False
             for k in range(max_syls):
                 s_start = k * num_points
                 s_end = (k + 1) * num_points
                 s_t_vals = t_vals[s_start:s_end]
                 s_x_vals = x_vals[s_start:s_end]
-                
                 valid_x = [x for x, v in zip(s_x_vals, s_t_vals) if v is not None]
                 valid_y = [v for v in s_t_vals if v is not None]
                 if valid_x:
-                    lbl = name if not label_added else None
-                    ax.plot(valid_x, valid_y, '-o', color=color, linewidth=2, markersize=5, label=lbl)
+                    lbl = lbl_text if not label_added else None
+                    ax.plot(valid_x, valid_y, linestyle=ls, marker=mk, color=color, linewidth=1.8, markersize=5.0, label=lbl)
                     label_added = True
 
-        ax.set_ylim(0, 5)
-        ax.set_xlim(0.5, total_points + 0.5)
-        ax.set_yticks([0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5])
-
+        ax.set_ylim(-0.2, 5.2)
+        ax.set_xlim(0.4, total_points + 0.8)
+        ax.set_yticks([0, 1, 2, 3, 4, 5])
         ax.set_xticks(range(1, total_points + 1))
-        ax.set_xticklabels([(idx % num_points) + 1 for idx in range(total_points)])
+        ax.set_xticklabels([(idx % num_points) + 1 for idx in range(total_points)], fontsize=8.5)
+        ax.tick_params(axis="both", direction="in", top=True, right=False)
 
+        for deg in (1, 2, 3, 4, 5):
+            ax.axhline(float(deg), color="#9CA3AF", linestyle=":", linewidth=0.75, alpha=0.55)
         for k in range(1, max_syls):
-            div_x = k * num_points + 0.5
-            ax.axvline(div_x, color='gray', linestyle='--', alpha=0.5)
+            ax.axvline(k * num_points + 0.5, color='gray', linestyle='--', alpha=0.55)
 
-        ax.set_xlabel('Points')
-        ax.set_ylabel('T-Value (0-5)')
-        ax.set_title('Tone Pattern')
-        ax.legend(loc='best', fontsize=10)
-        ax.grid(True, alpha=0.3)
+        ax_right = ax.twinx()
+        ax_right.set_yticks([0.5, 1.5, 2.5, 3.5, 4.5])
+        ax_right.set_yticklabels(["1度 [0-1]", "2度 [1-2]", "3度 [2-3]", "4度 [3-4]", "5度 [4-5]"], fontsize=8)
+        ax_right.set_ylabel("赵元任五度标尺", fontsize=9)
+        ax_right.set_autoscale_on(False)
+        ax_right.set_ylim(ax.get_ylim())
+        ax_right.grid(False)
+
+        ax.set_xlabel('音节测量点 (时序展开)')
+        ax.set_ylabel('T 值 (0-5 标度)')
+        ax.legend(loc='upper left', bbox_to_anchor=(1.18, 1.0), fontsize=8.5, frameon=True)
+        ax.grid(True, linestyle='--', alpha=0.25)
 
         fig.tight_layout()
-        fig.savefig(out_file, dpi=300, bbox_inches='tight')
+        ax_right.set_ylim(ax.get_ylim())
+        fig.savefig(out_file, dpi=600, bbox_inches='tight')
         plt.close(fig)
 
 
@@ -1844,86 +1982,22 @@ class CLIExportMixin:
 
 
     def _export_line_chart_integrated(self, out_file, speakers):
-        import matplotlib.pyplot as plt
-        import math
-
-        num_points = self.current_speaker.last_params['pts']
-        max_syls = 1
-        combined_points_map = {}
-        all_groups = []
-
-        for s in speakers:
-            s_struct = [(grp, [iid for iid, item in s.items.items() if item.get('group') == grp and not item.get('is_excluded', False)]) for grp in getattr(s, 'cli_groups', [])]
-            data, m_syls = self._collect_group_avg_data(s_struct, speaker=s)
-            if not data: continue
-            if m_syls > max_syls: max_syls = m_syls
-
-            for grp, t_vals in data.items():
-                if grp not in all_groups: all_groups.append(grp)
-                if grp not in combined_points_map: combined_points_map[grp] = []
-                combined_points_map[grp].append(t_vals)
-
-        if not combined_points_map:
+        from modules.acoustic_exporter import AcousticChartExporter
+        adapter = AcousticChartCLIAdapter(self)
+        exporter = AcousticChartExporter(project_tree=adapter, app=self, all_speakers=list(speakers))
+        exporter.params = {
+            "chart_type": "contour",
+            "export_scope": "integrated",
+            "scale": "t_value",
+            "groupby": "group",
+            "contour_facet": "none",
+            "contour_content": "average",
+        }
+        entries = exporter._extract_active_data(list(speakers))
+        if not entries:
             raise Exception("No valid data for charting across speakers")
-
-        final_data = {}
-        for grp, t_arrays in combined_points_map.items():
-            valid_len = max([len(arr) for arr in t_arrays])
-            avg_arr = []
-            for i in range(valid_len):
-                col_vals = [arr[i] for arr in t_arrays if i < len(arr) and arr[i] is not None]
-                if col_vals:
-                    avg_arr.append(sum(col_vals) / len(col_vals))
-                else:
-                    avg_arr.append(None)
-            final_data[grp] = avg_arr
-
-        plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
-        plt.rcParams['axes.unicode_minus'] = False
-
-        fig, ax = plt.subplots(figsize=(6 + 4 * max_syls, 6))
-        total_points = max_syls * num_points
-        x_vals = list(range(1, total_points + 1))
-
-        colors = ['#2563EB', '#DC2626', '#16A34A', '#9333EA', '#EA580C', '#0891B2', '#CA8A04', '#6366F1']
-
-        for i, grp in enumerate(all_groups):
-            if grp not in final_data: continue
-            t_vals = final_data[grp]
-            color = colors[i % len(colors)]
-            label_added = False
-            for k in range(max_syls):
-                s_start = k * num_points
-                s_end = (k + 1) * num_points
-                s_t_vals = t_vals[s_start:s_end]
-                s_x_vals = x_vals[s_start:s_end]
-                
-                valid_x = [x for x, v in zip(s_x_vals, s_t_vals) if v is not None]
-                valid_y = [v for v in s_t_vals if v is not None]
-                if valid_x:
-                    lbl = grp if not label_added else None
-                    ax.plot(valid_x, valid_y, '-o', color=color, linewidth=2, markersize=5, label=lbl)
-                    label_added = True
-
-        ax.set_ylim(0, 5)
-        ax.set_xlim(0.5, total_points + 0.5)
-        ax.set_yticks([0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5])
-        ax.set_xticks(range(1, total_points + 1))
-        ax.set_xticklabels([(idx % num_points) + 1 for idx in range(total_points)])
-
-        for k in range(1, max_syls):
-            div_x = k * num_points + 0.5
-            ax.axvline(div_x, color='gray', linestyle='--', alpha=0.5)
-
-        ax.set_xlabel('Points')
-        ax.set_ylabel('T-Value (0-5)')
-        ax.set_title(f'Integrated Tone Pattern ({len(speakers)} Speakers)')
-        ax.legend(loc='best', fontsize=10)
-        ax.grid(True, alpha=0.3)
-
-        fig.tight_layout()
-        fig.savefig(out_file, dpi=300, bbox_inches='tight')
-        plt.close(fig)
+        _, ext = os.path.splitext(out_file)
+        exporter._export_dataset(entries, out_file, ext or ".png")
 
 
     def _process_kde_item(self, item, N_DENSE):
@@ -2588,6 +2662,57 @@ class CLIExportMixin:
         tg.append(char_tier)
 
         tg.write(tg_path)
+
+    def _export_collection(self, out_path, structure, speaker=None, binary=True):
+        speaker = speaker or self.current_speaker
+        from modules.export_service import export_speaker_to_praat_collection
+
+        if not structure or not any(children for _, children in structure):
+            structure = [
+                (grp, [iid for iid, item in speaker.items.items() if item.get("group", "默认组") == grp and not item.get("is_excluded", False)])
+                for grp in dict.fromkeys(it.get("group", "默认组") for it in speaker.items.values())
+            ]
+
+        is_batch = ("多条" in str(getattr(speaker, "tab_mode", "")))
+        long_snd = getattr(speaker, "pending_long_snd", None)
+        default_ceiling = float(speaker.last_params.get("pitch_ceiling", 600.0)) if getattr(speaker, "last_params", None) else 600.0
+        export_speaker_to_praat_collection(
+            out_path=out_path,
+            items_dict=speaker.items,
+            tree_structure=structure,
+            is_batch_mode=is_batch,
+            long_snd=long_snd,
+            speaker_name=getattr(speaker, "name", ""),
+            ensure_loaded_fn=lambda it: self._ensure_item_loaded(it, speaker=speaker),
+            default_ceiling=default_ceiling,
+            binary=binary,
+        )
+
+    def _export_collection_integrated(self, out_path, speakers, binary=True):
+        from modules.export_service import build_speaker_collection_objects, write_praat_collection
+
+        all_objects = []
+        for s in speakers:
+            s_groups = getattr(s, "cli_groups", None) or list(dict.fromkeys(it.get("group", "默认组") for it in s.items.values()))
+            s_struct = [
+                (grp, [iid for iid, item in s.items.items() if item.get("group", "默认组") == grp and not item.get("is_excluded", False)])
+                for grp in s_groups
+            ]
+            is_batch = ("多条" in str(getattr(s, "tab_mode", "")))
+            long_snd = getattr(s, "pending_long_snd", None)
+            default_ceiling = float(s.last_params.get("pitch_ceiling", 600.0)) if getattr(s, "last_params", None) else 600.0
+            objs = build_speaker_collection_objects(
+                items_dict=s.items,
+                tree_structure=s_struct,
+                is_batch_mode=is_batch,
+                long_snd=long_snd,
+                speaker_name=getattr(s, "name", ""),
+                ensure_loaded_fn=lambda it, spk=s: self._ensure_item_loaded(it, speaker=spk),
+                default_ceiling=default_ceiling,
+            )
+            all_objects.extend(objs)
+
+        write_praat_collection(out_path, all_objects, binary=binary)
 
 
 __all__ = ["CLIExportMixin"]

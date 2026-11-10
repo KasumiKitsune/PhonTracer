@@ -38,6 +38,7 @@ gui_submodules = [
 # 预加载运行时实际使用的 numpy / scipy 子包，捕获 Cython 扩展与动态 __getattr__ 注入的全部子模块
 import numpy
 import scipy.stats
+import scipy.special
 import scipy.signal
 import scipy.interpolate
 import scipy.ndimage
@@ -46,6 +47,12 @@ import scipy.io.wavfile
 import scipy.fft
 import scipy.linalg
 
+def _safe_collect_submodules(pkg_name):
+    try:
+        return collect_submodules(pkg_name)
+    except Exception:
+        return []
+
 runtime_scientific_imports = sorted(
     m for m in sys.modules
     if m.startswith(('numpy', 'scipy')) and not m.startswith(('numpy.f2py', 'numpy.distutils', 'numpy.testing', 'scipy.conftest'))
@@ -53,11 +60,22 @@ runtime_scientific_imports = sorted(
 
 base_hidden_imports = [
     'parselmouth', 'xlsxwriter',
-    'scipy._cyutility',
-    'scipy.interpolate', 'scipy.signal', 'scipy.stats', 'scipy.special._cdflib',
+    'numpy.core', 'numpy.core.multiarray', 'numpy.core._multiarray_umath',
+    'numpy.core.umath', 'numpy.core.numeric', 'numpy.core.fromnumeric',
+    'numpy._core', 'numpy._core.multiarray', 'numpy._core._multiarray_umath',
+    'numpy._core.umath', 'numpy._core.numeric', 'numpy._core.fromnumeric',
+    'scipy._cyutility', 'scipy._lib._ccallback_c',
+    'scipy.interpolate', 'scipy.signal',
+    'scipy.stats', 'scipy.stats._stats_py', 'scipy.stats._kde', 'scipy.stats.kde',
+    'scipy.special', 'scipy.special._ufuncs', 'scipy.special._ufuncs_cxx',
+    'scipy.special.cython_special', 'scipy.special._cdflib',
+    'scipy.linalg', 'scipy.linalg.cython_blas', 'scipy.linalg.cython_lapack',
     'scipy.ndimage', 'scipy.spatial', 'scipy.io.wavfile', 'scipy.fft',
     'textgrid', 'matplotlib.backends.backend_svg',
-    *collect_submodules('numpy._core'),
+    *_safe_collect_submodules('numpy._core'),
+    *_safe_collect_submodules('numpy.core'),
+    *_safe_collect_submodules('scipy.stats'),
+    *_safe_collect_submodules('scipy.special'),
     *runtime_scientific_imports,
     *headless_submodules,
 ]

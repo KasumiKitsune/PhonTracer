@@ -13,9 +13,12 @@ from modules.core.acoustic_math import (
     _safe_nanstd,
     _t_to_5deg_continuous,
     compute_speaker_f0_bounds,
+    evaluate_1d_kde,
+    evaluate_2d_kde_grid,
     fit_chao_tone_code,
     hz_to_chao_t,
     hz_to_t_value,
+    smooth_2d_array,
 )
 from modules.core.paths import (
     get_asset_path,
@@ -62,6 +65,9 @@ __all__ = [
     "_safe_nanmean",
     "_safe_nanstd",
     "_safe_nanmax",
+    "evaluate_1d_kde",
+    "evaluate_2d_kde_grid",
+    "smooth_2d_array",
     "_compute_2d_convex_hull_and_area",
     "_compute_pillai_bartlett_trace",
 ]

@@ -34,6 +34,13 @@ from .export_service import (
     build_five_point_chart,
     get_export_textgrid_for_item,
     extract_wordlist_from_textgrid,
+    clean_praat_object_name,
+    write_praat_collection,
+    build_combined_textgrid_from_items,
+    build_collection_items_for_audio_group,
+    build_single_item_collection_objects,
+    build_speaker_collection_objects,
+    export_speaker_to_praat_collection,
     make_safe_excel_sheet_name,
     ExportCallbacks,
     UnifiedExportService,
@@ -71,6 +78,14 @@ __all__ = [
     # export_service / textgrid_io
     "get_export_textgrid_for_item",
     "extract_wordlist_from_textgrid",
+    # export_service / praat_collection_exporter
+    "clean_praat_object_name",
+    "write_praat_collection",
+    "build_combined_textgrid_from_items",
+    "build_collection_items_for_audio_group",
+    "build_single_item_collection_objects",
+    "build_speaker_collection_objects",
+    "export_speaker_to_praat_collection",
     # export_service / unified_exporter
     "ExportCallbacks",
     "UnifiedExportService",

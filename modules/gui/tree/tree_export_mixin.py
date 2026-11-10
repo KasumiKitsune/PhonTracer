@@ -226,14 +226,14 @@ class TreeExportMixin:
         dlg = ctk.CTkToplevel(self.parent)
         dlg.title("PhonTracer语音学标注与声学分析系统 V1.0 - 选择导出格式")
         dlg.configure(fg_color=("#FFFFFF", "#1A1D24"))
-        dlg.geometry("340x385")
+        dlg.geometry("340x438")
         dlg.resizable(False, False)
         dlg.transient(self.parent)
         dlg.grab_set()
         dlg.update_idletasks()
         main_win = self.parent.winfo_toplevel()
         x = main_win.winfo_rootx() + (main_win.winfo_width() - 340) // 2
-        y = main_win.winfo_rooty() + (main_win.winfo_height() - 385) // 2
+        y = main_win.winfo_rooty() + (main_win.winfo_height() - 438) // 2
         dlg.geometry(f"+{x}+{y}")
         ctk.CTkLabel(dlg, text="请选择导出格式", font=self.font_title, text_color=("#111827", "#F9FAFB")).pack(pady=(20, 15))
         btn_kwargs = {"corner_radius": 8, "height": 44, "font": self.font_main, "anchor": "w", "compound": "left", "border_width": 1.5}
@@ -301,8 +301,9 @@ class TreeExportMixin:
 
                     if mode == 'single':
                         orig_items = self.items
-                        if all_speakers and len(all_speakers) == 1:
-                            self.items = all_speakers[0].items
+                        single_spk = all_speakers[0] if (all_speakers and len(all_speakers) == 1) else None
+                        if single_spk is not None:
+                            self.items = single_spk.items
                         try:
                             if format_mode == 'txt': self._export_txt(out_path, tree_structure=tree_structure)
                             elif format_mode == 'xlsx': self._export_xlsx(out_path, include_chart=inc_chart, tree_structure=tree_structure)
@@ -312,6 +313,8 @@ class TreeExportMixin:
                                 elif hasattr(self.parent, 'tabview'): is_batch = (self.parent.tabview.get() == "多条独立音频")
                                 if is_batch: self._export_textgrid_batch(out_path, tree_structure=tree_structure)
                                 else: self._export_textgrid_long(out_path, tree_structure=tree_structure)
+                            elif format_mode == 'collection':
+                                self._export_praat_collection(out_path, tree_structure=tree_structure, speaker=single_spk)
                             elif format_mode == 'line_chart': self._export_line_chart(out_path, tree_structure=tree_structure)
                             elif format_mode == 'kde': self._export_kde_heatmap(out_path, tree_structure=tree_structure)
                         finally:
@@ -322,25 +325,35 @@ class TreeExportMixin:
                             s_struct = self._get_items_by_group_for_dict(s.items)
                             orig_items = self.items
                             self.items = s.items
-                            if format_mode == 'textgrid':
-                                s_out = os.path.join(out_path, s.name)
-                                os.makedirs(s_out, exist_ok=True)
-                                is_batch = False
-                                if getattr(s, 'tab_mode', None) == "多条独立音频": is_batch = True
-                                if is_batch: self._export_textgrid_batch(s_out, tree_structure=s_struct)
-                                else: self._export_textgrid_long(os.path.join(s_out, f"{s.name}.TextGrid"), tree_structure=s_struct)
-                            else:
-                                if os.path.isdir(out_path): s_out = os.path.join(out_path, f"{s.name}.{'txt' if format_mode=='txt' else 'xlsx' if format_mode=='xlsx' else 'png'}")
+                            try:
+                                if format_mode == 'textgrid':
+                                    s_out = os.path.join(out_path, s.name)
+                                    os.makedirs(s_out, exist_ok=True)
+                                    is_batch = False
+                                    if getattr(s, 'tab_mode', None) == "多条独立音频": is_batch = True
+                                    if is_batch: self._export_textgrid_batch(s_out, tree_structure=s_struct)
+                                    else: self._export_textgrid_long(os.path.join(s_out, f"{s.name}.TextGrid"), tree_structure=s_struct)
+                                elif format_mode == 'collection':
+                                    if os.path.isdir(out_path):
+                                        s_out = os.path.join(out_path, f"{s.name}.Collection")
+                                    else:
+                                        base, ext = os.path.splitext(out_path)
+                                        s_out = f"{base}_{s.name}{ext or '.Collection'}"
+                                    self._export_praat_collection(s_out, tree_structure=s_struct, speaker=s)
                                 else:
-                                    base, ext = os.path.splitext(out_path)
-                                    s_out = f"{base}_{s.name}{ext}"
-                                if format_mode == 'txt': self._export_txt(s_out, tree_structure=s_struct)
-                                elif format_mode == 'xlsx': self._export_xlsx(s_out, include_chart=inc_chart, tree_structure=s_struct)
-                                elif format_mode == 'line_chart': self._export_line_chart(s_out, tree_structure=s_struct)
-                                elif format_mode == 'kde': self._export_kde_heatmap(s_out, tree_structure=s_struct)
-                            self.items = orig_items
+                                    if os.path.isdir(out_path): s_out = os.path.join(out_path, f"{s.name}.{'txt' if format_mode=='txt' else 'xlsx' if format_mode=='xlsx' else 'png'}")
+                                    else:
+                                        base, ext = os.path.splitext(out_path)
+                                        s_out = f"{base}_{s.name}{ext}"
+                                    if format_mode == 'txt': self._export_txt(s_out, tree_structure=s_struct)
+                                    elif format_mode == 'xlsx': self._export_xlsx(s_out, include_chart=inc_chart, tree_structure=s_struct)
+                                    elif format_mode == 'line_chart': self._export_line_chart(s_out, tree_structure=s_struct)
+                                    elif format_mode == 'kde': self._export_kde_heatmap(s_out, tree_structure=s_struct)
+                            finally:
+                                self.items = orig_items
                     elif mode == 'integrated':
                         if format_mode in ('txt', 'xlsx'): self._export_integrated(out_path, format_mode, inc_chart, all_speakers)
+                        elif format_mode == 'collection': self._export_praat_collection_integrated(out_path, all_speakers)
                         elif format_mode == 'line_chart': self._export_line_chart_integrated(out_path, all_speakers)
                         elif format_mode == 'kde': self._export_kde_heatmap_integrated(out_path, all_speakers)
                         else:
@@ -364,6 +377,10 @@ class TreeExportMixin:
                     elif hasattr(self.parent, 'tabview'): is_batch = (self.parent.tabview.get() == "多条独立音频")
                     out = filedialog.askdirectory(title="选择TextGrid导出文件夹") if is_batch else filedialog.asksaveasfilename(title="导出 TextGrid", defaultextension=".TextGrid", initialfile="tone_export_data", filetypes=[("TextGrid 文件", "*.TextGrid")])
                 if out and execute_export(out): messagebox.showinfo("成功", f"TextGrid 已导出至:\n{out}")
+            elif format_mode == 'collection':
+                out = filedialog.askdirectory(title="选择 Praat 集合导出文件夹") if mode == 'separate' else filedialog.asksaveasfilename(title="导出 Praat 工程集合 (.Collection)", defaultextension=".Collection", initialfile="phontracer_workspace.Collection", filetypes=[("Praat 集合文件 (*.Collection)", "*.Collection"), ("所有文件 (*.*)", "*.*")])
+                if out and execute_export(out):
+                    messagebox.showinfo("成功", f"Praat 工程集合已导出至:\n{out}\n\n可直接用 Praat 打开以恢复音频、TextGrid 与精修后的基频/共振峰对象。")
             elif format_mode == 'xlsx':
                 out = filedialog.askdirectory(title="选择导出文件夹") if mode == 'separate' else filedialog.asksaveasfilename(title="导出Excel", defaultextension=".xlsx", initialfile="tone_export_data", filetypes=[("Excel 表格", "*.xlsx")])
                 if out:
@@ -380,6 +397,8 @@ class TreeExportMixin:
                       fg_color=("#F3F4F6", "#374151"), text_color=("#374151", "#E5E7EB"), hover_color=("#E5E7EB", "#4B5563"), border_color=("#D1D5DB", "#475569"), **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
         ctk.CTkButton(dlg, text="  🏷  TextGrid 标注文件 (.TextGrid)", command=lambda: do_export('textgrid'),
                       fg_color=("#F3E8FF", "#3B0764"), text_color=("#6B21A8", "#E9D5FF"), hover_color=("#E9D5FF", "#5B21B6"), border_color=("#C084FC", "#A855F7"), **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
+        ctk.CTkButton(dlg, text="  📦  Praat 工程集合 (.Collection)", command=lambda: do_export('collection'),
+                      fg_color=("#FFF7ED", "#431407"), text_color=("#C2410C", "#FFEDD5"), hover_color=("#FFEDD5", "#7C2D12"), border_color=("#FB923C", "#F97316"), **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
         ctk.CTkButton(dlg, text="  📊  Excel 表格 (.xlsx)", command=lambda: do_export('xlsx'),
                       fg_color=("#ECFDF5", "#022C22"), text_color=("#047857", "#D1FAE5"), hover_color=("#D1FAE5", "#065F46"), border_color=("#34D399", "#10B981"), **btn_kwargs).pack(fill=tk.X, padx=25, pady=4)
         ctk.CTkButton(dlg, text="  📈  声学图表可视化导出", command=lambda: do_export('line_chart'),
@@ -1941,6 +1960,101 @@ class TreeExportMixin:
                 tg.append(char_tier)
 
             tg.write(tg_path)
+
+    def _export_praat_collection(self, out_file, tree_structure=None, speaker=None):
+        from modules.export_service import export_speaker_to_praat_collection
+        if tree_structure is None:
+            tree_structure = self._get_all_items_by_group()
+
+        is_batch = False
+        if speaker is not None and getattr(speaker, 'tab_mode', None):
+            is_batch = (speaker.tab_mode == "多条独立音频")
+        elif self.app and hasattr(self.app, 'tabview'):
+            is_batch = (self.app.tabview.get() == "多条独立音频")
+        elif hasattr(self.parent, 'tabview'):
+            is_batch = (self.parent.tabview.get() == "多条独立音频")
+
+        long_snd = None
+        if speaker is not None and getattr(speaker, 'pending_long_snd', None) is not None:
+            long_snd = speaker.pending_long_snd
+        elif self.app:
+            long_snd = getattr(self.app, 'long_sound', None) or getattr(self.app, 'pending_long_snd', None)
+
+        default_ceiling = float(self.app_state_params.get('pitch_ceiling', 600.0))
+        spk_name = getattr(speaker, 'name', '') if speaker is not None else ''
+        export_speaker_to_praat_collection(
+            out_path=out_file,
+            items_dict=self.items,
+            tree_structure=tree_structure,
+            is_batch_mode=is_batch,
+            long_snd=long_snd,
+            speaker_name=spk_name,
+            ensure_loaded_fn=self._ensure_item_loaded,
+            default_ceiling=default_ceiling,
+            binary=True,
+        )
+
+    def _export_praat_collection_integrated(self, out_file, all_speakers):
+        from modules.export_service import build_speaker_collection_objects, write_praat_collection
+        all_objects = []
+        default_ceiling = float(self.app_state_params.get('pitch_ceiling', 600.0))
+        orig_items = self.items
+        try:
+            for s in all_speakers:
+                self.items = s.items
+                s_struct = self._get_items_by_group_for_dict(s.items)
+                is_batch = (getattr(s, 'tab_mode', None) == "多条独立音频")
+                long_snd = getattr(s, 'pending_long_snd', None)
+                if long_snd is None and self.app:
+                    long_snd = getattr(self.app, 'long_sound', None) or getattr(self.app, 'pending_long_snd', None)
+                objs = build_speaker_collection_objects(
+                    items_dict=s.items,
+                    tree_structure=s_struct,
+                    is_batch_mode=is_batch,
+                    long_snd=long_snd,
+                    speaker_name=s.name,
+                    ensure_loaded_fn=self._ensure_item_loaded,
+                    default_ceiling=default_ceiling,
+                )
+                all_objects.extend(objs)
+        finally:
+            self.items = orig_items
+
+        write_praat_collection(out_file, all_objects, binary=True)
+
+    def _export_single_item_collection(self, real_iid):
+        from modules.export_service import (
+            build_single_item_collection_objects,
+            clean_praat_object_name,
+            write_praat_collection,
+        )
+        if self.app and hasattr(self.app, 'flush_eraser_changes'):
+            self.app.flush_eraser_changes()
+        item = self.items.get(real_iid)
+        if not item:
+            return
+        self._ensure_item_loaded(item)
+        default_name = f"{clean_praat_object_name(item.get('label', 'item'))}.Collection"
+        out_path = filedialog.asksaveasfilename(
+            title="导出此项为 Praat 集合 (.Collection)",
+            defaultextension=".Collection",
+            initialfile=default_name,
+            filetypes=[("Praat 集合文件 (*.Collection)", "*.Collection"), ("所有文件 (*.*)", "*.*")],
+        )
+        if not out_path:
+            return
+        try:
+            long_snd = getattr(self.app, 'long_sound', None) or getattr(self.app, 'pending_long_snd', None) if self.app else None
+            default_ceiling = float(item.get('pitch_ceiling', self.app_state_params.get('pitch_ceiling', 600.0)))
+            objs = build_single_item_collection_objects(item, long_snd=long_snd, default_ceiling=default_ceiling)
+            write_praat_collection(out_path, objs, binary=True)
+            messagebox.showinfo(
+                "成功",
+                f"词条【{item.get('label', '')}】已导出为 Praat 集合:\n{out_path}\n\n在 Praat 中打开即可查看其音频、三层标注与修补后的基频/共振峰。",
+            )
+        except Exception as e:
+            messagebox.showerror("错误", f"导出 Praat 集合失败:\n{e}")
+            logger.error(f"Single item collection export failed: {e}", exc_info=True)
 
     def _show_formant_export_menu(self, mode='single', all_speakers=None):
         dlg = ctk.CTkToplevel(self.parent)

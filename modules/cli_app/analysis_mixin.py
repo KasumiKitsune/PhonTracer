@@ -924,12 +924,30 @@ class CLIAnalysisMixin:
                 self._ensure_item_loaded(item, speaker=self.current_speaker)
 
         from modules.formant_optimizer import FormantOptimizer
+        spk = self.current_speaker
+        spk_gender = getattr(spk, "gender", None) if spk is not None else None
+        if not spk_gender and spk is not None:
+            s_name = str(getattr(spk, "name", "") or "")
+            if "童" in s_name:
+                spk_gender = "child"
+            elif "女" in s_name:
+                spk_gender = "female"
+            elif "男" in s_name:
+                spk_gender = "male"
+        cached_med_f0 = self._compute_speaker_median_f0(spk) if (spk is not None and hasattr(self, "_compute_speaker_median_f0")) else None
+        # Only pass cached_med_f0 if actual pitch data exists on items (not default 160.0 fallback)
+        has_real_f0 = any(
+            isinstance(it.get("pitch_data"), dict) and it["pitch_data"].get("freqs") is not None and len(it["pitch_data"]["freqs"]) > 0
+            for it in self.items.values() if isinstance(it, dict)
+        )
         optimizer = FormantOptimizer()
         opt_res = optimizer.optimize(
             self.items,
             mode=self.mode,
             long_snd=self.long_snd,
             long_snd_path=self.long_snd_path,
+            speaker_median_f0=(cached_med_f0 if has_real_f0 else None),
+            speaker_gender=spk_gender,
         )
 
         suggestions = dict(opt_res.get("suggestions", {}))
@@ -987,6 +1005,7 @@ class CLIAnalysisMixin:
             formant_count=num_formants,
             formant_window_length=win_len,
             formant_pre_emphasis=pre_emp,
+            median_f0=opt_res.get("median_f0"),
             best_params=opt_res.get("best_params", {}),
             suggestions=suggestions,
             voiced_duration_s=opt_res.get("voiced_duration_s", 0.0),

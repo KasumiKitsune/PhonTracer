@@ -57,7 +57,7 @@ def _install_headless_gui_and_audio_stubs_if_missing() -> None:
                         child = _DummyWidget()
                         object.__setattr__(self, name, child)
                         return child
-                    if name in ("_select_button_by_value", "_draw", "_create_grid"):
+                    if name in ("_select_button_by_value", "_unselect_button_by_value", "_draw", "_create_grid"):
                         return lambda *args, **kwargs: None
                     raise AttributeError(name)
                 return lambda *args, **kwargs: None
@@ -239,6 +239,9 @@ def _install_headless_gui_and_audio_stubs_if_missing() -> None:
 
             def unbind_all(self, *args: Any, **kwargs: Any) -> None:
                 pass
+
+            def winfo_children(self):
+                return list(self.children.values())
 
             def winfo_rootx(self) -> int:
                 return 0

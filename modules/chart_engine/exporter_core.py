@@ -55,14 +55,13 @@ class AcousticChartExporter(
         self.params = {}  # CLI parameter overrides
         self.work_mode = "publication"
         self.preset_theme = "chinese_journal"
-        self.colors = ['#2563EB', '#DC2626', '#16A34A', '#9333EA', '#EA580C', '#0891B2', '#CA8A04', '#6366F1']
+        self.colors = ['#2563EB', '#DC2626', '#16A34A', '#9333EA', '#EA580C', '#0891B2', '#CA8A04', '#4F46E5', '#BE185D', '#0D9488', '#7C2D12', '#334155']
         self.linestyles = list(PUBLICATION_PRESETS["chinese_journal"]["linestyles"])
         self.markers = list(PUBLICATION_PRESETS["chinese_journal"]["markers"])
         self._speaker_data_cache = {}
         self._force_live_extract = False
         self.chart_group_rule = self._default_chart_group_rule()
 
-        # Load active speaker's data items as default fallback
         self.sm = getattr(self.app, 'speaker_manager', None)
         self.active_speaker = self.sm.get_active_speaker() if self.sm else None
         if not self.active_speaker and self.all_speakers:
@@ -227,7 +226,27 @@ class AcousticChartExporter(
 
 
     def _save_figure(self, fig, out_path):
+        self._sync_chao_axes_limits(fig)
         fig.savefig(out_path, dpi=self._resolve_save_dpi(fig), bbox_inches='tight')
+
+
+    def _sync_chao_axes_limits(self, fig):
+        """Force every secondary Chao 5-level axis to share the exact ylim of its parent primary axis and suppress parent right ticks."""
+        if fig is None:
+            return
+        for ca in getattr(fig, "axes", []):
+            if getattr(ca, "_is_chao_axis", False):
+                parent_ax = getattr(ca, "_parent_ax", None)
+                if parent_ax is not None:
+                    try:
+                        parent_ax.yaxis.set_ticks_position("left")
+                        parent_ax.tick_params(axis="y", which="both", right=False, labelright=False)
+                        ca.yaxis.set_ticks_position("right")
+                        ca.autoscale(enable=False, axis="y")
+                        ca.set_autoscale_on(False)
+                        ca.set_ylim(parent_ax.get_ylim())
+                    except Exception:
+                        pass
 
 
     def get_param(self, name, default=None):
@@ -235,11 +254,9 @@ class AcousticChartExporter(
         if runtime_params is not None and name in runtime_params:
             return runtime_params[name]
 
-        # If explicitly set in params (CLI mode)
         if hasattr(self, 'params') and self.params is not None and name in self.params:
             return self.params[name]
 
-        # Dynamic GUI property routing if subclassed by CTkToplevel
         gui_mappings = {
             'work_mode': lambda: getattr(self, 'var_work_mode').get() if hasattr(self, 'var_work_mode') else getattr(self, 'work_mode', None),
             'preset_theme': lambda: getattr(self, 'var_preset_theme').get() if hasattr(self, 'var_preset_theme') else getattr(self, 'preset_theme', None),
@@ -338,11 +355,19 @@ class AcousticChartExporter(
         return default
 
 
-    def _get_legend_kwargs(self, ax=None):
-        loc_val = self.get_param('legend_loc', '右上')
+    def _get_legend_kwargs(self, ax=None, default_outside=None):
+        loc_val = str(self.get_param('legend_loc', '右上') or '右上')
         has_chao = bool(ax is not None and getattr(ax, "_has_chao_axis", False))
-        default_outside = True if has_chao else False
-        outside_val = self.get_param('legend_outside', default_outside)
+        if default_outside is None:
+            default_outside = True if has_chao else False
+        outside_raw = self.get_param('legend_outside', None)
+        if outside_raw is None:
+            outside_val = bool(default_outside)
+        elif isinstance(outside_raw, str):
+            outside_val = outside_raw.strip().lower() in ("true", "1", "yes", "on", "是")
+        else:
+            outside_val = bool(outside_raw)
+
         preset = self.get_publication_preset()
 
         loc_map = {
@@ -355,12 +380,12 @@ class AcousticChartExporter(
 
         kwargs = {
             "markerscale": 0.65,
-            "labelspacing": 0.55,
+            "labelspacing": 0.50,
             "frameon": bool(preset.get("legend_frameon", True)),
         }
 
         if outside_val:
-            right_anchor_x = 1.20 if has_chao else 1.02
+            right_anchor_x = 1.22 if has_chao else 1.02
             if loc_val == "右上":
                 kwargs.update({"loc": "upper left", "bbox_to_anchor": (right_anchor_x, 1.0)})
             elif loc_val == "右下":
@@ -369,6 +394,8 @@ class AcousticChartExporter(
                 kwargs.update({"loc": "upper right", "bbox_to_anchor": (-0.02, 1.0)})
             elif loc_val == "左下":
                 kwargs.update({"loc": "lower right", "bbox_to_anchor": (-0.02, 0.0)})
+            else:
+                kwargs.update({"loc": "upper left", "bbox_to_anchor": (right_anchor_x, 1.0)})
         else:
             kwargs["loc"] = loc_str
 
@@ -388,18 +415,18 @@ class AcousticChartExporter(
             fig, ax = plt.subplots(figsize=(6, 4))
             fig.patch.set_facecolor("#FFFFFF")
             ax.set_facecolor("#FFFFFF")
-            ax.text(0.5, 0.5, "没有找到有效的声调基频数据！\n请检查是否配置了发音人或导入了音频点。", ha='center', va='center', fontsize=12, color='red')
+            ax.text(0.5, 0.5, "没有找到有效的声学分析数据！\n请检查是否配置了发音人或导入了音频点。", ha='center', va='center', fontsize=12, color='red')
             ax.axis('off')
             return fig
 
         data_entries = self._prepare_entries_for_color_by(data_entries, group_key)
 
-        page_size = 8
         pagination_state = self._get_group_pagination_state(data_entries, chart_type, color_by_val)
         total_pages = pagination_state['total_pages']
         total_groups = pagination_state['total_groups']
         unique_groups = pagination_state['unique_groups']
         is_paginated_heatmap = pagination_state['is_paginated_heatmap']
+        facet_pages = pagination_state.get('facet_pages', [])
 
         if self.current_group_page < 0:
             self.current_group_page = 0
@@ -408,28 +435,19 @@ class AcousticChartExporter(
 
         P = self.current_group_page
 
-        truncated = False
         if is_preview:
             if is_paginated_heatmap:
-                truncated = True
                 current_page_rows = pagination_state['pages'][P] if P < len(pagination_state['pages']) else []
                 allowed_pairs = {row['row_id'] for row in current_page_rows}
-                data_entries = [e for e in data_entries if (e['group'], e['label']) in allowed_pairs]
+                data_entries = [e for e in data_entries if (self._entry_wordlist_group(e), e['label']) in allowed_pairs]
             elif self._is_overview_heatmap_chart(chart_type):
                 if total_pages > 1 and total_groups > 24:
-                    truncated = True
                     start_idx = P * 24
                     end_idx = min(total_groups, start_idx + 24)
                     allowed_groups = set(unique_groups[start_idx:end_idx])
                     data_entries = [e for e in data_entries if e.get(group_key, e.get('group')) in allowed_groups]
-            elif chart_type in ("formant_trajectory", "tone_effect_time", "tone_sandhi", "formant_pillai"):
-                pass
-            elif total_groups > page_size and not self._is_overview_heatmap_chart(chart_type):
-                truncated = True
-                start_idx = P * page_size
-                end_idx = min(total_groups, start_idx + page_size)
-                allowed_groups = set(unique_groups[start_idx:end_idx])
-                data_entries = [e for e in data_entries if e.get(group_key, e.get('group')) in allowed_groups]
+            elif len(facet_pages) > 1 and P < len(facet_pages):
+                data_entries = self._filter_entries_by_page_spec(data_entries, group_key, facet_pages[P])
 
         if scale_val and ("T" in str(scale_val) or "t_value" in str(scale_val).lower()):
             scale = "T 值"
@@ -442,6 +460,8 @@ class AcousticChartExporter(
             fig = self._plot_tone_sandhi_grid(data_entries, group_key, scale)
         elif chart_type == "distribution":
             fig = self._plot_tone_distribution(data_entries, group_key, scale)
+        elif chart_type == "duration":
+            fig = self._plot_syllable_duration_comparison(data_entries, group_key, scale)
         elif chart_type == "density":
             fig = self._plot_temporal_density(data_entries, group_key, scale=scale, is_preview=is_preview)
         elif chart_type == "spaghetti_qc":
@@ -565,7 +585,6 @@ class AcousticChartExporter(
                         pass
 
         if getattr(self, 'is_minimized', False):
-            import matplotlib.text as mtext
             for text in fig.findobj(mtext.Text):
                 curr_size = text.get_size()
                 if isinstance(curr_size, (int, float)):
@@ -581,31 +600,29 @@ class AcousticChartExporter(
                 pass
 
         self._adjust_outside_legend_and_chao_layout(fig)
+        self._sync_chao_axes_limits(fig)
         return fig
 
 
     def _adjust_outside_legend_and_chao_layout(self, fig):
-        """Ensure outside right legend never overlaps the right-side Chao 5-level axis or clips at figure edge."""
+        """Ensure outside right legends never overlap right-side Chao 5-level axes, colorbars, or clip at figure edges."""
         try:
-            primary_axes = [
+            legend_axes = [
                 a for a in fig.axes
                 if a.get_visible()
                 and not getattr(a, "_is_chao_axis", False)
-                and getattr(a, "_has_chao_axis", False)
+                and not getattr(a, "_is_colorbar_axis", False)
                 and a.get_legend() is not None
             ]
-            if not primary_axes:
+            if not legend_axes:
                 return
+
             chao_axes = [
                 a for a in fig.axes
                 if a.get_visible() and getattr(a, "_is_chao_axis", False)
             ]
-            if not chao_axes:
-                return
-
             loc_val = str(self.get_param("legend_loc", "右上") or "右上")
-            outside_val = bool(self.get_param("legend_outside", True))
-            if not outside_val or "右" not in loc_val:
+            if "右" not in loc_val:
                 return
 
             anchor_y = 0.0 if loc_val == "右下" else 1.0
@@ -617,6 +634,20 @@ class AcousticChartExporter(
                 if fig_w <= 50:
                     return
 
+                # Identify axes whose legend is actually positioned outside to the right
+                outside_right_axes = []
+                for ax in legend_axes:
+                    leg = ax.get_legend()
+                    if leg is None:
+                        continue
+                    ax_bbox = ax.get_window_extent(renderer)
+                    leg_bbox = leg.get_window_extent(renderer)
+                    if float(leg_bbox.x1) > float(ax_bbox.x1) + 4.0:
+                        outside_right_axes.append(ax)
+
+                if not outside_right_axes:
+                    return
+
                 chao_x1 = max(
                     (
                         float(ca.get_tightbbox(renderer).x1)
@@ -625,44 +656,31 @@ class AcousticChartExporter(
                     ),
                     default=0.0,
                 )
-                if chao_x1 <= 0:
-                    return
 
                 needs_redraw = False
-                max_leg_x1 = 0.0
-                max_leg_w = 0.0
-                for ax in primary_axes:
-                    leg = ax.get_legend()
-                    if leg is None:
-                        continue
-                    ax_bbox = ax.get_window_extent(renderer)
-                    leg_bbox = leg.get_window_extent(renderer)
-                    max_leg_w = max(max_leg_w, float(leg_bbox.width))
-                    target_leg_x0 = chao_x1 + 10.0
-                    if float(leg_bbox.x0) < target_leg_x0 - 1.0 and float(ax_bbox.width) > 10.0:
-                        anchor_x = max(1.16, (target_leg_x0 - float(ax_bbox.x0)) / float(ax_bbox.width))
-                        leg.set_bbox_to_anchor((anchor_x, anchor_y), transform=ax.transAxes)
-                        needs_redraw = True
+                if chao_x1 > 0:
+                    for ax in outside_right_axes:
+                        if not getattr(ax, "_has_chao_axis", False):
+                            continue
+                        leg = ax.get_legend()
+                        if leg is None:
+                            continue
+                        ax_bbox = ax.get_window_extent(renderer)
+                        leg_bbox = leg.get_window_extent(renderer)
+                        target_leg_x0 = chao_x1 + 10.0
+                        if float(leg_bbox.x0) < target_leg_x0 - 1.0 and float(ax_bbox.width) > 10.0:
+                            anchor_x = max(1.16, (target_leg_x0 - float(ax_bbox.x0)) / float(ax_bbox.width))
+                            leg.set_bbox_to_anchor((anchor_x, anchor_y), transform=ax.transAxes)
+                            needs_redraw = True
 
                 if needs_redraw:
                     fig.canvas.draw()
                     renderer = fig.canvas.get_renderer()
-                    chao_x1 = max(
-                        (
-                            float(ca.get_tightbbox(renderer).x1)
-                            for ca in chao_axes
-                            if ca.get_tightbbox(renderer) is not None
-                        ),
-                        default=chao_x1,
-                    )
 
-                for ax in primary_axes:
-                    leg = ax.get_legend()
-                    if leg is not None:
-                        lb = leg.get_window_extent(renderer)
-                        max_leg_x1 = max(max_leg_x1, float(lb.x1))
-                        max_leg_w = max(max_leg_w, float(lb.width))
-
+                max_leg_x1 = max(
+                    (float(ax.get_legend().get_window_extent(renderer).x1) for ax in outside_right_axes if ax.get_legend() is not None),
+                    default=0.0,
+                )
                 overflow_px = max_leg_x1 - (fig_x1 - 8.0)
                 if overflow_px <= 1.0:
                     break
@@ -670,7 +688,7 @@ class AcousticChartExporter(
                 curr_right = float(fig.subplotpars.right)
                 curr_left = float(fig.subplotpars.left)
                 shrink_frac = (overflow_px + 8.0) / fig_w
-                new_right = max(curr_left + 0.28, min(curr_right - shrink_frac, 0.78))
+                new_right = max(curr_left + 0.30, min(curr_right - shrink_frac, 0.84))
                 if abs(new_right - curr_right) < 1e-3:
                     break
                 fig.subplots_adjust(right=new_right)
@@ -678,30 +696,27 @@ class AcousticChartExporter(
             pass
 
 
-    def _export_paginated_pdf(self, out_file, data_entries, group_key, scale):
-        from matplotlib.backends.backend_pdf import PdfPages
+    def _export_paginated_pdf(self, out_file, data_entries, group_key, scale, facet_pages=None):
+        prepared = self._prepare_entries_for_color_by(data_entries, group_key)
+        if not facet_pages:
+            chart_type = self._normalize_chart_type(self.get_param('chart_type', 'contour'))
+            facet_pages = self._build_facet_aware_group_pages(prepared, chart_type, group_key, page_size=8)
 
-        unique_groups = []
-        for e in data_entries:
-            val = e[group_key]
-            if val not in unique_groups:
-                unique_groups.append(val)
-
-        chunk_size = 8
+        total_pages = max(1, len(facet_pages))
         pdf_pages = PdfPages(out_file)
 
         try:
-            for page_idx in range(math.ceil(len(unique_groups) / chunk_size)):
+            for page_idx, page_spec in enumerate(facet_pages):
                 self._check_export_cancelled()
-                total_pages = max(1, math.ceil(len(unique_groups) / chunk_size))
                 self._report_export_progress(0.15 + 0.75 * (page_idx / total_pages), f"正在导出分页图 {page_idx + 1}/{total_pages}...")
-                allowed_groups = set(unique_groups[page_idx * chunk_size : (page_idx + 1) * chunk_size])
-                chunk_entries = [e for e in data_entries if e[group_key] in allowed_groups]
+                chunk_entries = self._filter_entries_by_page_spec(prepared, group_key, page_spec)
 
                 fig = self.generate_plot(chunk_entries, is_preview=False)
+                self._sync_chao_axes_limits(fig)
 
-                fig.text(0.95, 0.02, f"第 {page_idx + 1} 页 / 共 {math.ceil(len(unique_groups) / chunk_size)} 页",
-                         ha='right', va='bottom', fontsize=9, color='gray')
+                if total_pages > 1:
+                    fig.text(0.95, 0.02, f"第 {page_idx + 1} 页 / 共 {total_pages} 页",
+                             ha='right', va='bottom', fontsize=9, color='gray')
 
                 pdf_pages.savefig(fig, bbox_inches='tight')
                 plt.close(fig)
@@ -709,34 +724,30 @@ class AcousticChartExporter(
             pdf_pages.close()
 
 
-    def _export_paginated_images(self, base_path, data_entries, group_key, scale, ext):
-        unique_groups = []
-        for e in data_entries:
-            val = e[group_key]
-            if val not in unique_groups:
-                unique_groups.append(val)
+    def _export_paginated_images(self, base_path, data_entries, group_key, scale, ext, facet_pages=None):
+        prepared = self._prepare_entries_for_color_by(data_entries, group_key)
+        if not facet_pages:
+            chart_type = self._normalize_chart_type(self.get_param('chart_type', 'contour'))
+            facet_pages = self._build_facet_aware_group_pages(prepared, chart_type, group_key, page_size=8)
 
-        chunk_size = 8
-        total_pages = math.ceil(len(unique_groups) / chunk_size)
-
+        total_pages = max(1, len(facet_pages))
         dir_name, file_name = os.path.split(base_path)
         name_part, _ = os.path.splitext(file_name)
 
-        for page_idx in range(total_pages):
+        for page_idx, page_spec in enumerate(facet_pages):
             self._check_export_cancelled()
-            self._report_export_progress(0.15 + 0.75 * (page_idx / max(1, total_pages)), f"正在导出分页图 {page_idx + 1}/{total_pages}...")
-            allowed_groups = set(unique_groups[page_idx * chunk_size : (page_idx + 1) * chunk_size])
-            chunk_entries = [e for e in data_entries if e[group_key] in allowed_groups]
+            self._report_export_progress(0.15 + 0.75 * (page_idx / total_pages), f"正在导出分页图 {page_idx + 1}/{total_pages}...")
+            chunk_entries = self._filter_entries_by_page_spec(prepared, group_key, page_spec)
 
             fig = self.generate_plot(chunk_entries, is_preview=False)
 
-            fig.text(0.95, 0.02, f"第 {page_idx + 1} 页 / 共 {total_pages} 页",
-                     ha='right', va='bottom', fontsize=9, color='gray')
+            if total_pages > 1:
+                fig.text(0.95, 0.02, f"第 {page_idx + 1} 页 / 共 {total_pages} 页",
+                         ha='right', va='bottom', fontsize=9, color='gray')
 
-            out_path = os.path.join(dir_name, f"{name_part}_第{page_idx + 1}页{ext}")
+            out_path = os.path.join(dir_name, f"{name_part}_第{page_idx + 1}页{ext}") if total_pages > 1 else base_path
             self._save_figure(fig, out_path)
             if page_idx == 0 and os.path.abspath(out_path) != os.path.abspath(base_path):
-                import shutil as _shutil
                 _shutil.copy2(out_path, base_path)
             plt.close(fig)
 
@@ -745,15 +756,9 @@ class AcousticChartExporter(
         self._check_export_cancelled()
         rule_summary = self._format_chart_group_rule_summary(self.get_param("chart_group_rule", None))
         self._report_export_progress(0.05, f"正在按{rule_summary}准备导出数据...")
-        chart_type = self.get_param('chart_type', 'contour')
-        groupby = self.get_param('groupby', 'group')
+        chart_type = self._normalize_chart_type(self.get_param('chart_type', 'contour'))
+        groupby = self._resolve_color_by()
         group_key = self._get_group_key(groupby)
-
-        unique_groups = []
-        for e in data:
-            val = e[group_key]
-            if val not in unique_groups:
-                unique_groups.append(val)
 
         scale_val = self.get_param('scale')
         if scale_val and ("T" in str(scale_val) or "t_value" in str(scale_val).lower()):
@@ -771,12 +776,13 @@ class AcousticChartExporter(
             self._report_export_progress(1.0, "当前任务完成")
             return
 
-        if len(unique_groups) > 8 and not self._is_overview_heatmap_chart(chart_type) and chart_type != "tone_effect_time":
+        facet_pages = pagination_state.get('facet_pages', [])
+        if len(facet_pages) > 1 and not self._is_overview_heatmap_chart(chart_type):
             with _MATPLOTLIB_LOCK:
                 if ext == ".pdf":
-                    self._export_paginated_pdf(out_path, data, group_key, scale)
+                    self._export_paginated_pdf(out_path, data, group_key, scale, facet_pages=facet_pages)
                 else:
-                    self._export_paginated_images(out_path, data, group_key, scale, ext)
+                    self._export_paginated_images(out_path, data, group_key, scale, ext, facet_pages=facet_pages)
         else:
             self._report_export_progress(0.2, "正在生成图表...")
             self._check_export_cancelled()
@@ -821,7 +827,6 @@ class AcousticChartExporter(
 
 
     def _export_overview_heatmap_paginated_pdf(self, out_file, data, scale, pages):
-        from matplotlib.backends.backend_pdf import PdfPages
         pdf_pages = PdfPages(out_file)
         total_pages = len(pages)
         try:
@@ -830,7 +835,7 @@ class AcousticChartExporter(
                 self._report_export_progress(0.15 + 0.75 * (page_idx / total_pages), f"正在导出分页概览图 {page_idx + 1}/{total_pages}...")
 
                 allowed_pairs = {row['row_id'] for row in page_rows}
-                chunk_entries = [e for e in data if (e['group'], e['label']) in allowed_pairs]
+                chunk_entries = [e for e in data if (self._entry_wordlist_group(e), e['label']) in allowed_pairs]
                 fig = self.generate_plot(chunk_entries, is_preview=False)
 
                 fig.text(0.95, 0.02, f"第 {page_idx + 1} 页 / 共 {total_pages} 页",
@@ -852,7 +857,7 @@ class AcousticChartExporter(
             self._report_export_progress(0.15 + 0.75 * (page_idx / max(1, total_pages)), f"正在导出分页概览图 {page_idx + 1}/{total_pages}...")
 
             allowed_pairs = {row['row_id'] for row in page_rows}
-            chunk_entries = [e for e in data if (e['group'], e['label']) in allowed_pairs]
+            chunk_entries = [e for e in data if (self._entry_wordlist_group(e), e['label']) in allowed_pairs]
             fig = self.generate_plot(chunk_entries, is_preview=False)
 
             fig.text(0.95, 0.02, f"第 {page_idx + 1} 页 / 共 {total_pages} 页",
@@ -861,6 +866,5 @@ class AcousticChartExporter(
             out_path = os.path.join(dir_name, f"{name_part}_第{page_idx + 1}页{ext}")
             self._save_figure(fig, out_path)
             if page_idx == 0 and os.path.abspath(out_path) != os.path.abspath(base_path):
-                import shutil as _shutil
                 _shutil.copy2(out_path, base_path)
             plt.close(fig)

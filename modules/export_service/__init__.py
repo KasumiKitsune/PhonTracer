@@ -29,6 +29,23 @@ from .textgrid_io import (
     get_export_textgrid_for_item,
     extract_wordlist_from_textgrid,
 )
+from .praat_collection_exporter import (
+    clean_praat_object_name,
+    serialize_sound_binary,
+    serialize_sound_text,
+    serialize_textgrid_binary,
+    serialize_textgrid_text,
+    serialize_pitch_binary,
+    serialize_pitch_text,
+    serialize_formant_binary,
+    serialize_formant_text,
+    write_praat_collection,
+    build_combined_textgrid_from_items,
+    build_collection_items_for_audio_group,
+    build_single_item_collection_objects,
+    build_speaker_collection_objects,
+    export_speaker_to_praat_collection,
+)
 from .unified_exporter import (
     ExportCallbacks,
     UnifiedExportService,
@@ -54,6 +71,22 @@ __all__ = [
     # textgrid_io
     "get_export_textgrid_for_item",
     "extract_wordlist_from_textgrid",
+    # praat_collection_exporter
+    "clean_praat_object_name",
+    "serialize_sound_binary",
+    "serialize_sound_text",
+    "serialize_textgrid_binary",
+    "serialize_textgrid_text",
+    "serialize_pitch_binary",
+    "serialize_pitch_text",
+    "serialize_formant_binary",
+    "serialize_formant_text",
+    "write_praat_collection",
+    "build_combined_textgrid_from_items",
+    "build_collection_items_for_audio_group",
+    "build_single_item_collection_objects",
+    "build_speaker_collection_objects",
+    "export_speaker_to_praat_collection",
     # unified_exporter
     "ExportCallbacks",
     "UnifiedExportService",

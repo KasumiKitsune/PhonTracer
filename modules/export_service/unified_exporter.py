@@ -34,6 +34,15 @@ from .textgrid_io import (
     get_export_textgrid_for_item,
     extract_wordlist_from_textgrid,
 )
+from .praat_collection_exporter import (
+    clean_praat_object_name,
+    write_praat_collection,
+    build_combined_textgrid_from_items,
+    build_collection_items_for_audio_group,
+    build_single_item_collection_objects,
+    build_speaker_collection_objects,
+    export_speaker_to_praat_collection,
+)
 
 
 @dataclass
@@ -451,3 +460,7 @@ class UnifiedExportService:
     write_analysis_sheet_with_formulas = staticmethod(write_analysis_sheet_with_formulas)
     write_formant_analysis_sheet_with_formulas = staticmethod(write_formant_analysis_sheet_with_formulas)
     build_five_point_chart = staticmethod(build_five_point_chart)
+    write_praat_collection = staticmethod(write_praat_collection)
+    build_single_item_collection_objects = staticmethod(build_single_item_collection_objects)
+    build_speaker_collection_objects = staticmethod(build_speaker_collection_objects)
+    export_speaker_to_praat_collection = staticmethod(export_speaker_to_praat_collection)

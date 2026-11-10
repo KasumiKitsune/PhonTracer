@@ -2,7 +2,7 @@
 """
 modules.chart_engine.tone_stats_and_qc_plotters
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-音调分布统计、时序效应分析、时域核密度估计、Spaghetti 质检叠加图与发音人质检面板。
+音调分布统计、音节物理时长对比、时序效应分析、时域核密度估计、Spaghetti 质检叠加图与发音人质检面板。
 完全无头，仅依赖 matplotlib Agg 后端，不依赖任何 GUI 库。
 """
 from __future__ import annotations
@@ -18,18 +18,19 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 import matplotlib.cm as cm
 from matplotlib.collections import LineCollection
-from scipy.stats import gaussian_kde
 
 from modules.core.acoustic_math import (
     _safe_nanmean,
     _safe_nanstd,
+    evaluate_1d_kde,
+    evaluate_2d_kde_grid,
     hz_to_t_value,
 )
-from modules.data_utils import split_into_syllables
+from modules.data_utils import get_item_syllable_bounds, split_into_syllables
 
 
 class ToneStatsAndQCPlottersMixin:
-    """音调统计与质检可视化混入类。"""
+    """音调统计、物理时长对比与质检可视化混入类。"""
 
     def _extract_tone_entry_metrics(self, entry, scale="T 值"):
         """
@@ -60,7 +61,6 @@ class ToneStatsAndQCPlottersMixin:
         max_val = float(np.max(v))
         range_val = float(max_val - min_val)
 
-        # Inflection point extremum: interior point with maximum perpendicular/vertical deviation from onset->offset chord
         if len(v) >= 3:
             chord = np.linspace(onset, offset, len(v))
             dev = np.abs(v - chord)
@@ -73,7 +73,6 @@ class ToneStatsAndQCPlottersMixin:
         else:
             inflection_val = mid
 
-        # Slope across normalized time [0, 1] (or per second if duration > 0)
         if len(v) >= 2:
             norm_t = (valid_idx - valid_idx[0]) / max(1.0, float(len(arr) - 1))
             if np.std(norm_t) > 1e-6:
@@ -98,7 +97,7 @@ class ToneStatsAndQCPlottersMixin:
     def _draw_raincloud_series(self, ax, data_list, positions, colors, width=0.36):
         """
         在指定坐标轴上绘制现代雨云图（Raincloud Plot）：
-        1) 右侧半小提琴核密度云 (Half-Violin KDE)
+        1) 右侧半小提琴核密度云 (Half-Violin KDE，严格裁剪至有效数据极值/内群区间，杜绝细长针状尾巴)
         2) 中央窄箱线图 (Narrow Boxplot)
         3) 左侧个体抖动散点 (Individual Jittered Scatter)
         """
@@ -108,26 +107,43 @@ class ToneStatsAndQCPlottersMixin:
             if arr.size == 0:
                 continue
 
-            # 1. Half-Violin KDE on the right side [pos + 0.02, pos + width]
+            # 1. Half-Violin KDE clipped strictly to data min/max & core distribution (no needle spikes to distant outliers)
             if arr.size >= 2 and np.std(arr) > 1e-5:
                 try:
-                    kde = gaussian_kde(arr, bw_method=0.32)
-                    pad = (np.max(arr) - np.min(arr)) * 0.12
-                    y_grid = np.linspace(np.min(arr) - pad, np.max(arr) + pad, 80)
-                    dens = kde(y_grid)
-                    max_d = float(np.max(dens))
-                    if max_d > 0:
-                        dens_scaled = (dens / max_d) * width
-                        ax.fill_betweenx(
-                            y_grid,
-                            pos + 0.02,
-                            pos + 0.02 + dens_scaled,
-                            facecolor=color,
-                            edgecolor=color,
-                            alpha=0.52,
-                            linewidth=1.2,
-                            zorder=3,
-                        )
+                    kde_vals = arr
+                    if arr.size >= 4:
+                        q1, q3 = np.percentile(arr, [25.0, 75.0])
+                        iqr = float(q3 - q1)
+                        if iqr > 1e-4:
+                            inliers = arr[(arr >= q1 - 1.5 * iqr) & (arr <= q3 + 1.5 * iqr)]
+                            if inliers.size >= 3 and np.std(inliers) > 1e-5:
+                                kde_vals = inliers
+                    v_lo = float(np.min(kde_vals))
+                    v_hi = float(np.max(kde_vals))
+                    if v_hi > v_lo + 1e-5:
+                        y_grid = np.linspace(v_lo, v_hi, 72)
+                        dens = evaluate_1d_kde(kde_vals, y_grid, bw_method=0.34)
+                        max_d = float(np.max(dens)) if dens.size > 0 else 0.0
+                        if max_d > 0:
+                            # Trim near-zero density tails (< 4% peak) so thin edge strokes never form vertical needles
+                            keep = dens >= 0.04 * max_d
+                            if np.count_nonzero(keep) >= 3:
+                                k_idx = np.where(keep)[0]
+                                y_sub = y_grid[k_idx[0] : k_idx[-1] + 1]
+                                d_sub = dens[k_idx[0] : k_idx[-1] + 1]
+                            else:
+                                y_sub, d_sub = y_grid, dens
+                            dens_scaled = (d_sub / max_d) * width
+                            ax.fill_betweenx(
+                                y_sub,
+                                pos + 0.02,
+                                pos + 0.02 + dens_scaled,
+                                facecolor=color,
+                                edgecolor=color,
+                                alpha=0.52,
+                                linewidth=1.1,
+                                zorder=3,
+                            )
                 except Exception:
                     pass
 
@@ -170,6 +186,278 @@ class ToneStatsAndQCPlottersMixin:
             )
 
 
+    @staticmethod
+    def _clip_outliers_for_violin(columns):
+        """Clip extreme single-point outliers per column so matplotlib violinplot never draws thin full-canvas spikes."""
+        clipped = []
+        for col in columns:
+            arr = np.asarray(col, dtype=float)
+            arr = arr[np.isfinite(arr)]
+            if arr.size >= 4:
+                q1, q3 = np.percentile(arr, [25.0, 75.0])
+                iqr = float(q3 - q1)
+                if iqr > 1e-4:
+                    inl = arr[(arr >= q1 - 1.5 * iqr) & (arr <= q3 + 1.5 * iqr)]
+                    if inl.size >= 3 and np.std(inl) > 1e-5:
+                        clipped.append(inl)
+                        continue
+            clipped.append(arr if arr.size > 0 else np.array([np.nan]))
+        return clipped
+
+
+    def _extract_entry_syllable_durations_ms(self, entry) -> List[float]:
+        """Extract per-syllable physical durations (in ms) robustly across both f0 and formant modes."""
+        syl_list = entry.get("syl_data")
+        if syl_list:
+            durs = [float(s_dur) * 1000.0 for s_dur, _pts in syl_list if s_dur is not None and float(s_dur) > 0]
+            if durs:
+                return durs
+        syl_formants = entry.get("syl_formants")
+        if syl_formants:
+            durs = []
+            for sf in syl_formants:
+                b = sf.get("bounds")
+                if b and len(b) == 2 and float(b[1]) > float(b[0]):
+                    durs.append((float(b[1]) - float(b[0])) * 1000.0)
+            if durs:
+                return durs
+        raw_item = entry.get("raw_item")
+        if isinstance(raw_item, dict):
+            bounds = get_item_syllable_bounds(raw_item)
+            if bounds:
+                durs = [(float(b[1]) - float(b[0])) * 1000.0 for b in bounds if float(b[1]) > float(b[0])]
+                if durs:
+                    return durs
+            s_v, e_v = raw_item.get("start"), raw_item.get("end")
+            if s_v is not None and e_v is not None and float(e_v) > float(s_v):
+                return [(float(e_v) - float(s_v)) * 1000.0]
+        tot = float(entry.get("total_dur") or 0.0)
+        if tot > 0:
+            return [tot * 1000.0]
+        return []
+
+
+    def _plot_syllable_duration_comparison(self, data_entries, group_key, scale="T 值"):
+        """
+        各组/各词项音节物理时长对比图 (`export duration`)：
+        - 100% 兼容 `f0` 与 `formant` 分析模式；
+        - 单音节语料：绘制组/词项物理时长均值柱状图 + ±1 SD 误差棒 + 个体抖动散点 + 顶部数值标注；
+        - 双音节/多音节语料（如二字组连读变调）：绘制分音节堆叠物理时长柱状图（前字+后字）+ 全词总时长 ±1 SD 误差棒 + 顶部总时长标注。
+        """
+        facet_mode = self._resolve_facet_by(chart_type="duration", fallback="none")
+
+        def _entry_facet_val(e):
+            if facet_mode == "speaker":
+                return e.get("speaker_name", "默认发音人")
+            if facet_mode == "group":
+                return self._entry_wordlist_group(e) if group_key != "group" else e.get("group", "未分组")
+            if facet_mode == "label":
+                return e.get("label", "未命名")
+            return "Default"
+
+        facet_keys = ["Default"] if facet_mode == "none" else self._ordered_unique(_entry_facet_val(e) for e in data_entries)
+        n_facets = max(1, len(facet_keys))
+        n_cols = min(2, n_facets)
+        n_rows = math.ceil(n_facets / n_cols)
+
+        all_durs_check = [self._extract_entry_syllable_durations_ms(e) for e in data_entries]
+        max_syls = max((len(d) for d in all_durs_check), default=1)
+        unique_cats_global = self._ordered_unique(e.get(group_key, e.get("group", "未分组")) for e in data_entries)
+
+        base_panel_w = max(7.4, min(13.5, 1.05 * len(unique_cats_global) + 2.2)) if n_facets == 1 else max(5.6, 0.85 * len(unique_cats_global) + 1.8)
+        fig, axes = plt.subplots(
+            n_rows, n_cols,
+            figsize=(base_panel_w * n_cols, 4.8 * n_rows + 0.4),
+            squeeze=False, sharey=(n_facets > 1),
+        )
+        axes_flat = axes.flatten()
+        duration_summary = {}
+
+        syl_hatches = ["", "//", "..", "xx"]
+        syl_alphas = [0.76, 0.48, 0.34, 0.26]
+
+        for f_idx, f_key in enumerate(facet_keys):
+            ax = axes_flat[f_idx]
+            ax.set_facecolor("#FFFFFF")
+            ax.grid(True, axis="y", linestyle="--", alpha=0.28)
+
+            sub_entries = data_entries if facet_mode == "none" else [e for e in data_entries if _entry_facet_val(e) == f_key]
+            grouped = {}
+            for e in sub_entries:
+                cat = e.get(group_key, e.get("group", "未分组"))
+                d_list = self._extract_entry_syllable_durations_ms(e)
+                if d_list:
+                    grouped.setdefault(cat, []).append(d_list)
+
+            if not grouped:
+                ax.text(0.5, 0.5, "没有找到有效的音节物理时长数据", ha="center", va="center", color="#6B7280")
+                continue
+
+            cats = list(grouped.keys())
+            x_pos = np.arange(len(cats), dtype=float)
+            bar_w = min(0.54, max(0.32, 3.2 / max(4, len(cats))))
+            max_top_y = 0.0
+
+            if max_syls <= 1:
+                for c_i, cat in enumerate(cats):
+                    totals = np.asarray([ sum(d) for d in grouped[cat] ], dtype=float)
+                    mean_v = float(np.mean(totals))
+                    sd_v = float(np.std(totals, ddof=1)) if totals.size > 1 else 0.0
+                    color = self.colors[c_i % len(self.colors)]
+
+                    ax.bar(
+                        x_pos[c_i], mean_v, width=bar_w,
+                        color=color, alpha=0.74, edgecolor="#111827", linewidth=0.85, zorder=3,
+                    )
+                    if totals.size > 1 and sd_v > 0:
+                        ax.errorbar(
+                            x_pos[c_i], mean_v, yerr=sd_v,
+                            fmt="none", ecolor="#111827", elinewidth=1.3, capsize=4.5, capthick=1.2, zorder=5,
+                        )
+                    # Subtle jittered individual token dots
+                    rng = np.random.default_rng(2026 + c_i)
+                    jitter = rng.uniform(-bar_w * 0.24, bar_w * 0.24, size=totals.size)
+                    ax.scatter(
+                        np.full(totals.size, x_pos[c_i]) + jitter, totals,
+                        color="#FFFFFF", edgecolors=color, s=22, linewidth=1.0, alpha=0.82, zorder=4,
+                    )
+                    top_pt = max(mean_v + (sd_v if totals.size > 1 else 0.0), float(np.max(totals)))
+                    max_top_y = max(max_top_y, top_pt)
+                    duration_summary[f"{f_key}:{cat}" if n_facets > 1 else str(cat)] = {
+                        "count": int(totals.size),
+                        "mean_ms": round(mean_v, 2),
+                        "sd_ms": round(sd_v, 2),
+                    }
+                    ax._pending_bar_labels = getattr(ax, "_pending_bar_labels", []) + [(x_pos[c_i], top_pt, f"{mean_v:.0f} ms")]
+
+                if max_top_y > 0:
+                    y_upper = max_top_y * 1.22
+                    ax.set_ylim(0.0, y_upper)
+                    for bx, btop, blbl in getattr(ax, "_pending_bar_labels", []):
+                        ax.text(
+                            bx, btop + 0.024 * y_upper, blbl,
+                            ha="center", va="bottom", fontsize=8.5, fontweight="bold", color="#111827",
+                            bbox=dict(boxstyle="round,pad=0.12", fc="#FFFFFF", ec="none", alpha=0.82),
+                            zorder=6,
+                        )
+            else:
+                # Multi-syllable stacked duration bars (e.g. Syllable 1 + Syllable 2) with total duration ±1 SD error bar
+                syl_names = ["第1音节 (前字)", "第2音节 (后字)"] if max_syls == 2 else [f"第{k + 1}音节" for k in range(max_syls)]
+                legend_added = [False] * max_syls
+
+                for c_i, cat in enumerate(cats):
+                    d_rows = grouped[cat]
+                    totals = np.asarray([sum(r) for r in d_rows], dtype=float)
+                    mean_tot = float(np.mean(totals))
+                    sd_tot = float(np.std(totals, ddof=1)) if totals.size > 1 else 0.0
+                    color = self.colors[c_i % len(self.colors)]
+
+                    bottom_acc = 0.0
+                    syl_means = []
+                    for s_k in range(max_syls):
+                        s_vals = [r[s_k] for r in d_rows if s_k < len(r)]
+                        m_sk = float(np.mean(s_vals)) if s_vals else 0.0
+                        syl_means.append(m_sk)
+                        lbl_s = syl_names[s_k] if not legend_added[s_k] else None
+                        bar_patch = ax.bar(
+                            x_pos[c_i], m_sk, bottom=bottom_acc, width=bar_w,
+                            color=color, alpha=syl_alphas[s_k % len(syl_alphas)],
+                            edgecolor="#111827", linewidth=0.85,
+                            hatch=syl_hatches[s_k % len(syl_hatches)],
+                            label=lbl_s, zorder=3,
+                        )
+                        if lbl_s is not None and bar_patch:
+                            # Make legend swatch neutral gray so hatch/alpha represents syllable position across all groups
+                            legend_added[s_k] = True
+                        has_err = bool(totals.size > 1 and sd_tot > 0)
+                        txt_x = (x_pos[c_i] - bar_w * 0.16) if (has_err and s_k == max_syls - 1) else x_pos[c_i]
+                        if m_sk >= 52.0:
+                            ax.text(
+                                txt_x, bottom_acc + 0.5 * m_sk,
+                                f"{m_sk:.0f}",
+                                ha="center", va="center", fontsize=7.5, fontweight="bold",
+                                color="#FFFFFF" if s_k == 0 else "#111827",
+                                bbox=dict(
+                                    boxstyle="round,pad=0.12",
+                                    fc="#111827" if s_k == 0 else "#FFFFFF",
+                                    ec="none",
+                                    alpha=0.62 if s_k == 0 else 0.88,
+                                ),
+                                zorder=5.2,
+                            )
+                        bottom_acc += m_sk
+
+                    if totals.size > 1 and sd_tot > 0:
+                        err_x = x_pos[c_i] + bar_w * 0.20
+                        ax.errorbar(
+                            err_x, bottom_acc, yerr=sd_tot,
+                            fmt="none", ecolor="#111827", elinewidth=1.3, capsize=4.0, capthick=1.2, zorder=5.0,
+                        )
+                    top_pt = bottom_acc + (sd_tot if totals.size > 1 else 0.0)
+                    max_top_y = max(max_top_y, top_pt)
+                    duration_summary[f"{f_key}:{cat}" if n_facets > 1 else str(cat)] = {
+                        "count": int(totals.size),
+                        "mean_ms": round(mean_tot, 2),
+                        "sd_ms": round(sd_tot, 2),
+                        "syllable_means_ms": [round(v, 2) for v in syl_means],
+                    }
+                    ax._pending_bar_labels = getattr(ax, "_pending_bar_labels", []) + [(x_pos[c_i], top_pt, f"{bottom_acc:.0f} ms")]
+
+                if max_top_y > 0:
+                    y_upper = max_top_y * 1.22
+                    ax.set_ylim(0.0, y_upper)
+                    for bx, btop, blbl in getattr(ax, "_pending_bar_labels", []):
+                        ax.text(
+                            bx, btop + 0.022 * y_upper, blbl,
+                            ha="center", va="bottom", fontsize=8.2, fontweight="bold", color="#111827", zorder=6,
+                        )
+
+                # Build neutral-gray legend proxies for Syllable 1 vs Syllable 2
+                from matplotlib.patches import Patch
+                if f_idx == min(n_cols - 1, n_facets - 1):
+                    proxies = [
+                        Patch(
+                            facecolor="#4B5563", alpha=syl_alphas[k % len(syl_alphas)],
+                            edgecolor="#111827", hatch=syl_hatches[k % len(syl_hatches)],
+                            label=syl_names[k],
+                        )
+                        for k in range(max_syls)
+                    ]
+                    leg_kw = self._get_legend_kwargs(ax=ax, default_outside=True)
+                    leg_kw["fontsize"] = 8.5
+                    ax.legend(handles=proxies, **leg_kw)
+
+            ax.set_xticks(x_pos)
+            rot = 28 if (len(cats) > 6 or any(len(str(c)) > 5 for c in cats)) else 0
+            ax.set_xticklabels(
+                [str(c) for c in cats],
+                rotation=rot,
+                ha="right" if rot else "center",
+                fontsize=9.0,
+                fontweight="bold",
+            )
+            if f_idx % n_cols == 0:
+                ax.set_ylabel("物理时长 Duration (ms)")
+            if (f_idx // n_cols == n_rows - 1) or (f_idx + n_cols >= n_facets):
+                if group_key == "label":
+                    ax.set_xlabel("词项")
+                elif group_key == "speaker_name":
+                    ax.set_xlabel("发音人")
+                else:
+                    ax.set_xlabel("组别 / 调类")
+
+            t_str = "各组音节物理时长对比 (Mean ± SD)" if f_key == "Default" else str(f_key)
+            ax.set_title(t_str, fontsize=11.5, fontweight="bold")
+            ax._original_title = t_str
+
+        for idx in range(n_facets, len(axes_flat)):
+            axes_flat[idx].set_visible(False)
+
+        fig._duration_summary = duration_summary
+        fig.tight_layout()
+        return fig
+
+
     def _plot_tone_distribution(self, data_entries, group_key, scale):
         dist_type_val = str(self.get_param('dist_metric', None) or self.get_param('dist_type', 'raincloud_metric') or '')
         style_val = str(self.get_param('dist_style', 'raincloud' if self._normalize_work_mode() == 'publication' else 'boxplot') or '')
@@ -191,7 +479,6 @@ class ToneStatsAndQCPlottersMixin:
         max_syls = max((len(e.get('syl_data', [])) for e in data_entries), default=1)
         n_groups = len(grouped_data)
 
-        # Always compute the 8 linguistic metrics per group and attach to fig._tone_distribution_metrics
         all_group_metrics = {}
         for g_name, entries in grouped_data.items():
             m_bucket = {k: [] for k in ("mean", "onset", "mid", "offset", "inflection", "range", "slope", "duration_ms")}
@@ -248,7 +535,7 @@ class ToneStatsAndQCPlottersMixin:
                 if "雨云图" in style:
                     self._draw_raincloud_series(ax, data_to_plot, positions, colors_to_use)
                 elif "小提琴" in style:
-                    parts = ax.violinplot(data_to_plot, positions=positions, showmeans=True)
+                    parts = ax.violinplot(self._clip_outliers_for_violin(data_to_plot), positions=positions, showmeans=True)
                     for pc_idx, pc in enumerate(parts['bodies']):
                         pc.set_facecolor(colors_to_use[pc_idx])
                         pc.set_alpha(0.6)
@@ -260,6 +547,7 @@ class ToneStatsAndQCPlottersMixin:
                 ax.set_xticks(positions)
                 ax.set_xticklabels(labels, fontsize=10, fontweight="bold")
                 ax.set_ylabel(y_lbl)
+                ax.set_xlabel("声调类别")
                 t_str = f"声调声学特征分布 ({m_title} - {style})"
                 ax.set_title(t_str, fontsize=12, fontweight="bold")
                 ax._original_title = t_str
@@ -290,7 +578,7 @@ class ToneStatsAndQCPlottersMixin:
                 if "雨云图" in style:
                     self._draw_raincloud_series(ax, data_to_plot, positions, colors_to_use, width=0.28)
                 elif "小提琴图" in style:
-                    parts = ax.violinplot(data_to_plot, positions=positions, showmeans=True)
+                    parts = ax.violinplot(self._clip_outliers_for_violin(data_to_plot), positions=positions, showmeans=True)
                     for pc_idx, pc in enumerate(parts['bodies']):
                         pc.set_facecolor(colors_to_use[pc_idx])
                         pc.set_alpha(0.6)
@@ -302,6 +590,7 @@ class ToneStatsAndQCPlottersMixin:
 
                 ax.set_xticks(positions)
                 ax.set_xticklabels(labels, fontsize=9)
+                ax.set_ylabel("T 值 (0-5 标度)" if "T 值" in scale else "频率 (Hz)")
                 ax.set_title("各声调起-中-终三点基频离散比较", fontsize=13, fontweight="bold")
                 ax._original_title = "各声调起-中-终三点基频离散比较"
                 if "T 值" in scale:
@@ -313,7 +602,8 @@ class ToneStatsAndQCPlottersMixin:
             return fig
 
         elif dt_low in ("range", "调域范围跨度图") or "调域范围" in dist_type_val:
-            fig, ax = plt.subplots(figsize=(8, 5))
+            fig_h = max(5.0, 0.70 * n_groups + 1.2)
+            fig, ax = plt.subplots(figsize=(8.6, fig_h))
             ax.set_facecolor("#FFFFFF")
             ax.grid(True, linestyle="--", alpha=0.3)
 
@@ -337,15 +627,38 @@ class ToneStatsAndQCPlottersMixin:
                         max_vals.append(np.max(valid_ys))
 
                 if min_vals:
-                    avg_min = np.mean(min_vals)
-                    avg_max = np.mean(max_vals)
-                    ax.barh(idx, avg_max - avg_min, left=avg_min, height=0.5, color=color, alpha=0.7, edgecolor=color, align='center')
-                    ax.plot([avg_min, avg_max], [idx, idx], '|', color='black', markersize=10, markeredgewidth=2)
-                    ax.text((avg_min + avg_max) / 2, idx, f"{avg_min:.2f} ~ {avg_max:.2f}\n(调域: {avg_max - avg_min:.2f})",
-                            ha='center', va='center', color='black', fontsize=9, fontweight='bold')
+                    avg_min = float(np.mean(min_vals))
+                    avg_max = float(np.mean(max_vals))
+                    span_w = avg_max - avg_min
+                    ax.barh(
+                        idx, span_w, left=avg_min, height=0.66,
+                        color=color, alpha=0.72, edgecolor=color, linewidth=1.1, align='center',
+                    )
+                    ax.plot([avg_min, avg_max], [idx, idx], '|', color='#111827', markersize=12, markeredgewidth=2)
+                    try:
+                        import matplotlib.colors as _mcolors
+                        rc, gc, bc = _mcolors.to_rgb(color)
+                        r_eff = 0.72 * rc + 0.28 * 1.0
+                        g_eff = 0.72 * gc + 0.28 * 1.0
+                        b_eff = 0.72 * bc + 0.28 * 1.0
+                        lum_eff = 0.299 * r_eff + 0.587 * g_eff + 0.114 * b_eff
+                    except Exception:
+                        lum_eff = 0.65
+                    use_pill = bool(span_w < 1.05)
+                    txt_color_bar = "#111827" if use_pill else ("#FFFFFF" if lum_eff < 0.50 else "#111827")
+                    ax.text(
+                        (avg_min + avg_max) / 2.0,
+                        idx,
+                        f"{avg_min:.2f} ~ {avg_max:.2f}\n(调域: {span_w:.2f})",
+                        ha='center', va='center', color=txt_color_bar,
+                        fontsize=8.2, fontweight='bold', linespacing=1.15,
+                        bbox=dict(boxstyle="round,pad=0.14", fc="#FFFFFF", ec="none", alpha=0.86) if use_pill else None,
+                    )
 
             ax.set_yticks(y_positions)
-            ax.set_yticklabels(group_names, fontsize=11, fontweight="bold")
+            ax.set_yticklabels(group_names, fontsize=10.5, fontweight="bold")
+            ax.set_ylim(-0.6, max(0.6, n_groups - 0.4))
+            ax.set_ylabel("调类 / 组合")
             ax.set_title("各声调调域范围图 (最高点 / 最低点 / 调域跨度)", fontsize=13, fontweight="bold")
             ax._original_title = "各声调调域范围图 (最高点 / 最低点 / 调域跨度)"
 
@@ -402,9 +715,13 @@ class ToneStatsAndQCPlottersMixin:
 
             ax.bar(group_names, var_values, color=colors_to_use, alpha=0.75, width=0.45)
 
+            max_val = max(var_values, default=0.0)
+            y_top = max_val * 1.18 if max_val > 0 else 1.0
+            ax.set_ylim(0.0, y_top)
+
             for idx, val in enumerate(var_values):
                 lbl_str = f"{val:.2f}" if is_t_scale else f"{val:.1%}"
-                offset = max(var_values) * 0.02 if max(var_values, default=0.0) > 0 else 0.005
+                offset = max_val * 0.025 if max_val > 0 else 0.01
                 ax.text(idx, val + offset, lbl_str, ha='center', va='bottom', fontweight='bold')
 
             if is_t_scale:
@@ -419,10 +736,10 @@ class ToneStatsAndQCPlottersMixin:
             fig.tight_layout()
             return fig
 
-        else:  # 测量点精细分布 (legacy / detailed point-wise view)
+        else:  # 测量点精细分布 (boxplot_violin point-wise view)
             n_cols = min(2, max(1, n_groups))
             n_rows = math.ceil(max(1, n_groups) / n_cols)
-            fig, axes = plt.subplots(n_rows, n_cols, figsize=(5 * n_cols + 2, 4.2 * n_rows + 0.5), squeeze=False, sharex=True, sharey=True)
+            fig, axes = plt.subplots(n_rows, n_cols, figsize=(5.2 * n_cols + 1.8, 4.2 * n_rows + 0.6), squeeze=False, sharex=True, sharey=True)
             axes_flat = axes.flatten()
 
             for idx, (g_name, entries) in enumerate(grouped_data.items()):
@@ -451,13 +768,26 @@ class ToneStatsAndQCPlottersMixin:
                     col_colors = [self.colors[idx % len(self.colors)]] * len(positions)
                     self._draw_raincloud_series(ax, cleaned_columns, positions, col_colors, width=0.30)
                 elif "小提琴图" in style:
-                    ax.violinplot(cleaned_columns, positions, showmeans=True, showmedians=False)
+                    v_cols = self._clip_outliers_for_violin(cleaned_columns)
+                    parts = ax.violinplot(v_cols, positions, showmeans=True, showmedians=False)
+                    col_c = self.colors[idx % len(self.colors)]
+                    for pc in parts['bodies']:
+                        pc.set_facecolor(col_c)
+                        pc.set_edgecolor(col_c)
+                        pc.set_alpha(0.55)
                 else:
                     ax.boxplot(cleaned_columns, positions=positions, patch_artist=True,
                                boxprops=dict(facecolor="#DBEAFE", color="#1E40AF"),
                                whiskerprops=dict(color="#1E40AF"),
                                capprops=dict(color="#1E40AF"),
                                medianprops=dict(color="#DC2626", linewidth=1.5))
+
+                if max_syls > 1:
+                    for k in range(1, max_syls):
+                        ax.axvline(
+                            k * num_points + 0.5,
+                            color="#475569", linestyle="--", linewidth=1.15, alpha=0.70, zorder=2.5,
+                        )
 
                 ax.set_title(f"{g_name} 基频测量点分布", fontsize=11, fontweight="bold")
                 ax._original_title = f"{g_name} 基频测量点分布"
@@ -466,6 +796,17 @@ class ToneStatsAndQCPlottersMixin:
                     ax.set_yticks([0, 1, 2, 3, 4, 5])
                 ax.set_xticks(positions)
                 ax.set_xticklabels([str((p - 1) % num_points + 1) for p in positions], fontsize=8)
+
+                row_idx = idx // n_cols
+                col_idx = idx % n_cols
+                if col_idx == 0:
+                    ax.set_ylabel("T 值 (0-5 标度)" if "T 值" in scale else "频率 (Hz)")
+                else:
+                    ax.set_ylabel("")
+                if (row_idx == n_rows - 1) or (idx + n_cols >= n_groups):
+                    ax.set_xlabel("音节测量点 (时序展开)")
+                else:
+                    ax.set_xlabel("")
 
             for idx in range(n_groups, len(axes_flat)):
                 axes_flat[idx].set_visible(False)
@@ -559,24 +900,18 @@ class ToneStatsAndQCPlottersMixin:
         ax.plot(xs, [row["back"] for row in effect_rows], label="后字调类", linewidth=2.4, color=s1["color"], linestyle=s1["linestyle"], marker=s1["marker"], markersize=4.5)
         ax.plot(xs, [row["interaction"] for row in effect_rows], label="交互项/残差", linewidth=2.4, color=s2["color"], linestyle=s2["linestyle"], marker=s2["marker"], markersize=4.5)
         ax.axvline(100.0, color="#888888", linewidth=1.0, linestyle="--")
-        ax.set_xlim(0, 200)
-        ax.set_ylim(0, 1)
-        ax.set_xticks([5, 50, 95, 105, 150, 195])
-        ax.set_xticklabels(["前字5%", "前字50%", "前字95%", "后字5%", "后字50%", "后字95%"])
+        ax.set_xlim(-2.0, 202.0)
+        ax.set_ylim(-0.035, 1.05)
+        ax.set_xticks([5, 50, 100, 150, 195])
+        ax.set_xticklabels(["前字5%", "前字50%", "音节界", "后字50%", "后字95%"])
         ax.set_xlabel("两字组归一化时间轴")
         ax.set_ylabel("调类组合均值方差占比 (η²)")
         ax.set_title("二字组调类效应时间进程", fontsize=13, fontweight="bold")
         ax._original_title = "二字组调类效应时间进程"
         ax.grid(True, linestyle="--", alpha=0.25, linewidth=0.8)
-        legend_kwargs = self._get_legend_kwargs()
+        legend_kwargs = self._get_legend_kwargs(ax=ax, default_outside=True)
         legend_kwargs["fontsize"] = 9
         ax.legend(**legend_kwargs)
-        if self.get_param('legend_outside', False):
-            loc_val = self.get_param('legend_loc', '右上')
-            if "右" in loc_val:
-                fig.subplots_adjust(right=0.82)
-            elif "left" in loc_val or "左" in loc_val:
-                fig.subplots_adjust(left=0.18)
         fig.tight_layout()
         return fig
 
@@ -687,10 +1022,18 @@ class ToneStatsAndQCPlottersMixin:
             else:
                 ymin, ymax = 50.0, 500.0
 
+        def _density_facet_key(e):
+            if facet_mode == "speaker":
+                return e.get("speaker_name", "默认发音人")
+            if facet_mode == "label":
+                return e.get("label", "未命名")
+            if facet_mode == "group":
+                return self._entry_wordlist_group(e) if group_key != "group" else e.get("group", "未分组")
+            return e.get(group_key, e.get('group', '未分组'))
+
         facet_keys = ["Default"]
         if facet_mode != "none":
-            f_attr = "speaker_name" if facet_mode == "speaker" else ("label" if facet_mode == "label" else group_key)
-            facet_keys = sorted(list(set(e.get(f_attr, e.get('group')) for e in data_entries)))
+            facet_keys = self._ordered_unique(_density_facet_key(e) for e in data_entries)
 
         n_facets = max(1, len(facet_keys))
         n_cols = min(2, n_facets)
@@ -706,10 +1049,7 @@ class ToneStatsAndQCPlottersMixin:
             ax = axes_flat[f_idx]
             ax.set_facecolor("#FFFFFF")
 
-            facet_entries = data_entries
-            if facet_mode != "none":
-                f_attr = "speaker_name" if facet_mode == "speaker" else ("label" if facet_mode == "label" else group_key)
-                facet_entries = [e for e in data_entries if e.get(f_attr, e.get('group')) == f_key]
+            facet_entries = data_entries if facet_mode == "none" else [e for e in data_entries if _density_facet_key(e) == f_key]
 
             X_all_list, Y_all_list = [], []
             for e_idx, entry in enumerate(facet_entries):
@@ -749,21 +1089,24 @@ class ToneStatsAndQCPlottersMixin:
                 x_arr = x_arr[sample_idx]
                 y_arr = y_arr[sample_idx]
 
-            positions = np.vstack([x_arr, y_arr])
             try:
                 self._check_export_cancelled()
-                kernel = gaussian_kde(positions, bw_method=bw_method)
                 grid_x = max(120, min(240, int(80 * max_syls))) if high_prec else max(60, min(120, int(40 * max_syls)))
                 grid_y = 90 if high_prec else 50
                 xi, yi = np.mgrid[xmin:xmax:complex(0, grid_x), ymin:ymax:complex(0, grid_y)]
-                zi = kernel(np.vstack([xi.flatten(), yi.flatten()])).reshape(xi.shape)
+                zi = evaluate_2d_kde_grid(x_arr, y_arr, xi, yi, bw_method=bw_method)
 
-                vmax = zi.max()
+                vmax = float(np.nanmax(zi)) if zi.size > 0 else 0.0
                 if vmax > 0:
                     levels = np.linspace(vmax * 0.05, vmax, 30)
                     ax.contourf(xi, yi, zi, levels=levels, cmap="YlOrRd", extend='neither')
             except Exception as e:
-                ax.text(0.5, 0.5, f"KDE 计算失败: {str(e)[:20]}", ha='center', va='center', color='red')
+                ax.text(
+                    0.5, 0.5,
+                    f"KDE 计算失败:\n{str(e)[:120]}",
+                    ha='center', va='center', color='red', fontsize=9.5,
+                    transform=ax.transAxes, wrap=True,
+                )
 
             for k in range(1, max_syls):
                 ax.axvline(k * 100, color='gray', linestyle='--', alpha=0.8)
@@ -781,6 +1124,7 @@ class ToneStatsAndQCPlottersMixin:
             ax.set_xticks(ticks)
             if is_bottom_row:
                 ax.set_xticklabels([f"第 {k+1} 字\n(0-100%)" for k in range(max_syls)], fontsize=9)
+                ax.set_xlabel("归一化音节时序 (%)")
             else:
                 ax.set_xticklabels([])
 
@@ -804,9 +1148,6 @@ class ToneStatsAndQCPlottersMixin:
     def _plot_spaghetti_qc_overlay(self, data_entries, group_key="group", scale=None):
         """
         模式 B - 图表 2：组内个体原始曲线叠加图 (Spaghetti Raw Curve Overlay)
-        - 将同一声调或同一元音下的所有词条原始曲线画在同一张子图里；
-        - 正常曲线（与组中位数包络距离在 2σ 以内）：浅灰色半透明细线 (#94A3B8, alpha=0.45, lw=1.0)；
-        - 超出 2σ 的离群词条曲线：高亮红色粗线 (#DC2626, lw=2.2)，并在曲线峰值/尾端直接标注 `发音人: 词条 #ID`。
         """
         if scale is None:
             scale_val = self.get_param('scale', 't_value')
@@ -823,7 +1164,7 @@ class ToneStatsAndQCPlottersMixin:
             elif facet_mode == "speaker":
                 g_val = entry.get('speaker_name', '默认发音人')
             else:
-                g_val = entry.get('group', '未分组')
+                g_val = self._entry_wordlist_group(entry) if group_key != "group" else entry.get('group', '未分组')
             grouped.setdefault(g_val, []).append((idx, entry))
 
         facet_keys = list(grouped.keys()) if grouped else ["Default"]
@@ -903,6 +1244,7 @@ class ToneStatsAndQCPlottersMixin:
 
             normal_count = 0
             outlier_count = 0
+            pending_outlier_tags = []
             for c_info in curves_info:
                 y_arr = c_info["y"]
                 z_arr = np.abs(y_arr - med_y) / sigma
@@ -932,26 +1274,24 @@ class ToneStatsAndQCPlottersMixin:
                     lbl_plot = "离群异常轨迹 (>2σ)" if outlier_count == 1 else None
                     ax.plot(
                         x_grid, y_arr,
-                        color="#DC2626", linewidth=2.2, alpha=0.92,
+                        color="#DC2626", linewidth=2.2, alpha=0.90,
                         zorder=5, label=lbl_plot,
                     )
-                    # Annotate at peak deviation or curve tail
                     finite_idx = np.where(np.isfinite(y_arr))[0]
                     if finite_idx.size > 0:
                         if finite_z.size > 0:
                             peak_i = int(finite_idx[int(np.argmax(np.abs(y_arr[finite_idx] - med_y[finite_idx])))])
                         else:
                             peak_i = int(finite_idx[-1])
-                        ax.annotate(
-                            tag_text,
-                            xy=(float(x_grid[peak_i]), float(y_arr[peak_i])),
-                            xytext=(4, 4),
-                            textcoords="offset points",
-                            fontsize=8.0,
-                            fontweight="bold",
-                            color="#DC2626",
-                            zorder=6,
-                        )
+                        last_i = int(finite_idx[-1])
+                        pending_outlier_tags.append({
+                            "peak_x": float(x_grid[peak_i]),
+                            "peak_y": float(y_arr[peak_i]),
+                            "end_x": float(x_grid[last_i]),
+                            "end_y": float(y_arr[last_i]),
+                            "med_at_peak": float(med_y[peak_i]) if np.isfinite(med_y[peak_i]) else float(y_arr[peak_i]),
+                            "text": tag_text,
+                        })
                 else:
                     normal_count += 1
                     lbl_plot = "正常轨迹 (≤2σ)" if normal_count == 1 else None
@@ -961,7 +1301,6 @@ class ToneStatsAndQCPlottersMixin:
                         zorder=2, label=lbl_plot,
                     )
 
-            # Plot median reference and ±2σ envelope
             if np.any(np.isfinite(med_y)):
                 ax.plot(x_grid, med_y, color="#1E293B", linestyle="--", linewidth=1.5, alpha=0.85, zorder=4, label="组中位数包络")
                 ax.fill_between(x_grid, med_y - 2.0 * sigma, med_y + 2.0 * sigma, color="#CBD5E1", alpha=0.18, zorder=1)
@@ -969,6 +1308,118 @@ class ToneStatsAndQCPlottersMixin:
             if max_syls > 1:
                 for k in range(1, max_syls):
                     ax.axvline(k * num_points + 0.5, color="gray", linestyle="--", alpha=0.5)
+
+            # Set generous X/Y limits on ALL subplots (including right column!) so outlier labels never cross borders
+            right_margin_x = max(4.2, total_pts * 0.36) if pending_outlier_tags else 0.8
+            ax.set_xlim(0.35, float(total_pts) + right_margin_x)
+            ax.set_xticks([p for p in range(1, total_pts + 1) if total_pts <= 12 or p in (1, num_points // 2 + 1, num_points, num_points + 1, total_pts)])
+
+            if "T 值" in scale and not is_formant:
+                ax.set_ylim(-0.38, 5.38)
+                ax.set_yticks([0, 1, 2, 3, 4, 5])
+            else:
+                ylo_c, yhi_c = ax.get_ylim()
+                ysp_c = max(10.0, float(yhi_c - ylo_c))
+                ax.set_ylim(ylo_c - 0.10 * ysp_c, yhi_c + 0.14 * ysp_c)
+
+            # Non-overlapping outlier tag layout inside subplot boundaries
+            if pending_outlier_tags:
+                ylo_f, yhi_f = ax.get_ylim()
+                yspan_f = max(1e-3, float(yhi_f - ylo_f))
+                xlo_f, xhi_f = ax.get_xlim()
+                xspan_f = max(1e-3, float(xhi_f - xlo_f))
+                ax_w_pts = max(210.0, 5.0 * 72.0 * 0.80)
+                ax_h_pts = max(165.0, 4.1 * 72.0 * 0.76)
+
+                tail_tags = [t for t in pending_outlier_tags if t["peak_x"] >= total_pts - 2.2]
+                inner_tags = [t for t in pending_outlier_tags if t["peak_x"] < total_pts - 2.2]
+
+                # 1) Right-tail tags: stack & repel cleanly in the dedicated right margin (zero overlap, zero border crossing!)
+                if tail_tags:
+                    tail_tags_sorted = sorted(tail_tags, key=lambda d: d["end_y"])
+                    raw_tys = [d["end_y"] for d in tail_tags_sorted]
+                    rep_min = ylo_f + 0.08 * yspan_f
+                    rep_max = yhi_f - 0.08 * yspan_f
+                    min_gap_y = 0.095 * yspan_f
+                    # Simple 1D repulsion
+                    pos_y = list(raw_tys)
+                    n_t = len(pos_y)
+                    eff_g = min(min_gap_y, (rep_max - rep_min) / max(1, n_t))
+                    for _ in range(40):
+                        for k in range(n_t - 1):
+                            if pos_y[k + 1] - pos_y[k] < eff_g:
+                                mid_v = 0.5 * (pos_y[k] + pos_y[k + 1])
+                                pos_y[k] = mid_v - 0.5 * eff_g
+                                pos_y[k + 1] = mid_v + 0.5 * eff_g
+                        pos_y[0] = max(rep_min, pos_y[0])
+                        for k in range(1, n_t):
+                            pos_y[k] = max(pos_y[k], pos_y[k - 1] + eff_g)
+                        pos_y[-1] = min(rep_max, pos_y[-1])
+                        for k in range(n_t - 2, -1, -1):
+                            pos_y[k] = min(pos_y[k], pos_y[k + 1] - eff_g)
+                    pts_per_y = ax_h_pts / yspan_f
+                    for t_obj, adj_y in zip(tail_tags_sorted, pos_y):
+                        dy_pts = float((adj_y - t_obj["end_y"]) * pts_per_y)
+                        ax.annotate(
+                            t_obj["text"],
+                            xy=(t_obj["end_x"], t_obj["end_y"]),
+                            xytext=(6.0, dy_pts),
+                            textcoords="offset points",
+                            fontsize=7.3,
+                            fontweight="bold",
+                            color="#B91C1C",
+                            ha="left",
+                            va="center",
+                            zorder=7,
+                            bbox=dict(boxstyle="round,pad=0.14", fc="#FFFFFF", ec="#FCA5A5", lw=0.6, alpha=0.90),
+                            arrowprops=dict(arrowstyle="-", color="#DC2626", lw=0.65, alpha=0.65, shrinkA=0, shrinkB=2),
+                        )
+
+                # 2) Interior peak tags: repel in 2D point space away from curve, top/bottom ticks, and right spine
+                if inner_tags:
+                    boxes = []
+                    anchors = []
+                    for t_obj in inner_tags:
+                        px = (t_obj["peak_x"] - xlo_f) / xspan_f * ax_w_pts
+                        py = (t_obj["peak_y"] - ylo_f) / yspan_f * ax_h_pts
+                        txt_s = t_obj["text"]
+                        cw = sum(1.0 if ord(ch) > 127 else 0.55 for ch in txt_s)
+                        hw = max(24.0, 0.5 * cw * 7.3 + 5.0)
+                        hh = 7.8
+                        # Offset away from curve toward interior whitespace
+                        prefer_up = (t_obj["peak_y"] >= t_obj["med_at_peak"]) and (py + 2 * hh + 14.0 < ax_h_pts)
+                        by = (py + hh + 9.0) if prefer_up else (py - hh - 9.0)
+                        by = float(np.clip(by, hh + 8.0, ax_h_pts - hh - 10.0))
+                        bx = float(np.clip(px, hw + 6.0, ax_w_pts - hw - 8.0))
+                        anchors.append((px, py))
+                        boxes.append([bx, by, hw, hh])
+                    for _it in range(40):
+                        for i in range(len(boxes)):
+                            for j in range(i + 1, len(boxes)):
+                                ovx = (boxes[i][2] + boxes[j][2] + 4.0) - abs(boxes[j][0] - boxes[i][0])
+                                ovy = (boxes[i][3] + boxes[j][3] + 3.5) - abs(boxes[j][1] - boxes[i][1])
+                                if ovx > 0 and ovy > 0:
+                                    sgn = 1.0 if boxes[j][1] >= boxes[i][1] else -1.0
+                                    boxes[i][1] -= 0.52 * ovy * sgn
+                                    boxes[j][1] += 0.52 * ovy * sgn
+                        for i in range(len(boxes)):
+                            boxes[i][0] = float(np.clip(boxes[i][0], boxes[i][2] + 6.0, ax_w_pts - boxes[i][2] - 8.0))
+                            boxes[i][1] = float(np.clip(boxes[i][1], boxes[i][3] + 8.0, ax_h_pts - boxes[i][3] - 10.0))
+                    for t_obj, (apx, apy), (bx, by, _hw, _hh) in zip(inner_tags, anchors, boxes):
+                        ax.annotate(
+                            t_obj["text"],
+                            xy=(t_obj["peak_x"], t_obj["peak_y"]),
+                            xytext=(float(bx - apx), float(by - apy)),
+                            textcoords="offset points",
+                            fontsize=7.3,
+                            fontweight="bold",
+                            color="#B91C1C",
+                            ha="center",
+                            va="center",
+                            zorder=7,
+                            bbox=dict(boxstyle="round,pad=0.14", fc="#FFFFFF", ec="#FCA5A5", lw=0.6, alpha=0.90),
+                            arrowprops=dict(arrowstyle="-", color="#DC2626", lw=0.65, alpha=0.65, shrinkA=1, shrinkB=2),
+                        )
 
             sub_t = f"{g_name} - 组内个体原始曲线叠加 (离群={outlier_count})"
             ax.set_title(sub_t, fontsize=11, fontweight="bold")
@@ -978,17 +1429,21 @@ class ToneStatsAndQCPlottersMixin:
                 if is_formant:
                     ax.set_ylabel("F1 频率 (Hz)")
                 elif "T 值" in scale:
-                    ax.set_ylim(-0.2, 5.2)
-                    ax.set_yticks([0, 1, 2, 3, 4, 5])
                     ax.set_ylabel("T 值 (0-5 标度)")
                 else:
                     ax.set_ylabel("频率 (Hz)")
 
             handles, labels = ax.get_legend_handles_labels()
             if handles:
-                legend_kwargs = self._get_legend_kwargs()
-                legend_kwargs["fontsize"] = 8
-                ax.legend(**legend_kwargs)
+                # Enforce deterministic legend order across all subplots: normal -> median -> outlier!
+                order_rank = {"正常轨迹 (≤2σ)": 0, "组中位数包络": 1, "离群异常轨迹 (>2σ)": 2}
+                paired = sorted(zip(handles, labels), key=lambda hl: order_rank.get(hl[1], 99))
+                s_handles = [p[0] for p in paired]
+                s_labels = [p[1] for p in paired]
+                legend_kwargs = self._get_legend_kwargs(ax=ax, default_outside=False)
+                legend_kwargs["fontsize"] = 7.6
+                legend_kwargs["loc"] = "upper right"
+                ax.legend(s_handles, s_labels, **legend_kwargs)
 
         for idx in range(n_facets, len(axes_flat)):
             axes_flat[idx].set_visible(False)
@@ -1008,7 +1463,6 @@ class ToneStatsAndQCPlottersMixin:
             spk = entry.get('speaker_name', '默认发音人')
             ratio = entry.get('active_ratio')
             if ratio is None:
-                # Fallback for formant entries
                 raw_f1 = np.asarray(entry.get('raw_f1', []), dtype=float)
                 ratio = float(np.mean(np.isfinite(raw_f1) & (raw_f1 > 0))) if raw_f1.size > 0 else 1.0
             spk_data.setdefault(spk, []).append(float(ratio))
@@ -1035,7 +1489,7 @@ class ToneStatsAndQCPlottersMixin:
             ax.set_title(t_str, fontsize=11.5, fontweight="bold")
             ax._original_title = t_str
             ax.axhline(0.60, color="#EF4444", linestyle=":", label="常规建议的极低阈值 (60%)")
-            legend_kwargs = self._get_legend_kwargs()
+            legend_kwargs = self._get_legend_kwargs(ax=ax)
             legend_kwargs["fontsize"] = 8.5
             ax.legend(**legend_kwargs)
             ax.set_ylim(-0.05, 1.05)
@@ -1083,7 +1537,7 @@ class ToneStatsAndQCPlottersMixin:
         ax.set_ylabel("共振峰均值 Mean F1 (Hz)" if is_formant else "发音基频均值 Mean F0 (Hz)")
         handles, _ = ax.get_legend_handles_labels()
         if handles:
-            legend_kwargs = self._get_legend_kwargs()
+            legend_kwargs = self._get_legend_kwargs(ax=ax)
             legend_kwargs["fontsize"] = 8.5
             ax.legend(**legend_kwargs)
 
@@ -1184,7 +1638,6 @@ class ToneStatsAndQCPlottersMixin:
                 else:
                     normal_lines.append(seg)
 
-            from matplotlib.collections import LineCollection
             if normal_lines:
                 lc_norm = LineCollection(normal_lines, colors="#94A3B8", linewidths=1.0, alpha=0.45)
                 ax.add_collection(lc_norm)
@@ -1209,36 +1662,18 @@ class ToneStatsAndQCPlottersMixin:
             else:
                 ax.set_ylabel("频率 (Hz)")
 
-            legend_kwargs = self._get_legend_kwargs()
+            legend_kwargs = self._get_legend_kwargs(ax=ax)
             ax.legend(**legend_kwargs)
-            if self.get_param('legend_outside', False):
-                loc_val = self.get_param('legend_loc', '右上')
-                if "右" in loc_val:
-                    fig.subplots_adjust(right=0.82)
-                elif "left" in loc_val or "左" in loc_val:
-                    fig.subplots_adjust(left=0.18)
             return fig
 
         elif view == "active_ratio":
             fig, ax = plt.subplots(figsize=(8, 5))
             self._draw_active_ratio_panel(ax, data_entries)
-            if self.get_param('legend_outside', False):
-                loc_val = self.get_param('legend_loc', '右上')
-                if "右" in loc_val:
-                    fig.subplots_adjust(right=0.82)
-                elif "left" in loc_val or "左" in loc_val:
-                    fig.subplots_adjust(left=0.18)
             return fig
 
         elif view == "speaker_means":
             fig, ax = plt.subplots(figsize=(9, 5))
             self._draw_speaker_range_panel(ax, data_entries)
-            if self.get_param('legend_outside', False):
-                loc_val = self.get_param('legend_loc', '右上')
-                if "右" in loc_val:
-                    fig.subplots_adjust(right=0.82)
-                elif "left" in loc_val or "左" in loc_val:
-                    fig.subplots_adjust(left=0.18)
             return fig
 
         fig, ax = plt.subplots()
@@ -1254,7 +1689,6 @@ class ToneStatsAndQCPlottersMixin:
         y_val = float(event.ydata)
         x_val = float(event.xdata) if getattr(event, "xdata", None) is not None else 0.0
 
-        # 1) 热图模式 (含 row_index)
         if any("row_index" in item for item in hover_meta):
             row_idx = int(round(y_val))
             col_idx = max(0, int(round(x_val)))
@@ -1263,7 +1697,6 @@ class ToneStatsAndQCPlottersMixin:
                     return item, col_idx
             return None, col_idx
 
-        # 2) Spaghetti 原始曲线叠加模式 (按所属子图与最近采样点 Y 距离匹配，优先命中离群红线)
         col_idx = max(0, int(round(x_val)) - 1)
         candidates = [it for it in hover_meta if it.get("ax") is None or it.get("ax") is event.inaxes]
         if not candidates:
@@ -1280,7 +1713,6 @@ class ToneStatsAndQCPlottersMixin:
             if v is None or not np.isfinite(v):
                 continue
             dist = abs(float(v) - y_val)
-            # 离群曲线给予优先权重，方便点击红色离群轨迹
             score = dist * (0.55 if item.get("is_outlier") or item.get("is_anomaly") else 1.0)
             if score < best_score:
                 best_score = score
@@ -1290,14 +1722,12 @@ class ToneStatsAndQCPlottersMixin:
 
     def locate_qc_item_in_project_tree(self, item_id, speaker_name=None, label=None):
         """
-        阶段 A 质检交互闭环：在质检图表中发现异常词条后，直接定位并选中主程序工程树对应词条，
-        支持跨发音人自动切换与分组展开。
+        阶段 A 质检交互闭环：在质检图表中发现异常词条后，直接定位并选中主程序工程树对应词条。
         """
         pt = getattr(self, "project_tree", None)
         if pt is None:
             return False
 
-        # 若指定了发音人且与当前发音人不同，尝试通过主程序切换发音人
         if speaker_name and getattr(self, "app", None) is not None:
             sm = getattr(self.app, "speaker_manager", None)
             speakers = list(getattr(self, "all_speakers", None) or [])

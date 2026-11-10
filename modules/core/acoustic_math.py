@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """
 PhonTracer 基础声学数学与统计计算核心模块 (Layer 0 - 零业务与零 GUI 依赖)
-包含五度值基频上下限计算、Hz<->T值换算、五度值整型编码拟合、安全 NaN 统计、2D 凸包面积与 Pillai-Bartlett 迹计算。
+包含五度值基频上下限计算、Hz<->T值换算、五度值整型编码拟合、安全 NaN 统计、
+纯 NumPy 回退的高斯核密度估计 (1D/2D KDE)、2D 凸包面积与 Pillai-Bartlett 迹计算。
 """
 from __future__ import annotations
 
@@ -13,7 +14,7 @@ import numpy as np
 
 try:
     from scipy.spatial import ConvexHull
-except ImportError:
+except Exception:
     ConvexHull = None
 
 DEFAULT_F0_BOUNDS: Tuple[float, float] = (75.0, 600.0)
@@ -25,16 +26,6 @@ def compute_speaker_f0_bounds(
 ) -> Tuple[float, float]:
     """
     权威统一的发音人五度值基频上下限 (f_min, f_max) 计算函数。
-
-    Parameters
-    ----------
-    f0_values : Iterable[float] or Dict[str, Iterable[float]]
-        发音人有效基频采样序列，或按调类分组的基频字典。
-    method : str
-        - "p5_p95_iqr" (默认): 样本数 >= 16 时先以 1.5*IQR 剔除八度跳变等离群点，再取 5%–95% 分位数；
-          极小样本 (< 16) 回退为绝对极值 min/max。
-        - "raw_minmax": 直接使用有效正值的绝对极值 (min, max)。
-        - "group_mean_minmax": 按各组均值曲线的极值计算。
     """
     if method == "group_mean_minmax" and isinstance(f0_values, dict):
         group_vals = []
@@ -271,6 +262,168 @@ def _safe_nanmax(arr, default=np.nan):
     a = np.asarray(arr, dtype=float)
     valid = a[np.isfinite(a)]
     return float(np.max(valid)) if valid.size > 0 else default
+
+
+def evaluate_1d_kde(values, y_grid, bw_method: float = 0.32):
+    """
+    Evaluate 1D Gaussian KDE on `y_grid`, preferring scipy.stats.gaussian_kde
+    and falling back to a pure-NumPy Gaussian kernel sum if scipy Cython extensions fail.
+    """
+    vals = np.asarray(values, dtype=float).ravel()
+    vals = vals[np.isfinite(vals)]
+    grid = np.asarray(y_grid, dtype=float).ravel()
+    if vals.size < 2 or grid.size == 0:
+        return np.zeros_like(grid, dtype=float)
+
+    try:
+        from scipy.stats import gaussian_kde
+        kde = gaussian_kde(vals, bw_method=bw_method)
+        res = np.asarray(kde(grid), dtype=float)
+        if np.all(np.isfinite(res)):
+            return res
+    except Exception:
+        pass
+
+    n = float(vals.size)
+    std_v = float(np.std(vals, ddof=1)) if vals.size > 1 else float(np.std(vals))
+    if not np.isfinite(std_v) or std_v <= 1e-8:
+        return np.zeros_like(grid, dtype=float)
+    factor = float(bw_method) if isinstance(bw_method, (int, float)) else (n ** (-0.2))
+    h = max(1e-6, factor * std_v)
+    diff = (grid[:, None] - vals[None, :]) / h
+    dens = np.mean(np.exp(-0.5 * diff * diff), axis=1) / (math.sqrt(2.0 * math.pi) * h)
+    return dens
+
+
+def evaluate_2d_kde_grid(
+    x_samples,
+    y_samples,
+    grid_x_2d,
+    grid_y_2d,
+    bw_method: float = 0.15,
+    weights=None,
+):
+    """
+    Evaluate 2D Gaussian KDE over meshgrid `(grid_x_2d, grid_y_2d)` (`shape=(nx, ny)` or `(ny, nx)`).
+    Uses `scipy.stats.gaussian_kde` when available, and seamlessly falls back to a pure-NumPy
+    2D binned Gaussian convolution / direct Gaussian kernel evaluation when scipy Cython
+    modules (e.g. `numpy.core.multiarray` or `_ufuncs_cxx`) are unavailable or covariance is singular.
+    """
+    xs = np.asarray(x_samples, dtype=float).ravel()
+    ys = np.asarray(y_samples, dtype=float).ravel()
+    gx = np.asarray(grid_x_2d, dtype=float)
+    gy = np.asarray(grid_y_2d, dtype=float)
+    if xs.size < 3 or ys.size != xs.size or gx.size == 0:
+        return np.zeros(gx.shape, dtype=float)
+
+    if weights is not None:
+        ws = np.asarray(weights, dtype=float).ravel()
+        valid = np.isfinite(xs) & np.isfinite(ys) & np.isfinite(ws) & (ws > 0)
+        xs, ys, ws = xs[valid], ys[valid], ws[valid]
+    else:
+        ws = None
+        valid = np.isfinite(xs) & np.isfinite(ys)
+        xs, ys = xs[valid], ys[valid]
+
+    if xs.size < 3:
+        return np.zeros(gx.shape, dtype=float)
+
+    try:
+        from scipy.stats import gaussian_kde
+        pts = np.vstack([xs, ys])
+        kde = gaussian_kde(pts, bw_method=bw_method, weights=ws)
+        eval_pts = np.vstack([gx.ravel(), gy.ravel()])
+        zi = kde(eval_pts).reshape(gx.shape)
+        if np.any(np.isfinite(zi)) and float(np.nanmax(zi)) > 0:
+            return np.nan_to_num(zi, nan=0.0, posinf=0.0, neginf=0.0)
+    except Exception:
+        pass
+
+    # Pure-NumPy fallback: weighted covariance / separable binned Gaussian smoothing
+    if ws is None:
+        w_norm = np.full(xs.size, 1.0 / float(xs.size), dtype=float)
+        n_eff = float(xs.size)
+    else:
+        w_sum = float(np.sum(ws))
+        if w_sum <= 1e-12:
+            return np.zeros(gx.shape, dtype=float)
+        w_norm = ws / w_sum
+        n_eff = max(2.0, 1.0 / max(1e-12, float(np.sum(w_norm * w_norm))))
+
+    mx = float(np.sum(w_norm * xs))
+    my = float(np.sum(w_norm * ys))
+    sx = math.sqrt(max(1e-8, float(np.sum(w_norm * (xs - mx) ** 2))))
+    sy = math.sqrt(max(1e-8, float(np.sum(w_norm * (ys - my) ** 2))))
+
+    scott = n_eff ** (-1.0 / 6.0)
+    bw = float(bw_method) if isinstance(bw_method, (int, float)) else scott
+    hx = max(1e-5, bw * sx)
+    hy = max(1e-5, bw * sy)
+
+    # Fast 2D histogram + separable Gaussian blur on regular grids, or chunked direct evaluation
+    if xs.size <= 2500 and gx.size <= 12000:
+        out_flat = np.zeros(gx.size, dtype=float)
+        gx_f = gx.ravel()
+        gy_f = gy.ravel()
+        norm_const = 1.0 / (2.0 * math.pi * hx * hy)
+        chunk = 512
+        for start in range(0, xs.size, chunk):
+            end = min(xs.size, start + chunk)
+            dx = (gx_f[:, None] - xs[None, start:end]) / hx
+            dy = (gy_f[:, None] - ys[None, start:end]) / hy
+            kern = np.exp(-0.5 * (dx * dx + dy * dy))
+            out_flat += kern @ w_norm[start:end]
+        return (out_flat * norm_const).reshape(gx.shape)
+
+    # Binned separable convolution for large point clouds
+    x_min, x_max = float(np.min(gx)), float(np.max(gx))
+    y_min, y_max = float(np.min(gy)), float(np.max(gy))
+    # Determine grid orientation: mgrid (axis 0 varies x) vs meshgrid (axis 1 varies x)
+    axis0_is_x = gx.ndim == 2 and abs(gx[-1, 0] - gx[0, 0]) >= abs(gx[0, -1] - gx[0, 0])
+    nx = gx.shape[0] if axis0_is_x else gx.shape[1]
+    ny = gx.shape[1] if axis0_is_x else gx.shape[0]
+    x_edges = np.linspace(x_min, x_max, nx + 1)
+    y_edges = np.linspace(y_min, y_max, ny + 1)
+    hist, _, _ = np.histogram2d(xs, ys, bins=[x_edges, y_edges], weights=w_norm, density=True)
+
+    dx_step = max(1e-8, (x_max - x_min) / max(1, nx - 1))
+    dy_step = max(1e-8, (y_max - y_min) / max(1, ny - 1))
+    sig_x = max(0.6, hx / dx_step)
+    sig_y = max(0.6, hy / dy_step)
+
+    def _blur_axis0(mat, sigma_px):
+        rad = min(max(2, int(math.ceil(3.0 * sigma_px))), 48)
+        offs = np.arange(-rad, rad + 1, dtype=float)
+        k = np.exp(-0.5 * (offs / sigma_px) ** 2)
+        k /= np.sum(k)
+        padded = np.pad(mat, ((rad, rad), (0, 0)), mode="edge")
+        out = np.zeros_like(mat, dtype=float)
+        for i, kv in enumerate(k):
+            out += kv * padded[i : i + mat.shape[0], :]
+        return out
+
+    smoothed = _blur_axis0(hist, sig_x)
+    smoothed = _blur_axis0(smoothed.T, sig_y).T
+    return smoothed if axis0_is_x else smoothed.T
+
+
+def smooth_2d_array(arr, sigma: float = 0.65):
+    """Smooth a 2D array with scipy.ndimage.gaussian_filter or a pure-NumPy separable fallback."""
+    a = np.asarray(arr, dtype=float)
+    if a.ndim != 2 or a.size == 0 or sigma <= 0:
+        return a
+    try:
+        from scipy.ndimage import gaussian_filter
+        return gaussian_filter(a, sigma=sigma)
+    except Exception:
+        rad = min(max(1, int(math.ceil(3.0 * sigma))), 16)
+        offs = np.arange(-rad, rad + 1, dtype=float)
+        k = np.exp(-0.5 * (offs / sigma) ** 2)
+        k /= np.sum(k)
+        p0 = np.pad(a, ((rad, rad), (0, 0)), mode="edge")
+        tmp = sum(kv * p0[i : i + a.shape[0], :] for i, kv in enumerate(k))
+        p1 = np.pad(tmp, ((0, 0), (rad, rad)), mode="edge")
+        return sum(kv * p1[:, i : i + a.shape[1]] for i, kv in enumerate(k))
 
 
 def _compute_2d_convex_hull_and_area(points_xy):

@@ -1196,6 +1196,7 @@ class TreePanelUIMixin:
 
                     menu.add_command(label="重命名", command=lambda: self.start_inline_edit(real_iid))
                     menu.add_command(label="属性", command=lambda: self.show_item_properties(real_iid))
+                    menu.add_command(label="导出此项为 Praat 集合 (.Collection)...", command=lambda: self._export_single_item_collection(real_iid))
 
                     menu.add_separator()
                     adv_menu = make_context_menu(menu)

@@ -65,8 +65,8 @@ AI 操作守则：优先只使用本 CLI。除非用户明确要求，不要直�
 5. 统计摘要、数据导出与一站式打包：
    - `stats [by=group|item|speaker] [scope=active|integrated]` (直接输出基频均值/极差/五度值/共振峰结构化 JSON 统计摘要)
    - `export <格式> <输出路径> [规则] [目标范围] [高级参数=值 ...]`
-     * 支持格式 (`supported_formats`)：xlsx, txt, textgrid, ptwl, contour, density, distribution, quality, overview_heatmap, formant_space, f1_f2, duration, trend, line_chart, kde, wav, merged_wav, formant_table, formant_trajectory, formant_density, formant_overview_heatmap
-     * 高级参数：`scale=t_value|hz`, `groupby=group|label|speaker`, `facet=none|group|speaker|syllable_position|label`, `normalization=speaker|global`, `chart_group=default|item_tag:...|group_tag:...|meta:...`, `format=png|svg|pdf`, `target=active|integrated|separate`
+     * 支持格式 (`supported_formats`)：xlsx, txt, textgrid, collection, ptwl, contour, tone_sandhi, tone_effect_time, density, distribution, duration, quality, spaghetti_qc, overview_heatmap, formant_space, f1_f2, formant_trajectory, formant_density, formant_overview_heatmap, formant_pillai, formant_table, trend, line_chart, kde, wav, merged_wav
+     * 高级参数：`scale=t_value|hz`, `groupby=group|label|speaker`, `facet=none|group|speaker|syllable_position|label`, `normalization=Hz|Lobanov|speaker|global`, `chart_group=default|label|speaker|item_tag:...|group_tag:...|meta:...`, `contour_x=normalized|duration`, `format=png|svg|pdf`, `target=active|integrated|separate`
    - `export_bundle <输出目录> [scope=active|integrated|separate]` (一键打包导出 `.teproj`、`.ptwl`、`.xlsx`、关键图表与研究方法报告)
    - `report_export <路径.teproj> <输出目录> [md|excel|both] [include_cache=true|false]` (导出项目研究方法报告与科学数据档案)
 
@@ -166,8 +166,8 @@ change project data. Use `status`, `list_items`, and `agent_guide` to orient fir
 5. Statistical Summary, Export & One-Step Bundle:
    - `stats [by=group|item|speaker] [scope=active|integrated]` (output structured JSON summary of F0 mean/sd/range/T-values/formants)
    - `export <format> <output_file> [rule] [target] [key=val ...]`
-     * supported_formats: xlsx, txt, textgrid, ptwl, contour, density, distribution, quality, overview_heatmap, formant_space, f1_f2, duration, trend, line_chart, kde, wav, merged_wav, formant_table, formant_trajectory, formant_density, formant_overview_heatmap
-     * key=value options: `scale=t_value|hz`, `groupby=group|label|speaker`, `facet=none|group|speaker|syllable_position|label`, `normalization=speaker|global`, `chart_group=default|item_tag:...|group_tag:...|meta:...`, `format=png|svg|pdf`, `target=active|integrated|separate`
+     * supported_formats: xlsx, txt, textgrid, collection, ptwl, contour, tone_sandhi, tone_effect_time, density, distribution, duration, quality, spaghetti_qc, overview_heatmap, formant_space, f1_f2, formant_trajectory, formant_density, formant_overview_heatmap, formant_pillai, formant_table, trend, line_chart, kde, wav, merged_wav
+     * key=value options: `scale=t_value|hz`, `groupby=group|label|speaker`, `facet=none|group|speaker|syllable_position|label`, `normalization=Hz|Lobanov|speaker|global`, `chart_group=default|label|speaker|item_tag:...|group_tag:...|meta:...`, `contour_x=normalized|duration`, `format=png|svg|pdf`, `target=active|integrated|separate`
    - `export_bundle <out_dir> [scope=active|integrated|separate]` (one-step bundle export of `.teproj`, `.ptwl`, `.xlsx`, charts, and research report)
    - `report_export <path.teproj> <out_dir> [md|excel|both] [include_cache=true|false]` (export research methodologies reports and data archives)
 
@@ -248,17 +248,18 @@ class CLIHelpMixin:
     @staticmethod
     def _get_subcommand_help_catalog():
         supported_export_formats = [
-            "xlsx", "txt", "textgrid", "ptwl",
-            "contour", "density", "distribution", "quality", "overview_heatmap",
-            "formant_space", "f1_f2", "duration", "trend",
-            "line_chart", "kde", "wav", "merged_wav",
-            "formant_table", "formant_trajectory", "formant_density", "formant_overview_heatmap"
+            "xlsx", "txt", "textgrid", "collection", "ptwl",
+            "contour", "tone_sandhi", "tone_effect_time", "density", "distribution",
+            "duration", "quality", "spaghetti_qc", "overview_heatmap",
+            "formant_space", "f1_f2", "formant_trajectory", "formant_density",
+            "formant_overview_heatmap", "formant_pillai", "formant_table",
+            "trend", "line_chart", "kde", "wav", "merged_wav"
         ]
         catalog = {
             "export": {
                 "command": "export",
                 "usage": "export <format> <output_file_or_dir> [rule] [target] [key=value ...]",
-                "description": "导出声学数据表（xlsx/txt）、标注文件（textgrid）、高级字表（ptwl）或科研图表（contour/density/distribution/quality/overview_heatmap/formant_space/f1_f2/duration/trend 等）。",
+                "description": "导出声学数据表（xlsx/txt/formant_table）、标注文件（textgrid）、Praat 工程集合（collection）、高级字表（ptwl）或科研图表（contour/tone_sandhi/tone_effect_time/density/distribution/duration/quality/spaghetti_qc/overview_heatmap/formant_space/f1_f2/formant_trajectory/formant_density/formant_overview_heatmap/formant_pillai 等）。其中 duration 为各组/各词项音节物理时长对比图；若需绘制以物理时长为横轴的基频曲线，请使用 export contour ... contour_x=duration。",
                 "supported_formats": supported_export_formats,
                 "positional_args": {
                     "format": "导出格式枚举（见 supported_formats）",
@@ -269,26 +270,32 @@ class CLIHelpMixin:
                 "key_value_options": {
                     "target": "active | integrated | separate（同位置参数 target / export_scope）",
                     "scale": "t_value（五度值 0-5，默认）| hz（原始赫兹频率）",
-                    "groupby": "group（按声调/组别，默认）| label（按词语）| speaker（按发音人）",
+                    "groupby": "group（按声调/组别，默认）| label（按词语）| speaker（按发音人）| item_tag:<标签> | group_tag:<组标签> | meta:<自定义字段名>",
                     "facet": "none（单图不分面）| group（按声调类型分面）| speaker（按发音人分面）| syllable_position（按音节位置分面）| label（按词项分面）",
-                    "normalization": "speaker（按发音人归一化，推荐多发音人密度图使用）| global（全局归一化）| Hz | Lobanov",
+                    "normalization": "Hz | Lobanov | Bark | ERB | Mel（共振峰归一化）| speaker | global（多发音人声调密度归一化）",
                     "chart_group": "default | label | speaker | review | item_tag:<标签1,标签2> | group_tag:<组标签> | contains_item_tag:<标签> | filter_item_tag:<标签> | meta:<自定义字段名>",
                     "format": "png（默认）| svg | pdf",
-                    "contour_x": "normalized（归一化采样点）| duration（真实物理时长）",
+                    "contour_x": "normalized（归一化采样点）| duration（真实物理时长横轴基频曲线）",
                     "contour_content": "average（仅均值曲线）| average_individual（均值+个体浅色细线）| average_sd_ci（均值+标准差/置信区间阴影）",
-                    "dist_type": "boxplot_violin | start_mid_end | range | variability",
-                    "dist_style": "boxplot | violinplot",
+                    "dist_type": "boxplot_violin | start_mid_end | range | variability | duration",
+                    "dist_style": "raincloud | boxplot | violinplot",
                     "density_bw": "核密度带宽浮点数（默认 0.15）",
                     "overview_metric": "mean（均值热图）| sd（标准差热图）| combination（调类组合热图）",
                     "overview_show_deviation": "true | false（是否显示与组均值的偏差）",
+                    "sandhi_subview": "grid（二字组变调分面方阵，默认）| matrix（组合特征矩阵）| eta2（效应时间进程）",
+                    "pillai_subview": "matrix（Pillai 重叠度与欧氏距离矩阵，默认）| raincloud（元音动程与时长雨云分布）",
                 },
                 "examples": [
                     "export xlsx out.xlsx continuous integrated",
                     "export ptwl upgraded.ptwl",
                     "export contour tone_contour.svg target=integrated scale=t_value groupby=group facet=none format=svg",
+                    "export contour tone_phys_dur.png target=integrated scale=t_value groupby=group contour_x=duration",
+                    "export duration syllable_duration.png target=integrated groupby=group",
+                    "export tone_sandhi sandhi_grid.png target=integrated scale=t_value",
                     "export density tone_density.png target=integrated normalization=speaker facet=group",
-                    "export formant_space vowel_space.png target=integrated groupby=group",
-                    "export overview_heatmap overview.png target=integrated groupby=label",
+                    "export formant_space vowel_space_lobanov.png target=integrated groupby=label normalization=Lobanov",
+                    "export formant_pillai vowel_pillai.png target=integrated groupby=label normalization=Lobanov",
+                    "export overview_heatmap overview.png target=integrated groupby=label overview_metric=mean",
                 ],
             },
             "speakers": {
@@ -406,7 +413,7 @@ class CLIHelpMixin:
             "detect_formants": {
                 "command": "detect_formants",
                 "usage": "detect_formants [--apply|--no-apply] [preset=recommended|conservative|high_resolution|reco|anti|fine]",
-                "description": "自动评估当前发音人样本的共振峰追踪质量评分，给出推荐档 (recommended/reco)、保守复核档 (conservative/anti)、高分辨率档 (high_resolution/fine) 三档参数并支持直接应用。",
+                "description": "结合发音人中位基频生理声道先验，自动评估当前发音人样本的共振峰追踪质量评分，给出推荐档 (recommended/reco)、保守复核档 (conservative/anti)、高分辨率档 (high_resolution/fine) 三档参数并支持直接应用。",
                 "supported_formats": ["recommended", "conservative", "high_resolution", "reco", "anti", "fine"],
                 "key_value_options": {
                     "apply": "true（默认自动应用）| false（或传入 --no-apply 仅预览建议）",
@@ -585,7 +592,7 @@ class CLIHelpMixin:
                 "fix_warnings": "fix_warnings [--apply] [scope=active|all]  # 自动诊断并修复倍频跳变(octave_jump)、低覆盖率(low_f0_coverage)、过短音段等警告",
                 "stats": "stats [by=group|item|speaker] [scope=active|integrated] [out=<path.json|path.md>]  # 直接返回并可落盘样本数、时长、首/中/尾F0、极差、均值±SD、五度值T值轨迹与编码(如55/35/214/51)及共振峰均值",
                 "export_bundle": "export_bundle <out_dir> [scope=active|integrated|separate] [format=png|svg] [title=<name>]  # 【首选一键全量导出】一次生成 .teproj、.ptwl、acoustic_data.xlsx、acoustic_points.txt、acoustic_stats.json、charts/(contour/distribution/density/quality/overview_heatmap/formant_space) 与 report/(研究方法报告.md 含核心声学指标分组统计摘要表)",
-                "export": "export <format> <output_file> [continuous|per_group] [active|integrated|separate] [key=val ...]  # 单项导出；formats: xlsx, txt, textgrid, ptwl, contour, density, distribution, quality, overview_heatmap, tone_effect_time, formant_space, f1_f2, duration, trend, line_chart, kde, wav, merged_wav, formant_table, formant_trajectory, formant_density, formant_overview_heatmap；options: scale=t_value|hz, groupby=group|label|speaker, facet=none|group|speaker|syllable_position|label, normalization=speaker|global, chart_group=default|item_tag:...|group_tag:...|meta:..., format=png|svg|pdf, target=active|integrated|separate",
+                "export": "export <format> <output_file> [continuous|per_group] [active|integrated|separate] [key=val ...]  # 单项导出；formats: xlsx, txt, textgrid, collection, ptwl, contour, tone_sandhi, tone_effect_time, density, distribution, duration, quality, spaghetti_qc, overview_heatmap, formant_space, f1_f2, formant_trajectory, formant_density, formant_overview_heatmap, formant_pillai, formant_table, trend, line_chart, kde, wav, merged_wav；options: scale=t_value|hz, groupby=group|label|speaker, facet=none|group|speaker|syllable_position|label, normalization=Hz|Lobanov|speaker|global, chart_group=default|label|speaker|item_tag:...|group_tag:...|meta:..., contour_x=normalized|duration, format=png|svg|pdf, target=active|integrated|separate",
                 "report_export": "report_export <path.teproj> <out_dir> [format=md|excel|both] [include_cache=true|false]  # 导出含核心声学指标分组统计摘要表的 研究方法报告.md 与研究档案 Excel",
             },
             supported_commands=[

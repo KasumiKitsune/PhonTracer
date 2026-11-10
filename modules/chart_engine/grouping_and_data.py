@@ -18,7 +18,7 @@ matplotlib.use("Agg", force=True)
 import matplotlib.pyplot as plt
 
 from modules.core.acoustic_math import hz_to_t_value
-from modules.data_utils import split_into_syllables
+from modules.data_utils import get_item_syllable_bounds, split_into_syllables
 
 
 class ChartDataGroupingMixin:
@@ -141,6 +141,82 @@ class ChartDataGroupingMixin:
         return data_entries
 
 
+    def _extract_duration_only_entries(self, speakers_list, filter_groups=True, apply_chart_grouping=True):
+        """
+        提取各音节物理时长条目，不强制依赖 pitch_data 或 formant_data（只要存在有效时间边界即可绘制 export duration）。
+        """
+        num_points = int(self.project_tree.app_state_params.get('pts', 11))
+        entries = []
+        for speaker in speakers_list or []:
+            if speaker is None:
+                continue
+            orig_items = self.project_tree.items
+            try:
+                self.project_tree.items = speaker.items
+                s_struct = self.project_tree._get_items_by_group_for_dict(speaker.items)
+                for grp_name, children in s_struct:
+                    for child in children:
+                        item = speaker.items[child]
+                        if item.get("is_excluded", False) or item.get("missing", False):
+                            continue
+                        bounds = get_item_syllable_bounds(item)
+                        if not bounds:
+                            s_v, e_v = item.get("start"), item.get("end")
+                            if s_v is not None and e_v is not None and float(e_v) > float(s_v):
+                                bounds = [(float(s_v), float(e_v))]
+                        if not bounds:
+                            continue
+                        syl_durs = [max(0.0, float(b[1]) - float(b[0])) for b in bounds if float(b[1]) > float(b[0])]
+                        total_dur = float(sum(syl_durs))
+                        if total_dur <= 0:
+                            continue
+                        label = item.get("label", "")
+                        syls = split_into_syllables(label)
+                        syl_data = [(d, [np.nan] * num_points) for d in syl_durs]
+                        syl_formants = [
+                            {
+                                "syllable_index": idx_s,
+                                "char": syls[idx_s] if idx_s < len(syls) else f"字{idx_s + 1}",
+                                "bounds": [float(bounds[idx_s][0]), float(bounds[idx_s][1])],
+                                "times": [],
+                                "f1": [],
+                                "f2": [],
+                                "f3": [],
+                            }
+                            for idx_s in range(len(syl_durs))
+                        ]
+                        entries.append(
+                            self._attach_entry_group_defaults({
+                                "item_id": str(child),
+                                "speaker_name": speaker.name,
+                                "group": grp_name,
+                                "wordlist_group": grp_name,
+                                "chart_group": grp_name,
+                                "label": label,
+                                "total_dur": total_dur,
+                                "syl_data": syl_data,
+                                "normalized_syl_data": syl_data,
+                                "syl_formants": syl_formants,
+                                "warnings": item.get("warnings", []),
+                                "raw_item": item,
+                                **self._item_wordlist_metadata(item),
+                            })
+                        )
+            finally:
+                self.project_tree.items = orig_items
+
+        if apply_chart_grouping:
+            entries = self._apply_chart_grouping(entries)
+        if filter_groups:
+            selected_groups = self.get_param('selected_groups', None)
+            if selected_groups is not None:
+                if isinstance(selected_groups, str):
+                    selected_groups = [g.strip() for g in selected_groups.split(',') if g.strip()]
+                selected_groups = set(selected_groups)
+                entries = [e for e in entries if e['group'] in selected_groups]
+        return entries
+
+
     def _get_current_data_entries(self):
         scope = self.get_param('export_scope', 'active')
         if scope == "active" or not self.all_speakers:
@@ -163,6 +239,19 @@ class ChartDataGroupingMixin:
             raw = runtime_params.get("color_by") or runtime_params.get("groupby")
         if raw is None and hasattr(self, "params") and isinstance(self.params, dict):
             raw = self.params.get("color_by") or self.params.get("groupby")
+        if raw is None:
+            # Check explicit chart_group_rule if groupby was not passed directly
+            explicit_rule = None
+            if runtime_params is not None and "chart_group_rule" in runtime_params:
+                explicit_rule = runtime_params.get("chart_group_rule")
+            elif hasattr(self, "params") and isinstance(self.params, dict) and "chart_group_rule" in self.params:
+                explicit_rule = self.params.get("chart_group_rule")
+            if isinstance(explicit_rule, dict):
+                src = explicit_rule.get("source")
+                if src == "label":
+                    raw = "label"
+                elif src == "speaker_name":
+                    raw = "speaker"
         if raw is None and fallback is not None:
             raw = fallback
         if raw is None:
@@ -176,7 +265,7 @@ class ChartDataGroupingMixin:
         raw = None
         runtime_params = getattr(getattr(self, "_render_runtime", None), "params", None)
         if runtime_params is not None:
-            raw = runtime_params.get("facet_by") or runtime_params.get("layout")
+            raw = runtime_params.get("facet_by") or runtime_params.get("facet") or runtime_params.get("layout")
             if raw is None:
                 if chart_type in ("contour", None):
                     raw = runtime_params.get("contour_facet")
@@ -185,7 +274,7 @@ class ChartDataGroupingMixin:
                 elif chart_type in ("formant_space", "formant_density"):
                     raw = runtime_params.get("formant_density_facet")
         if raw is None and hasattr(self, "params") and isinstance(self.params, dict):
-            raw = self.params.get("facet_by") or self.params.get("layout")
+            raw = self.params.get("facet_by") or self.params.get("facet") or self.params.get("layout")
             if raw is None:
                 if chart_type in ("contour", None):
                     raw = self.params.get("contour_facet")
@@ -229,7 +318,7 @@ class ChartDataGroupingMixin:
             return 'speaker_name'
         if low in ("按单字音节", "按单字/音节", "syl_char", "syllable", "char") or "单字" in val or "音节" in val:
             return 'syl_char'
-        if low.startswith("custom") or low.startswith("item_meta") or "自定义字段" in val:
+        if low.startswith("custom") or low.startswith("item_meta") or low.startswith("meta:") or "自定义字段" in val:
             return 'custom_field'
         return 'group'
 
@@ -249,10 +338,8 @@ class ChartDataGroupingMixin:
         for idx, entry in enumerate(data_entries):
             e = dict(entry)
             e.setdefault("item_id", str(entry.get("item_id", f"item_{idx}")))
-            # Populate syl_char
             syls = split_into_syllables(e.get("label", ""))
             e.setdefault("syl_char", syls[0] if syls else (e.get("label") or e.get("group") or "未标注"))
-            # Populate custom_field
             meta = e.get("item_meta") if isinstance(e.get("item_meta"), dict) else {}
             if custom_field_name and custom_field_name in meta:
                 e["custom_field"] = str(meta[custom_field_name] or "未标注")
@@ -302,9 +389,40 @@ class ChartDataGroupingMixin:
         }
 
 
+    def _parse_groupby_string_to_rule(self, raw_str):
+        text = str(raw_str or "").strip()
+        if not text:
+            return None
+        low = text.lower()
+        if low in ("default", "group", "原始组", "默认组", "按字表组别", "按组别"):
+            return {"source": "default", "tag_mode": "each", "selected_values": [], "field_name": ""}
+        if low in ("label", "word", "词项", "词语", "按词语", "按词项"):
+            return {"source": "label", "tag_mode": "each", "selected_values": [], "field_name": ""}
+        if low in ("speaker", "speaker_name", "发音人", "按发音人"):
+            return {"source": "speaker_name", "tag_mode": "each", "selected_values": [], "field_name": ""}
+        if low in ("review", "metadata_source", "复核状态", "按复核状态"):
+            return {"source": "metadata_source", "tag_mode": "each", "selected_values": [], "field_name": ""}
+        if ":" in text:
+            prefix, rest = text.split(":", 1)
+            p_low = prefix.strip().lower().replace("-", "_")
+            rest = rest.strip()
+            vals = [v.strip() for v in rest.replace("；", ",").replace("、", ",").split(",") if v.strip()]
+            if p_low in ("item_tag", "item_tags", "tag", "tags", "词项标签", "标签"):
+                return {"source": "item_tags", "tag_mode": "each", "selected_values": vals, "field_name": ""}
+            if p_low in ("group_tag", "group_tags", "组标签"):
+                return {"source": "group_tags", "tag_mode": "each", "selected_values": vals, "field_name": ""}
+            if p_low in ("meta", "field", "item_meta", "custom", "自定义字段", "按自定义字段", "字段"):
+                return {"source": "item_meta", "tag_mode": "each", "selected_values": [], "field_name": rest}
+        return None
+
+
     def _normalize_chart_group_rule(self, rule=None):
         base = self._default_chart_group_rule()
-        if isinstance(rule, dict):
+        if isinstance(rule, str):
+            parsed = self._parse_groupby_string_to_rule(rule)
+            if parsed is not None:
+                base.update(parsed)
+        elif isinstance(rule, dict):
             base.update(rule)
         source = str(base.get("source") or "default")
         if source not in {
@@ -328,6 +446,23 @@ class ChartDataGroupingMixin:
 
 
     def _get_chart_group_rule(self):
+        runtime_params = getattr(getattr(self, "_render_runtime", None), "params", None)
+        if runtime_params is not None and "chart_group_rule" in runtime_params and runtime_params["chart_group_rule"] is not None:
+            return self._normalize_chart_group_rule(runtime_params["chart_group_rule"])
+        if hasattr(self, "params") and isinstance(self.params, dict) and "chart_group_rule" in self.params and self.params["chart_group_rule"] is not None:
+            return self._normalize_chart_group_rule(self.params["chart_group_rule"])
+
+        # Fallback compatibility: derive chart_group_rule from groupby / color_by when explicitly provided
+        raw_gb = None
+        if runtime_params is not None:
+            raw_gb = runtime_params.get("groupby") or runtime_params.get("color_by")
+        if raw_gb is None and hasattr(self, "params") and isinstance(self.params, dict):
+            raw_gb = self.params.get("groupby") or self.params.get("color_by")
+        if raw_gb is not None:
+            parsed = self._parse_groupby_string_to_rule(raw_gb)
+            if parsed is not None:
+                return self._normalize_chart_group_rule(parsed)
+
         return self._normalize_chart_group_rule(self.get_param("chart_group_rule", None))
 
 
@@ -423,14 +558,21 @@ class ChartDataGroupingMixin:
         return [base_group], True
 
 
-    def _chart_grouping_preserves_original_group(self):
-        return str(self.get_param("chart_type", "")) in ("tone_effect_time", "tone_sandhi", "sandhi_grid")
+    def _chart_grouping_preserves_original_group(self, rule=None):
+        ct = str(self.get_param("chart_type", ""))
+        if ct in ("tone_effect_time", "tone_sandhi", "sandhi_grid"):
+            return True
+        # When grouping by label or speaker_name, entries already store `label` and `speaker_name` directly;
+        # preserving `entry["group"]` as `wordlist_group` keeps `facet=group` and `overview_heatmap` parent groups intact!
+        if isinstance(rule, dict) and rule.get("source") in ("label", "speaker_name"):
+            return True
+        return False
 
 
     def _apply_chart_grouping(self, data_entries, rule=None, preserve_original_group=None):
         rule = self._get_chart_group_rule() if rule is None else self._normalize_chart_group_rule(rule)
         preserve_original_group = (
-            self._chart_grouping_preserves_original_group()
+            self._chart_grouping_preserves_original_group(rule=rule)
             if preserve_original_group is None else bool(preserve_original_group)
         )
         grouped_entries = []
@@ -440,8 +582,6 @@ class ChartDataGroupingMixin:
             group_values, include_entry = self._resolve_chart_groups_for_entry(entry, rule)
             if not include_entry:
                 continue
-            if preserve_original_group:
-                group_values = [base_group]
             for group_value in group_values:
                 copied = dict(entry)
                 chart_group = str(group_value or "未标注")
@@ -495,14 +635,17 @@ class ChartDataGroupingMixin:
     def _chart_group_counts_for_rule(self, rule=None, data_entries=None, preserve_original_group=False):
         if data_entries is None:
             data_entries = getattr(self, "_all_base_group_filter_entries", [])
+        rule_norm = self._normalize_chart_group_rule(rule)
         grouped_entries = self._apply_chart_grouping(
             data_entries,
-            rule=rule,
+            rule=rule_norm,
             preserve_original_group=preserve_original_group,
         )
         counts = Counter()
+        use_chart_grp = (not preserve_original_group) and rule_norm.get("source") in ("label", "speaker_name")
         for entry in grouped_entries:
-            counts[entry.get("group") or "未标注"] += 1
+            k_val = entry.get("chart_group") if use_chart_grp else entry.get("group")
+            counts[k_val or "未标注"] += 1
         return counts
 
 
@@ -546,7 +689,6 @@ class ChartDataGroupingMixin:
             if len(parts) >= 2:
                 return parts[0], parts[1]
 
-        # Match patterns like "11_阴阴", "12_阴阳", "24_阳去"
         m = re.match(r"^(\d)(\d)[_\s]*(\S)(\S)$", raw_text)
         if m:
             return f"{m.group(1)}_{m.group(3)}", f"{m.group(2)}_{m.group(4)}"
@@ -602,6 +744,7 @@ class ChartDataGroupingMixin:
             "3. 声调声学特征分布雨云图",
             "声调轮廓图",
             "声调分布图",
+            "音节物理时长对比图",
             "时序密度图",
             "数据质量检查",
             "声调组别概览图",
@@ -629,6 +772,7 @@ class ChartDataGroupingMixin:
             "共振峰时序轨迹图",
             "共振峰时空密度图",
             "共振峰组别概览图",
+            "音节物理时长对比图",
         ]
 
 
@@ -714,7 +858,7 @@ class ChartDataGroupingMixin:
 
     def _build_overview_word_rows(self, data_entries):
         rows = []
-        present_groups = self._ordered_unique(entry['group'] for entry in data_entries)
+        present_groups = self._ordered_unique(self._entry_wordlist_group(entry) for entry in data_entries)
         preferred_order = list(getattr(self, 'available_groups', []) or [])
         group_order = [group_name for group_name in preferred_order if group_name in present_groups]
         for group_name in present_groups:
@@ -724,7 +868,7 @@ class ChartDataGroupingMixin:
         for group_name in group_order:
             seen_labels = set()
             for entry in data_entries:
-                if entry['group'] != group_name:
+                if self._entry_wordlist_group(entry) != group_name:
                     continue
                 label = entry['label']
                 if label in seen_labels:
@@ -782,6 +926,129 @@ class ChartDataGroupingMixin:
         return rows, pages
 
 
+    def _build_facet_aware_group_pages(self, prepared_entries, chart_type, group_key, page_size=8):
+        """
+        构建感知 `facet` 分面结构的分页列表（每个元素为本页允许的 `entry` 过滤集合描述）：
+        - 当启用了 `facet=group`（如 `groupby=label facet=group`，4 个声调各 6 个字）：
+          按每个分面子图内部的曲线数判定——若每个分面内曲线数 `<= 10` 且分面总数 `<= 6`，直接 1 页 2x2/3x2 画完，绝不把同一声调组硬拆到两页！
+          若分面数 `> 6` 或单个分面内曲线过多，也严格按完整分面组切页，绝不在分面组中间硬截断。
+        - 当未分面（`facet=none`）且 `group_key == 'label'` 时，若词条归属多个 `wordlist_group`（如 4 组各 6 字），
+          优先按完整 `wordlist_group` 桶组合成每页 `<= 12` 项（例如 6+6=12 字/页，共 2 页），避免把同一实验组劈成两半；
+          若单桶本身超过阈值则按 `page_size=8` 切块。
+        """
+        unique_series = self._ordered_unique(e.get(group_key, e.get('group')) for e in prepared_entries)
+        if not unique_series:
+            return []
+
+        if chart_type in ("tone_effect_time", "tone_sandhi", "sandhi_grid", "formant_pillai", "pillai_matrix"):
+            return [{"mode": "all"}]
+
+        facet_mode = self._resolve_facet_by(chart_type=chart_type)
+
+        # Case 1: Faceted by parent group while coloring by label / syl_char / custom_field
+        if facet_mode == "group" and group_key != "group":
+            facet_groups = self._ordered_unique(self._entry_wordlist_group(e) for e in prepared_entries)
+            per_facet_series = {
+                fg: self._ordered_unique(
+                    e.get(group_key, e.get('group'))
+                    for e in prepared_entries
+                    if self._entry_wordlist_group(e) == fg
+                )
+                for fg in facet_groups
+            }
+            max_in_facet = max((len(v) for v in per_facet_series.values()), default=0)
+            max_facets_per_page = 6
+            max_curves_per_facet = 10
+
+            if len(facet_groups) <= max_facets_per_page and max_in_facet <= max_curves_per_facet:
+                return [{"mode": "all"}]
+
+            pages = []
+            curr_facets = []
+            for fg in facet_groups:
+                series_list = per_facet_series[fg]
+                if len(series_list) > max_curves_per_facet:
+                    if curr_facets:
+                        pages.append({"mode": "wordlist_groups", "values": set(curr_facets)})
+                        curr_facets = []
+                    for s_i in range(0, len(series_list), page_size):
+                        pages.append({
+                            "mode": "facet_and_series",
+                            "wordlist_group": fg,
+                            "values": set(series_list[s_i:s_i + page_size]),
+                        })
+                else:
+                    curr_facets.append(fg)
+                    if len(curr_facets) >= max_facets_per_page:
+                        pages.append({"mode": "wordlist_groups", "values": set(curr_facets)})
+                        curr_facets = []
+            if curr_facets:
+                pages.append({"mode": "wordlist_groups", "values": set(curr_facets)})
+            return pages
+
+        # Case 2: Faceted by group AND colored by group (1 curve per facet, e.g. Exp 2 Chart 02/04 with 8 groups -> 1 page of 4x2!)
+        if facet_mode == "group" and group_key == "group":
+            if len(unique_series) <= 8:
+                return [{"mode": "all"}]
+            return [
+                {"mode": "series", "values": set(unique_series[i:i + 8])}
+                for i in range(0, len(unique_series), 8)
+            ]
+
+        # Case 3: Unfaceted (or speaker-faceted) with <= 8 series (or <= 16 for duration bar chart)
+        max_single_page = 16 if chart_type == "duration" else page_size
+        if len(unique_series) <= max_single_page:
+            return [{"mode": "all"}]
+
+        # Case 4: Unfaceted with group_key == 'label' and structured wordlist_groups -> bucket cleanly by wordlist_group (up to 12/page)
+        if group_key == "label":
+            wl_groups = self._ordered_unique(self._entry_wordlist_group(e) for e in prepared_entries)
+            if len(wl_groups) > 1:
+                buckets = []
+                for wg in wl_groups:
+                    wg_labels = self._ordered_unique(
+                        e.get("label") for e in prepared_entries if self._entry_wordlist_group(e) == wg
+                    )
+                    if wg_labels:
+                        buckets.append(wg_labels)
+                bucket_cap = 8
+                if buckets and all(len(b) <= bucket_cap for b in buckets):
+                    pages = []
+                    curr = []
+                    for b in buckets:
+                        if curr and len(curr) + len(b) > bucket_cap:
+                            pages.append({"mode": "series", "values": set(curr)})
+                            curr = list(b)
+                        else:
+                            curr.extend(b)
+                    if curr:
+                        pages.append({"mode": "series", "values": set(curr)})
+                    return pages
+
+        return [
+            {"mode": "series", "values": set(unique_series[i:i + page_size])}
+            for i in range(0, len(unique_series), page_size)
+        ]
+
+
+    def _filter_entries_by_page_spec(self, data_entries, group_key, page_spec):
+        if not page_spec or page_spec.get("mode") == "all":
+            return data_entries
+        mode = page_spec.get("mode")
+        if mode == "wordlist_groups":
+            allowed = page_spec.get("values", set())
+            return [e for e in data_entries if self._entry_wordlist_group(e) in allowed]
+        if mode == "facet_and_series":
+            wg = page_spec.get("wordlist_group")
+            allowed = page_spec.get("values", set())
+            return [
+                e for e in data_entries
+                if self._entry_wordlist_group(e) == wg and e.get(group_key, e.get('group')) in allowed
+            ]
+        allowed = page_spec.get("values", set())
+        return [e for e in data_entries if e.get(group_key, e.get('group')) in allowed]
+
+
     def _get_group_pagination_state(self, data_entries, chart_type, groupby_val=None):
         chart_type = self._normalize_chart_type(chart_type)
         group_key = self._get_group_key(groupby_val)
@@ -797,6 +1064,10 @@ class ChartDataGroupingMixin:
             rows, pages = self._build_overview_word_pages(prepared, page_size=24)
         is_paginated_heatmap = bool(is_overview_hm and group_key == "label" and len(rows) > 24 and len(pages) > 1)
 
+        facet_pages = []
+        if not self._is_overview_heatmap_chart(chart_type):
+            facet_pages = self._build_facet_aware_group_pages(prepared, chart_type, group_key, page_size=8)
+
         state = {
             'group_key': group_key,
             'unique_groups': unique_groups,
@@ -804,6 +1075,7 @@ class ChartDataGroupingMixin:
             'is_paginated_heatmap': is_paginated_heatmap,
             'total_pages': 1,
             'pages': pages if is_paginated_heatmap else [],
+            'facet_pages': facet_pages,
         }
 
         if is_paginated_heatmap:
@@ -812,10 +1084,8 @@ class ChartDataGroupingMixin:
             state['total_pages'] = math.ceil(total_groups / 24)
         elif self._is_overview_heatmap_chart(chart_type):
             state['total_pages'] = 1
-        elif chart_type in ("formant_trajectory", "tone_effect_time", "tone_sandhi", "sandhi_grid", "formant_pillai", "pillai_matrix"):
-            state['total_pages'] = 1
         else:
-            state['total_pages'] = math.ceil(total_groups / 8) if total_groups > 0 else 1
+            state['total_pages'] = max(1, len(facet_pages))
 
         return state
 
@@ -839,6 +1109,9 @@ class ChartDataGroupingMixin:
             "声调声学特征分布雨云图": "distribution",
             "声调分布图": "distribution",
             "雨云图 (raincloud)": "distribution",
+            "duration": "duration",
+            "音节物理时长对比图": "duration",
+            "物理时长对比图": "duration",
             "density": "density",
             "时序密度图": "density",
             "tone_effect_time": "tone_effect_time",
@@ -857,6 +1130,7 @@ class ChartDataGroupingMixin:
             "3. 检出率与发音人共振峰体检图": "quality",
             "检出率与发音人基频/共振峰体检图": "quality",
             "formant_space": "formant_space",
+            "f1_f2": "formant_space",
             "1. 元音声学空间图": "formant_space",
             "元音声学空间图": "formant_space",
             "元音共振峰空间图": "formant_space",
@@ -886,6 +1160,8 @@ class ChartDataGroupingMixin:
             res = "tone_sandhi"
         elif "雨云" in text or "raincloud" in low:
             res = "distribution"
+        elif "物理时长对比" in text:
+            res = "duration"
         elif "pillai" in low or "重叠度" in text:
             res = "formant_pillai"
         else:

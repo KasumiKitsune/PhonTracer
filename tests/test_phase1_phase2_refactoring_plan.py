@@ -1690,7 +1690,8 @@ def test_exporter_default_mean_only_and_kde_group_faceting():
     }
     assert exporter._resolve_facet_by("density") == "group"
     fig_d = exporter.generate_plot(entries, is_preview=False)
-    vis_d_axes = [a for a in fig_d.axes if a.get_visible() and a.get_title()]
+    vis_d_axes = [a for a in fig_d.axes if a.get_visible() and (a.get_title() or a.get_title(loc="left"))]
+    assert all(a.get_title(loc="center") == "" for a in vis_d_axes)
     assert len(vis_d_axes) >= 4
     plt.close(fig_d)
 
@@ -1710,7 +1711,8 @@ def test_exporter_default_mean_only_and_kde_group_faceting():
     }
     assert f_exporter._resolve_facet_by("formant_density") == "group"
     fig_fd = f_exporter.generate_plot(f_entries, is_preview=False)
-    vis_fd_axes = [a for a in fig_fd.axes if a.get_visible() and a.get_title()]
+    vis_fd_axes = [a for a in fig_fd.axes if a.get_visible() and (a.get_title() or a.get_title(loc="left"))]
+    assert all(a.get_title(loc="center") == "" for a in vis_fd_axes)
     assert len(vis_fd_axes) >= 5
     plt.close(fig_fd)
 
@@ -1768,7 +1770,8 @@ def test_qc_heatmap_and_spaghetti_pagination():
     assert state_sp["total_pages"] == 2
 
     fig_sp_p1 = exporter.generate_plot(entries_96, is_preview=True)
-    vis_sp_axes = [a for a in fig_sp_p1.axes if a.get_visible() and a.get_title()]
+    vis_sp_axes = [a for a in fig_sp_p1.axes if a.get_visible() and (a.get_title() or a.get_title(loc="left"))]
+    assert all(a.get_title(loc="center") == "" for a in vis_sp_axes)
     assert len(vis_sp_axes) == 8
     plt.close(fig_sp_p1)
 
