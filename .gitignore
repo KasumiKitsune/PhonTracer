@@ -18,6 +18,7 @@
 !toolkit.py
 !PhonTracer_Suite.spec
 !installer.iss
+!pytest.ini
 
 # 4. 白名单：核心代码与资源目录
 !modules/**
