@@ -45,6 +45,9 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
+[InstallDelete]
+Type: filesandordirs; Name: "{app}\_internal\uharfbuzz"
+
 [Files]
 Source: "dist\PhonTracer_Suite\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs
 

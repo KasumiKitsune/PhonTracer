@@ -89,6 +89,7 @@ if sys.platform == 'win32':
     gui_hidden_imports.append('windnd')
 
 excluded_modules = [
+    'uharfbuzz',
     'seaborn', 'pandas', 'torch', 'torchvision', 'torchaudio',
     'whisper', 'matplotlib.tests', 'IPython', 'jupyter',
     'notebook', 'sqlite3', 'numba', 'llvmlite', 'gradio', 'altair',

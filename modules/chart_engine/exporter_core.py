@@ -38,6 +38,27 @@ from .formant_plotters import FormantPlottersMixin
 _MATPLOTLIB_LOCK = threading.RLock()
 
 
+def _sanitize_fonttools_harfbuzz() -> None:
+    """
+    Prevent fontTools PDF Type-42 subsetting from crashing with
+    `AttributeError: module 'uharfbuzz' has no attribute 'RepackerError'`
+    when uharfbuzz is partially bundled or a leftover directory in frozen builds.
+    """
+    try:
+        import fontTools.ttLib.tables.otBase as _ot_base
+        _hb = getattr(_ot_base, "hb", None)
+        if _hb is not None and not hasattr(_hb, "RepackerError"):
+            setattr(_hb, "RepackerError", getattr(_hb, "SerializerError", getattr(_hb, "HarfBuzzError", Exception)))
+        if _hb is None or not callable(getattr(_hb, "repack", None)) or not hasattr(_hb, "RepackerError"):
+            _ot_base.have_uharfbuzz = False
+    except Exception:
+        pass
+
+
+_sanitize_fonttools_harfbuzz()
+
+
+
 class AcousticChartExporter(
     ChartPresetsMixin,
     ChartDataGroupingMixin,
@@ -226,6 +247,7 @@ class AcousticChartExporter(
 
 
     def _save_figure(self, fig, out_path):
+        _sanitize_fonttools_harfbuzz()
         self._sync_chao_axes_limits(fig)
         fig.savefig(out_path, dpi=self._resolve_save_dpi(fig), bbox_inches='tight')
 
@@ -697,6 +719,7 @@ class AcousticChartExporter(
 
 
     def _export_paginated_pdf(self, out_file, data_entries, group_key, scale, facet_pages=None):
+        _sanitize_fonttools_harfbuzz()
         prepared = self._prepare_entries_for_color_by(data_entries, group_key)
         if not facet_pages:
             chart_type = self._normalize_chart_type(self.get_param('chart_type', 'contour'))
