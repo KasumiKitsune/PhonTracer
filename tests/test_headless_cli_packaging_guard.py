@@ -32,6 +32,9 @@ import modules.scripting
 import modules.dsp
 import modules.storage
 import modules.wordlist
+import modules.export_service
+import modules.reporting
+import modules.chart_engine
 
 c = cli.PhonTracerCLI()
 c.cleanup_workspace()

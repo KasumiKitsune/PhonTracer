@@ -132,14 +132,8 @@ class AcousticChartCLIAdapter:
         self.items = cli_instance.items
 
     def _get_items_by_group_for_dict(self, items_dict):
-        groups = {}
-        for k, v in items_dict.items():
-            if isinstance(v, dict) and v.get('is_excluded', False):
-                continue
-            g = v.get('group', '导入内容') if isinstance(v, dict) else '导入内容'
-            if g not in groups: groups[g] = []
-            groups[g].append(k)
-        return [(g, groups[g]) for g in groups]
+        from modules.export_service import UnifiedExportService
+        return UnifiedExportService.get_items_by_group_for_dict(items_dict)
 
     def _ensure_item_loaded(self, item):
         self.cli._ensure_item_loaded(item)
@@ -148,93 +142,16 @@ class AcousticChartCLIAdapter:
         return self.cli._extract_syl_data(item, num_points)
 
     def _get_pitch_arrays_for_item(self, item):
-        if item.get('pitch_data'):
-            p_xs = item['pitch_data'].get('xs')
-            p_freqs = item['pitch_data'].get('freqs')
-            if p_xs is None or p_freqs is None:
-                return None, None
-            return np.asarray(p_xs), np.asarray(p_freqs)
-        if item.get('pitch'):
-            pitch = item['pitch']
-            try:
-                p_xs = np.asarray(pitch.xs())
-                p_freqs = np.asarray(pitch.selected_array['frequency'])
-            except (TypeError, KeyError, AttributeError):
-                return None, None
-            if p_xs.ndim != 1 or p_freqs.ndim != 1 or len(p_xs) != len(p_freqs):
-                return None, None
-            return p_xs, p_freqs
-        return None, None
+        from modules.export_service import UnifiedExportService
+        return UnifiedExportService.get_pitch_arrays_for_item(item)
 
     def _get_syllables_and_bounds(self, item):
-        t_s, t_e = item.get('start'), item.get('end')
-        if t_s is None or t_e is None or t_e <= t_s:
-            return [], []
-
-        label = item.get('label', '')
-        from modules.data_utils import split_into_syllables
-        syls = split_into_syllables(label)
-        if not syls and label:
-            syls = [label]
-
-        chars_bounds = item.get('chars_bounds', [])
-        if chars_bounds and len(chars_bounds) == len(syls):
-            return syls, [[float(s), float(e)] for s, e in chars_bounds]
-
-        inner_splits = item.get('inner_splits', [])
-        splits = [t_s] + [s for s in inner_splits if t_s < s < t_e] + [t_e]
-        if len(syls) > 1 and len(splits) != len(syls) + 1:
-            splits = np.linspace(t_s, t_e, len(syls) + 1).tolist()
-        elif len(syls) <= 1:
-            splits = [t_s, t_e]
-            if not syls:
-                syls = [label]
-
-        return syls, [[splits[i], splits[i + 1]] for i in range(len(splits) - 1)]
+        from modules.export_service import UnifiedExportService
+        return UnifiedExportService.get_syllables_and_bounds(item)
 
     def _extract_kde_contour(self, p_xs, p_freqs, c_s, c_e, n_dense):
-        if c_e <= c_s:
-            return None
-
-        valid_idx = np.where((p_xs >= c_s) & (p_xs <= c_e) & np.isfinite(p_freqs) & (p_freqs > 0))[0]
-        if len(valid_idx) < 3:
-            return None
-
-        seg_xs = np.asarray(p_xs[valid_idx], dtype=float)
-        seg_ys = np.asarray(p_freqs[valid_idx], dtype=float)
-        order = np.argsort(seg_xs)
-        seg_xs = seg_xs[order]
-        seg_ys = seg_ys[order]
-
-        v_s, v_e = seg_xs[0], seg_xs[-1]
-        if v_e <= v_s:
-            return None
-
-        gap_threshold = 0.025
-        smoothed = seg_ys.copy()
-        try:
-            from scipy.signal import savgol_filter
-            breaks = np.where(np.diff(seg_xs) > gap_threshold)[0] + 1
-            run_ranges = np.split(np.arange(len(seg_xs)), breaks)
-            for run in run_ranges:
-                run_len = len(run)
-                if run_len < 5:
-                    continue
-                win = min(9, run_len if run_len % 2 == 1 else run_len - 1)
-                if win >= 5:
-                    smoothed[run] = savgol_filter(seg_ys[run], win, 2)
-        except Exception:
-            pass
-
-        dense_times = np.linspace(v_s, v_e, n_dense)
-        y_dense = np.interp(dense_times, seg_xs, smoothed)
-
-        nearest_right = np.searchsorted(seg_xs, dense_times, side='left')
-        nearest_left = np.clip(nearest_right - 1, 0, len(seg_xs) - 1)
-        nearest_right = np.clip(nearest_right, 0, len(seg_xs) - 1)
-        nearest_dist = np.minimum(np.abs(dense_times - seg_xs[nearest_left]), np.abs(dense_times - seg_xs[nearest_right]))
-        y_dense[nearest_dist > gap_threshold] = np.nan
-        return y_dense
+        from modules.export_service import UnifiedExportService
+        return UnifiedExportService.extract_kde_contour(p_xs, p_freqs, c_s, c_e, n_dense)
 
 
 def _calc_preview_f0(preview_times, pitch_xs, pitch_freqs, valid_xs=None):
