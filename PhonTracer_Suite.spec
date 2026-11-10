@@ -2,22 +2,77 @@
 import os
 import sys
 import customtkinter
+from PyInstaller.utils.hooks import collect_submodules
 
 # 获取 customtkinter 资源路径
 ctk_path = os.path.dirname(customtkinter.__file__)
 
-# 隐式导入与排除列表
-hidden_imports = [
-    'parselmouth', 'PIL._tkinter_finder', 'xlsxwriter',
+# 1. 自动收集 modules 下所有子模块，但按【无头层】与【GUI层】精准分流
+GUI_ONLY_PREFIXES = (
+    'modules.gui',
+    'modules.toolkit_ui',
+    'modules.ui_dialogs',
+    'modules.app',
+    'modules.project_tree',
+    'modules.spectrogram_panel',
+    'modules.visual_splitter',
+    'modules.wordlist_editor',
+    'modules.ui_widgets',
+    'modules.about_dialog',
+    'modules.update_dialog',
+    'modules.project_import_dialog',
+    'modules.f0_detection_dialog',
+    'modules.formant_detection_dialog',
+)
+
+all_modules_subpackages = collect_submodules('modules')
+headless_submodules = [
+    m for m in all_modules_subpackages
+    if not m.startswith(GUI_ONLY_PREFIXES)
+]
+gui_submodules = [
+    m for m in all_modules_subpackages
+    if m.startswith(GUI_ONLY_PREFIXES)
+]
+
+# 预加载运行时实际使用的 numpy / scipy 子包，捕获 Cython 扩展与动态 __getattr__ 注入的全部子模块
+import numpy
+import scipy.stats
+import scipy.signal
+import scipy.interpolate
+import scipy.ndimage
+import scipy.spatial
+import scipy.io.wavfile
+import scipy.fft
+import scipy.linalg
+
+runtime_scientific_imports = sorted(
+    m for m in sys.modules
+    if m.startswith(('numpy', 'scipy')) and not m.startswith(('numpy.f2py', 'numpy.distutils', 'numpy.testing', 'scipy.conftest'))
+)
+
+base_hidden_imports = [
+    'parselmouth', 'xlsxwriter',
+    'scipy._cyutility',
     'scipy.interpolate', 'scipy.signal', 'scipy.stats', 'scipy.special._cdflib',
-    'textgrid', 'matplotlib.backends.backend_svg'
+    'scipy.ndimage', 'scipy.spatial', 'scipy.io.wavfile', 'scipy.fft',
+    'textgrid', 'matplotlib.backends.backend_svg',
+    *collect_submodules('numpy._core'),
+    *runtime_scientific_imports,
+    *headless_submodules,
+]
+
+gui_hidden_imports = [
+    *base_hidden_imports,
+    *gui_submodules,
+    'PIL._tkinter_finder',
 ]
 if sys.platform == 'win32':
-    hidden_imports.append('windnd')
+    gui_hidden_imports.append('windnd')
 
 excluded_modules = [
-    'seaborn', 'pandas', 'torch', 'torchvision', 'torchaudio', 
-    'whisper', 'matplotlib.tests', 'IPython', 'jupyter', 
+    'seaborn', 'pandas', 'torch', 'torchvision', 'torchaudio',
+    'whisper', 'matplotlib.tests', 'IPython', 'jupyter',
     'notebook', 'sqlite3', 'numba', 'llvmlite', 'gradio', 'altair',
     'PyQt5', 'PyQt6', 'PySide2', 'PySide6', 'qtpy'
 ]
@@ -31,7 +86,7 @@ a = Analysis(
         ('assets', 'assets'),
         (ctk_path, 'customtkinter')
     ],
-    hiddenimports=hidden_imports,
+    hiddenimports=gui_hidden_imports,
     excludes=excluded_modules,
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
@@ -49,7 +104,7 @@ b = Analysis(
         ('assets', 'assets'),
         (ctk_path, 'customtkinter')
     ],
-    hiddenimports=hidden_imports,
+    hiddenimports=gui_hidden_imports,
     excludes=excluded_modules,
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
@@ -63,9 +118,10 @@ is_win = (sys.platform == 'win32')
 # --- 3. 分析命令行工具 (仅在 Windows 上执行，macOS 无需打包 CLI) ---
 if is_win:
     cli_hidden_imports = [
-        item for item in hidden_imports
-        if item != 'PIL._tkinter_finder'
-    ] + ['matplotlib.backends.backend_agg']
+        *base_hidden_imports,
+        'matplotlib.backends.backend_agg',
+        *collect_submodules('modules.cli_app'),
+    ]
 
     c = Analysis(
         ['cli.py'],
@@ -73,7 +129,7 @@ if is_win:
         binaries=[],
         datas=[],
         hiddenimports=cli_hidden_imports,
-        excludes=excluded_modules + ['customtkinter', 'tkinter'], # CLI 排除 GUI 库，但保留 Pillow 供 Matplotlib 无窗口导出
+        excludes=excluded_modules + ['customtkinter', 'tkinter', *gui_submodules],  # CLI 排除 GUI 库与 GUI 子包
         win_no_prefer_redirects=False,
         win_private_assemblies=False,
         cipher=None,

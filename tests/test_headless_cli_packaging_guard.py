@@ -35,6 +35,7 @@ import modules.wordlist
 import modules.export_service
 import modules.reporting
 import modules.chart_engine
+import modules.cli_app
 
 c = cli.PhonTracerCLI()
 c.cleanup_workspace()

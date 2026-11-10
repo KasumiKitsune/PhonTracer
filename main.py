@@ -23,17 +23,9 @@ def _startup_debug(message):
 
 _startup_debug(f"捕获启动参数: {STARTUP_ARGS!r}")
 
-# 全局打补丁：使所有 CTkCheckBox 在未勾选时为圆角矩形(6)，勾选后为圆形(1000)
-_orig_checkbox_draw = getattr(ctk.CTkCheckBox, "_orig_unpatched_draw", ctk.CTkCheckBox._draw)
-ctk.CTkCheckBox._orig_unpatched_draw = _orig_checkbox_draw
-def _patched_checkbox_draw(self, no_color_updates=False):
-    if getattr(self, "_check_state", False):
-        self._corner_radius = 1000
-    else:
-        self._corner_radius = 6
-    return _orig_checkbox_draw(self, no_color_updates)
-ctk.CTkCheckBox._draw = _patched_checkbox_draw
-ctk.CTkCheckBox._phontracer_dynamic_radius_patched = True
+# 全局打补丁：使用 modules.ui_widgets 统一安装动态复选框圆角补丁
+from modules.ui_widgets import install_dynamic_checkbox_patch
+install_dynamic_checkbox_patch()
 
 from modules.version import APP_NAME, __version__
 from modules.core.paths import get_asset_path
@@ -244,7 +236,9 @@ def _load_phase_2(root, splash, set_target_progress, startup_files, splash_alive
     set_target_progress(0.60, "构建声学分析界面...")
     try:
         from modules.app import PhoneticsApp
-    except ImportError:
+    except Exception as e:
+        logger.exception("加载主界面模块失败")
+        _startup_debug(f"加载 PhoneticsApp 失败: {e!r}")
         PhoneticsApp = None 
     
     # 缩短阶段转换的人为延迟
