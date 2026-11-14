@@ -40,24 +40,6 @@ jobs:
       run: |
         pyinstaller --noconfirm --clean PhonTracer_Suite.spec
 
-    - name: 配置 Node.js
-      uses: actions/setup-node@v6
-      with:
-        node-version: '22'
-        cache: npm
-        cache-dependency-path: PhonRec/frontend/package-lock.json
-
-    - name: 构建 PhonRec 并并入全家桶目录
-      shell: pwsh
-      run: |
-        rustup target add aarch64-pc-windows-msvc
-        Push-Location PhonRec/frontend
-        npm ci
-        npm run build
-        cargo build --release --manifest-path src-tauri/Cargo.toml --target aarch64-pc-windows-msvc
-        Pop-Location
-        Copy-Item -Path "PhonRec/frontend/src-tauri/target/aarch64-pc-windows-msvc/release/phonrec.exe" -Destination "dist/PhonTracer_Suite/PhonRec.exe" -Force
-
     - name: 创建 Windows ARM64 压缩包
       shell: pwsh
       run: |

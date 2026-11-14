@@ -10,7 +10,6 @@
 #define MyAppURL "https://github.com/KasumiKitsune/PhonTracer"
 #define MyAppExeName "PhonTracer.exe"
 #define ToolkitExeName "Toolkit.exe"
-#define PhonRecExeName "PhonRec.exe"
 #define MyAppAssocName "PhonTracer Project"
 #define MyAppAssocExt ".teproj"
 #define MyAppAssocKey "PhonTracer.Document"
@@ -52,10 +51,9 @@ Type: filesandordirs; Name: "{app}\_internal\uharfbuzz"
 Source: "dist\PhonTracer_Suite\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs
 
 [Registry]
-; 为 PhonRec 等配套工具登记稳定的主程序发现信息
+; 登记主程序安装目录与版本信息
 Root: HKA; Subkey: "Software\KasumiKitsune\PhonTracer"; ValueType: string; ValueName: "InstallDir"; ValueData: "{app}"; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\KasumiKitsune\PhonTracer"; ValueType: string; ValueName: "Version"; ValueData: "{#MyAppVersion}"
-Root: HKA; Subkey: "Software\KasumiKitsune\PhonTracer"; ValueType: dword; ValueName: "EngineProtocol"; ValueData: "1"
 
 ; 注册工程文件关联后缀 .teproj 并在双击时通过 PhonTracer 打开
 Root: HKA; Subkey: "Software\Classes\{#MyAppAssocExt}"; ValueType: string; ValueName: ""; ValueData: "{#MyAppAssocKey}"; Flags: uninsdeletekey
@@ -81,7 +79,6 @@ Root: HKA; Subkey: "Software\Classes\Applications\{#ToolkitExeName}\SupportedTyp
 ; 在开始菜单中创建快捷方式
 Name: "{autoprograms}\{#MyAppName}\{#MyAppName} 声调提取分析器"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autoprograms}\{#MyAppName}\Toolkit 工具箱"; Filename: "{app}\{#ToolkitExeName}"
-Name: "{autoprograms}\{#MyAppName}\PhonRec 多发音人录音工具"; Filename: "{app}\{#PhonRecExeName}"; Check: FileExists(ExpandConstant('{app}\{#PhonRecExeName}'))
 Name: "{autoprograms}\{#MyAppName}\PhonTracerCLI 命令行界面"; Filename: "{app}\PhonTracerCLI.exe"
 ; 在桌面上创建快捷方式
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon

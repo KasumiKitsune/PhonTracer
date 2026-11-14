@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/KasumiKitsune/PhonTracer/blob/main/docs/project.schema.json",
-  "title": "PhonTracer / PhonRec project.json 格式统一规范",
-  "description": "用于 PhonTracer 与 PhonRec 统一工程存档 (.teproj) project.json 格式验证与跨端契约检查。",
+  "title": "PhonTracer project.json 格式统一规范",
+  "description": "用于 PhonTracer 工程存档 (.teproj) project.json 格式验证与结构契约检查。",
   "type": "object",
   "required": ["speakers"],
   "properties": {
@@ -23,7 +23,6 @@
       "type": "array",
       "items": {"$ref": "#/$defs/group"}
     },
-    "phonrec": {"type": "object"},
     "quality_config": {"type": "object"},
     "custom_script_runs": {
       "type": "array",

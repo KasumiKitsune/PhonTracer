@@ -3,7 +3,7 @@
 PhonTracer 语音端点检测 (VAD)、元音起始点 (VOP)、微观韵母核提取与字间边界切分模块 (modules.dsp.segmentation)
 """
 import itertools
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 
@@ -27,7 +27,7 @@ VOP_WIN_LEN_SEC = 0.010
 VOP_HOP_LEN_SEC = 0.002
 VAD_TIME_STEP = 0.01
 VAD_MIN_DURATION = 0.1
-VAD_CLEAR_GAP_THRESHOLD = 0.12
+VAD_CLEAR_GAP_THRESHOLD = 0.18
 
 
 def detect_vowel_onset(snd: parselmouth.Sound, rough_start: float, rough_end: float) -> float:
@@ -112,8 +112,34 @@ def _merge_vad_segments(segs: List[List[float]], merge_threshold: float) -> List
     return merged
 
 
-def _fit_vad_segments_to_expected_count(segs: List[List[float]], expected_count: int) -> List[List[float]]:
-    """按停顿长度保留最可信的边界，使宏观段落尽量贴合字表数量。"""
+def _estimate_adaptive_intra_word_gap(segs: List[List[float]], base_thresh: float = VAD_CLEAR_GAP_THRESHOLD) -> float:
+    """
+    结合双峰停顿分布自适应估计词内闭塞停顿上限：
+    当长录音包含多组明显词间静音（如 >=0.30s 的词间停顿中位数 >=0.45s）时，
+    允许合并略长于 base_thresh 的词内清塞/擦音短暂闭塞（最高不超过 min(0.24s, 0.42 * 词间停顿中位数)）。
+    """
+    if len(segs) < 6:
+        return float(base_thresh)
+    gaps = [float(segs[i + 1][0] - segs[i][1]) for i in range(len(segs) - 1)]
+    inter_candidates = [g for g in gaps if g >= 0.30]
+    if len(inter_candidates) < 4:
+        return float(base_thresh)
+    med_inter = float(np.median(inter_candidates))
+    if med_inter >= 0.45:
+        return max(float(base_thresh), min(0.24, 0.42 * med_inter))
+    return float(base_thresh)
+
+
+def _fit_vad_segments_to_expected_count(
+    segs: List[List[float]],
+    expected_count: int,
+    max_merge_gap: Optional[float] = None,
+) -> List[List[float]]:
+    """
+    按停顿长度择优合并词内短暂间隙，使宏观段落尽量贴合字表数量。
+    若指定了 max_merge_gap（如 tool_split 防静默吞词保护），则仅合并 <= max_merge_gap 的词内停顿，
+    绝不强行把间隔远大于词内闭塞的独立真实词条粘连成一段。
+    """
     expected_count = max(1, int(expected_count))
     fitted = [list(seg) for seg in segs]
     while len(fitted) > expected_count:
@@ -121,6 +147,9 @@ def _fit_vad_segments_to_expected_count(segs: List[List[float]], expected_count:
             range(len(fitted) - 1),
             key=lambda idx: fitted[idx + 1][0] - fitted[idx][1],
         )
+        smallest_gap = fitted[merge_idx + 1][0] - fitted[merge_idx][1]
+        if max_merge_gap is not None and smallest_gap > float(max_merge_gap):
+            break
         fitted[merge_idx][1] = fitted[merge_idx + 1][1]
         fitted.pop(merge_idx + 1)
     return fitted
@@ -131,8 +160,10 @@ def macroscopic_vad(
     expected_count: int = None,
     min_dur: float = VAD_MIN_DURATION,
     merge_thresh: float = VAD_CLEAR_GAP_THRESHOLD,
+    max_merge_gap: Optional[float] = None,
+    drop_db: Optional[float] = None,
 ) -> List[List[float]]:
-    """长音频宏观静音检测分割，可按字表数量择优保留停顿。"""
+    """长音频宏观静音检测分割，自适应吸收词内短暂停顿并可按字表数量择优对齐。"""
     intensity = snd.to_intensity(time_step=VAD_TIME_STEP)
     vals = intensity.values[0]
     xs = intensity.xs()
@@ -141,7 +172,10 @@ def macroscopic_vad(
     if len(sorted_vals) > 20:
         max_int = np.mean(sorted_vals[-int(len(sorted_vals) * 0.05) :])
         noise_floor = np.mean(sorted_vals[: int(len(sorted_vals) * 0.1)])
-        thresh = max(noise_floor + 15, max_int - 25)
+        if drop_db is not None and float(drop_db) > 0:
+            thresh = max(noise_floor + 6.0, max_int - float(drop_db))
+        else:
+            thresh = max(noise_floor + 15, max_int - 25)
     else:
         thresh = 50.0
 
@@ -157,9 +191,22 @@ def macroscopic_vad(
 
     usable_segs = [s for s in segs if s[1] - s[0] > VAD_TIME_STEP * 2]
     if expected_count:
-        merged = _fit_vad_segments_to_expected_count(usable_segs, expected_count)
+        # 先吸收极短毛刺间隙并剔除孤立极短噪声脉冲，再按 expected_count 精确拟合边界
+        pre_merged = _merge_vad_segments(usable_segs, min(0.08, float(merge_thresh)))
+        pre_valid = [s for s in pre_merged if s[1] - s[0] > min_dur]
+        base_for_fit = pre_valid if len(pre_valid) >= expected_count else usable_segs
+        merged = _fit_vad_segments_to_expected_count(
+            base_for_fit,
+            expected_count,
+            max_merge_gap=max_merge_gap,
+        )
     else:
-        merged = _merge_vad_segments(usable_segs, merge_thresh)
+        eff_thresh = (
+            _estimate_adaptive_intra_word_gap(usable_segs, base_thresh=merge_thresh)
+            if abs(float(merge_thresh) - VAD_CLEAR_GAP_THRESHOLD) < 1e-6
+            else float(merge_thresh)
+        )
+        merged = _merge_vad_segments(usable_segs, eff_thresh)
     return [s for s in merged if s[1] - s[0] > min_dur]
 
 
@@ -559,6 +606,7 @@ __all__ = [
     "VAD_CLEAR_GAP_THRESHOLD",
     "detect_vowel_onset",
     "_merge_vad_segments",
+    "_estimate_adaptive_intra_word_gap",
     "_fit_vad_segments_to_expected_count",
     "macroscopic_vad",
     "core_microscopic_vowel_nucleus",

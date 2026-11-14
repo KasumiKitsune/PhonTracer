@@ -451,7 +451,7 @@ def _read_wav_robust(filepath: Union[str, os.PathLike]) -> Tuple[float, np.ndarr
     """
     鲁棒读取 WAV 文件：
     1. 优先尝试 scipy.io.wavfile.read
-    2. 若因旧版 PhonRec 头部 nAvgBytesPerSec 异常或 24-bit 失败，回退至 wave 模块
+    2. 若因历史录音文件头部 nAvgBytesPerSec 异常或 24-bit 失败，回退至 wave 模块
     3. 若仍失败，回退至底层 RIFF chunk 解析
     """
     path_str = os.fspath(filepath)
@@ -549,6 +549,27 @@ class Sound:
 
     def get_total_duration(self) -> float:
         return float(self.duration)
+
+    def resample(self, new_sampling_frequency: float, precision: int = 50) -> "Sound":
+        target_sr = float(new_sampling_frequency)
+        if target_sr <= 0:
+            raise ValueError("new_sampling_frequency must be positive")
+        if abs(target_sr - self.sampling_frequency) < 1e-6 or self.n_samples == 0:
+            return Sound(self.values.copy(), sampling_frequency=target_sr, start_time=self.xmin)
+        up = max(1, int(round(target_sr)))
+        down = max(1, int(round(self.sampling_frequency)))
+        g = math.gcd(up, down)
+        up //= g
+        down //= g
+        out_channels = []
+        for ch in range(self.n_channels):
+            if up <= 4000 and down <= 4000:
+                rs = scipy.signal.resample_poly(self.values[ch], up, down)
+            else:
+                n_target = max(1, int(round(self.n_samples * target_sr / self.sampling_frequency)))
+                rs = scipy.signal.resample(self.values[ch], n_target)
+            out_channels.append(np.asarray(rs, dtype=np.float64))
+        return Sound(np.vstack(out_channels), sampling_frequency=target_sr, start_time=self.xmin)
 
     def save(self, filepath: Union[str, os.PathLike], format: str = "WAV") -> None:
         path_str = os.fspath(filepath)
@@ -1037,7 +1058,491 @@ class Sound:
 
 
 # ============================================================================
-# 4. parselmouth.praat 子模块占位
+# 4. TextGrid, Data 与 Praat .Collection (ooBinaryFile / ooTextFile) 解析支持
+# ============================================================================
+
+import re
+
+
+class TextGrid:
+    """兼容 parselmouth.TextGrid 的多层级标注对象。"""
+
+    class_name = "TextGrid"
+
+    def __init__(self, xmin: float = 0.0, xmax: float = 1.0, tiers: Optional[List[dict]] = None, name: str = "untitled"):
+        self.xmin = float(xmin)
+        self.xmax = float(xmax)
+        self.tiers: List[dict] = list(tiers or [])
+        self.name = str(name or "untitled")
+
+    def get_total_duration(self) -> float:
+        return float(self.xmax - self.xmin)
+
+
+class Data:
+    """兼容 parselmouth.Data 的通用 Praat 对象基类与文件读取器。"""
+
+    def __init__(self, class_name: str = "Data", name: str = "untitled", items: Optional[List[Any]] = None):
+        self.class_name = str(class_name)
+        self.name = str(name)
+        self.items = list(items or [])
+
+    @staticmethod
+    def read(filepath: Union[str, os.PathLike]) -> Any:
+        path_str = os.fspath(filepath)
+        if not os.path.isfile(path_str):
+            raise FileNotFoundError(f"File not found: {path_str}")
+        with open(path_str, "rb") as f:
+            head = f.read(64)
+        if head.startswith(b"ooBinaryFile"):
+            cls_name, objs = _read_praat_binary_file(path_str)
+            if cls_name == "Collection":
+                return Data(class_name="Collection", items=objs)
+            return objs[0] if objs else Data(class_name=cls_name)
+        if b"ooTextFile" in head:
+            cls_name, objs = _read_praat_text_file(path_str)
+            if cls_name == "Collection":
+                return Data(class_name="Collection", items=objs)
+            return objs[0] if objs else Data(class_name=cls_name)
+        return Sound(path_str)
+
+
+class _BinReader:
+    def __init__(self, buf: bytes):
+        self.buf = buf
+        self.pos = 0
+
+    def u8(self) -> int:
+        val = self.buf[self.pos]
+        self.pos += 1
+        return int(val)
+
+    def i16(self) -> int:
+        val = struct.unpack_from(">h", self.buf, self.pos)[0]
+        self.pos += 2
+        return int(val)
+
+    def u16(self) -> int:
+        val = struct.unpack_from(">H", self.buf, self.pos)[0]
+        self.pos += 2
+        return int(val)
+
+    def i32(self) -> int:
+        val = struct.unpack_from(">i", self.buf, self.pos)[0]
+        self.pos += 4
+        return int(val)
+
+    def r64(self) -> float:
+        val = struct.unpack_from(">d", self.buf, self.pos)[0]
+        self.pos += 8
+        return float(val)
+
+    def w8(self) -> str:
+        n = self.u8()
+        if n == 0xFF:
+            char_len = self.u8()
+            raw = self.buf[self.pos : self.pos + char_len * 2]
+            self.pos += char_len * 2
+            return raw.decode("utf-16-be")
+        raw = self.buf[self.pos : self.pos + n]
+        self.pos += n
+        return raw.decode("ascii", errors="replace")
+
+    def w16(self) -> str:
+        n = self.u16()
+        if n == 0xFFFF:
+            char_len = self.u16()
+            raw = self.buf[self.pos : self.pos + char_len * 2]
+            self.pos += char_len * 2
+            return raw.decode("utf-16-be")
+        raw = self.buf[self.pos : self.pos + n]
+        self.pos += n
+        return raw.decode("ascii", errors="replace")
+
+    def bytes_slice(self, length: int) -> bytes:
+        out = self.buf[self.pos : self.pos + length]
+        self.pos += length
+        return out
+
+
+def _parse_binary_object(r: _BinReader, cls_name: str, obj_name: str = "untitled") -> Any:
+    if cls_name.startswith("Sound"):
+        xmin = r.r64()
+        xmax = r.r64()
+        nx = r.i32()
+        dx = r.r64()
+        _x1 = r.r64()
+        _ymin = r.r64()
+        _ymax = r.r64()
+        ny = r.i32()
+        _dy = r.r64()
+        _y1 = r.r64()
+        raw_mat = r.bytes_slice(ny * nx * 8)
+        arr = np.frombuffer(raw_mat, dtype=">f8").astype(np.float64).reshape(ny, nx)
+        sf = 1.0 / dx if dx > 0 else 44100.0
+        snd = Sound(arr, sampling_frequency=sf, start_time=xmin)
+        snd.xmax = float(xmax)
+        snd.duration = float(xmax - xmin)
+        snd.total_duration = snd.duration
+        snd.name = obj_name
+        return snd
+
+    if cls_name == "TextGrid":
+        xmin = r.r64()
+        xmax = r.r64()
+        has_tiers = r.u8()
+        tiers = []
+        if has_tiers:
+            n_tiers = r.i32()
+            for _ in range(n_tiers):
+                t_cls = r.w8()
+                t_name = r.w16()
+                t_min = r.r64()
+                t_max = r.r64()
+                if t_cls == "TextTier":
+                    n_pts = r.i32()
+                    pts = []
+                    for _ in range(n_pts):
+                        pt_t = r.r64()
+                        pt_m = r.w16()
+                        pts.append({"number": pt_t, "mark": pt_m})
+                    tiers.append({"class": "TextTier", "name": t_name, "xmin": t_min, "xmax": t_max, "points": pts})
+                else:
+                    n_ivs = r.i32()
+                    ivs = []
+                    for _ in range(n_ivs):
+                        iv_min = r.r64()
+                        iv_max = r.r64()
+                        iv_txt = r.w16()
+                        ivs.append({"xmin": iv_min, "xmax": iv_max, "text": iv_txt})
+                    tiers.append({"class": "IntervalTier", "name": t_name, "xmin": t_min, "xmax": t_max, "intervals": ivs})
+        return TextGrid(xmin=xmin, xmax=xmax, tiers=tiers, name=obj_name)
+
+    if cls_name.startswith("Pitch"):
+        xmin = r.r64()
+        xmax = r.r64()
+        nx = r.i32()
+        dx = r.r64()
+        x1 = r.r64()
+        ceiling = r.r64()
+        _maxn_cand = r.i16()
+        xs = x1 + np.arange(nx, dtype=np.float64) * dx
+        freqs = np.zeros(nx, dtype=np.float64)
+        strs = np.zeros(nx, dtype=np.float64)
+        for i in range(nx):
+            _inten = r.r64()
+            n_cand = r.i32()
+            for c_idx in range(n_cand):
+                f_val = r.r64()
+                s_val = r.r64()
+                if c_idx == 0:
+                    freqs[i] = f_val if (math.isfinite(f_val) and 0.0 < f_val < ceiling) else 0.0
+                    strs[i] = s_val if math.isfinite(s_val) else 0.0
+        p = Pitch(xs, freqs, strs, xmin=xmin, xmax=xmax, dt=dx, ceiling=ceiling)
+        p.name = obj_name
+        return p
+
+    if cls_name.startswith("Formant"):
+        xmin = r.r64()
+        xmax = r.r64()
+        nx = r.i32()
+        dx = r.r64()
+        x1 = r.r64()
+        maxn_f = max(1, r.i16())
+        xs = x1 + np.arange(nx, dtype=np.float64) * dx
+        freqs_mat = np.full((nx, maxn_f), np.nan, dtype=np.float64)
+        bw_mat = np.full((nx, maxn_f), np.nan, dtype=np.float64)
+        for i in range(nx):
+            _inten = r.r64()
+            n_f = r.i16()
+            for k in range(n_f):
+                freq = r.r64()
+                bw = r.r64()
+                if k < maxn_f:
+                    freqs_mat[i, k] = freq if (math.isfinite(freq) and freq > 0.0) else np.nan
+                    bw_mat[i, k] = bw if (math.isfinite(bw) and bw > 0.0) else np.nan
+        fmt = Formant(xs, freqs_mat, bw_mat, xmin=xmin, xmax=xmax, dt=dx)
+        fmt.name = obj_name
+        return fmt
+
+    raise ValueError(f"Unsupported binary Praat object class: {cls_name}")
+
+
+def _read_praat_binary_file(filepath: str) -> Tuple[str, List[Any]]:
+    with open(filepath, "rb") as f:
+        buf = f.read()
+    r = _BinReader(buf)
+    magic = r.bytes_slice(len(b"ooBinaryFile"))
+    if magic != b"ooBinaryFile":
+        raise ValueError("Invalid ooBinaryFile header")
+    top_cls = r.w8()
+    if top_cls == "Collection":
+        n_items = r.i32()
+        items = []
+        for _ in range(n_items):
+            c_name = r.w8()
+            o_name = r.w16()
+            items.append(_parse_binary_object(r, c_name, o_name))
+        return "Collection", items
+    return top_cls, [_parse_binary_object(r, top_cls, os.path.splitext(os.path.basename(filepath))[0])]
+
+
+def _parse_praat_num(val_str: str) -> float:
+    s = val_str.strip()
+    if s.startswith("--undefined--") or not s:
+        return float("nan")
+    return float(s.split()[0])
+
+
+def _unescape_praat_str(raw: str) -> str:
+    s = raw.strip()
+    if len(s) >= 2 and s[0] == '"' and s[-1] == '"':
+        return s[1:-1].replace('""', '"')
+    return s
+
+
+def _parse_text_object_lines(cls_name: str, obj_name: str, block_lines: List[str]) -> Any:
+    kv_re = re.compile(r"^\s*([A-Za-z0-9_?.\[\]\s]+?)\s*=\s*(.+?)\s*$")
+
+    if cls_name.startswith("Sound"):
+        meta = {}
+        z_vals: List[List[float]] = []
+        z_cell_re = re.compile(r"^\s*z\s*\[(\d+)\]\s*\[(\d+)\]\s*=\s*([^\s]+)")
+        for ln in block_lines:
+            m_cell = z_cell_re.match(ln)
+            if m_cell:
+                ch_i = int(m_cell.group(1)) - 1
+                while len(z_vals) <= ch_i:
+                    z_vals.append([])
+                z_vals[ch_i].append(_parse_praat_num(m_cell.group(3)))
+                continue
+            m_kv = kv_re.match(ln)
+            if m_kv and not m_kv.group(1).strip().startswith("z"):
+                meta[m_kv.group(1).strip()] = m_kv.group(2).strip()
+        xmin = _parse_praat_num(meta.get("xmin", "0"))
+        xmax = _parse_praat_num(meta.get("xmax", "1"))
+        dx = _parse_praat_num(meta.get("dx", str(1.0 / 44100.0)))
+        arr = np.asarray(z_vals if z_vals else [[0.0]], dtype=np.float64)
+        sf = 1.0 / dx if dx > 0 else 44100.0
+        snd = Sound(arr, sampling_frequency=sf, start_time=xmin)
+        snd.xmax = float(xmax)
+        snd.duration = float(xmax - xmin)
+        snd.total_duration = snd.duration
+        snd.name = obj_name
+        return snd
+
+    if cls_name == "TextGrid":
+        xmin = 0.0
+        xmax = 1.0
+        tiers: List[dict] = []
+        cur_tier: Optional[dict] = None
+        cur_sub: Optional[dict] = None
+        for ln in block_lines:
+            stripped = ln.strip()
+            if re.match(r"^item\s*\[\d+\]\s*:$", stripped):
+                if cur_tier is not None:
+                    tiers.append(cur_tier)
+                cur_tier = {"class": "IntervalTier", "name": "", "xmin": xmin, "xmax": xmax, "intervals": [], "points": []}
+                cur_sub = None
+                continue
+            if re.match(r"^intervals\s*\[\d+\]\s*:$", stripped) and cur_tier is not None:
+                cur_sub = {"xmin": 0.0, "xmax": 0.0, "text": ""}
+                cur_tier["intervals"].append(cur_sub)
+                continue
+            if re.match(r"^points\s*\[\d+\]\s*:$", stripped) and cur_tier is not None:
+                cur_sub = {"number": 0.0, "mark": ""}
+                cur_tier["points"].append(cur_sub)
+                continue
+            m_kv = kv_re.match(ln)
+            if not m_kv:
+                continue
+            k, v = m_kv.group(1).strip(), m_kv.group(2).strip()
+            if cur_tier is None:
+                if k == "xmin":
+                    xmin = _parse_praat_num(v)
+                elif k == "xmax":
+                    xmax = _parse_praat_num(v)
+            elif cur_sub is None:
+                if k == "class":
+                    cur_tier["class"] = _unescape_praat_str(v)
+                elif k == "name":
+                    cur_tier["name"] = _unescape_praat_str(v)
+                elif k == "xmin":
+                    cur_tier["xmin"] = _parse_praat_num(v)
+                elif k == "xmax":
+                    cur_tier["xmax"] = _parse_praat_num(v)
+            else:
+                if k == "xmin":
+                    cur_sub["xmin"] = _parse_praat_num(v)
+                elif k == "xmax":
+                    cur_sub["xmax"] = _parse_praat_num(v)
+                elif k == "text":
+                    cur_sub["text"] = _unescape_praat_str(v)
+                elif k == "number":
+                    cur_sub["number"] = _parse_praat_num(v)
+                elif k == "mark":
+                    cur_sub["mark"] = _unescape_praat_str(v)
+        if cur_tier is not None:
+            tiers.append(cur_tier)
+        return TextGrid(xmin=xmin, xmax=xmax, tiers=tiers, name=obj_name)
+
+    if cls_name.startswith("Pitch"):
+        xmin, xmax, nx, dx, x1, ceiling = 0.0, 1.0, 0, 0.01, 0.01, 600.0
+        freqs: List[float] = []
+        strs: List[float] = []
+        in_cand1 = False
+        cur_f, cur_s = 0.0, 0.0
+        in_frame = False
+        for ln in block_lines:
+            stripped = ln.strip()
+            if re.match(r"^frames\s*\[\d+\]\s*:$", stripped):
+                if in_frame:
+                    freqs.append(cur_f)
+                    strs.append(cur_s)
+                in_frame = True
+                cur_f, cur_s = 0.0, 0.0
+                in_cand1 = False
+                continue
+            if re.match(r"^candidates\s*\[(\d+)\]\s*:$", stripped):
+                c_idx = int(re.findall(r"\d+", stripped)[0])
+                in_cand1 = c_idx == 1
+                continue
+            m_kv = kv_re.match(ln)
+            if not m_kv:
+                continue
+            k, v = m_kv.group(1).strip(), m_kv.group(2).strip()
+            if not in_frame:
+                if k == "xmin":
+                    xmin = _parse_praat_num(v)
+                elif k == "xmax":
+                    xmax = _parse_praat_num(v)
+                elif k == "nx":
+                    nx = int(_parse_praat_num(v))
+                elif k == "dx":
+                    dx = _parse_praat_num(v)
+                elif k == "x1":
+                    x1 = _parse_praat_num(v)
+                elif k == "ceiling":
+                    ceiling = _parse_praat_num(v)
+            elif in_cand1:
+                if k == "frequency":
+                    fv = _parse_praat_num(v)
+                    cur_f = fv if (math.isfinite(fv) and 0.0 < fv < ceiling) else 0.0
+                elif k == "strength":
+                    sv = _parse_praat_num(v)
+                    cur_s = sv if math.isfinite(sv) else 0.0
+        if in_frame:
+            freqs.append(cur_f)
+            strs.append(cur_s)
+        n_actual = len(freqs) if freqs else nx
+        xs = x1 + np.arange(n_actual, dtype=np.float64) * dx
+        p = Pitch(xs, np.asarray(freqs, dtype=np.float64), np.asarray(strs, dtype=np.float64), xmin=xmin, xmax=xmax, dt=dx, ceiling=ceiling)
+        p.name = obj_name
+        return p
+
+    if cls_name.startswith("Formant"):
+        xmin, xmax, nx, dx, x1, maxn_f = 0.0, 1.0, 0, 0.00625, 0.00625, 5
+        frames_f: List[List[float]] = []
+        frames_b: List[List[float]] = []
+        cur_f_list: Optional[List[float]] = None
+        cur_b_list: Optional[List[float]] = None
+        cur_slot = -1
+        for ln in block_lines:
+            stripped = ln.strip()
+            if re.match(r"^frames\s*\[\d+\]\s*:$", stripped):
+                if cur_f_list is not None:
+                    frames_f.append(cur_f_list)
+                    frames_b.append(cur_b_list or [])
+                cur_f_list = [float("nan")] * maxn_f
+                cur_b_list = [float("nan")] * maxn_f
+                cur_slot = -1
+                continue
+            m_slot = re.match(r"^formant\s*\[(\d+)\]\s*:$", stripped)
+            if m_slot and cur_f_list is not None:
+                cur_slot = int(m_slot.group(1)) - 1
+                continue
+            m_kv = kv_re.match(ln)
+            if not m_kv:
+                continue
+            k, v = m_kv.group(1).strip(), m_kv.group(2).strip()
+            if cur_f_list is None:
+                if k == "xmin":
+                    xmin = _parse_praat_num(v)
+                elif k == "xmax":
+                    xmax = _parse_praat_num(v)
+                elif k == "nx":
+                    nx = int(_parse_praat_num(v))
+                elif k == "dx":
+                    dx = _parse_praat_num(v)
+                elif k == "x1":
+                    x1 = _parse_praat_num(v)
+                elif k == "maxnFormants":
+                    maxn_f = max(1, int(_parse_praat_num(v)))
+            elif 0 <= cur_slot < len(cur_f_list):
+                if k == "frequency":
+                    fv = _parse_praat_num(v)
+                    cur_f_list[cur_slot] = fv if (math.isfinite(fv) and fv > 0.0) else float("nan")
+                elif k == "bandwidth":
+                    bv = _parse_praat_num(v)
+                    cur_b_list[cur_slot] = bv if (math.isfinite(bv) and bv > 0.0) else float("nan")
+        if cur_f_list is not None:
+            frames_f.append(cur_f_list)
+            frames_b.append(cur_b_list or [])
+        n_actual = len(frames_f) if frames_f else nx
+        xs = x1 + np.arange(n_actual, dtype=np.float64) * dx
+        f_mat = np.asarray(frames_f, dtype=np.float64) if frames_f else np.full((n_actual, maxn_f), np.nan)
+        b_mat = np.asarray(frames_b, dtype=np.float64) if frames_b else np.full((n_actual, maxn_f), np.nan)
+        fmt = Formant(xs, f_mat, b_mat, xmin=xmin, xmax=xmax, dt=dx)
+        fmt.name = obj_name
+        return fmt
+
+    raise ValueError(f"Unsupported text Praat object class: {cls_name}")
+
+
+def _read_praat_text_file(filepath: str) -> Tuple[str, List[Any]]:
+    with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+        lines = f.read().splitlines()
+    top_cls = "Collection"
+    for ln in lines[:10]:
+        if "Object class" in ln and "=" in ln:
+            top_cls = _unescape_praat_str(ln.split("=", 1)[1])
+            break
+    if top_cls != "Collection":
+        return top_cls, [_parse_text_object_lines(top_cls, os.path.splitext(os.path.basename(filepath))[0], lines)]
+
+    # Split top-level `    item [k]:` blocks (indent == 4 spaces)
+    blocks: List[Tuple[str, str, List[str]]] = []
+    cur_lines: Optional[List[str]] = None
+    for ln in lines:
+        if re.match(r"^    item\s*\[\d+\]\s*:\s*$", ln):
+            if cur_lines is not None:
+                blocks.append(("", "", cur_lines))
+            cur_lines = []
+        elif cur_lines is not None:
+            cur_lines.append(ln)
+    if cur_lines is not None:
+        blocks.append(("", "", cur_lines))
+
+    parsed_objs: List[Any] = []
+    for _, _, b_lines in blocks:
+        c_name = ""
+        o_name = "untitled"
+        body_start = 0
+        for idx, bln in enumerate(b_lines[:6]):
+            m_c = re.match(r'^\s{8}class\s*=\s*"([^"]+)"', bln)
+            m_n = re.match(r'^\s{8}name\s*=\s*"(.*)"\s*$', bln)
+            if m_c:
+                c_name = m_c.group(1)
+                body_start = max(body_start, idx + 1)
+            elif m_n:
+                o_name = m_n.group(1).replace('""', '"')
+                body_start = max(body_start, idx + 1)
+        parsed_objs.append(_parse_text_object_lines(c_name, o_name, b_lines[body_start:]))
+    return "Collection", parsed_objs
+
+
+# ============================================================================
+# 5. parselmouth.praat 子模块占位
 # ============================================================================
 
 class _PraatSubmodule(types.ModuleType):
@@ -1047,8 +1552,22 @@ class _PraatSubmodule(types.ModuleType):
         super().__init__("parselmouth.praat")
 
     @staticmethod
-    def call(obj: Any, command: str, *args: Any, **kwargs: Any) -> Any:
-        cmd = str(command or "").strip().lower()
+    def call(obj_or_cmd: Any, *call_args: Any, **kwargs: Any) -> Any:
+        # Case 1: Command without target object, e.g. call("Read from file...", path)
+        if isinstance(obj_or_cmd, str):
+            cmd_only = obj_or_cmd.strip().lower()
+            if "read from file" in cmd_only and len(call_args) >= 1:
+                read_res = Data.read(call_args[0])
+                if isinstance(read_res, Data) and read_res.class_name == "Collection":
+                    return list(read_res.items)
+                return read_res
+            raise NotImplementedError(f"parselmouth.praat.call fallback does not support global command: {obj_or_cmd}")
+
+        obj = obj_or_cmd
+        command = str(call_args[0] if len(call_args) >= 1 else "").strip()
+        args = call_args[1:]
+        cmd = command.lower()
+
         if isinstance(obj, Sound):
             if "total duration" in cmd:
                 return obj.get_total_duration()
@@ -1075,6 +1594,46 @@ class _PraatSubmodule(types.ModuleType):
                     window_length=w_len,
                     pre_emphasis_from=pre_emp,
                 )
+
+        if isinstance(obj, TextGrid):
+            if "get number of tiers" in cmd:
+                return len(obj.tiers)
+            if "get tier name" in cmd:
+                return str(obj.tiers[int(args[0]) - 1].get("name", ""))
+            if "get number of intervals" in cmd:
+                return len(obj.tiers[int(args[0]) - 1].get("intervals", []))
+            if "get label of interval" in cmd:
+                tier = obj.tiers[int(args[0]) - 1]
+                iv = tier["intervals"][int(args[1]) - 1]
+                return str(iv.get("text", ""))
+            if "get start time of interval" in cmd or "get start point" in cmd:
+                tier = obj.tiers[int(args[0]) - 1]
+                iv = tier["intervals"][int(args[1]) - 1]
+                return float(iv.get("xmin", 0.0))
+            if "get end time of interval" in cmd or "get end point" in cmd:
+                tier = obj.tiers[int(args[0]) - 1]
+                iv = tier["intervals"][int(args[1]) - 1]
+                return float(iv.get("xmax", 0.0))
+
+        if isinstance(obj, Pitch):
+            if "get value at time" in cmd:
+                t = float(args[0])
+                unit = str(args[1]) if len(args) >= 2 else "Hertz"
+                interp = str(args[2]) if len(args) >= 3 else "Linear"
+                return obj.get_value_at_time(t, unit=unit, interpolation=interp)
+
+        if isinstance(obj, Formant):
+            if "get value at time" in cmd:
+                f_num = int(args[0])
+                t = float(args[1])
+                unit = str(args[2]) if len(args) >= 3 else "Hertz"
+                interp = str(args[3]) if len(args) >= 4 else "Linear"
+                return obj.get_value_at_time(f_num, t, unit=unit, interpolation=interp)
+            if "get bandwidth at time" in cmd:
+                f_num = int(args[0])
+                t = float(args[1])
+                return obj.get_bandwidth_at_time(f_num, t)
+
         raise NotImplementedError(f"parselmouth.praat.call fallback does not support command: {command}")
 
     @staticmethod
@@ -1088,6 +1647,8 @@ praat = _PraatSubmodule()
 __all__ = [
     "IS_FALLBACK",
     "__version__",
+    "Data",
+    "TextGrid",
     "Matrix",
     "Intensity",
     "Pitch",

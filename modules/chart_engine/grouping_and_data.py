@@ -69,7 +69,15 @@ class ChartDataGroupingMixin:
                         valid_f0_mask = np.isfinite(p_freqs) & (p_freqs > 0)
                         active_ratio = np.mean(valid_f0_mask) if len(p_freqs) > 0 else 0.0
 
-                        warnings = item.get('warnings', [])
+                        if getattr(self, 'app', None) is not None and hasattr(self.app, '_scan_item_warnings_detailed'):
+                            try:
+                                spk_med = self.app._compute_speaker_median_f0(speaker) if hasattr(self.app, '_compute_speaker_median_f0') else None
+                                diag_w = self.app._scan_item_warnings_detailed(str(child), item, spk_median_f0=spk_med)
+                                warnings = [f'[警告] {iss}' for iss in (diag_w.get('issues') or [])]
+                            except Exception:
+                                warnings = item.get('warnings', [])
+                        else:
+                            warnings = item.get('warnings', [])
 
                         speaker_items_temp.append({
                             'item_id': str(child),
@@ -942,6 +950,10 @@ class ChartDataGroupingMixin:
 
         if chart_type in ("tone_effect_time", "tone_sandhi", "sandhi_grid", "formant_pillai", "pillai_matrix"):
             return [{"mode": "all"}]
+        if chart_type == "quality":
+            qc_v = str(self.get_param("qc_view", "") or "").lower()
+            if "spaghetti" not in qc_v and "组内个体" not in qc_v:
+                return [{"mode": "all"}]
 
         facet_mode = self._resolve_facet_by(chart_type=chart_type)
 

@@ -96,7 +96,7 @@ class TestModuleDAgent3(unittest.TestCase):
         self.assertIn("各词项核心声学数据速览表", md_text)
 
     def test_export_bundle_and_zero_warnings_on_example(self):
-        """测试 P1 export_bundle 一站式科研产物打包及 overview_heatmap / formant_space 零警告导出。"""
+        """测试 P1 export_bundle 一站式科研产物打包（含双字调专项图表、.Collection 与无重复分页图命名）及零警告导出。"""
         proj_copy = self.tmp_dir / "bundle_src.teproj"
         shutil.copy2(self.example_teproj, proj_copy)
         bundle_dir = self.tmp_dir / "bundle_out"
@@ -110,13 +110,22 @@ class TestModuleDAgent3(unittest.TestCase):
         self.assertTrue((bundle_dir / "acoustic_data.xlsx").exists())
         self.assertTrue((bundle_dir / "acoustic_points.txt").exists())
         self.assertTrue((bundle_dir / "acoustic_stats.json").exists())
-        self.assertTrue((bundle_dir / "charts" / "contour.png").exists())
-        self.assertTrue((bundle_dir / "charts" / "distribution.png").exists())
+        # 16 组双字调自动分页为 2 页，仅保留 _第1页/_第2页，不生成重复无后缀同名图
+        self.assertTrue((bundle_dir / "charts" / "contour_第1页.png").exists())
+        self.assertTrue((bundle_dir / "charts" / "contour_第2页.png").exists())
+        self.assertFalse((bundle_dir / "charts" / "contour.png").exists())
+        self.assertTrue((bundle_dir / "charts" / "distribution_第1页.png").exists())
+        self.assertTrue((bundle_dir / "charts" / "distribution_第2页.png").exists())
+        self.assertFalse((bundle_dir / "charts" / "distribution.png").exists())
         self.assertTrue((bundle_dir / "charts" / "quality.png").exists())
+        self.assertTrue((bundle_dir / "charts" / "duration.png").exists())
+        self.assertTrue((bundle_dir / "charts" / "tone_sandhi.png").exists())
+        self.assertTrue((bundle_dir / "charts" / "tone_effect_time.png").exists())
         self.assertTrue((bundle_dir / "charts" / "overview_heatmap.png").exists())
         self.assertTrue((bundle_dir / "report" / "研究方法报告.md").exists())
         self.assertTrue(len(list(bundle_dir.glob("*.teproj"))) >= 1)
         self.assertTrue(len(list(bundle_dir.glob("*.ptwl"))) >= 1)
+        self.assertTrue(len(list(bundle_dir.glob("*.Collection"))) >= 1)
 
     def test_script_prompt_c02_and_c03_and_p2_commands(self):
         """测试 P1 C-02/C-03 (script_prompt v2 字表字段与参数白名单) 及 P2 detect_formants / fix_warnings。"""

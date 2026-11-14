@@ -1360,12 +1360,14 @@ class CLIAnalysisMixin:
                             p_freqs[idx_in_seg] = seg_f
                             item["pitch_data"] = {"xs": p_xs, "freqs": p_freqs, "engine": engine_name}
 
-                # Clear repaired split_warnings
+                # Clear repaired split_warnings and stale GUI warnings cache
                 if "split_warnings" in item and isinstance(item["split_warnings"], list):
                     item["split_warnings"] = [
                         w for w in item["split_warnings"]
                         if w not in ("tiny_segment", "low_f0_coverage", "no_clear_valley", "fallback_equal_split", "imbalanced_duration")
                     ]
+                if "warnings" in item and isinstance(item["warnings"], list):
+                    item["warnings"] = []
 
                 # Recompute preview_f0 and has_empty_data
                 t_s, t_e = item.get("start"), item.get("end")
@@ -1411,10 +1413,16 @@ class CLIAnalysisMixin:
         if getattr(self, "_in_script_file", False) and should_apply and warnings_after == 0:
             emit_suggestions = []
 
+        qc_note = (
+            "口径说明：fix_warnings 诊断与修复的是工程声学提取与切分异常（octave_jump / low_f0_coverage / no_clear_valley / tiny_segment，"
+            "与 status、list_items warnings、stats 完全同口径）。导出 quality / spaghetti_qc 质控图时，"
+            "红实线代表上述声学/切分警告（清零后为 0 项），橙虚线代表相对同组中位轨迹的个体统计离散参考（>2σ/>2.8σ，属正常发音波动而非提取错误）。"
+        )
         self._emit(
             True,
             (
                 f"异常词条自动修复完成：修复前警告词条 {warnings_before} 项 -> 修复后 {warnings_after} 项（已修复 {fixed_count} 项）。"
+                + ("（注：quality 质控图中红实线警告已同步清零，若存在橙虚线仅为组内统计离散参考）" if warnings_after == 0 else "")
                 if should_apply
                 else f"扫描完成：共发现 {warnings_before} 个异常/警告词条。传入 --apply 可一键自动修复。"
             ),
@@ -1426,6 +1434,7 @@ class CLIAnalysisMixin:
             after_summary=after_counts if should_apply else before_counts,
             global_suggestions=global_suggestions,
             item_suggestions=emit_suggestions,
+            qc_note=qc_note,
         )
 
 

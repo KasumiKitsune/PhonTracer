@@ -15,7 +15,7 @@
 
 ### <img src="https://img.icons8.com/material-rounded/24/000000/info.png" width="20" style="vertical-align: middle;"/> 项目简介
 
-> **PhonTracer** 是一个面向语音学标注与声学分析的桌面工具套件，支持批量提取和人工复核声调 `F0`、共振峰 `F1/F2`，并提供 `.teproj` 工程保存、异常提示、多说话人管理、科学图表导出和 Windows 命令行工作台。
+> **PhonTracer** 是一个面向语音学标注与声学分析的桌面工具套件，支持批量提取和人工复核声调 `F0`、共振峰 `F1/F2`，并提供 `.teproj` 工程保存、异常提示、多说话人管理、科学图表导出和命令行工作台。
 
 项目底层通过 [Parselmouth](https://parselmouth.readthedocs.io/) 调用 **Praat** 的声学分析能力，适合需要“自动提取 + 可视化复核 + 批量导出”工作流的研究和教学场景。
 
@@ -54,16 +54,6 @@
       <b>PhonTracerCLI 交互式命令行控制台</b>
     </td>
   </tr>
-  <tr>
-    <td width="50%" align="center">
-      <img src="assets/screenshots/07_phonrec_main.png" alt="PhonRec 录音配套工具主界面" width="100%"><br>
-      <b>PhonRec 录音配套工具主界面</b>
-    </td>
-    <td width="50%" align="center">
-      <img src="assets/screenshots/08_phonrec_settings.png" alt="PhonRec 设置与质量检测配置" width="100%"><br>
-      <b>PhonRec 设置与质量检测配置</b>
-    </td>
-  </tr>
 </table>
 
 ---
@@ -73,13 +63,13 @@
 - **双分析模式**：支持声调 `F0` 与共振峰 `F1/F2` 提取，可按任务切换分析模式。
 - **自动分析与人工复核结合**：在声谱图中查看轮廓、试听音频、调整边界，并使用橡皮擦工具删除明显异常的分析点。
 - **两类导入流程**：支持“长音频 + 字表”切分，也支持批量导入独立音频文件。
-- **TextGrid 互操作**：支持导入和导出 TextGrid，便于与 Praat 工作流衔接。
-- **高级字表 (`.ptwl`) 与元数据穿透**：支持带结构的 JSON 格式高级字表。导入后，组名、组标签、组备注、词项别名、自定义科研字段和人工复核状态将随 `.teproj` 穿透并附加于每个切分项，可在画图、导出或自定义脚本中调用。
+- **Praat 生态互操作**：支持导入和导出 `TextGrid` 及一键导出包含音频、标注、基频与共振峰的 `.Collection` 集合文件。
+- **高级字表 (`.ptwl`) 与容错草稿解析**：支持带结构的 JSON 格式高级字表及人类随手记录的草稿 `.txt`/`.csv` 字表。导入后，组名、组标签、组备注、词项别名、自定义科研字段和人工复核状态将随 `.teproj` 穿透并附加于每个切分项，可在画图、导出或自定义脚本中调用。
 - **发音人多维隔离**：每位发音人拥有独立的工作区、F0 与共振峰参数；支持单条目参数隔离（局部参数微调不污染同发音人的其他词项），并提供右键属性窗口核对参数来源。
 - **异常提示**：在项目树中提示边界问题、分析点缺失、跳变异常和跨边界拆分风险，并提供项目树右侧状态短标签（如 `+N` 等）辅助定位需复核条目。
-- **科学图表分组规则**：支持按“词项标签”、“组标签”、“复核状态”或“自定义科研字段”临时对图表重组上色；对符合特定格式的二字组数据自动支持调类效应时程图和均值热图。
+- **科学图表分组规则**：支持按“词项标签”、“组标签”、“复核状态”或“自定义科研字段”临时对图表重组上色；对符合特定格式的二字组数据自动支持连读变调方阵、调类效应时程图、音节时长对比图和均值热图。
 - **自定义脚本沙箱与 AI 协作**：Toolkit 内置受控 Python 执行沙箱（可使用 numpy, scipy, matplotlib，禁用系统访问和未允许的库），支持一键生成工程概要 AI 提示词，由 AI 协作生成绘图代码，并支持将执行记录写入 `.teproj` 以供归档。
-- **工程归档与报告生成**：支持将完整状态保存为 `.teproj`。在 Toolkit 中可直接导出包含工程 SHA-256 文件指纹、元数据和脚本记录的研究方法报告。
+- **工程归档与报告生成**：支持将完整状态保存为 `.teproj`。在 Toolkit 或 CLI 中可直接导出包含工程 SHA-256 文件指纹、统计摘要、ANOVA 分析与脚本记录的研究方法报告。
 
 ---
 
@@ -98,18 +88,13 @@
   </tr>
   <tr>
     <td><b>Toolkit</b></td>
-    <td>独立处理工作台：音频合并、长音频切分、高级字表 (.ptwl) 编辑、自定义 Python 脚本沙箱运行及研究方法报告生成。</td>
+    <td>独立处理工作台：音频合并、长音频切分、高级字表 (.ptwl) 编辑、TextGrid 转换、自定义 Python 脚本沙箱运行及研究方法报告生成。</td>
     <td>Windows x64 / ARM64、macOS</td>
   </tr>
   <tr>
-    <td><b>PhonRec</b></td>
-    <td>轻量化录音配套工具：支持多发音人分词录音、声级计与削波检查、语音活动检测（VAD），支持独立软件模式与主程序数据互通。</td>
-    <td>Windows x64 / ARM64、macOS (仅限 Apple Silicon)</td>
-  </tr>
-  <tr>
     <td><b>PhonTracerCLI</b></td>
-    <td>面向批处理与 AI 代理的命令行交互式/静默执行工作台，支持自定义脚本库指令。</td>
-    <td>当前随 Windows 套件发布</td>
+    <td>面向批处理与 AI 代理的命令行交互式/静默执行工作台，支持全流程 `--script-file` 跑批、`export_bundle` 一站式交付与自定义脚本库指令。</td>
+    <td>随 Windows 套件发布（源码跨平台运行）</td>
   </tr>
 </table>
 
@@ -138,18 +123,18 @@ flowchart LR
     G --> I["声谱图试听与人工复核"]:::ui
     H --> I
     I --> J["异常提示与条目检查"]:::ui
-    J --> K["TXT、TextGrid、XLSX、图表导出"]:::export
+    J --> K["TXT、TextGrid、Collection、XLSX、图表导出"]:::export
     I --> L["保存 .teproj 工程"]:::export
 ```
 
 **一个典型工作流如下：**
 
 1. 创建或切换发音人，并设置适合该发音人的分析参数。
-2. 导入长音频和字表（普通字表或 `.ptwl` 高级字表）、批量导入独立音频，或载入已有 TextGrid。
+2. 导入长音频和字表（普通/草稿字表或 `.ptwl` 高级字表）、批量导入独立音频，或载入已有 TextGrid。
 3. 选择声调 `F0` 或共振峰 `F1/F2` 模式并执行分析。
 4. 在声谱图中试听音频、检查分段边界和分析点，必要时通过橡皮擦/剔除点工具手动修正。
 5. 根据项目树中的异常提示或右键属性窗口复核可疑条目的底层配置。
-6. 导出所需的数据报告、自定义分组科学图表或 TextGrid。
+6. 导出所需的数据报告、自定义分组科学图表、Praat `.Collection` 或 `TextGrid`。
 7. 将当前工作保存为 `.teproj` 工程，或载入 Toolkit 进行高级字表编辑、沙盒脚本绘图和生成归档报告。
 
 ---
@@ -189,7 +174,7 @@ PhonTracer 支持三类常见输入流程：
 
 | 输入方式 | 适用场景 | 说明 |
 | --- | --- | --- |
-| **长音频 + 字表** | 连续录音按词条拆分 | 支持普通文本（分组名/词项）与高级字表 `.ptwl` 格式 |
+| **长音频 + 字表** | 连续录音按词条拆分 | 支持普通/草稿文本（分组名/词项）、CSV 与高级字表 `.ptwl` 格式 |
 | **独立音频批量导入** | 每个词条已有单独音频文件 | 支持 `WAV` 和 `MP3` 文件，提供模糊匹配和顺序匹配模式 |
 | **TextGrid 导入** | 已有 Praat 标注或需要继续复核 | 支持载入已有分段信息，并在当前工程中继续分析 |
 
@@ -230,32 +215,10 @@ PhonTracer 使用 `.teproj` 作为可移植工程归档格式。工程可保存�
 | 类别 | 格式 | 适用场景 |
 | --- | --- | --- |
 | **文本数据** | `TXT` | 轻量查看和后续脚本处理；文本结果采用制表符分隔 |
-| **Praat 标注** | `TextGrid` | 导出包含 `groups` (组别), `words` (词项), `chars` (音节) 的 IntervalTier，自动填充静音区间 |
+| **Praat 互操作** | `TextGrid`、`.Collection` | 导出标准三层 `groups / words / chars` TextGrid 或一键打包音频、标注、Pitch 与 Formant 的 `.Collection` |
 | **表格分析** | `XLSX` | 包含数据和分析结果页，自动在 Excel 底层注入基频 T 值活公式和共振峰均值/离散度活公式，保留高级字表元数据 |
-| **科学图表** | `PNG`、`SVG`、`PDF` | 支持当前/分发音人/整合导出，支持自定义分组重新上色，PDF 自动分页 |
+| **科学图表** | `PNG`、`SVG`、`PDF` | 支持当前/分发音人/整合导出，支持自定义分组重新上色与自动分页 |
 | **工程归档** | `.teproj` | 保存完整分析状态、缓存、指纹及脚本运行历史 |
-
----
-
-### <img src="https://img.icons8.com/material-rounded/24/000000/microphone.png" width="20" style="vertical-align: middle;"/> PhonRec 录音配套工具
-
-<p align="center">
-  <img src="assets/screenshots/07_phonrec_main.png" alt="PhonRec 录音配套工具主界面" width="90%">
-</p>
-
-PhonRec 是基于 React、Vite 与 Tauri v2 构建的轻量化录音辅助工具。为了方便野外调查或多发音人录音，PhonRec 客户端不打包 Python 及大型科学计算库，支持以下两种运行模式：
-
-#### 完整模式
-当系统已安装 PhonTracer 且版本兼容时，PhonRec 在启动时会自动对接本地的 PhonTracer 分析引擎。在此模式下，录音完成后将自动调用 PhonTracer 分析引擎获取精细声学参数，并在前端渲染语谱图与完整的录音质量分析。
-
-#### 独立软件模式
-如果系统未安装 PhonTracer，或者引擎启动失败，用户可选择进入“独立软件模式”。该模式完全运行在本地 Rust 底层和前端轻量计算上，无任何外部依赖：
-* **录音与播放**：支持麦克风录音，以及 Windows 系统的音频回环（Loopback）录音与播放。
-* **录音质量反馈**：提供实时波形绘制、语音活动检测（VAD）、音量声级计（VU Meter）与录音削波检测。
-* **字表与工程管理**：支持普通 TXT/CSV 字表与高级 `.ptwl` 结构化字表导入；支持保存和加载 `.teproj` 工程，与主程序共享工作区以实现数据互通。
-* **批量导出**：支持按“发音人/分组/词项”层级结构批量导出命名规范的单字/词 WAV 音频文件。
-
-*注：独立软件模式下不提供语谱图渲染和基频/共振峰分析，但与完整模式共用工作区。以后安装或修复 PhonTracer 后，完整模式可无损继续读取已有录音。*
 
 ---
 
@@ -263,22 +226,17 @@ PhonRec 是基于 React、Vite 与 Tauri v2 构建的轻量化录音辅助工具
 
 #### 安装
 
-请优先从 [GitHub Releases](https://github.com/KasumiKitsune/PhonTracer/releases) 下载已构建版本。
+请优先从 [GitHub Releases](https://github.com/KasumiKitsune/PhonTracer/releases) 下载对应平台与用途的已构建发布资产：
 
-请按系统和用途下载对应资产；主套件与独立 PhonRec 是分开的安装包。
-
-| 用途 | 平台 | 发布资产 | 内容与边界 |
+| 用途 | 平台 | 发布资产 | 内容与说明 |
 |---|---|---|---|
-| 主套件安装 | Windows x64 | `PhonTracer_Setup_Windows_x64.exe` | PhonTracer、Toolkit、CLI 与本地分析引擎；注册 `.teproj`、`.ptwl` 文件关联 |
-| 主套件便携 | Windows x64 | `PhonTracer_Suite-Windows-x64.zip` | 同上，解压后直接运行；**不含独立 PhonRec** |
-| 主套件安装 | Windows ARM64 | `PhonTracer_Setup_Windows_ARM64.exe` | 原生 ARM64 主套件 |
-| 主套件便携 | Windows ARM64 | `PhonTracer_Suite-Windows-ARM64.zip` | 原生 ARM64；**不含独立 PhonRec** |
-| 主套件 | macOS Apple Silicon | `PhonTracer_Suite-macOS.dmg` | PhonTracer 与 Toolkit；当前工作流目标为 ARM64 |
-| 独立录音工具 | Windows x64 | `PhonRec_1.0.0_x64-setup.exe` | PhonRec；可独立运行，也可连接已安装的兼容分析引擎 |
-| 独立录音工具 | Windows ARM64 | `PhonRec_1.0.0_arm64-setup.exe` | 原生 ARM64 PhonRec |
-| 独立录音工具 | macOS Apple Silicon | `PhonRec_1.0.0_aarch64.dmg` | 最低 macOS 12 |
+| 主套件安装 | Windows x64 | `PhonTracer_Setup_Windows_x64.exe` | PhonTracer、Toolkit 与 PhonTracerCLI；注册 `.teproj`、`.ptwl` 文件关联 |
+| 主套件便携 | Windows x64 | `PhonTracer_Suite-Windows-x64.zip` | 同上，解压后直接运行 |
+| 主套件安装 | Windows ARM64 | `PhonTracer_Setup_Windows_ARM64.exe` | 原生 ARM64 安装包 |
+| 主套件便携 | Windows ARM64 | `PhonTracer_Suite-Windows-ARM64.zip` | 原生 ARM64 便携压缩包 |
+| 主套件 | macOS Apple Silicon | `PhonTracer_Suite-macOS.dmg` | PhonTracer 与 Toolkit（ARM64） |
 
-Windows 便携版解压后可运行 `PhonTracer.exe`、`Toolkit.exe` 或 `PhonTracerCLI.exe`。PhonRec 需要单独下载。macOS 用户将 DMG 中的 `.app` 拖入“应用程序”目录；主套件当前没有在配置中声明精确最低 macOS 版本，PhonRec 明确要求 macOS 12 或更高版本。
+Windows 便携版解压后可直接运行 `PhonTracer.exe`、`Toolkit.exe` 或 `PhonTracerCLI.exe`。macOS 用户打开 DMG 后将 `.app` 拖入“应用程序”目录即可使用。
 
 #### 从源码运行
 
@@ -299,21 +257,16 @@ python cli.py
 
 #### Windows CLI 示例
 
-打包后的命令行执行示例（支持单次执行回显与受控脚本管理）：
+打包后的命令行执行示例（支持 `--script-file` 全流程跑批、单项执行回显与受控脚本管理）：
 ```powershell
-# 查询状态与获得帮助
+# 查询状态与获取帮助
 PhonTracerCLI.exe --version
-PhonTracerCLI.exe status
-PhonTracerCLI.exe help export
+PhonTracerCLI.exe agent_guide
+PhonTracerCLI.exe help all
+PhonTracerCLI.exe help tools
 
-# 修改参数模式
-PhonTracerCLI.exe set_params analysis_mode=f0
-PhonTracerCLI.exe set_params analysis_mode=formant
-
-# 脚本管理与受控运行
-PhonTracerCLI.exe list_scripts
-PhonTracerCLI.exe script_info "分组均值 F0 曲线"
-PhonTracerCLI.exe run_script "1" timeout=30 desc="自定义曲线"
+# 单次剧本跑批与一站式闭环导出
+PhonTracerCLI.exe --project session.teproj --script-file pipeline.txt
 ```
 
 ---
@@ -327,21 +280,9 @@ README 只提供快速概览。完整操作步骤、参数说明和进阶工作�
 #### 验证与测试
 
 ```bash
-python -m pytest -q tests PhonRec/backend/test_backend.py
-python -m compileall -q main.py cli.py toolkit.py modules tests PhonRec/backend
+python -m pytest -q tests
+python -m compileall -q main.py cli.py toolkit.py modules tests
 python scripts/check_release_version.py --expected v1.0.0
-```
-
-PhonRec 前端与 Rust 原生层：
-
-```bash
-cd PhonRec/frontend
-npm ci
-npm run lint
-npm test -- --run
-npm run build
-cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
-cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
 #### 更新与发布
@@ -353,7 +294,6 @@ cargo test --manifest-path src-tauri/Cargo.toml
 - [架构与共享事实源](docs/ARCHITECTURE.md)
 - [`.teproj` 工程格式 1.0](docs/PROJECT_FORMAT_V1.md)
 - [论文使用与写作指南](docs/PAPER_USAGE_GUIDE.md)
-- [PhonRec 操作指南](docs/PHONREC_OPERATION_GUIDE.md)
 
 ---
 

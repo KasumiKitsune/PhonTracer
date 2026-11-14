@@ -28,7 +28,7 @@ except ImportError:
     sys.modules.setdefault("parselmouth", parselmouth)
     sys.modules.setdefault("parselmouth.praat", parselmouth.praat)
 
-from modules.audio_core import macroscopic_vad, trim_bounds_by_amplitude
+from modules.audio_core import load_compatible_sound, macroscopic_vad, trim_bounds_by_amplitude
 from modules.cli_app.io_utils import _natural_sort_key, dumps_utf8
 from modules.data_utils import fuzzy_match_word_to_path, parse_wordlist
 from modules.project_patch import _append_or_update_script_run, apply_project_patch_to_teproj
@@ -60,6 +60,14 @@ from modules.wordlist_v2 import (
 )
 
 
+def _is_float_token(val: str) -> bool:
+    try:
+        float(str(val).strip())
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
 class CLIToolkitScriptMixin:
     """
     Toolkit and scripting mixin providing tool commands, user script execution,
@@ -79,6 +87,10 @@ class CLIToolkitScriptMixin:
             args = shlex.split(arg)
         except ValueError as e:
             self._emit(False, error=f"Invalid arguments: {e}")
+            return
+
+        if len(args) == 1 and args[0].strip().lower() in ("?", "--help", "-h", "help"):
+            self._emit_subcommand_help("tool_wordlist_convert")
             return
 
         pos_args = []
@@ -154,50 +166,139 @@ class CLIToolkitScriptMixin:
 
 
     def _safe_audio_label(self, label):
-        import re
         safe = re.sub(r'[\\/*?:"<>|]', "", str(label)).strip()
         return safe or "segment"
 
 
     def do_tool_merge(self, arg):
         """
-        Merge short audio files into a single WAV, like toolkit's merge tab.
-        Usage: tool_merge <output.wav> <gap_sec> <audio1> <audio2> ...
+        Merge short audio files into a single WAV while preserving native sampling rate.
+        Usage: tool_merge <output.wav> <gap_sec> <audio1_or_dir_or_glob> [audio2 ...] [sr=<Hz>]
         """
-        args = shlex.split(arg)
-        if len(args) < 4:
+        try:
+            args = shlex.split(arg)
+        except ValueError as e:
+            self._emit(False, error=f"Invalid arguments: {e}")
+            return
+
+        if len(args) == 1 and args[0].strip().lower() in ("?", "--help", "-h", "help"):
+            self._emit_subcommand_help("tool_merge")
+            return
+
+        out_path = None
+        gap_sec = None
+        explicit_sr = None
+        raw_inputs = []
+
+        for tok in args:
+            if "=" in tok:
+                k, v = tok.split("=", 1)
+                k_low = k.strip().lstrip("-").lower()
+                v_clean = v.strip().strip('"').strip("'")
+                if k_low in ("out", "output", "dst"):
+                    out_path = v_clean
+                    continue
+                elif k_low in ("gap", "gap_sec"):
+                    try:
+                        gap_sec = float(v_clean)
+                    except ValueError:
+                        self._emit(False, error="gap_sec must be a number")
+                        return
+                    continue
+                elif k_low in ("sr", "sample_rate", "sampling_frequency"):
+                    try:
+                        explicit_sr = float(v_clean)
+                    except ValueError:
+                        self._emit(False, error="sr must be a positive number")
+                        return
+                    continue
+            raw_inputs.append(tok)
+
+        if out_path is None and len(raw_inputs) >= 1:
+            out_path = raw_inputs.pop(0)
+        if gap_sec is None and len(raw_inputs) >= 1:
+            try:
+                gap_sec = float(raw_inputs.pop(0))
+            except ValueError:
+                self._emit(False, error="gap_sec must be a number")
+                return
+        if gap_sec is None:
+            gap_sec = 0.5
+
+        if not out_path or not raw_inputs:
+            self._emit(
+                False,
+                error="Requires output.wav, gap_sec, and audio files (or directory/glob containing at least two audio files)",
+                hint="用法: tool_merge <output.wav> <gap_sec> <audio1> <audio2> ... [sr=<Hz>]",
+            )
+            return
+
+        has_dir_or_glob = any(os.path.isdir(p) or any(ch in p for ch in ("*", "?", "[")) for p in raw_inputs)
+        if has_dir_or_glob:
+            paths, err_msg, hint_msg = self._expand_batch_audio_inputs(raw_inputs)
+            if err_msg:
+                self._emit(False, error=err_msg, hint=hint_msg)
+                return
+        else:
+            paths = list(raw_inputs)
+            missing = [p for p in paths if not os.path.exists(p)]
+            if missing:
+                self._emit(False, error=f"File not found: {missing[0]}", missing=missing)
+                return
+
+        if len(paths) < 2:
             self._emit(False, error="Requires output.wav, gap_sec, and at least two audio files")
             return
 
-        out_path = args[0]
         try:
-            gap_sec = float(args[1])
-        except ValueError:
-            self._emit(False, error="gap_sec must be a number")
-            return
+            loaded_sounds = [load_compatible_sound(path) for path in paths]
+            source_srs = [float(snd.sampling_frequency) for snd in loaded_sounds]
 
-        paths = args[2:]
-        missing = [p for p in paths if not os.path.exists(p)]
-        if missing:
-            self._emit(False, error=f"File not found: {missing[0]}", missing=missing)
-            return
+            if explicit_sr is not None and explicit_sr > 0:
+                target_sr = float(explicit_sr)
+            else:
+                first_sr = source_srs[0]
+                if all(abs(sr - first_sr) < 1e-3 for sr in source_srs):
+                    target_sr = first_sr
+                else:
+                    # 输入采样率不一致时采用最高采样率保真合并，避免损失高频声学分量
+                    target_sr = max(source_srs)
 
-        try:
-            target_sr = 44100
+            resampled_any = False
             all_vals = []
-            gap_array = np.zeros(int(target_sr * gap_sec))
-            for path in paths:
-                snd = parselmouth.Sound(path)
-                if snd.sampling_frequency != target_sr:
+            gap_samples = max(0, int(round(target_sr * gap_sec)))
+            gap_array = np.zeros(gap_samples, dtype=np.float64)
+
+            for snd in loaded_sounds:
+                if abs(float(snd.sampling_frequency) - target_sr) >= 1e-3:
                     snd = snd.resample(target_sr)
-                all_vals.append(snd.values[0])
+                    resampled_any = True
+                mono = np.mean(snd.values, axis=0) if snd.values.shape[0] > 1 else snd.values[0]
+                all_vals.append(np.asarray(mono, dtype=np.float64))
                 all_vals.append(gap_array)
 
             merged_vals = np.concatenate(all_vals[:-1])
-            merged_snd = parselmouth.Sound(np.array([merged_vals]), sampling_frequency=target_sr)
+            merged_snd = parselmouth.Sound(np.array([merged_vals], dtype=np.float64), sampling_frequency=target_sr)
             os.makedirs(os.path.dirname(os.path.abspath(out_path)) or ".", exist_ok=True)
             merged_snd.save(out_path, "WAV")
-            self._emit(True, f"已合并 {len(paths)} 个音频。", path=out_path, count=len(paths), gap_sec=gap_sec)
+
+            warnings_list = []
+            if resampled_any and explicit_sr is None:
+                warnings_list.append(
+                    f"输入音频存在不同采样率 ({sorted({int(round(s)) for s in source_srs})} Hz)，已统一对齐至 {int(round(target_sr))} Hz。"
+                )
+
+            sr_out = int(round(target_sr)) if abs(target_sr - round(target_sr)) < 1e-3 else target_sr
+            self._emit(
+                True,
+                f"已合并 {len(paths)} 个音频（采样率 {sr_out} Hz）。",
+                path=out_path,
+                count=len(paths),
+                gap_sec=gap_sec,
+                sampling_frequency=sr_out,
+                resampled=resampled_any,
+                warnings=warnings_list,
+            )
         except Exception as e:
             self._emit(False, error=str(e))
 
@@ -213,6 +314,10 @@ class CLIToolkitScriptMixin:
             args = shlex.split(arg)
         except ValueError as e:
             self._emit(False, error=f"Invalid arguments: {e}")
+            return
+
+        if len(args) == 1 and args[0].strip().lower() in ("?", "--help", "-h", "help"):
+            self._emit_subcommand_help("tool_sort_batch")
             return
 
         if not args:
@@ -296,6 +401,7 @@ class CLIToolkitScriptMixin:
                 mode=self.mode,
                 count=len(result),
                 matched=len(sorted_paths),
+                matched_count=len(sorted_paths),
                 total_words=len(flat_words),
                 sorted_paths=result,
                 batch_paths=result,
@@ -306,6 +412,7 @@ class CLIToolkitScriptMixin:
                 "已按字表给音频排序。需要正式载入时可把 sorted_paths 交给 load_batch，或直接加 --apply 参数。",
                 applied=False,
                 matched=len(sorted_paths),
+                matched_count=len(sorted_paths),
                 total_words=len(flat_words),
                 sorted_paths=result,
             )
@@ -313,73 +420,352 @@ class CLIToolkitScriptMixin:
 
     def do_tool_split(self, arg):
         """
-        Split a long audio into short WAV files by a wordlist, like toolkit's split tab.
-        Usage: tool_split <long_audio> <wordlist.txt> <output_dir> [buffer_sec] [trim]
-        trim accepts true/false and defaults to true.
+        Split a long audio into short WAV files (with .ptwl/.csv/.txt wordlist or pure unlabeled VAD split).
+        Usage:
+          tool_split <long_audio> <wordlist.ptwl|.txt|.csv> <output_dir> [buffer_sec] [trim]
+          tool_split <long_audio> <output_dir> [buffer_sec] [trim]              # 无字表纯拆音
+          tool_split <long_audio> none <output_dir> [buffer_sec] [trim]         # 无字表纯拆音
+        Options: wordlist=<path|none>, out=<dir>, buffer=<sec>, trim=true|false, merge_thresh=<sec>
         """
-        args = shlex.split(arg)
-        if len(args) < 3:
-            self._emit(False, error="Requires long_audio, wordlist.txt, and output_dir")
+        try:
+            args = shlex.split(arg)
+        except ValueError as e:
+            self._emit(False, error=f"Invalid arguments: {e}")
             return
 
-        audio_path, wordlist_path, out_dir = args[:3]
-        try:
-            buffer_sec = float(args[3]) if len(args) > 3 else 0.1
-        except ValueError:
-            self._emit(False, error="buffer_sec must be a number")
+        if len(args) == 1 and args[0].strip().lower() in ("?", "--help", "-h", "help"):
+            self._emit_subcommand_help("tool_split")
             return
-        do_trim = True if len(args) <= 4 else args[4].lower() in ("1", "true", "yes", "y", "trim")
+
+        audio_path = None
+        wordlist_path = None
+        no_wordlist_explicit = False
+        out_dir = None
+        buffer_sec = None
+        do_trim = None
+        user_merge_thresh = None
+        user_min_dur = None
+        user_drop_db = None
+        pos_args = []
+
+        for tok in args:
+            low = tok.strip().lower()
+            if low in ("--no-wordlist", "--pure", "--unlabeled"):
+                no_wordlist_explicit = True
+                wordlist_path = None
+                continue
+            if "=" in tok:
+                k, v = tok.split("=", 1)
+                k_low = k.strip().lstrip("-").lower()
+                v_clean = v.strip().strip('"').strip("'")
+                if k_low in ("audio", "in", "input", "src", "long_audio"):
+                    audio_path = v_clean
+                    continue
+                elif k_low in ("wordlist", "wl", "字表"):
+                    if v_clean.lower() in ("", "none", "null", "-", "false", "0", "无", "不带字表"):
+                        no_wordlist_explicit = True
+                        wordlist_path = None
+                    else:
+                        wordlist_path = v_clean
+                    continue
+                elif k_low in ("out", "out_dir", "output", "output_dir", "dst"):
+                    out_dir = v_clean
+                    continue
+                elif k_low in ("buffer", "buffer_sec", "pad"):
+                    try:
+                        buffer_sec = float(v_clean)
+                    except ValueError:
+                        self._emit(False, error="buffer_sec must be a number")
+                        return
+                    continue
+                elif k_low in ("trim", "trim_silence"):
+                    do_trim = v_clean.lower() in ("1", "true", "yes", "y", "on", "trim")
+                    continue
+                elif k_low in ("merge_thresh", "gap_thresh", "min_gap"):
+                    try:
+                        user_merge_thresh = float(v_clean)
+                    except ValueError:
+                        self._emit(False, error="merge_thresh must be a number")
+                        return
+                    continue
+                elif k_low in ("min_dur", "min_duration"):
+                    try:
+                        user_min_dur = float(v_clean)
+                    except ValueError:
+                        self._emit(False, error="min_dur must be a number")
+                        return
+                    if user_min_dur <= 0:
+                        self._emit(False, error="min_dur must be positive")
+                        return
+                    continue
+                elif k_low in ("db", "drop_db", "energy_drop_db"):
+                    try:
+                        user_drop_db = float(v_clean)
+                    except ValueError:
+                        self._emit(False, error="db must be a number")
+                        return
+                    if user_drop_db <= 0:
+                        self._emit(False, error="db must be positive")
+                        return
+                    continue
+                elif not os.path.exists(tok) and re.match(r"^[A-Za-z_\-][A-Za-z0-9_\-]*$", k.strip()):
+                    self._emit(
+                        False,
+                        error=f"Unknown option for tool_split: {k.strip()}",
+                        hint="支持参数: wordlist=, out=, buffer=, trim=, merge_thresh=, min_dur=, db=",
+                    )
+                    return
+            pos_args.append(tok)
+
+        rest_pos = list(pos_args)
+        if audio_path is None and rest_pos:
+            audio_path = rest_pos.pop(0)
+
+        none_tokens = {"", "none", "null", "-", "无", "不带字表"}
+        wl_exts = (".txt", ".ptwl", ".csv", ".json")
+
+        if no_wordlist_explicit or wordlist_path is not None:
+            if out_dir is None and rest_pos:
+                out_dir = rest_pos.pop(0)
+        else:
+            if len(rest_pos) == 1:
+                cand = rest_pos[0]
+                if cand.lower().endswith(wl_exts):
+                    self._emit(
+                        False,
+                        error="Requires output_dir when wordlist is provided",
+                        hint="带字表拆音: tool_split <long_audio> <wordlist> <output_dir>；无字表纯拆音: tool_split <long_audio> <output_dir>",
+                    )
+                    return
+                out_dir = rest_pos.pop(0)
+                no_wordlist_explicit = True
+            elif len(rest_pos) >= 2:
+                cand1, cand2 = rest_pos[0], rest_pos[1]
+                if cand1.strip().lower() in none_tokens:
+                    no_wordlist_explicit = True
+                    wordlist_path = None
+                    out_dir = cand2
+                    rest_pos = rest_pos[2:]
+                elif _is_float_token(cand2) and not cand1.lower().endswith(wl_exts) and not os.path.isfile(cand1):
+                    # 形如: tool_split male.wav ./out_clips 0.12 true
+                    no_wordlist_explicit = True
+                    wordlist_path = None
+                    out_dir = cand1
+                    rest_pos = rest_pos[1:]
+                elif (
+                    cand2.lower().endswith(wl_exts)
+                    and not cand1.lower().endswith(wl_exts)
+                    and (os.path.isfile(cand2) or os.path.isdir(cand1))
+                ):
+                    # 容错：用户把 <output_dir> 与 <wordlist> 顺序写反时自动识别
+                    wordlist_path = cand2
+                    out_dir = cand1
+                    rest_pos = rest_pos[2:]
+                else:
+                    wordlist_path = cand1
+                    out_dir = cand2
+                    rest_pos = rest_pos[2:]
+
+        if buffer_sec is None:
+            if rest_pos:
+                try:
+                    buffer_sec = float(rest_pos.pop(0))
+                except ValueError:
+                    self._emit(False, error="buffer_sec must be a number")
+                    return
+            else:
+                buffer_sec = 0.1
+
+        if do_trim is None:
+            if rest_pos:
+                do_trim = rest_pos.pop(0).lower() in ("1", "true", "yes", "y", "on", "trim")
+            else:
+                do_trim = True
+
+        if not audio_path or not out_dir:
+            self._emit(
+                False,
+                error="Requires long_audio and output_dir (with optional .ptwl/.txt/.csv wordlist)",
+                hint="用法: tool_split <long_audio> [wordlist.ptwl|.txt|.csv|none] <output_dir> [buffer_sec] [trim]",
+            )
+            return
 
         if not os.path.exists(audio_path):
             self._emit(False, error=f"File not found: {audio_path}")
             return
-        if not os.path.exists(wordlist_path):
-            self._emit(False, error=f"File not found: {wordlist_path}")
-            return
 
-        try:
-            with open(wordlist_path, "r", encoding="utf-8") as f:
-                groups, flat_words = parse_wordlist(f.read())
+        flat_words: List[str] = []
+        wordlist_groups = []
+        wordlist_schema = None
+        if wordlist_path is not None and not no_wordlist_explicit:
+            if not os.path.exists(wordlist_path):
+                self._emit(False, error=f"File not found: {wordlist_path}")
+                return
+            try:
+                wl_doc, wordlist_groups, flat_words, _records = self._load_wordlist_any(wordlist_path)
+                wordlist_schema = wl_doc.get("schema", WORDLIST_SCHEMA) if isinstance(wl_doc, dict) else WORDLIST_SCHEMA
+            except Exception as e:
+                self._emit(False, error=f"Failed to parse wordlist: {e}")
+                return
             if not flat_words:
                 self._emit(False, error="No words found in wordlist")
                 return
 
-            snd = parselmouth.Sound(audio_path)
-            segs = macroscopic_vad(snd)
-            if not segs:
+        try:
+            snd = load_compatible_sound(audio_path)
+            base_vad_kwargs: Dict[str, Any] = {}
+            if user_min_dur is not None:
+                base_vad_kwargs["min_dur"] = float(user_min_dur)
+            if user_drop_db is not None:
+                base_vad_kwargs["drop_db"] = float(user_drop_db)
+            vad_kwargs: Dict[str, Any] = dict(base_vad_kwargs)
+            if user_merge_thresh is not None:
+                vad_kwargs["merge_thresh"] = float(user_merge_thresh)
+
+            natural_segs = macroscopic_vad(snd, **vad_kwargs)
+            if not natural_segs and flat_words:
+                natural_segs = macroscopic_vad(snd, expected_count=len(flat_words), **vad_kwargs)
+            if not natural_segs:
                 self._emit(False, error="No speech segments detected")
                 return
 
+            if not flat_words:
+                segs = natural_segs
+            elif len(natural_segs) == len(flat_words):
+                segs = natural_segs
+            elif len(natural_segs) > len(flat_words):
+                # 仅允许合并短于词间停顿尺度的词内闭塞间隙，严禁把真实独立的词条强行粘连成一段
+                gaps = [float(natural_segs[k + 1][0] - natural_segs[k][1]) for k in range(len(natural_segs) - 1)]
+                inter_gaps = [g for g in gaps if g >= 0.30]
+                med_inter = float(np.median(inter_gaps)) if len(inter_gaps) >= 3 else 0.50
+                max_intra_gap = (
+                    float(user_merge_thresh)
+                    if user_merge_thresh is not None
+                    else min(0.28, max(0.20, 0.48 * med_inter))
+                )
+                segs = macroscopic_vad(
+                    snd,
+                    expected_count=len(flat_words),
+                    max_merge_gap=max_intra_gap,
+                    **vad_kwargs,
+                )
+            else:
+                # 检出段数少于词表词数：仅当整体语速极快（词间停顿中位数 < 0.32s）时尝试细粒度重切
+                gaps = [float(natural_segs[k + 1][0] - natural_segs[k][1]) for k in range(len(natural_segs) - 1)]
+                med_gap = float(np.median(gaps)) if gaps else 0.50
+                if user_merge_thresh is None and med_gap < 0.32:
+                    segs = macroscopic_vad(
+                        snd,
+                        expected_count=len(flat_words),
+                        merge_thresh=0.08,
+                        max_merge_gap=0.18,
+                        **base_vad_kwargs,
+                    )
+                else:
+                    segs = natural_segs
+
             os.makedirs(out_dir, exist_ok=True)
-            total = min(len(segs), len(flat_words))
-            saved_files = []
-            for i in range(total):
-                start, end = segs[i]
-                word = flat_words[i]
+            pad_width = max(3, len(str(max(len(segs), len(flat_words), 1))))
+            saved_files: List[str] = []
+            matched_files: List[str] = []
+            extra_files: List[str] = []
+            total_dur = snd.get_total_duration()
+
+            for i, (raw_start, raw_end) in enumerate(segs):
+                start, end = float(raw_start), float(raw_end)
                 if do_trim:
                     part = snd.extract_part(from_time=start, to_time=end)
                     vals = part.values[0]
                     xs = part.xs()
                     start, end = trim_bounds_by_amplitude(start, end, xs, vals)
 
-                start = max(0, start - buffer_sec)
-                end = min(snd.get_total_duration(), end + buffer_sec)
+                start = max(0.0, start - buffer_sec)
+                end = min(total_dur, end + buffer_sec)
                 if end <= start:
                     continue
 
                 extract = snd.extract_part(from_time=start, to_time=end)
-                out_file = os.path.join(out_dir, f"{str(i + 1).zfill(3)}_{self._safe_audio_label(word)}.wav")
-                extract.save(out_file, "WAV")
-                saved_files.append(out_file)
+                idx_prefix = str(i + 1).zfill(pad_width)
+                if not flat_words:
+                    out_file = os.path.join(out_dir, f"{idx_prefix}_segment.wav")
+                    extract.save(out_file, "WAV")
+                    saved_files.append(out_file)
+                elif i < len(flat_words):
+                    word = flat_words[i]
+                    out_file = os.path.join(out_dir, f"{idx_prefix}_{self._safe_audio_label(word)}.wav")
+                    extract.save(out_file, "WAV")
+                    saved_files.append(out_file)
+                    matched_files.append(out_file)
+                else:
+                    extra_idx = i - len(flat_words) + 1
+                    out_file = os.path.join(out_dir, f"{idx_prefix}_extra_{str(extra_idx).zfill(2)}.wav")
+                    extract.save(out_file, "WAV")
+                    saved_files.append(out_file)
+                    extra_files.append(out_file)
 
-            self._emit(
-                True,
-                f"已拆分保存 {len(saved_files)} 段音频。",
-                output_dir=out_dir,
-                saved_files=saved_files,
-                detected_segments=len(segs),
-                word_count=len(flat_words)
-            )
+            warnings_list: List[str] = []
+            unmatched_words: List[str] = []
+            mismatch = False
+
+            if flat_words and len(segs) != len(flat_words):
+                mismatch = True
+                if len(segs) > len(flat_words):
+                    extra_names = ", ".join(os.path.basename(p) for p in extra_files[:5])
+                    if len(extra_files) > 5:
+                        extra_names += f" 等共 {len(extra_files)} 个文件"
+                    warn_msg = (
+                        f"检出音频段数 ({len(segs)}) 多于字表词数 ({len(flat_words)})："
+                        f"前 {len(flat_words)} 段已按字表命名，其余 {len(extra_files)} 段多余音频片段未丢弃，"
+                        f"已完整保留为 {extra_names}；请人工核对是否存在词内长停顿切裂或重读多录（中间若有错位会影响后续词条对应）。"
+                    )
+                    warnings_list.append(warn_msg)
+                else:
+                    unmatched_words = list(flat_words[len(segs):])
+                    preview_missing = "、".join(unmatched_words[:6])
+                    if len(unmatched_words) > 6:
+                        preview_missing += f" 等 {len(unmatched_words)} 词"
+                    warn_msg = (
+                        f"检出音频段数 ({len(segs)}) 少于字表词数 ({len(flat_words)})："
+                        f"末尾 {len(unmatched_words)} 个词条（{preview_missing}）未分配到音频段，请核对是否存在漏读或词间连读粘连。"
+                    )
+                    warnings_list.append(warn_msg)
+
+            if not flat_words:
+                msg = f"无字表纯拆音完成：共检出并保存 {len(saved_files)} 段音频。"
+            elif mismatch:
+                msg = f"[警告] {warnings_list[0]}"
+            else:
+                msg = f"已按字表准确对齐并拆分保存 {len(saved_files)} 段音频。"
+
+            sr_val = float(snd.sampling_frequency)
+            sr_out = int(round(sr_val)) if abs(sr_val - round(sr_val)) < 1e-3 else sr_val
+            payload: Dict[str, Any] = {
+                "status": "warning" if mismatch else "ok",
+                "mode": "wordlist" if flat_words else "unlabeled",
+                "wordlist_mode": "wordlist" if flat_words else "none",
+                "output_dir": out_dir,
+                "saved_files": saved_files,
+                "saved_count": len(saved_files),
+                "count": len(saved_files),
+                "detected_segments": len(segs),
+                "word_count": len(flat_words),
+                "expected_words": len(flat_words),
+                "matched_count": len(matched_files) if flat_words else 0,
+                "mismatch": mismatch,
+                "extra_segments": len(extra_files),
+                "extra_files": extra_files,
+                "missing_words_count": len(unmatched_words),
+                "unmatched_words": unmatched_words,
+                "sampling_frequency": sr_out,
+                "warnings": warnings_list,
+            }
+            if warnings_list:
+                payload["warning"] = warnings_list[0]
+            if wordlist_schema:
+                payload["wordlist_schema"] = wordlist_schema
+                payload["group_count"] = len(wordlist_groups)
+
+            self._emit(True, msg, **payload)
         except Exception as e:
             self._emit(False, error=str(e))
 
@@ -457,11 +843,6 @@ class CLIToolkitScriptMixin:
           desc="Goal"      User goal description for archiving (default "CLI script execution")
           name="Name"      Custom script name for archiving (default "CLI script")
         """
-        import re
-        import uuid
-        import hashlib
-        import datetime
-        
         arg_norm = arg.replace('\\', '/')
         args = shlex.split(arg_norm)
         if not args:
@@ -540,7 +921,6 @@ class CLIToolkitScriptMixin:
             # We can check if any speakers exist to know if there's project data to snapshot
             if self.speaker_manager.get_all_speakers():
                 has_active_project = True
-                import tempfile
                 # Export to a temp path
                 fd, temp_path = tempfile.mkstemp(suffix=".teproj")
                 os.close(fd)
@@ -758,7 +1138,6 @@ class CLIToolkitScriptMixin:
                     
             # Save tables
             for idx, tbl_res in enumerate(table_results, start=1):
-                import csv
                 tbl_name = safe_name(tbl_res.title or f"custom_table_{idx}", f"custom_table_{idx}")
                 out_path = unique_path(unique_folder, f"{tbl_name}.csv")
                 try:
@@ -808,7 +1187,6 @@ class CLIToolkitScriptMixin:
                     
             self._emit(True, "脚本执行完成", logs=logs, output_dir=unique_folder, outputs=output_records)
         except Exception as e:
-            import traceback
             tb = traceback.format_exc()
             self._emit(False, error=f"执行发生意外错误: {e}", traceback=tb)
         finally:
@@ -843,7 +1221,7 @@ class CLIToolkitScriptMixin:
 
             from modules.script_manager import save_script
             saved_id = save_script(script_id, name, description, script_type, code_content)
-            self._emit(True, f"Script saved successfully.", id=saved_id)
+            self._emit(True, "Script saved successfully.", id=saved_id)
         except Exception as e:
             self._emit(False, error=str(e))
 

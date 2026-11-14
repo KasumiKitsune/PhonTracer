@@ -43,7 +43,7 @@ def _corrupt_wav_byte_rate(path):
     return sample_rate * block_align
 
 
-def test_repair_legacy_phonrec_wav_header(tmp_path):
+def test_repair_legacy_corrupted_wav_header(tmp_path):
     wav_path = _write_test_wav(tmp_path / "legacy.wav")
     expected_byte_rate = _corrupt_wav_byte_rate(wav_path)
 
@@ -64,7 +64,7 @@ def test_normalize_independent_item_boundaries():
     assert item["inner_splits"] == [0.6]
 
 
-def test_project_manager_restores_phonrec_audio_with_valid_boundaries(tmp_path):
+def test_project_manager_restores_batch_audio_with_valid_boundaries(tmp_path):
     from modules.project_manager import ProjectManager
 
     workspace = tmp_path / "workspace"
@@ -418,8 +418,8 @@ def test_project_manager_collect_file_refs():
     assert refs == expected_refs
 
 
-def test_advanced_wordlist_metadata_survives_phonrec_main_roundtrip(tmp_path):
-    """PhonRec 简洁字段与主程序 item_*/group_* 字段必须始终双向等价。"""
+def test_advanced_wordlist_metadata_survives_adapt_roundtrip(tmp_path):
+    """工程简洁元数据字段与 item_*/group_* 字段必须始终双向等价。"""
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     state = {
@@ -465,3 +465,25 @@ def test_advanced_wordlist_metadata_survives_phonrec_main_roundtrip(tmp_path):
     assert rebuilt_item["tags"] == ["目标词"]
     assert rebuilt_item["aliases"] == ["ma1"]
     assert rebuilt_item["meta"] == {"拼音": "mā", "声调": "阴平"}
+
+def test_app_startup_speaker_and_item_arguments():
+    from modules.app import PhoneticsApp
+
+    raw_args = ["--speaker", "spk_123", "handoff.teproj", "--item", "item_456"]
+    cleaned = PhoneticsApp._normalize_startup_files(raw_args)
+    assert cleaned == ["handoff.teproj"]
+
+    class DummyApp:
+        _startup_target_speaker = None
+        _startup_target_item = None
+
+        def _sync_ui_after_project_load(self):
+            pass
+
+    dummy = DummyApp()
+    cleaned_dummy = PhoneticsApp._normalize_startup_files(
+        dummy, ["--speaker=spk_abc", "handoff.teproj", "--item=item_xyz"]
+    )
+    assert cleaned_dummy == ["handoff.teproj"]
+    assert dummy._startup_target_speaker == "spk_abc"
+    assert dummy._startup_target_item == "item_xyz"

@@ -1,8 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os
 import sys
+import importlib.util
 import customtkinter
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 # 获取 customtkinter 资源路径
 ctk_path = os.path.dirname(customtkinter.__file__)
@@ -35,8 +36,9 @@ gui_submodules = [
     if m.startswith(GUI_ONLY_PREFIXES)
 ]
 
-# 预加载运行时实际使用的 numpy / scipy 子包，捕获 Cython 扩展与动态 __getattr__ 注入的全部子模块
+# 预加载运行时实际使用的 numpy / scipy / pandas 子包，捕获 Cython 扩展与动态 __getattr__ 注入的全部子模块
 import numpy
+import pandas
 import scipy.stats
 import scipy.special
 import scipy.signal
@@ -53,13 +55,34 @@ def _safe_collect_submodules(pkg_name):
     except Exception:
         return []
 
+def _safe_collect_datas(pkg_name):
+    try:
+        if importlib.util.find_spec(pkg_name) is not None:
+            return collect_data_files(pkg_name)
+    except Exception:
+        pass
+    return []
+
 runtime_scientific_imports = sorted(
     m for m in sys.modules
-    if m.startswith(('numpy', 'scipy')) and not m.startswith(('numpy.f2py', 'numpy.distutils', 'numpy.testing', 'scipy.conftest'))
+    if m.startswith(('numpy', 'scipy', 'pandas'))
+    and not m.startswith((
+        'numpy.f2py', 'numpy.distutils', 'numpy.testing',
+        'scipy.conftest', 'pandas.tests', 'pandas.conftest',
+    ))
 )
 
+optional_pandas_deps = [
+    m for m in ('pytz', 'dateutil', 'tzdata')
+    if importlib.util.find_spec(m) is not None
+]
+
+base_datas = [
+    *_safe_collect_datas('tzdata'),
+]
+
 base_hidden_imports = [
-    'parselmouth', 'xlsxwriter',
+    'parselmouth', 'xlsxwriter', 'pandas', 'statistics',
     'numpy.core', 'numpy.core.multiarray', 'numpy.core._multiarray_umath',
     'numpy.core.umath', 'numpy.core.numeric', 'numpy.core.fromnumeric',
     'numpy._core', 'numpy._core.multiarray', 'numpy._core._multiarray_umath',
@@ -72,8 +95,10 @@ base_hidden_imports = [
     'scipy.linalg', 'scipy.linalg.cython_blas', 'scipy.linalg.cython_lapack',
     'scipy.ndimage', 'scipy.spatial', 'scipy.io.wavfile', 'scipy.fft',
     'textgrid', 'matplotlib.backends.backend_svg',
+    *optional_pandas_deps,
     *_safe_collect_submodules('numpy._core'),
     *_safe_collect_submodules('numpy.core'),
+    *_safe_collect_submodules('pandas._libs'),
     *_safe_collect_submodules('scipy.stats'),
     *_safe_collect_submodules('scipy.special'),
     *runtime_scientific_imports,
@@ -90,7 +115,7 @@ if sys.platform == 'win32':
 
 excluded_modules = [
     'uharfbuzz',
-    'seaborn', 'pandas', 'torch', 'torchvision', 'torchaudio',
+    'seaborn', 'pandas.tests', 'torch', 'torchvision', 'torchaudio',
     'whisper', 'matplotlib.tests', 'IPython', 'jupyter',
     'notebook', 'sqlite3', 'numba', 'llvmlite', 'gradio', 'altair',
     'PyQt5', 'PyQt6', 'PySide2', 'PySide6', 'qtpy'
@@ -103,7 +128,8 @@ a = Analysis(
     binaries=[],
     datas=[
         ('assets', 'assets'),
-        (ctk_path, 'customtkinter')
+        (ctk_path, 'customtkinter'),
+        *base_datas,
     ],
     hiddenimports=gui_hidden_imports,
     excludes=excluded_modules,
@@ -121,7 +147,8 @@ b = Analysis(
     binaries=[],
     datas=[
         ('assets', 'assets'),
-        (ctk_path, 'customtkinter')
+        (ctk_path, 'customtkinter'),
+        *base_datas,
     ],
     hiddenimports=gui_hidden_imports,
     excludes=excluded_modules,
@@ -146,7 +173,7 @@ if is_win:
         ['cli.py'],
         pathex=['.'],
         binaries=[],
-        datas=[],
+        datas=[*base_datas],
         hiddenimports=cli_hidden_imports,
         excludes=excluded_modules + ['customtkinter', 'tkinter', *gui_submodules],  # CLI 排除 GUI 库与 GUI 子包
         win_no_prefer_redirects=False,

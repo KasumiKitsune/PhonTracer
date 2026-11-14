@@ -23,8 +23,6 @@ body:
         - PhonTracer 主程序
         - Toolkit
         - PhonTracer CLI
-        - PhonRec 完整模式
-        - PhonRec 独立模式
         - 安装或发布产物
         - 其他
     validations:

@@ -745,6 +745,7 @@ class AcousticChartExporter(
                 plt.close(fig)
         finally:
             pdf_pages.close()
+        return [out_file]
 
 
     def _export_paginated_images(self, base_path, data_entries, group_key, scale, ext, facet_pages=None):
@@ -756,6 +757,14 @@ class AcousticChartExporter(
         total_pages = max(1, len(facet_pages))
         dir_name, file_name = os.path.split(base_path)
         name_part, _ = os.path.splitext(file_name)
+        written_files = []
+
+        # 分页导出 (>1页) 时清理可能残留的无后缀同名旧图，杜绝与 _第1页 完全重复的图片误导漏看后续页
+        if total_pages > 1 and os.path.exists(base_path):
+            try:
+                os.remove(base_path)
+            except Exception:
+                pass
 
         for page_idx, page_spec in enumerate(facet_pages):
             self._check_export_cancelled()
@@ -770,9 +779,9 @@ class AcousticChartExporter(
 
             out_path = os.path.join(dir_name, f"{name_part}_第{page_idx + 1}页{ext}") if total_pages > 1 else base_path
             self._save_figure(fig, out_path)
-            if page_idx == 0 and os.path.abspath(out_path) != os.path.abspath(base_path):
-                _shutil.copy2(out_path, base_path)
+            written_files.append(out_path)
             plt.close(fig)
+        return written_files
 
 
     def _export_dataset(self, data, out_path, ext):
@@ -789,23 +798,24 @@ class AcousticChartExporter(
         else:
             scale = "Hz"
 
+        written_files = []
         pagination_state = self._get_group_pagination_state(data, chart_type, groupby)
         if pagination_state['is_paginated_heatmap'] and pagination_state['pages']:
             with _MATPLOTLIB_LOCK:
                 if ext == ".pdf":
-                    self._export_overview_heatmap_paginated_pdf(out_path, data, scale, pagination_state['pages'])
+                    written_files = self._export_overview_heatmap_paginated_pdf(out_path, data, scale, pagination_state['pages'])
                 else:
-                    self._export_overview_heatmap_paginated_images(out_path, data, scale, ext, pagination_state['pages'])
+                    written_files = self._export_overview_heatmap_paginated_images(out_path, data, scale, ext, pagination_state['pages'])
             self._report_export_progress(1.0, "当前任务完成")
-            return
+            return written_files
 
         facet_pages = pagination_state.get('facet_pages', [])
         if len(facet_pages) > 1 and not self._is_overview_heatmap_chart(chart_type):
             with _MATPLOTLIB_LOCK:
                 if ext == ".pdf":
-                    self._export_paginated_pdf(out_path, data, group_key, scale, facet_pages=facet_pages)
+                    written_files = self._export_paginated_pdf(out_path, data, group_key, scale, facet_pages=facet_pages)
                 else:
-                    self._export_paginated_images(out_path, data, group_key, scale, ext, facet_pages=facet_pages)
+                    written_files = self._export_paginated_images(out_path, data, group_key, scale, ext, facet_pages=facet_pages)
         else:
             self._report_export_progress(0.2, "正在生成图表...")
             self._check_export_cancelled()
@@ -814,8 +824,10 @@ class AcousticChartExporter(
                 self._check_export_cancelled()
                 self._report_export_progress(0.9, "正在写入文件...")
                 self._save_figure(fig, out_path)
+                written_files = [out_path]
                 plt.close(fig)
         self._report_export_progress(1.0, "当前任务完成")
+        return written_files
 
 
     def _parse_custom_ratio_value(self, raw_val, default=1.5):
@@ -868,12 +880,20 @@ class AcousticChartExporter(
                 plt.close(fig)
         finally:
             pdf_pages.close()
+        return [out_file]
 
 
     def _export_overview_heatmap_paginated_images(self, base_path, data, scale, ext, pages):
         total_pages = len(pages)
         dir_name, file_name = os.path.split(base_path)
         name_part, _ = os.path.splitext(file_name)
+        written_files = []
+
+        if total_pages > 1 and os.path.exists(base_path):
+            try:
+                os.remove(base_path)
+            except Exception:
+                pass
 
         for page_idx, page_rows in enumerate(pages):
             self._check_export_cancelled()
@@ -883,11 +903,12 @@ class AcousticChartExporter(
             chunk_entries = [e for e in data if (self._entry_wordlist_group(e), e['label']) in allowed_pairs]
             fig = self.generate_plot(chunk_entries, is_preview=False)
 
-            fig.text(0.95, 0.02, f"第 {page_idx + 1} 页 / 共 {total_pages} 页",
-                     ha='right', va='bottom', fontsize=9, color='gray')
+            if total_pages > 1:
+                fig.text(0.95, 0.02, f"第 {page_idx + 1} 页 / 共 {total_pages} 页",
+                         ha='right', va='bottom', fontsize=9, color='gray')
 
-            out_path = os.path.join(dir_name, f"{name_part}_第{page_idx + 1}页{ext}")
+            out_path = os.path.join(dir_name, f"{name_part}_第{page_idx + 1}页{ext}") if total_pages > 1 else base_path
             self._save_figure(fig, out_path)
-            if page_idx == 0 and os.path.abspath(out_path) != os.path.abspath(base_path):
-                _shutil.copy2(out_path, base_path)
+            written_files.append(out_path)
             plt.close(fig)
+        return written_files

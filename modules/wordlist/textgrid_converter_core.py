@@ -18,7 +18,13 @@ from ..core.text_io import (
     read_text_file_with_fallback,
     split_into_syllables,
 )
-from .parsers_and_exporters import build_document_from_csv_text
+from .parsers_and_exporters import (
+    build_document_from_csv_text,
+    build_document_from_messy_text,
+    build_document_from_structured_text,
+    looks_like_csv_wordlist_text,
+    looks_like_structured_wordlist_text,
+)
 from .schema_and_models import flatten_wordlist_document, load_wordlist_document
 
 DEFAULT_GROUP_NAME = "导入内容"
@@ -277,7 +283,7 @@ def recommend_tier_names(summary: Dict[str, Any]) -> Dict[str, Optional[str]]:
 
 
 def load_auxiliary_wordlist_records(path: str) -> Tuple[List[Dict[str, Any]], int]:
-    """读取普通字表、CSV 或 .ptwl，返回 TextGrid 转换器可用的辅助词项记录。"""
+    """读取普通/杂乱草稿字表、结构化字表、CSV 或 .ptwl，返回 TextGrid 转换器可用的辅助词项记录。"""
     lower = str(path or "").lower()
     if lower.endswith(".ptwl"):
         doc = load_wordlist_document(path)
@@ -285,23 +291,15 @@ def load_auxiliary_wordlist_records(path: str) -> Tuple[List[Dict[str, Any]], in
         return records, len(groups)
 
     text = _read_text_file_with_fallback(path)
-    if lower.endswith(".csv"):
-        try:
-            doc = build_document_from_csv_text(text, title=os.path.splitext(os.path.basename(path))[0])
-            groups, _flat_words, records = flatten_wordlist_document(doc)
-            if records:
-                return records, len(groups)
-        except Exception:
-            pass
-
-    groups, _flat_words = parse_wordlist(text)
-    records = []
-    for group in groups:
-        group_name = str(group.get("group") or DEFAULT_GROUP_NAME).strip() or DEFAULT_GROUP_NAME
-        for word in group.get("items", []):
-            label = str(word or "").strip()
-            if label:
-                records.append({"label": label, "word": label, "group": group_name})
+    title = os.path.splitext(os.path.basename(path))[0] or "辅助字表"
+    stripped = (text or "").lstrip("﻿").strip()
+    if lower.endswith(".csv") or looks_like_csv_wordlist_text(stripped):
+        doc = build_document_from_csv_text(stripped, title=title)
+    elif looks_like_structured_wordlist_text(stripped):
+        doc = build_document_from_structured_text(stripped, title=title)
+    else:
+        doc = build_document_from_messy_text(stripped, title=title)
+    groups, _flat_words, records = flatten_wordlist_document(doc)
     return records, len(groups)
 
 

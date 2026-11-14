@@ -1137,13 +1137,25 @@ class CLISpeakerIngestMixin:
             self._after_state_change("apply_wordlist")
             if emit_result:
                 doc_info = wordlist_doc or self.wordlist_doc or {}
+                missing_cnt = sum(1 for it in self.items.values() if isinstance(it, dict) and it.get("missing"))
+                wl_warns = []
+                if missing_cnt > 0:
+                    wl_warns.append(
+                        f"长音频检出有效语音段 ({len(macro_segments)}) 少于字表词数 ({len(flat_words)})，末尾 {missing_cnt} 个词条标记为缺失。"
+                    )
+                msg_long = f"长音频已按字表处理，共 {len(flat_words)} 个词/字。"
+                if wl_warns:
+                    msg_long = f"[警告] {wl_warns[0]}"
                 self._emit(
                     True,
-                    f"长音频已按字表处理，共 {len(flat_words)} 个词/字。",
+                    msg_long,
                     total=len(flat_words),
+                    detected_segments=len(macro_segments),
+                    missing_count=missing_cnt,
                     group_count=len(groups),
                     wordlist_title=doc_info.get("title", "") if isinstance(doc_info, dict) else "",
                     schema=doc_info.get("schema", WORDLIST_SCHEMA) if isinstance(doc_info, dict) else WORDLIST_SCHEMA,
+                    warnings=wl_warns,
                 )
         except Exception as e:
             if emit_result:

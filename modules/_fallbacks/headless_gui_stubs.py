@@ -57,10 +57,11 @@ def _install_headless_gui_and_audio_stubs_if_missing() -> None:
                         child = _DummyWidget()
                         object.__setattr__(self, name, child)
                         return child
-                    if name in ("_select_button_by_value", "_unselect_button_by_value", "_draw", "_create_grid"):
+                    if name in ("_select_button_by_value", "_unselect_button_by_value", "_draw", "_create_grid", "_open_dropdown_menu"):
                         return lambda *args, **kwargs: None
                     raise AttributeError(name)
                 return lambda *args, **kwargs: None
+
             def __init__(self, *args: Any, **kwargs: Any):
                 self._cfg = dict(kwargs)
                 self.children = {}
@@ -68,15 +69,19 @@ def _install_headless_gui_and_audio_stubs_if_missing() -> None:
                 self._manager = ""
                 self._grid_info = {}
                 self._bindings = {}
-                self._check_state = False
-                self._corner_radius = kwargs.get("corner_radius", 6)
+                var_obj = kwargs.get("variable")
+                init_var_val = var_obj.get() if hasattr(var_obj, "get") else None
+                self._check_state = bool(init_var_val) if isinstance(init_var_val, bool) else False
+                cr_in = kwargs.get("corner_radius")
+                self._corner_radius = 6 if cr_in is None else cr_in
                 self.tk = "tk"
                 self._after_depth = 0
                 self._segmented_button = self
                 self._buttons_dict = {}
                 self._values = kwargs.get("values", [])
                 self._current_value = self._values[0] if self._values else ""
-                self._geom = "200x120+0+0" 
+                self._geom = "200x120+0+0"
+                self._draw()
 
             def _mouse_wheel_all(self, *args: Any, **kwargs: Any) -> None:
                 pass
@@ -258,7 +263,7 @@ def _install_headless_gui_and_audio_stubs_if_missing() -> None:
             def winfo_pointerxy(self) -> Tuple[int, int]:
                 return (100, 100)
 
-            def transient(self, *args: Any) -> None:
+            def transient(self, *args: Any, **kwargs: Any) -> None:
                 pass
 
             def protocol(self, *args: Any) -> None:
@@ -275,7 +280,7 @@ def _install_headless_gui_and_audio_stubs_if_missing() -> None:
                             self._after_depth = depth
                 return "after_id"
 
-            def after_cancel(self, *args: Any) -> None:
+            def after_cancel(self, *args: Any, **kwargs: Any) -> None:
                 pass
 
             def update_idletasks(self) -> None:
@@ -288,26 +293,48 @@ def _install_headless_gui_and_audio_stubs_if_missing() -> None:
                 pass
 
             def get(self, *args: Any) -> Any:
-                return self._cfg.get("value", "")
+                if "value" in self._cfg:
+                    return self._cfg["value"]
+                var_obj = self._cfg.get("variable")
+                if hasattr(var_obj, "get"):
+                    v = var_obj.get()
+                    return int(v) if isinstance(v, bool) else v
+                if self._values:
+                    return self._current_value
+                return ""
 
             def set(self, val: Any = "") -> None:
                 self._cfg["value"] = val
+                self._current_value = val
+                var_obj = self._cfg.get("variable")
+                if hasattr(var_obj, "set"):
+                    var_obj.set(val)
 
             def select(self) -> None:
                 self._check_state = True
                 self._cfg["value"] = 1
+                var_obj = self._cfg.get("variable")
+                if hasattr(var_obj, "set"):
+                    var_obj.set(True)
                 self._draw()
 
             def deselect(self) -> None:
                 self._check_state = False
                 self._cfg["value"] = 0
+                var_obj = self._cfg.get("variable")
+                if hasattr(var_obj, "set"):
+                    var_obj.set(False)
                 self._draw()
 
             def insert(self, *args: Any, **kwargs: Any) -> str:
+                if len(args) == 2 and not kwargs and str(args[0]) in ("0", "end", "1.0"):
+                    cur = str(self._cfg.get("value", ""))
+                    self._cfg["value"] = (str(args[1]) + cur) if str(args[0]) in ("0", "1.0") else (cur + str(args[1]))
                 return "item"
 
             def delete(self, *args: Any, **kwargs: Any) -> None:
-                pass
+                if args and not kwargs and str(args[0]) in ("0", "1.0"):
+                    self._cfg["value"] = ""
 
             def get_children(self, *args: Any) -> Tuple[str, ...]:
                 return ()
@@ -388,14 +415,7 @@ def _install_headless_gui_and_audio_stubs_if_missing() -> None:
             "CENTER": "center",
             "HORIZONTAL": "horizontal",
             "VERTICAL": "vertical",
-            "WORD": "word",
             "CHAR": "char",
-            "FLAT": "flat",
-            "SOLID": "solid",
-            "SUNKEN": "sunken",
-            "RAISED": "raised",
-            "GROOVE": "groove",
-            "RIDGE": "ridge",
             "SINGLE": "single",
             "BROWSE": "browse",
             "MULTIPLE": "multiple",

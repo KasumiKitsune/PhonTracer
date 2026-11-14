@@ -18,24 +18,26 @@ except ImportError:
     _sys.modules.setdefault("parselmouth", parselmouth)
     _sys.modules.setdefault("parselmouth.praat", parselmouth.praat)
 
-from modules.audio_core import trim_bounds_by_amplitude, macroscopic_vad, SILENCE_AMPLITUDE_THRESHOLD
+from modules.audio_core import load_compatible_sound, trim_bounds_by_amplitude, macroscopic_vad, SILENCE_AMPLITUDE_THRESHOLD
 from modules.visual_splitter import VisualSplitter
 from modules.data_utils import fuzzy_match_word_to_path, parse_wordlist as parse_grouped_wordlist
 from modules.core.text_io import parse_flat_wordlist, read_text_file_with_fallback
 from modules.wordlist_v2 import (
     build_document_from_csv_text,
+    build_document_from_messy_text,
     build_document_from_structured_text,
     build_document_from_v1_text,
     document_to_v1_text,
     flatten_wordlist_document,
     load_wordlist_document,
+    looks_like_csv_wordlist_text,
     looks_like_structured_wordlist_text,
 )
 from modules.ui_widgets import bind_text_context_menu
 from modules.toolkit_ui.tk_utils import start_safe_thread
 
 def parse_wordlist(raw_text: str):
-    """解析字表，兼容主程序的【组别】格式"""
+    """解析字表，兼容主程序的【组别】格式及杂乱草稿格式"""
     return parse_flat_wordlist(raw_text)
 
 
@@ -214,8 +216,6 @@ class AudioBatchTabMixin:
         self.var_buffer = ctk.StringVar(value="0.1")
         self._make_labeled_entry(settings, "保存区段首尾缓冲", self.var_buffer, width=110, suffix="秒")
 
-
-
         actions = ctk.CTkFrame(right_panel, fg_color="transparent")
         actions.pack(side=tk.BOTTOM, fill=tk.X, padx=20, pady=20)
         self._make_button(actions, "匹配字表", self.match_segments_to_wordlist, tone="warning", image=self.icons.get("check")).pack(fill=tk.X, pady=(0, 10))
@@ -263,7 +263,6 @@ class AudioBatchTabMixin:
             bbox = self.tree_merge.bbox(item)
             if bbox:
                 mid_y = bbox[1] + bbox[3] // 2
-                # x 从 0 开始，宽度为 Treeview 宽度
                 x = 0
                 w = self.tree_merge.winfo_width()
                 if event.y < mid_y:
@@ -317,10 +316,12 @@ class AudioBatchTabMixin:
             doc = build_document_from_csv_text(text, title=title)
         else:
             text = cls._read_text_file_with_fallback(path)
-            if looks_like_structured_wordlist_text(text):
+            if looks_like_csv_wordlist_text(text):
+                doc = build_document_from_csv_text(text, title=title)
+            elif looks_like_structured_wordlist_text(text):
                 doc = build_document_from_structured_text(text, title=title)
             else:
-                doc = build_document_from_v1_text(text, title=title)
+                doc = build_document_from_messy_text(text, title=title)
 
         _groups, flat_words, _records = flatten_wordlist_document(doc)
         return {
@@ -352,7 +353,6 @@ class AudioBatchTabMixin:
         if not flat_words:
             return messagebox.showwarning("提示", "字表解析结果为空")
 
-        # 模糊匹配排序
         sorted_paths = []
         available_paths = list(self.merge_files)
         used_indices = set()
@@ -363,12 +363,10 @@ class AudioBatchTabMixin:
                 sorted_paths.append(available_paths[idx])
                 used_indices.add(idx)
 
-        # 将未匹配到的文件追加到末尾
         for i, p in enumerate(available_paths):
             if i not in used_indices:
                 sorted_paths.append(p)
 
-        # 更新 UI
         self.merge_files = sorted_paths
         self.tree_merge.delete(*self.tree_merge.get_children())
         for p in self.merge_files:
@@ -426,7 +424,7 @@ class AudioBatchTabMixin:
         def run():
             self.set_loading(True, "正在进行 VAD 检测与匹配...")
             try:
-                snd = parselmouth.Sound(self.split_source)
+                snd = load_compatible_sound(self.split_source)
                 vad_segs = macroscopic_vad(snd)
                 self.custom_segments = vad_segs
 
@@ -451,7 +449,7 @@ class AudioBatchTabMixin:
         def run():
             self.set_loading(True, "正在加载并检测音频区段...")
             try:
-                snd = parselmouth.Sound(self.split_source)
+                snd = load_compatible_sound(self.split_source)
 
                 if self.custom_segments:
                     existing_items = [{'id': i, 'label': f'#{i+1}', 'start': s, 'end': e} for i, (s, e) in enumerate(self.custom_segments)]
@@ -490,23 +488,31 @@ class AudioBatchTabMixin:
         def run():
             self.set_loading(True, "正在合并音频...")
             try:
-                target_sr = 44100
-                all_vals = []
-                gap_samples = int(target_sr * gap_sec)
-                gap_array = np.zeros(gap_samples)
-
                 total = len(self.merge_files)
+                loaded_sounds = []
                 for i, path in enumerate(self.merge_files):
-                    snd = parselmouth.Sound(path)
-                    if snd.sampling_frequency != target_sr:
+                    loaded_sounds.append(load_compatible_sound(path))
+                    self.update_progress(0.5 * (i + 1) / total)
+
+                source_srs = [float(s.sampling_frequency) for s in loaded_sounds]
+                first_sr = source_srs[0]
+                target_sr = first_sr if all(abs(sr - first_sr) < 1e-3 for sr in source_srs) else max(source_srs)
+
+                all_vals = []
+                gap_samples = max(0, int(round(target_sr * gap_sec)))
+                gap_array = np.zeros(gap_samples, dtype=np.float64)
+
+                for i, snd in enumerate(loaded_sounds):
+                    if abs(float(snd.sampling_frequency) - target_sr) >= 1e-3:
                         snd = snd.resample(target_sr)
-                    all_vals.append(snd.values[0])
+                    mono = np.mean(snd.values, axis=0) if snd.values.shape[0] > 1 else snd.values[0]
+                    all_vals.append(np.asarray(mono, dtype=np.float64))
                     all_vals.append(gap_array)
-                    self.update_progress((i+1)/total)
+                    self.update_progress(0.5 + 0.5 * (i + 1) / total)
 
                 if all_vals:
                     merged_vals = np.concatenate(all_vals[:-1])
-                    merged_snd = parselmouth.Sound(np.array([merged_vals]), sampling_frequency=target_sr)
+                    merged_snd = parselmouth.Sound(np.array([merged_vals], dtype=np.float64), sampling_frequency=target_sr)
                     merged_snd.save(out_path, "WAV")
 
                 self.after(0, lambda: messagebox.showinfo("成功", f"合并完成！\n保存在: {out_path}"))
@@ -528,7 +534,6 @@ class AudioBatchTabMixin:
             _groups, wordlist, _records = flatten_wordlist_document(self.split_wordlist_document)
         else:
             wordlist = parse_wordlist(raw_text)
-        if not wordlist: return messagebox.showwarning("提示", "字表为空，请粘贴字表。")
 
         try: buffer_sec = float(self.var_buffer.get())
         except ValueError: return messagebox.showwarning("提示", "缓冲时间必须为数字")
@@ -541,28 +546,31 @@ class AudioBatchTabMixin:
         def run():
             self.set_loading(True, "正在分析并拆分音频...")
             try:
-                snd = parselmouth.Sound(self.split_source)
+                snd = load_compatible_sound(self.split_source)
 
-                # 优先使用可视化编辑器微调后的边界，否则跑自动 VAD
                 if self.custom_segments:
                     segs = self.custom_segments
+                elif wordlist:
+                    natural_segs = macroscopic_vad(snd)
+                    if len(natural_segs) > len(wordlist):
+                        gaps = [float(natural_segs[k + 1][0] - natural_segs[k][1]) for k in range(len(natural_segs) - 1)]
+                        inter_gaps = [g for g in gaps if g >= 0.30]
+                        med_inter = float(np.median(inter_gaps)) if len(inter_gaps) >= 3 else 0.50
+                        segs = macroscopic_vad(snd, expected_count=len(wordlist), max_merge_gap=min(0.28, max(0.20, 0.48 * med_inter)))
+                    else:
+                        segs = natural_segs
                 else:
-                    segs = macroscopic_vad(snd, expected_count=len(wordlist))
+                    segs = macroscopic_vad(snd)
 
                 if not segs:
                     self.after(0, lambda: messagebox.showwarning("警告", "未能在音频中检测到任何有效发音段！"))
                     return
 
-                if len(segs) != len(wordlist):
-                    pass # 容错机制：数量不匹配时，只提取匹配的最小部分
-
-                total = min(len(segs), len(wordlist))
+                pad_width = max(3, len(str(max(len(segs), len(wordlist), 1))))
                 saved_files = []
+                extra_count = 0
 
-                for i in range(total):
-                    s, e = segs[i]
-                    word = wordlist[i]
-
+                for i, (s, e) in enumerate(segs):
                     if do_trim:
                         part = snd.extract_part(from_time=s, to_time=e)
                         vals = part.values[0]
@@ -574,14 +582,24 @@ class AudioBatchTabMixin:
 
                     if e > s:
                         extract = snd.extract_part(from_time=s, to_time=e)
-                        safe_word = re.sub(r'[\\/*?:"<>|]', "", word)
-                        out_file = os.path.join(out_dir, f"{str(i+1).zfill(3)}_{safe_word}.wav")
+                        idx_prefix = str(i + 1).zfill(pad_width)
+                        if not wordlist:
+                            out_file = os.path.join(out_dir, f"{idx_prefix}_segment.wav")
+                        elif i < len(wordlist):
+                            safe_word = re.sub(r'[\\/*?:"<>|]', "", wordlist[i]).strip() or "segment"
+                            out_file = os.path.join(out_dir, f"{idx_prefix}_{safe_word}.wav")
+                        else:
+                            extra_count += 1
+                            out_file = os.path.join(out_dir, f"{idx_prefix}_extra_{str(extra_count).zfill(2)}.wav")
                         extract.save(out_file, "WAV")
                         saved_files.append(out_file)
 
-                    self.update_progress((i+1)/total)
+                    self.update_progress((i + 1) / len(segs))
 
-                self.after(0, lambda: messagebox.showinfo("成功", f"成功拆分 {total} 段音频并保存到:\n{out_dir}"))
+                summary_msg = f"成功拆分 {len(saved_files)} 段音频并保存到:\n{out_dir}"
+                if wordlist and len(segs) != len(wordlist):
+                    summary_msg += f"\n\n[警告] 检出段数 ({len(segs)}) 与字表词数 ({len(wordlist)}) 不一致，多余片段已保留为 extra_* 文件，请人工复核。"
+                self.after(0, lambda m=summary_msg: messagebox.showinfo("完成", m))
 
             except Exception as e:
                 error_message = f"拆分失败:\n{e}"
@@ -590,4 +608,3 @@ class AudioBatchTabMixin:
                 self.after(0, lambda: self.set_loading(False))
 
         start_safe_thread(run)
-

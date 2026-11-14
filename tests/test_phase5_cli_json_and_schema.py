@@ -111,7 +111,6 @@ class TestPhase5CliJsonAndSchema(unittest.TestCase):
                         "items": [{"label": "妈", "word": "妈", "metadata_source": "导入字表"}]
                     }
                 ],
-                "phonrec": {"custom": "field"},
                 "quality_config": {"snr_min": 15},
                 "speakers": {
                     "spk_1": {

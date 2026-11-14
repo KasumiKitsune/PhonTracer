@@ -12,7 +12,6 @@
 !.gitignore
 !README.md
 !requirements.txt
-!requirements-phonrec-engine.txt
 !main.py
 !cli.py
 !toolkit.py
@@ -59,15 +58,3 @@ scratch/
 upx.exe
 upx.zip
 upx-*/
-
-# 8. PhonRec Recording Suite Whitelist
-!PhonRec/backend/main.py
-!PhonRec/backend/test_backend.py
-!PhonRec/frontend/**
-PhonRec/frontend/node_modules/
-PhonRec/frontend/dist/
-PhonRec/frontend/dist-electron/
-PhonRec/frontend/src-tauri/target/
-PhonRec/frontend/eslint_errors.txt
-PhonRec/backend/workspace/
-PhonRec/backend/__pycache__/

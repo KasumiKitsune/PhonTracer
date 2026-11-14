@@ -120,7 +120,22 @@ class CLIExportMixin:
             self._emit_subcommand_help("export")
             return
 
-        if len(args) < 2:
+        fmt_raw = args[0].strip() if args else ""
+        fmt_low = fmt_raw.lower().lstrip(".")
+        out_file = None
+        filtered_tail = []
+        for tok in args[1:]:
+            if "=" in tok:
+                k_t, v_t = tok.split("=", 1)
+                if k_t.strip().lstrip("-").lower() in ("out", "output", "out_file", "output_file", "path", "dst"):
+                    out_file = v_t.strip().strip('"').strip("'")
+                    continue
+            filtered_tail.append(tok)
+        if out_file is None and filtered_tail and "=" not in filtered_tail[0]:
+            out_file = filtered_tail.pop(0)
+        args = [fmt_raw, out_file] + filtered_tail if out_file else [fmt_raw]
+
+        if len(args) < 2 or not out_file:
             self._emit(
                 False,
                 error="Requires format and output_file",
@@ -128,10 +143,6 @@ class CLIExportMixin:
                 hint="用法: export <格式> <输出路径> [continuous|per_group] [active|integrated|separate] [key=value ...]。输入 `export ?` 查看完整格式与参数列表。",
             )
             return
-
-        fmt_raw = args[0].strip()
-        fmt_low = fmt_raw.lower().lstrip(".")
-        out_file = args[1]
 
         fmt_aliases = {
             "f1_f2": "formant_space",
@@ -166,11 +177,40 @@ class CLIExportMixin:
         # 2. 高级字表 (.ptwl) 导出支持
         if fmt_low in ("ptwl", "wordlist"):
             custom_title = None
+            ptwl_scope = "active"
             for extra in args[2:]:
                 if "=" in extra:
                     k, v = extra.split("=", 1)
-                    if k.strip().lower() in ("title", "标题"):
-                        custom_title = v.strip().strip('"').strip("'")
+                    kl = k.strip().lower()
+                    vc = v.strip().strip('"').strip("'")
+                    if kl in ("title", "标题"):
+                        custom_title = vc
+                    elif kl in ("scope", "target", "export_scope"):
+                        ptwl_scope = "integrated" if vc.lower() in ("integrated", "all", "all_speakers") else vc.lower()
+                elif extra.strip().lower() in ("active", "integrated", "all", "separate"):
+                    ptwl_scope = "integrated" if extra.strip().lower() == "all" else extra.strip().lower()
+
+            if ptwl_scope == "integrated" and any(len(s.items) > 0 for s in self.speaker_manager.get_all_speakers()):
+                try:
+                    doc = self._build_wordlist_v2_doc_from_project(title=custom_title)
+                    normalized = save_wordlist_file(doc, out_file)
+                    self.wordlist_doc = normalized
+                    summary = summarize_wordlist_document(normalized)
+                    self._emit(
+                        True,
+                        f"Exported ptwl to {out_file}",
+                        path=out_file,
+                        output_file=out_file,
+                        scope="integrated",
+                        schema=normalized.get("schema", WORDLIST_SCHEMA),
+                        title=normalized.get("title", ""),
+                        groups=summary["groups"],
+                        group_count=summary["groups"],
+                        item_count=summary["items"],
+                    )
+                except Exception as e:
+                    self._emit(False, error=str(e))
+                return
 
             spk = self.current_speaker
             base_doc = self.wordlist_doc
@@ -349,7 +389,13 @@ class CLIExportMixin:
                     if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
                         v = v[1:-1]
                     if k in ("target", "scope", "export_scope"):
-                        params["export_scope"] = v
+                        v_sc = v.strip().lower()
+                        if v_sc in ("all", "all_speakers"):
+                            v_sc = "integrated"
+                        if v_sc not in ("active", "integrated", "separate"):
+                            self._emit(False, error=f"Invalid target/scope '{v}'. Must be active, integrated, or separate")
+                            return
+                        params["export_scope"] = v_sc
                         continue
                     elif k == "facet":
                         params["facet_by"] = v
@@ -405,6 +451,8 @@ class CLIExportMixin:
 
             for pos_arg in pos_args:
                 scope_candidate = pos_arg.lower()
+                if scope_candidate in ("all", "all_speakers"):
+                    scope_candidate = "integrated"
                 if scope_candidate in ("active", "separate", "integrated"):
                     params["export_scope"] = scope_candidate
                     break
@@ -470,14 +518,23 @@ class CLIExportMixin:
                     warnings.simplefilter("ignore", category=RuntimeWarning)
                     if scope == "separate":
                         os.makedirs(out_file, exist_ok=True)
+                        sep_files = []
                         for speaker in all_speakers:
                             data = exporter._extract_active_data([speaker])
                             if not data and fmt == "duration":
                                 data = exporter._extract_duration_only_entries([speaker])
                             if data:
                                 out_path = os.path.join(out_file, f"{speaker.name}_{fmt}{ext}")
-                                exporter._export_dataset(data, out_path, ext)
-                        self._emit(True, f"Exported {fmt} for multiple speakers separately to {out_file}", path=out_file, format=fmt)
+                                written = exporter._export_dataset(data, out_path, ext) or [out_path]
+                                sep_files.extend(written)
+                        self._emit(
+                            True,
+                            f"Exported {fmt} for multiple speakers separately to {out_file}",
+                            path=out_file,
+                            files=sep_files,
+                            format=fmt,
+                            scope="separate",
+                        )
                     else:
                         os.makedirs(os.path.dirname(os.path.abspath(out_file)) or ".", exist_ok=True)
                         data = exporter._get_current_data_entries()
@@ -486,7 +543,7 @@ class CLIExportMixin:
                         if not data and fmt == "formant_space":
                             ok = self._export_vowel_space_chart(out_file, speakers_to_process, emit_error=False)
                             if ok:
-                                extra_payload = {"path": out_file, "format": fmt}
+                                extra_payload = {"path": out_file, "files": [out_file], "paginated": False, "page_count": 1, "format": fmt, "scope": scope}
                                 if scope == "integrated":
                                     extra_payload["integrated_summary"] = self._build_integrated_summary(speakers_to_process)
                                 self._emit(True, f"Exported {fmt} ({scope}) to {out_file}", **extra_payload)
@@ -494,11 +551,25 @@ class CLIExportMixin:
                         if not data:
                             self._emit(False, error="No valid data found for export", hint=empty_data_hint)
                             return
-                        exporter._export_dataset(data, out_file, ext)
-                        extra_payload = {"path": out_file, "format": fmt}
+                        written = exporter._export_dataset(data, out_file, ext) or [out_file]
+                        is_paginated = len(written) > 1
+                        primary_path = written[0] if written else out_file
+                        extra_payload = {
+                            "path": primary_path,
+                            "files": written,
+                            "paginated": is_paginated,
+                            "page_count": len(written),
+                            "format": fmt,
+                            "scope": scope,
+                        }
                         if scope == "integrated":
                             extra_payload["integrated_summary"] = self._build_integrated_summary(speakers_to_process)
-                        self._emit(True, f"Exported {fmt} ({scope}) to {out_file}", **extra_payload)
+                        msg_out = (
+                            f"Exported paginated {fmt} ({scope}, {len(written)} pages) to {', '.join(os.path.basename(p) for p in written)}"
+                            if is_paginated
+                            else f"Exported {fmt} ({scope}) to {primary_path}"
+                        )
+                        self._emit(True, msg_out, **extra_payload)
             except Exception as e:
                 self._emit(False, error=str(e))
             finally:
@@ -518,30 +589,47 @@ class CLIExportMixin:
         rule = "continuous"
         target = "active"
         use_binary = True
+        explicit_sr = None
         pos_rest = []
         for token in args[2:]:
             if "=" in token:
                 k, v = token.split("=", 1)
                 k_low = k.strip().lower()
-                v_clean = v.strip().strip('"').strip("'").lower()
+                v_raw = v.strip().strip('"').strip("'")
+                v_clean = v_raw.lower()
                 if k_low in ("target", "scope", "export_scope"):
-                    target = v_clean
-                elif k_low in ("rule", "num_rule"):
-                    rule = v.strip().strip('"').strip("'")
+                    target = "integrated" if v_clean in ("all", "all_speakers") else v_clean
+                elif k_low in ("rule", "num_rule", "buffer", "buffer_sec", "gap", "gap_sec"):
+                    rule = v_raw
                 elif k_low == "binary":
                     use_binary = v_clean not in ("false", "0", "no", "off", "text")
+                elif k_low in ("sr", "sample_rate", "sampling_frequency"):
+                    try:
+                        explicit_sr = float(v_raw)
+                    except ValueError:
+                        self._emit(False, error=f"Invalid sample rate: {v_raw}")
+                        return
+                elif k_low == "format" and fmt == "collection":
+                    use_binary = v_clean not in ("text", "ootextfile", "txt", "ascii")
             else:
                 pos_rest.append(token)
 
         for tok in pos_rest:
-            if tok.lower() in ("active", "separate", "integrated"):
-                target = tok.lower()
-            elif tok.lower() == "text" and fmt == "collection":
+            tl_tok = tok.lower()
+            if tl_tok in ("all", "all_speakers"):
+                target = "integrated"
+            elif tl_tok in ("active", "separate", "integrated"):
+                target = tl_tok
+            elif tl_tok == "text" and fmt == "collection":
                 use_binary = False
-            elif tok.lower() == "binary" and fmt == "collection":
+            elif tl_tok == "binary" and fmt == "collection":
                 use_binary = True
             else:
                 rule = tok
+
+        if target not in ("active", "integrated", "separate"):
+            self._emit(False, error=f"Invalid target/scope '{target}'. Must be active, integrated, or separate")
+            return
 
         speakers_to_process = [self.current_speaker] if target == "active" else self.speaker_manager.get_all_speakers()
 
@@ -551,8 +639,18 @@ class CLIExportMixin:
 
         try:
             if fmt == "formant_table":
+                if target == "separate":
+                    os.makedirs(out_file, exist_ok=True)
+                    ft_files = []
+                    for s in speakers_to_process:
+                        if len(s.items) > 0:
+                            s_path = os.path.join(out_file, f"{s.name}_formant_table.xlsx")
+                            self._export_formant_table(s_path, [s])
+                            ft_files.append(s_path)
+                    self._emit(True, f"Exported formant_table separately to {out_file}", path=out_file, files=ft_files, format=fmt, scope="separate")
+                    return
                 self._export_formant_table(out_file, speakers_to_process)
-                extra_payload = {"path": out_file, "format": fmt}
+                extra_payload = {"path": out_file, "format": fmt, "scope": target}
                 if target == "integrated":
                     extra_payload["integrated_summary"] = self._build_integrated_summary(speakers_to_process)
                 self._emit(True, f"Exported formant_table to {out_file}", **extra_payload)
@@ -578,12 +676,12 @@ class CLIExportMixin:
                     elif fmt == "wav":
                         self._export_wav(s_out, s_struct, rule, s)
                     elif fmt == "merged_wav":
-                        self._export_merged_wav(f"{s_out}.wav", s_struct, rule, s)
+                        self._export_merged_wav(f"{s_out}.wav", s_struct, rule, s, explicit_sr=explicit_sr)
                     elif fmt == "textgrid":
                         if s.tab_mode == "多条独立音频":
-                            self._export_textgrid(s_out, s_struct, s)
+                            self._export_textgrid(s_out, s_struct, s, emit_output=False)
                         else:
-                            self._export_textgrid(f"{s_out}.TextGrid", s_struct, s)
+                            self._export_textgrid(f"{s_out}.TextGrid", s_struct, s, emit_output=False)
                     elif fmt == "collection":
                         self._export_collection(os.path.join(out_file, f"{s.name}.Collection"), s_struct, s, binary=use_binary)
                     else:
@@ -592,10 +690,34 @@ class CLIExportMixin:
                 self._emit(True, f"Exported {fmt} for multiple speakers to {out_file}", path=out_file, format=fmt)
 
             elif target == "integrated":
+                if fmt == "textgrid":
+                    os.makedirs(out_file, exist_ok=True)
+                    tg_files = []
+                    for s in speakers_to_process:
+                        if not s.items:
+                            continue
+                        s_groups = getattr(s, "cli_groups", None) or list(dict.fromkeys(it.get("group", "默认组") for it in s.items.values()))
+                        s_struct = [
+                            (grp, [iid for iid, item in s.items.items() if item.get("group", "默认组") == grp and not item.get("is_excluded", False)])
+                            for grp in s_groups
+                        ]
+                        s_out = os.path.join(out_file, f"{s.name}") if s.tab_mode == "多条独立音频" else os.path.join(out_file, f"{s.name}.TextGrid")
+                        self._export_textgrid(s_out, s_struct, s, emit_output=False)
+                        tg_files.append(s_out)
+                    self._emit(
+                        True,
+                        f"Exported multi-speaker TextGrids to {out_file}",
+                        path=out_file,
+                        files=tg_files,
+                        format=fmt,
+                        scope="integrated",
+                        integrated_summary=self._build_integrated_summary(speakers_to_process),
+                    )
+                    return
                 if fmt not in ("txt", "xlsx", "line_chart", "kde", "collection"):
                     self._emit(
                         False,
-                        error=f"Format {fmt} does not support integrated multi-speaker export",
+                        error=f"Format {fmt} does not support integrated multi-speaker export (use target=separate or target=active)",
                         supported_formats=self.SUPPORTED_EXPORT_FORMATS,
                     )
                     return
@@ -635,9 +757,9 @@ class CLIExportMixin:
                 elif fmt == "wav":
                     self._export_wav(out_file, structure, rule, s)
                 elif fmt == "merged_wav":
-                    self._export_merged_wav(out_file, structure, rule, s)
+                    self._export_merged_wav(out_file, structure, rule, s, explicit_sr=explicit_sr)
                 elif fmt == "textgrid":
-                    self._export_textgrid(out_file, structure, s)
+                    self._export_textgrid(out_file, structure, s, emit_output=False)
                 elif fmt == "collection":
                     self._export_collection(out_file, structure, s, binary=use_binary)
                 else:
@@ -651,13 +773,11 @@ class CLIExportMixin:
     def do_export_bundle(self, arg):
         """
         One-stop research artifact bundle export.
-        Usage: export_bundle <out_dir> [scope=active|integrated|separate] [format=png|svg] [title=<project_title>]
+        Usage: export_bundle <out_dir> [scope=active|integrated|separate] [format=png|svg|pdf] [title=<project_title>] [charts=auto|all|<list>] [collection=true|false] [binary=true|false]
         Generates under <out_dir>:
-          - <project_title>.teproj
-          - <project_title>.ptwl
-          - acoustic_data.xlsx & acoustic_points.txt
-          - acoustic_stats.json
-          - charts/ (contour, distribution, quality, overview_heatmap, and formant_space if formant data exists)
+          - <project_title>.teproj & <project_title>.ptwl & <project_title>.Collection
+          - acoustic_data.xlsx & acoustic_points.txt & acoustic_stats.json
+          - charts/ (contour, distribution, duration, density, quality, overview_heatmap, plus auto-detected disyllabic tone_sandhi & tone_effect_time, and formant_space if formant data exists)
           - report/ (研究方法报告.md, 研究档案.xlsx, provenance_meta.json)
         """
         try:
@@ -667,41 +787,82 @@ class CLIExportMixin:
             return
 
         if not args or (len(args) == 1 and args[0].strip().lower() in ("?", "--help", "-h", "help")):
-            self._emit(
-                 len(args) == 1,
-                error=None if len(args) == 1 else "Usage: export_bundle <out_dir> [scope=active|integrated|separate] [format=png|svg]",
-                usage="export_bundle <out_dir> [scope=active|integrated|separate] [format=png|svg]",
-            )
+            if len(args) == 1:
+                self._emit_subcommand_help("export_bundle")
+            else:
+                self._emit(
+                    False,
+                    error="Usage: export_bundle <out_dir> [scope=active|integrated|separate] [format=png|svg|pdf] [title=<name>] [charts=auto|all|<list>] [collection=true|false]",
+                    usage="export_bundle <out_dir> [scope=active|integrated|separate] [format=png|svg|pdf] [title=<name>] [charts=auto|all|<list>] [collection=true|false]",
+                )
             return
 
-        out_dir = args[0]
+        out_dir = None
         scope = None
         img_fmt = "png"
         custom_title = None
+        charts_opt = "auto"
+        extra_charts = []
+        include_collection = True
+        collection_binary = True
+        sandhi_opt = "auto"
+        include_duration = True
 
-        for token in args[1:]:
+        for token in args:
             if "=" in token:
                 k, v = token.split("=", 1)
-                k = k.strip().lower()
-                v = v.strip()
-                if k in ("scope", "target", "export_scope"):
-                    scope = v.lower()
+                k = k.strip().lstrip("-").lower()
+                v = v.strip().strip('"').strip("'")
+                vl = v.lower()
+                if k in ("out", "out_dir", "output", "output_dir"):
+                    out_dir = v
+                elif k in ("scope", "target", "export_scope"):
+                    scope = "integrated" if vl in ("all", "all_speakers") else vl
                 elif k in ("format", "fmt", "img_format"):
-                    img_fmt = v.lower().lstrip(".")
+                    img_fmt = vl.lstrip(".")
                 elif k in ("title", "project_title", "name"):
                     custom_title = v
+                elif k in ("charts", "chart_types"):
+                    charts_opt = v
+                elif k in ("extra_charts", "add_charts"):
+                    extra_charts.extend([c.strip().lower() for c in re.split(r"[,;，；]+", v) if c.strip()])
+                elif k in ("collection", "export_collection", "praat_collection"):
+                    include_collection = vl not in ("false", "0", "no", "off", "none")
+                    if vl == "text":
+                        include_collection = True
+                        collection_binary = False
+                elif k in ("binary", "collection_binary"):
+                    collection_binary = vl not in ("false", "0", "no", "off", "text")
+                elif k in ("sandhi", "tone_sandhi", "disyllabic"):
+                    sandhi_opt = vl
+                elif k == "duration":
+                    include_duration = vl not in ("false", "0", "no", "off")
                 else:
                     self._emit(
                         False,
-                        error=f"Unknown parameter for export_bundle: {k}. Supported: scope=active|integrated|separate, format=png|svg, title=<name>",
+                        error=(
+                            f"Unknown parameter for export_bundle: {k}. Supported: scope=active|integrated|separate, "
+                            "format=png|svg|pdf, title=<name>, charts=auto|all|<list>, extra_charts=<list>, "
+                            "collection=true|false, binary=true|false, sandhi=auto|true|false, duration=true|false"
+                        ),
                     )
                     return
             else:
                 tl = token.strip().lower().lstrip(".")
-                if tl in ("active", "integrated", "separate"):
+                if out_dir is None:
+                    out_dir = token
+                elif tl in ("all", "all_speakers"):
+                    scope = "integrated"
+                elif tl in ("active", "integrated", "separate"):
                     scope = tl
                 elif tl in ("png", "svg", "pdf"):
                     img_fmt = tl
+                elif tl in ("--no-collection",):
+                    include_collection = False
+
+        if not out_dir:
+            self._emit(False, error="Requires out_dir for export_bundle")
+            return
 
         all_speakers = self.speaker_manager.get_all_speakers()
         speakers_with_items = [s for s in all_speakers if len(s.items) > 0]
@@ -854,7 +1015,39 @@ class CLIExportMixin:
         except Exception as e:
             errors.append(f"stats export failed: {e}")
 
-        # 5. Export charts/ (contour, distribution, quality, overview_heatmap, + formant_space if formant data exists)
+        # 4.5 Export Praat .Collection (<project_title>.Collection)
+        if include_collection:
+            col_path = os.path.join(abs_out_dir, f"{safe_title}.Collection")
+            try:
+                if scope in ("integrated", "separate") and len(speakers_with_items) > 1:
+                    self._export_collection_integrated(col_path, speakers_with_items, binary=collection_binary)
+                    if os.path.exists(col_path):
+                        bundle_files.append(col_path)
+                    if scope == "separate":
+                        for spk in speakers_with_items:
+                            spk_col = os.path.join(abs_out_dir, f"{spk.name}.Collection")
+                            g_list = getattr(spk, "cli_groups", None) or list(dict.fromkeys(it.get("group", "默认组") for it in spk.items.values()))
+                            s_struct = [
+                                (grp, [iid for iid, it in spk.items.items() if it.get("group", "默认组") == grp and not it.get("is_excluded", False)])
+                                for grp in g_list
+                            ]
+                            self._export_collection(spk_col, s_struct, spk, binary=collection_binary)
+                            if os.path.exists(spk_col):
+                                bundle_files.append(spk_col)
+                else:
+                    spk_col_target = self.current_speaker if len(self.current_speaker.items) > 0 else speakers_with_items[0]
+                    g_list = getattr(spk_col_target, "cli_groups", None) or list(dict.fromkeys(it.get("group", "默认组") for it in spk_col_target.items.values()))
+                    s_struct = [
+                        (grp, [iid for iid, it in spk_col_target.items.items() if it.get("group", "默认组") == grp and not it.get("is_excluded", False)])
+                        for grp in g_list
+                    ]
+                    self._export_collection(col_path, s_struct, spk_col_target, binary=collection_binary)
+                    if os.path.exists(col_path):
+                        bundle_files.append(col_path)
+            except Exception as e:
+                errors.append(f"collection export failed: {e}")
+
+        # 5. Export charts/ (auto-adapting duration, tone_sandhi, tone_effect_time for disyllabic tone datasets, + formant_space)
         has_any_formant = (
             self.params.get("analysis_mode") == "formant"
             or any(
@@ -864,14 +1057,59 @@ class CLIExportMixin:
                 if not it.get("is_excluded", False)
             )
         )
-        chart_types = ["contour", "distribution", "density", "quality", "overview_heatmap"]
-        if has_any_formant:
-            chart_types.append("formant_space")
 
         from modules.acoustic_exporter import AcousticChartExporter
         adapter = AcousticChartCLIAdapter(self)
         ext = f".{img_fmt}"
         chart_scope = "integrated" if (scope != "active" and len(speakers_with_items) > 1) else "active"
+
+        # 预探测当前数据集是否具备二字组声调组合特征（如 16 种双字调组合）
+        has_disyllabic_sandhi = False
+        try:
+            probe_exp = AcousticChartExporter(project_tree=adapter, app=self, all_speakers=all_speakers)
+            probe_exp.params = {"export_scope": chart_scope, "scale": "t_value"}
+            old_m_probe = self.params.get("analysis_mode")
+            try:
+                self.params["analysis_mode"] = "f0"
+                probe_entries = probe_exp._get_current_data_entries()
+                has_disyllabic_sandhi = bool(probe_entries and probe_exp._has_tone_effect_time_data(probe_entries))
+            finally:
+                if old_m_probe is not None:
+                    self.params["analysis_mode"] = old_m_probe
+        except Exception:
+            has_disyllabic_sandhi = False
+
+        charts_opt_low = str(charts_opt or "auto").strip().lower()
+        if charts_opt_low in ("none", "off", "false", "0"):
+            chart_types = []
+        elif charts_opt_low == "all":
+            chart_types = [
+                "contour", "distribution", "duration", "density", "quality",
+                "overview_heatmap", "tone_sandhi", "tone_effect_time",
+            ]
+            if has_any_formant:
+                chart_types.extend(["formant_space", "formant_trajectory"])
+        elif charts_opt_low != "auto":
+            chart_types = [c.strip().lower() for c in re.split(r"[,;，；]+", str(charts_opt)) if c.strip()]
+        else:
+            chart_types = ["contour", "distribution"]
+            if include_duration:
+                chart_types.append("duration")
+            chart_types.extend(["density", "quality", "overview_heatmap"])
+            want_sandhi = (
+                sandhi_opt in ("true", "1", "yes", "on")
+                or (sandhi_opt == "auto" and has_disyllabic_sandhi)
+            )
+            if want_sandhi:
+                chart_types.extend(["tone_sandhi", "tone_effect_time"])
+            if has_any_formant:
+                chart_types.append("formant_space")
+
+        for ec in extra_charts:
+            if ec and ec not in chart_types:
+                chart_types.append(ec)
+
+        exported_chart_types = []
         for ctype in chart_types:
             c_out = os.path.join(charts_dir, f"{ctype}{ext}")
             try:
@@ -880,10 +1118,11 @@ class CLIExportMixin:
                     "chart_type": ctype,
                     "export_scope": chart_scope,
                     "format": img_fmt,
-                    "scale": "t_value" if chart_scope == "integrated" else "t_value",
+                    "scale": "t_value",
                 }
                 exporter.params = c_params
                 old_m = self.params.get("analysis_mode")
+                written_c = []
                 try:
                     if ctype.startswith("formant_"):
                         self.params["analysis_mode"] = "formant"
@@ -891,28 +1130,32 @@ class CLIExportMixin:
                     else:
                         self.params["analysis_mode"] = "f0"
                     data = exporter._get_current_data_entries()
+                    if not data and ctype == "duration":
+                        data = exporter._extract_duration_only_entries(target_spks)
                     if data:
-                        exporter._export_dataset(data, c_out, ext)
+                        written_c = exporter._export_dataset(data, c_out, ext) or []
                     elif ctype == "formant_space":
-                        self._export_vowel_space_chart(c_out, target_spks, emit_error=False)
+                        if self._export_vowel_space_chart(c_out, target_spks, emit_error=False):
+                            written_c = [c_out]
                 finally:
                     if old_m is not None:
                         self.params["analysis_mode"] = old_m
-                if os.path.exists(c_out):
-                    bundle_files.append(c_out)
-                for p_fn in sorted(os.listdir(charts_dir)):
-                    if p_fn.startswith(f"{ctype}_第") and p_fn.endswith(ext):
-                        p_full = os.path.join(charts_dir, p_fn)
-                        if p_full not in bundle_files:
-                            bundle_files.append(p_full)
+                for wf in written_c:
+                    if os.path.exists(wf) and wf not in bundle_files:
+                        bundle_files.append(wf)
+                if written_c:
+                    exported_chart_types.append(ctype)
                 if scope == "separate" and len(speakers_with_items) > 1:
                     for spk in speakers_with_items:
                         sep_out = os.path.join(charts_dir, f"{spk.name}_{ctype}{ext}")
                         sep_data = exporter._extract_active_data([spk])
+                        if not sep_data and ctype == "duration":
+                            sep_data = exporter._extract_duration_only_entries([spk])
                         if sep_data:
-                            exporter._export_dataset(sep_data, sep_out, ext)
-                            if os.path.exists(sep_out):
-                                bundle_files.append(sep_out)
+                            sep_written = exporter._export_dataset(sep_data, sep_out, ext) or []
+                            for swf in sep_written:
+                                if os.path.exists(swf) and swf not in bundle_files:
+                                    bundle_files.append(swf)
             except Exception as e:
                 errors.append(f"chart {ctype} export failed: {e}")
 
@@ -962,14 +1205,16 @@ class CLIExportMixin:
             project_title=safe_title,
             scope=scope,
             format=img_fmt,
+            chart_types=exported_chart_types,
+            disyllabic_sandhi_detected=has_disyllabic_sandhi,
+            collection_exported=include_collection,
             bundle_files=bundle_files,
             warnings=errors,
         )
 
 
-    def _export_merged_wav(self, out_file, structure, rule, speaker=None):
+    def _export_merged_wav(self, out_file, structure, rule, speaker=None, explicit_sr=None):
         speaker = speaker or self.current_speaker
-        import numpy as np
 
         if ('batch' if '多条' in speaker.tab_mode else 'long') != 'batch':
             raise Exception("merged_wav export is only supported for batch audio mode")
@@ -981,31 +1226,41 @@ class CLIExportMixin:
         except ValueError:
             pass
 
-        target_sr = 44100
-        all_vals = []
-        gap_samples = int(target_sr * gap_sec)
-        gap_array = np.zeros(gap_samples)
-
+        loaded_sounds = []
         for grp_name, children in structure:
             for child in children:
                 item = speaker.items[child]
                 if item.get('missing') or not item.get('success', True) or not item.get('path'):
                     continue
-
                 try:
-                    snd = parselmouth.Sound(item['path'])
-                    if snd.sampling_frequency != target_sr:
-                        snd = snd.resample(target_sr)
-                    all_vals.append(snd.values[0])
-                    all_vals.append(gap_array)
+                    loaded_sounds.append(load_compatible_sound(item['path']))
                 except Exception:
                     continue
 
-        if not all_vals:
+        if not loaded_sounds:
             raise Exception("No valid audio files found to merge")
 
+        source_srs = [float(s.sampling_frequency) for s in loaded_sounds]
+        if explicit_sr is not None and explicit_sr > 0:
+            target_sr = float(explicit_sr)
+        else:
+            first_sr = source_srs[0]
+            target_sr = first_sr if all(abs(sr - first_sr) < 1e-3 for sr in source_srs) else max(source_srs)
+
+        all_vals = []
+        gap_samples = max(0, int(round(target_sr * gap_sec)))
+        gap_array = np.zeros(gap_samples, dtype=np.float64)
+
+        for snd in loaded_sounds:
+            if abs(float(snd.sampling_frequency) - target_sr) >= 1e-3:
+                snd = snd.resample(target_sr)
+            mono = np.mean(snd.values, axis=0) if snd.values.shape[0] > 1 else snd.values[0]
+            all_vals.append(np.asarray(mono, dtype=np.float64))
+            all_vals.append(gap_array)
+
         merged_vals = np.concatenate(all_vals[:-1])
-        merged_snd = parselmouth.Sound(np.array([merged_vals]), sampling_frequency=target_sr)
+        merged_snd = parselmouth.Sound(np.array([merged_vals], dtype=np.float64), sampling_frequency=target_sr)
+        os.makedirs(os.path.dirname(os.path.abspath(out_file)) or ".", exist_ok=True)
         merged_snd.save(out_file, "WAV")
 
 
@@ -2538,10 +2793,8 @@ class CLIExportMixin:
         return True
 
 
-    def _export_textgrid(self, out_path, structure, speaker=None):
+    def _export_textgrid(self, out_path, structure, speaker=None, emit_output=True):
         speaker = speaker or self.current_speaker
-        import textgrid
-        import os
 
         flat_items = []
         for grp_name, children in structure:
@@ -2550,12 +2803,12 @@ class CLIExportMixin:
                     flat_items.append(speaker.items[child])
 
         if not flat_items:
-            self._emit(False, error="No valid items to export")
-            return
+            if emit_output:
+                self._emit(False, error="No valid items to export")
+                return
+            raise ValueError("No valid items to export")
 
-        # Simple heuristic: if we have paths, it might be batch mode, but CLI might not have "long audio" vs "batch" mode
-        # If output is a directory or ends in a slash, treat as batch export
-        if os.path.isdir(out_path) or not out_path.endswith('.TextGrid'):
+        if os.path.isdir(out_path) or not out_path.lower().endswith('.textgrid'):
             out_subdir = os.path.join(out_path, "Textgrid_export")
             os.makedirs(out_subdir, exist_ok=True)
 
@@ -2576,10 +2829,13 @@ class CLIExportMixin:
                 tg_path = os.path.join(out_subdir, f"{base_name}.TextGrid")
                 self._write_textgrid(tg_path, items)
 
-            self._emit(True, message=f"Exported batch TextGrids to {out_subdir}")
+            if emit_output:
+                self._emit(True, message=f"Exported batch TextGrids to {out_subdir}")
         else:
+            os.makedirs(os.path.dirname(os.path.abspath(out_path)) or ".", exist_ok=True)
             self._write_textgrid(out_path, flat_items)
-            self._emit(True, message=f"Exported TextGrid to {out_path}")
+            if emit_output:
+                self._emit(True, message=f"Exported TextGrid to {out_path}")
 
 
     def _write_textgrid(self, tg_path, items):

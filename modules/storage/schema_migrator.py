@@ -818,7 +818,7 @@ def adapt_project_state(state: dict, workspace_dir: str):
         spk_data.pop("manual_segments", None)
 
     # 3. 记录转换摘要和来源信息
-    state["phonrec"] = {
+    state["migration_info"] = {
         "version": "1.0",
         "source": "compatibility_converter",
         "warnings": warnings,
@@ -863,7 +863,7 @@ def prune_unreferenced_resources(state: dict, workspace_dir: str):
         for root, dirs, files in os.walk(dir_path, topdown=False):
             for file in files:
                 file_path = os.path.normpath(os.path.join(root, file))
-                if file.endswith(".tmp") or file.endswith(".temp") or file == ".phonrec-project.json":
+                if file.endswith(".tmp") or file.endswith(".temp"):
                     continue
                 if file_path not in referenced:
                     try:

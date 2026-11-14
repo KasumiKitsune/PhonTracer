@@ -881,7 +881,7 @@ class ProjectManager(WorkspaceLockMixin):
             with zipfile.ZipFile(zip_path, 'r') as zf:
                 safe_extract_zip(zf, temp_workspace)
 
-            # PhonTracer 保留自身工程模型；面向 PhonRec 的转换只在 PhonRec 导入端执行。
+            # 校验工程归档内部引用的音频与缓存资源完整性。
             validate_project_resources(state, temp_workspace)
 
             with self._save_lock:

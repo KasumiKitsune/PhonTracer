@@ -14,12 +14,14 @@ from typing import Optional
 from .headless_gui_stubs import _install_headless_gui_and_audio_stubs_if_missing
 from .praat_fallback import (
     IS_FALLBACK,
+    Data,
     Formant,
     Intensity,
     Matrix,
     Pitch,
     Sound,
     Spectrogram,
+    TextGrid,
     _PraatSubmodule,
     __version__,
     _decode_pcm_bytes,
@@ -51,6 +53,8 @@ def register_as_parselmouth(mod: Optional[types.ModuleType] = None) -> None:
 __all__ = [
     "IS_FALLBACK",
     "__version__",
+    "Data",
+    "TextGrid",
     "Matrix",
     "Intensity",
     "Pitch",

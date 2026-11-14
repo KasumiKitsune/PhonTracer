@@ -1243,6 +1243,8 @@ class ToneStatsAndQCPlottersMixin:
                 sigma = np.where(np.isfinite(sigma) & (sigma > 0), sigma, min_sigma)
 
             normal_count = 0
+            stat_outlier_count = 0
+            warn_outlier_count = 0
             outlier_count = 0
             pending_outlier_tags = []
             for c_info in curves_info:
@@ -1256,6 +1258,7 @@ class ToneStatsAndQCPlottersMixin:
                     for w in (c_info["warnings"] or [])
                 )
                 is_outlier = bool(max_z > 2.0 or rms_z > 1.85 or has_warn)
+                c_info["has_warning"] = bool(has_warn)
                 c_info["max_z"] = max_z
                 c_info["rms_z"] = rms_z
                 c_info["rmsd"] = rms_z
@@ -1271,12 +1274,24 @@ class ToneStatsAndQCPlottersMixin:
                 if is_outlier:
                     outlier_count += 1
                     outlier_records.append(c_info)
-                    lbl_plot = "离群异常轨迹 (>2σ)" if outlier_count == 1 else None
-                    ax.plot(
-                        x_grid, y_arr,
-                        color="#DC2626", linewidth=2.2, alpha=0.90,
-                        zorder=5, label=lbl_plot,
-                    )
+                    if has_warn:
+                        warn_outlier_count += 1
+                        lbl_plot = "声学/切分警告轨迹" if warn_outlier_count == 1 else None
+                        ax.plot(
+                            x_grid, y_arr,
+                            color="#DC2626", linestyle="-", linewidth=2.2, alpha=0.90,
+                            zorder=6, label=lbl_plot,
+                        )
+                        tag_fg, tag_ec, tag_arrow = "#B91C1C", "#FCA5A5", "#DC2626"
+                    else:
+                        stat_outlier_count += 1
+                        lbl_plot = "组内统计离群参考 (>2σ, 无声学警告)" if stat_outlier_count == 1 else None
+                        ax.plot(
+                            x_grid, y_arr,
+                            color="#D97706", linestyle="--", linewidth=1.7, alpha=0.85,
+                            zorder=5, label=lbl_plot,
+                        )
+                        tag_fg, tag_ec, tag_arrow = "#B45309", "#FCD34D", "#D97706"
                     finite_idx = np.where(np.isfinite(y_arr))[0]
                     if finite_idx.size > 0:
                         if finite_z.size > 0:
@@ -1291,6 +1306,9 @@ class ToneStatsAndQCPlottersMixin:
                             "end_y": float(y_arr[last_i]),
                             "med_at_peak": float(med_y[peak_i]) if np.isfinite(med_y[peak_i]) else float(y_arr[peak_i]),
                             "text": tag_text,
+                            "fg": tag_fg,
+                            "ec": tag_ec,
+                            "arrow": tag_arrow,
                         })
                 else:
                     normal_count += 1
@@ -1334,17 +1352,16 @@ class ToneStatsAndQCPlottersMixin:
                 tail_tags = [t for t in pending_outlier_tags if t["peak_x"] >= total_pts - 2.2]
                 inner_tags = [t for t in pending_outlier_tags if t["peak_x"] < total_pts - 2.2]
 
-                # 1) Right-tail tags: stack & repel cleanly in the dedicated right margin (zero overlap, zero border crossing!)
+                # 1) Right-tail tags: stack & repel cleanly below upper-right legend box
                 if tail_tags:
                     tail_tags_sorted = sorted(tail_tags, key=lambda d: d["end_y"])
                     raw_tys = [d["end_y"] for d in tail_tags_sorted]
                     rep_min = ylo_f + 0.08 * yspan_f
-                    rep_max = yhi_f - 0.08 * yspan_f
+                    rep_max = yhi_f - 0.24 * yspan_f
                     min_gap_y = 0.095 * yspan_f
-                    # Simple 1D repulsion
                     pos_y = list(raw_tys)
                     n_t = len(pos_y)
-                    eff_g = min(min_gap_y, (rep_max - rep_min) / max(1, n_t))
+                    eff_g = min(min_gap_y, max(1e-3, (rep_max - rep_min)) / max(1, n_t))
                     for _ in range(40):
                         for k in range(n_t - 1):
                             if pos_y[k + 1] - pos_y[k] < eff_g:
@@ -1367,12 +1384,12 @@ class ToneStatsAndQCPlottersMixin:
                             textcoords="offset points",
                             fontsize=7.3,
                             fontweight="bold",
-                            color="#B91C1C",
+                            color=t_obj["fg"],
                             ha="left",
                             va="center",
                             zorder=7,
-                            bbox=dict(boxstyle="round,pad=0.14", fc="#FFFFFF", ec="#FCA5A5", lw=0.6, alpha=0.90),
-                            arrowprops=dict(arrowstyle="-", color="#DC2626", lw=0.65, alpha=0.65, shrinkA=0, shrinkB=2),
+                            bbox=dict(boxstyle="round,pad=0.14", fc="#FFFFFF", ec=t_obj["ec"], lw=0.6, alpha=0.90),
+                            arrowprops=dict(arrowstyle="-", color=t_obj["arrow"], lw=0.65, alpha=0.65, shrinkA=0, shrinkB=2),
                         )
 
                 # 2) Interior peak tags: repel in 2D point space away from curve, top/bottom ticks, and right spine
@@ -1386,7 +1403,6 @@ class ToneStatsAndQCPlottersMixin:
                         cw = sum(1.0 if ord(ch) > 127 else 0.55 for ch in txt_s)
                         hw = max(24.0, 0.5 * cw * 7.3 + 5.0)
                         hh = 7.8
-                        # Offset away from curve toward interior whitespace
                         prefer_up = (t_obj["peak_y"] >= t_obj["med_at_peak"]) and (py + 2 * hh + 14.0 < ax_h_pts)
                         by = (py + hh + 9.0) if prefer_up else (py - hh - 9.0)
                         by = float(np.clip(by, hh + 8.0, ax_h_pts - hh - 10.0))
@@ -1413,16 +1429,19 @@ class ToneStatsAndQCPlottersMixin:
                             textcoords="offset points",
                             fontsize=7.3,
                             fontweight="bold",
-                            color="#B91C1C",
+                            color=t_obj["fg"],
                             ha="center",
                             va="center",
                             zorder=7,
-                            bbox=dict(boxstyle="round,pad=0.14", fc="#FFFFFF", ec="#FCA5A5", lw=0.6, alpha=0.90),
-                            arrowprops=dict(arrowstyle="-", color="#DC2626", lw=0.65, alpha=0.65, shrinkA=1, shrinkB=2),
+                            bbox=dict(boxstyle="round,pad=0.14", fc="#FFFFFF", ec=t_obj["ec"], lw=0.6, alpha=0.90),
+                            arrowprops=dict(arrowstyle="-", color=t_obj["arrow"], lw=0.65, alpha=0.65, shrinkA=1, shrinkB=2),
                         )
 
-            sub_t = f"{g_name} - 组内个体原始曲线叠加 (离群={outlier_count})"
-            ax.set_title(sub_t, fontsize=11, fontweight="bold")
+            if warn_outlier_count > 0:
+                sub_t = f"{g_name} - 组内个体原始曲线叠加 (警告={warn_outlier_count}, 统计离群={stat_outlier_count})"
+            else:
+                sub_t = f"{g_name} - 组内个体原始曲线叠加 (警告=0, 统计离群={stat_outlier_count})"
+            ax.set_title(sub_t, fontsize=10.5, fontweight="bold")
             ax._original_title = sub_t
             ax.set_xlabel("归一化测量点")
             if f_idx % n_cols == 0:
@@ -1435,13 +1454,18 @@ class ToneStatsAndQCPlottersMixin:
 
             handles, labels = ax.get_legend_handles_labels()
             if handles:
-                # Enforce deterministic legend order across all subplots: normal -> median -> outlier!
-                order_rank = {"正常轨迹 (≤2σ)": 0, "组中位数包络": 1, "离群异常轨迹 (>2σ)": 2}
+                # Enforce deterministic legend order across all subplots: normal -> median -> stat_ref -> warning
+                order_rank = {
+                    "正常轨迹 (≤2σ)": 0,
+                    "组中位数包络": 1,
+                    "组内统计离群参考 (>2σ, 无声学警告)": 2,
+                    "声学/切分警告轨迹": 3,
+                }
                 paired = sorted(zip(handles, labels), key=lambda hl: order_rank.get(hl[1], 99))
                 s_handles = [p[0] for p in paired]
                 s_labels = [p[1] for p in paired]
                 legend_kwargs = self._get_legend_kwargs(ax=ax, default_outside=False)
-                legend_kwargs["fontsize"] = 7.6
+                legend_kwargs["fontsize"] = 7.4
                 legend_kwargs["loc"] = "upper right"
                 ax.legend(s_handles, s_labels, **legend_kwargs)
 
@@ -1571,7 +1595,7 @@ class ToneStatsAndQCPlottersMixin:
         is_t_value = scale_val and ("T" in str(scale_val) or "t_value" in str(scale_val).lower())
 
         if view == "raw_overlay":
-            fig, ax = plt.subplots(figsize=(9, 5))
+            fig, ax = plt.subplots(figsize=(9.6, 5.4))
             ax.set_facecolor("#FFFFFF")
             ax.grid(True, linestyle="--", alpha=0.3)
 
@@ -1580,8 +1604,9 @@ class ToneStatsAndQCPlottersMixin:
             total_pts = max_syls * num_points
 
             normal_lines = []
-            outlier_lines = []
-            all_y_rows = []
+            stat_ref_lines = []
+            warning_lines = []
+            group_rows = {}
             entry_xy = []
 
             for idx_e, entry in enumerate(data_entries):
@@ -1594,75 +1619,168 @@ class ToneStatsAndQCPlottersMixin:
 
                 y_flat = np.asarray(y_flat, dtype=float)
                 x_flat = np.asarray(x_flat, dtype=float)
+                grp_k = self._entry_wordlist_group(entry) if hasattr(self, "_entry_wordlist_group") else entry.get("group", "未分组")
                 if len(y_flat) == total_pts:
-                    all_y_rows.append(y_flat)
-                entry_xy.append((idx_e, entry, x_flat, y_flat))
+                    group_rows.setdefault(grp_k, []).append(y_flat)
+                entry_xy.append((idx_e, entry, grp_k, x_flat, y_flat))
 
-            if all_y_rows:
-                mat = np.vstack(all_y_rows)
-                med_y = np.nanmedian(mat, axis=0)
-                std_y = np.maximum(_safe_nanstd(mat, axis=0, default=0.2), 0.15 if is_t_value else 5.0)
+            # 按各调类组内中位数计算残差，避免将不同调型（如 55 与 21）混算全局均值误判为异常
+            group_medians = {}
+            residual_rows = []
+            for gk, rows_g in group_rows.items():
+                mat_g = np.vstack(rows_g)
+                med_g = np.nanmedian(mat_g, axis=0)
+                group_medians[gk] = med_g
+                if len(rows_g) >= 2:
+                    residual_rows.append(mat_g - med_g)
+
+            if residual_rows:
+                res_mat = np.vstack(residual_rows)
+                mad_res = np.nanmedian(np.abs(res_mat), axis=0)
+                std_classic = _safe_nanstd(res_mat, axis=0, default=0.35 if is_t_value else 12.0)
+                std_robust = np.where(np.isfinite(mad_res) & (mad_res > 1e-4), 1.4826 * mad_res, std_classic)
+                min_sigma = 0.25 if is_t_value else 8.0
+                res_sigma = np.maximum(np.maximum(std_classic, std_robust), min_sigma)
             else:
-                med_y = None
-                std_y = None
+                res_sigma = None
 
-            for idx_e, entry, x_flat, y_flat in entry_xy:
+            warn_tag_count = 0
+            stat_tag_count = 0
+            pending_qc_tags = []
+            for idx_e, entry, grp_k, x_flat, y_flat in entry_xy:
                 has_warning = any(
-                    w.startswith("[警告]") or w.startswith("[致命]") or w.startswith("[复核]") or w.startswith("[错误]")
-                    for w in entry.get('warnings', [])
+                    str(w).startswith(("[警告]", "[致命]", "[复核]", "[错误]"))
+                    for w in (entry.get('warnings') or [])
                 )
-                exceeds_2sigma = False
-                if med_y is not None and len(y_flat) == len(med_y):
-                    z_vals = np.abs(y_flat - med_y) / std_y
+                exceeds_stat_ref = False
+                med_g = group_medians.get(grp_k)
+                if not has_warning and res_sigma is not None and med_g is not None and len(y_flat) == len(med_g) and len(group_rows.get(grp_k, [])) >= 3:
+                    z_vals = np.abs(y_flat - med_g) / res_sigma
                     finite_z = z_vals[np.isfinite(z_vals)]
-                    if finite_z.size > 0 and float(np.max(finite_z)) > 2.0:
-                        exceeds_2sigma = True
+                    if finite_z.size > 0 and (float(np.max(finite_z)) > 2.8 or float(np.sqrt(np.mean(finite_z ** 2))) > 2.1):
+                        exceeds_stat_ref = True
 
                 seg = np.column_stack((x_flat, y_flat))
-                if has_warning or exceeds_2sigma:
-                    outlier_lines.append(seg)
-                    finite_idx = np.where(np.isfinite(y_flat))[0]
-                    if finite_idx.size > 0:
+                finite_idx = np.where(np.isfinite(y_flat))[0]
+                item_id = entry.get('item_id', f"item_{idx_e}")
+                tag_lbl = f"{entry.get('speaker_name', '')}: {entry.get('label', '')} #{item_id}"
+
+                if has_warning:
+                    warning_lines.append(seg)
+                    warn_tag_count += 1
+                    if finite_idx.size > 0 and warn_tag_count <= 10:
                         ti = int(finite_idx[-1])
-                        item_id = entry.get('item_id', f"item_{idx_e}")
-                        tag_lbl = f"{entry.get('speaker_name', '')}: {entry.get('label', '')} #{item_id}"
-                        ax.annotate(
-                            tag_lbl,
-                            xy=(float(x_flat[ti]), float(y_flat[ti])),
-                            xytext=(4, 2),
-                            textcoords="offset points",
-                            fontsize=7.5,
-                            color="#DC2626",
-                            fontweight="bold",
-                        )
+                        pending_qc_tags.append({
+                            "end_x": float(x_flat[ti]),
+                            "end_y": float(y_flat[ti]),
+                            "text": tag_lbl,
+                            "color": "#DC2626",
+                            "ec": "#FCA5A5",
+                            "bold": True,
+                        })
+                elif exceeds_stat_ref:
+                    stat_ref_lines.append(seg)
+                    stat_tag_count += 1
+                    if finite_idx.size > 0 and stat_tag_count <= 6:
+                        ti = int(finite_idx[-1])
+                        pending_qc_tags.append({
+                            "end_x": float(x_flat[ti]),
+                            "end_y": float(y_flat[ti]),
+                            "text": tag_lbl,
+                            "color": "#B45309",
+                            "ec": "#FCD34D",
+                            "bold": False,
+                        })
                 else:
                     normal_lines.append(seg)
 
             if normal_lines:
-                lc_norm = LineCollection(normal_lines, colors="#94A3B8", linewidths=1.0, alpha=0.45)
+                lc_norm = LineCollection(normal_lines, colors="#94A3B8", linewidths=1.0, alpha=0.42)
                 ax.add_collection(lc_norm)
-                ax.plot([], [], color="#94A3B8", linewidth=1.0, alpha=0.45, label="未触发复核阈值轨迹")
-            if outlier_lines:
-                lc_out = LineCollection(outlier_lines, colors="#DC2626", linewidths=2.2, alpha=0.9, linestyles="-")
+                ax.plot([], [], color="#94A3B8", linewidth=1.0, alpha=0.45, label=f"正常轨迹 (无声学警告, n={len(normal_lines)})")
+            if stat_ref_lines:
+                lc_stat = LineCollection(stat_ref_lines, colors="#D97706", linewidths=1.6, alpha=0.80, linestyles="--")
+                ax.add_collection(lc_stat)
+                ax.plot([], [], color="#D97706", linewidth=1.6, alpha=0.85, linestyle="--", label=f"组内统计偏离参考 (>2.8σ, 无声学警告, n={len(stat_ref_lines)})")
+            if warning_lines:
+                lc_out = LineCollection(warning_lines, colors="#DC2626", linewidths=2.2, alpha=0.92, linestyles="-")
                 ax.add_collection(lc_out)
-                ax.plot([], [], color="#DC2626", linewidth=2.2, alpha=0.9, linestyle="-", label="触发复核阈值轨迹")
+                ax.plot([], [], color="#DC2626", linewidth=2.2, alpha=0.92, linestyle="-", label=f"声学/切分警告轨迹 (需复核, n={len(warning_lines)})")
+            else:
+                ax.plot([], [], color="#10B981", linewidth=1.6, linestyle=":", label="声学/切分警告轨迹 (0 项，已全部通过)")
 
             if max_syls > 1:
                 for k in range(1, max_syls):
                     ax.axvline(k * num_points + 0.5, color='gray', linestyle='--', alpha=0.5)
 
-            ax.set_title("数据质量分析：逐项基频曲线质量分布叠加", fontsize=13, fontweight="bold")
-            ax._original_title = "数据质量分析：逐项基频曲线质量分布叠加"
+            right_pad = max(4.5, total_pts * 0.28) if pending_qc_tags else 0.8
+            ax.set_xlim(0.4, float(total_pts) + right_pad)
+
+            title_main = "数据质量分析：逐项基频曲线质量分布叠加"
+            ax.set_title(title_main, fontsize=13, fontweight="bold", pad=16)
+            ax._original_title = title_main
+            ax.text(
+                0.5, 1.015,
+                "口径说明：红实线 = 声学提取/切分警告（与 status / fix_warnings 一致）；橙虚线 = 相对同组中位轨迹的个体统计离散参考（非提取报错）",
+                transform=ax.transAxes, ha="center", va="bottom", fontsize=8.0, color="#475569",
+            )
             ax.set_xlabel("测量点")
 
             if is_t_value:
-                ax.set_ylim(-0.2, 5.2)
+                ax.set_ylim(-0.25, 5.35)
                 ax.set_yticks([0, 1, 2, 3, 4, 5])
                 ax.set_ylabel("T 值 (0-5 标度)")
             else:
+                ax.autoscale_view()
+                ylo_q, yhi_q = ax.get_ylim()
+                ysp_q = max(10.0, float(yhi_q - ylo_q))
+                ax.set_ylim(ylo_q - 0.08 * ysp_q, yhi_q + 0.16 * ysp_q)
                 ax.set_ylabel("频率 (Hz)")
 
-            legend_kwargs = self._get_legend_kwargs(ax=ax)
+            if pending_qc_tags:
+                ylo_f, yhi_f = ax.get_ylim()
+                yspan_f = max(1e-3, float(yhi_f - ylo_f))
+                ax_h_pts = 5.4 * 72.0 * 0.78
+                tags_sorted = sorted(pending_qc_tags, key=lambda d: d["end_y"])
+                pos_y = [d["end_y"] for d in tags_sorted]
+                rep_min = ylo_f + 0.06 * yspan_f
+                rep_max = yhi_f - 0.24 * yspan_f
+                min_gap_y = 0.072 * yspan_f
+                n_t = len(pos_y)
+                eff_g = min(min_gap_y, max(1e-3, (rep_max - rep_min)) / max(1, n_t))
+                for _ in range(40):
+                    for k in range(n_t - 1):
+                        if pos_y[k + 1] - pos_y[k] < eff_g:
+                            mid_v = 0.5 * (pos_y[k] + pos_y[k + 1])
+                            pos_y[k] = mid_v - 0.5 * eff_g
+                            pos_y[k + 1] = mid_v + 0.5 * eff_g
+                    pos_y[0] = max(rep_min, pos_y[0])
+                    for k in range(1, n_t):
+                        pos_y[k] = max(pos_y[k], pos_y[k - 1] + eff_g)
+                    pos_y[-1] = min(rep_max, pos_y[-1])
+                    for k in range(n_t - 2, -1, -1):
+                        pos_y[k] = min(pos_y[k], pos_y[k + 1] - eff_g)
+                pts_per_y = ax_h_pts / yspan_f
+                for t_obj, adj_y in zip(tags_sorted, pos_y):
+                    dy_pts = float((adj_y - t_obj["end_y"]) * pts_per_y)
+                    ax.annotate(
+                        t_obj["text"],
+                        xy=(t_obj["end_x"], t_obj["end_y"]),
+                        xytext=(6.0, dy_pts),
+                        textcoords="offset points",
+                        fontsize=7.3 if t_obj["bold"] else 7.1,
+                        fontweight="bold" if t_obj["bold"] else "normal",
+                        color=t_obj["color"],
+                        ha="left",
+                        va="center",
+                        zorder=7,
+                        bbox=dict(boxstyle="round,pad=0.14", fc="#FFFFFF", ec=t_obj["ec"], lw=0.55, alpha=0.90),
+                        arrowprops=dict(arrowstyle="-", color=t_obj["color"], lw=0.6, alpha=0.6, shrinkA=0, shrinkB=2),
+                    )
+
+            legend_kwargs = self._get_legend_kwargs(ax=ax, default_outside=False)
+            legend_kwargs["loc"] = "upper right"
+            legend_kwargs["fontsize"] = 8.2
             ax.legend(**legend_kwargs)
             return fig
 

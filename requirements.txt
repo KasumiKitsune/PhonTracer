@@ -1,5 +1,6 @@
 praat-parselmouth
 numpy
+pandas
 sounddevice
 matplotlib
 customtkinter

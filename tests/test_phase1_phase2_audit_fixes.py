@@ -174,7 +174,7 @@ def test_d04_and_b01_b02_b04_b05_workspace_save_and_restore(tmp_path):
             },
             {"id": "grp_empty", "name": "空分组", "items": []},
         ],
-        "phonrec": {"session_id": "pr_123"},
+        "meta": {"session_id": "exp_123"},
     }
     app.tree_panel = SimpleNamespace(project_groups=["第一组", "空分组"])
     app.custom_script_runs = []
@@ -185,9 +185,9 @@ def test_d04_and_b01_b02_b04_b05_workspace_save_and_restore(tmp_path):
         proj_json_path = ws / "project.json"
         saved_state = json.loads(proj_json_path.read_text(encoding="utf-8"))
 
-        # D-04: Top-level groups and phonrec preserved, and item note synced to groups
+        # D-04: Top-level groups and custom meta preserved, and item note synced to groups
         assert "groups" in saved_state
-        assert saved_state["phonrec"] == {"session_id": "pr_123"}
+        assert saved_state["meta"] == {"session_id": "exp_123"}
         assert len(saved_state["groups"]) == 2
         assert saved_state["groups"][0]["items"][0]["note"] == "条目备注"
         assert saved_state["groups"][0]["items"][1]["id"] == "item_unrecorded"

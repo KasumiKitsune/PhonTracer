@@ -11,7 +11,7 @@ import os
 import re
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from ..core.text_io import parse_wordlist, read_text_file_with_fallback
+from ..core.text_io import parse_messy_wordlist_data, parse_wordlist, read_text_file_with_fallback
 from .schema_and_models import (
     AI_REVIEW_STATUS,
     DEFAULT_GROUP_NAME,
@@ -126,6 +126,8 @@ def _strip_markdown_code_fence(text: str) -> str:
 
 
 def looks_like_structured_wordlist_text(text: str) -> bool:
+    has_directive_or_pipe = False
+    has_only_title = False
     for raw_line in (text or "").lstrip("\ufeff").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("```"):
@@ -134,11 +136,26 @@ def looks_like_structured_wordlist_text(text: str) -> bool:
         if (
             lowered.startswith("@group")
             or lowered.startswith("@defaults")
-            or lowered.startswith("@title")
-            or TITLE_DIRECTIVE_RE.match(line)
             or bool(STRUCTURED_KV_PIPE_RE.search(line))
         ):
-            return True
+            has_directive_or_pipe = True
+            break
+        if lowered.startswith("@title") or TITLE_DIRECTIVE_RE.match(line):
+            has_only_title = True
+    if has_directive_or_pipe:
+        return True
+    # 若仅含 `title: xxx` 而正文使用的是随手草稿格式（如 `//`、`===`、冒号分组、`1. 2.`），交由 messy 解析器统一兼容
+    if has_only_title:
+        body = (text or "")
+        if "//" in body or "===" in body or re.search(r"(?m)^\s*(?:[-*+•]|[(（][^)\n]+[)）]|\S+\s*[:：]\s*\S+)", body):
+            for rl in body.splitlines():
+                s = rl.strip()
+                if not s or TITLE_DIRECTIVE_RE.match(s) or s.lower().startswith("@title"):
+                    continue
+                if re.match(r"^(?:【[^】]+】|\[[^\]]+\]|［[^］]+］)\s*$", s):
+                    return True
+                return False
+        return True
     return False
 
 
@@ -252,6 +269,10 @@ def build_document_from_structured_text(text: str, title: str = "从结构化文
         line = raw_line.strip()
         if not line or line.startswith("```"):
             continue
+        if "//" in line and not re.search(r"https?://", line, flags=re.IGNORECASE):
+            line = line.split("//", 1)[0].strip()
+            if not line:
+                continue
         title_match = TITLE_DIRECTIVE_RE.match(line)
         if title_match:
             doc["title"] = _as_text(title_match.group(1)) or doc["title"]
@@ -318,30 +339,18 @@ def build_document_from_structured_text(text: str, title: str = "从结构化文
 
 
 def build_document_from_v1_text(raw_text: str, title: str = "从普通字表导入") -> Dict[str, Any]:
-    groups, _flat_words = parse_wordlist(raw_text or "")
-    doc = create_empty_wordlist_document(title=title)
-    doc["groups"] = []
-    for group in groups:
-        doc["groups"].append({
-            "id": "",
-            "name": _as_text(group.get("group")) or DEFAULT_GROUP_NAME,
-            "note": "",
-            "tags": [],
-            "meta": {},
-            "items": [_normalize_item({"label": word}) for word in group.get("items", [])],
-        })
-    if not doc["groups"]:
-        doc["groups"] = create_empty_wordlist_document().get("groups", [])
-    return normalize_wordlist_document(doc)
+    """兼容旧版入口，底层委托给统一的容错字表解析器。"""
+    return build_document_from_messy_text(raw_text or "", title=title)
 
 
 def build_document_from_messy_text(raw_text: str, title: str = "从普通字表导入") -> Dict[str, Any]:
     """
-    将普通或随手编写的杂乱字表文本解析并升级为标准 v2 高级字表文档。
+    将普通或随手编写的杂乱草稿字表文本解析并升级为标准 v2 高级字表文档。
     兼容：
-    - 结构化指令或 CSV 文本（若自动识别命中则直接转交对应构建器）
-    - 【组名】、[组名]、［组名］、# 组名 以及同行带词条如“【阴平】 妈 麻”或“第一组：妈、麻”
-    - 词条序号前缀（如 1. 播音、2、高峰、(1)播音）与括号内备注/别名（如 播音(boyin)、播音（阴阴））
+    - 结构化指令或 CSV 文本（自动识别转交）
+    - `//` 注释、`=== 标题 ===` 横幅与分隔线
+    - 【组名】、[组名]、圆括号分组头 `(11_阴阴)` / `（阴平+阴平）`、中文序号章节头及冒号分组头 `第一组：词1 词2`
+    - 行内编号 `1. 2.` / `1) 2)` / `(1) (2)`、` - ` 列表符、`/` 分隔词及词后括号别名/备注 `播音(boyin)`
     """
     clean_text = _strip_markdown_code_fence((raw_text or "").lstrip("\ufeff"))
     if looks_like_structured_wordlist_text(clean_text):
@@ -349,115 +358,31 @@ def build_document_from_messy_text(raw_text: str, title: str = "从普通字表�
     if looks_like_csv_wordlist_text(clean_text):
         return build_document_from_csv_text(clean_text, title=title)
 
-    doc = create_empty_wordlist_document(title=title)
+    parsed = parse_messy_wordlist_data(clean_text, default_group=DEFAULT_GROUP_NAME)
+    resolved_title = _as_text(parsed.get("title")) or _as_text(title) or "从普通字表导入"
+    doc = create_empty_wordlist_document(title=resolved_title)
     doc["groups"] = []
-    group_map: Dict[str, Dict[str, Any]] = {}
-    curr_group_name = DEFAULT_GROUP_NAME
 
-    def get_or_create_group(g_name: str) -> Dict[str, Any]:
-        g_name = _as_text(g_name) or DEFAULT_GROUP_NAME
-        if g_name not in group_map:
-            grp = {
+    for grp in parsed.get("groups", []):
+        g_name = _as_text(grp.get("group")) or DEFAULT_GROUP_NAME
+        norm_items = [
+            _normalize_item({
+                "label": it.get("label", ""),
+                "note": it.get("note", ""),
+                "aliases": list(it.get("aliases") or []),
+            })
+            for it in grp.get("items", [])
+            if _as_text(it.get("label"))
+        ]
+        if norm_items:
+            doc["groups"].append({
                 "id": "",
                 "name": g_name,
                 "note": "",
                 "tags": [],
                 "meta": {},
-                "items": [],
-            }
-            group_map[g_name] = grp
-            doc["groups"].append(grp)
-        return group_map[g_name]
-
-    def append_words_from_fragment(fragment: str, g_name: str, line_note: str = "") -> None:
-        raw_tokens = [w.strip() for w in re.split(r"[,\s\t，、;；]+", fragment) if w.strip()]
-        for token in raw_tokens:
-            cleaned = re.sub(
-                r"^(?:\(\d+\)|（\d+）|\d+[.、)）]|[①-⑳])\s*(?=[^\d\s])",
-                "",
-                token,
-            ).strip()
-            if not cleaned or re.match(r"^(?:\(\d+\)|（\d+）|\d+[.、)）]?|[-*•]+)$", cleaned):
-                continue
-
-            item_note = line_note
-            aliases: List[str] = []
-            label = cleaned
-
-            paren_match = re.match(r"^([^\s(（]+?)[(（]([^)）]+)[)）]$", cleaned)
-            if paren_match:
-                label = _as_text(paren_match.group(1))
-                inner = _as_text(paren_match.group(2))
-                if inner:
-                    if re.match(r"^[a-zA-Z0-9_\-\s]+$", inner):
-                        aliases.append(inner)
-                    item_note = f"{inner}；{item_note}".strip("；") if item_note else inner
-
-            if not label:
-                continue
-
-            grp = get_or_create_group(g_name)
-            grp["items"].append(
-                _normalize_item({
-                    "label": label,
-                    "note": item_note,
-                    "aliases": aliases,
-                })
-            )
-
-    bracket_group_re = re.compile(r"^(?:【([^】]+)】|\[([^\]]+)\]|［([^］]+)］)\s*[:：]?\s*(.*)$")
-
-    for raw_line in clean_text.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("```"):
-            continue
-
-        title_match = TITLE_DIRECTIVE_RE.match(line)
-        if title_match:
-            doc["title"] = _as_text(title_match.group(1)) or doc["title"]
-            continue
-        if line.lower().startswith("@title"):
-            t_val = _as_text(line[len("@title"):].lstrip(":： "))
-            if t_val:
-                doc["title"] = t_val
-            continue
-
-        line_note = ""
-        if "//" in line:
-            line, comment_part = line.split("//", 1)
-            line = line.strip()
-            line_note = comment_part.strip()
-            if not line:
-                continue
-
-        b_match = bracket_group_re.match(line)
-        if b_match:
-            curr_group_name = _as_text(b_match.group(1) or b_match.group(2) or b_match.group(3)) or DEFAULT_GROUP_NAME
-            get_or_create_group(curr_group_name)
-            trailing = _as_text(b_match.group(4))
-            if trailing:
-                append_words_from_fragment(trailing, curr_group_name, line_note=line_note)
-            continue
-
-        if line.startswith("#"):
-            grp_candidate = line.lstrip("#").strip()
-            if grp_candidate:
-                curr_group_name = grp_candidate
-                get_or_create_group(curr_group_name)
-            continue
-
-        if ("：" in line or ":" in line) and "|" not in line:
-            sep = "：" if "：" in line else ":"
-            left, right = line.split(sep, 1)
-            left_clean = re.sub(r"^(?:[\d一二三四五六七八九十]+[.、\s]+)", "", left.strip()).strip()
-            if left_clean and len(left_clean) <= 24 and not re.search(r"[,，、;；]", left_clean):
-                curr_group_name = left_clean
-                get_or_create_group(curr_group_name)
-                if right.strip():
-                    append_words_from_fragment(right.strip(), curr_group_name, line_note=line_note)
-                continue
-
-        append_words_from_fragment(line, curr_group_name, line_note=line_note)
+                "items": norm_items,
+            })
 
     if not doc["groups"]:
         doc["groups"] = create_empty_wordlist_document().get("groups", [])
@@ -612,7 +537,7 @@ export_document_to_csv_text = document_to_csv_text
 
 
 def load_wordlist_file(path: str, title: Optional[str] = None) -> Dict[str, Any]:
-    """加载 .ptwl（或自动回退解析 .csv / 结构化 .txt / 普通 .txt）并规范化为 v2 字表文档。"""
+    """加载 .ptwl（或自动回退解析 .csv / 结构化 .txt / 杂乱草稿 .txt）并规范化为 v2 字表文档。"""
     text = _read_text_file_with_fallback(path)
     default_title = _as_text(title) or os.path.splitext(os.path.basename(path))[0] or "未命名字表"
     doc: Optional[Dict[str, Any]] = None

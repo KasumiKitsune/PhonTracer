@@ -1,40 +1,30 @@
 # PhonTracer 架构与事实源
 
-本文面向维护者，说明主程序、Toolkit、CLI、PhonRec 与共享后端之间的边界与数据契约。
+本文面向维护者，说明主程序、Toolkit、CLI 与共享后端之间的边界与数据契约。
 
 ## 组件关系
 
 ```text
 PhonTracer GUI ─┐
-Toolkit ────────┼─> modules/ 共享 Python 后端 ─> .teproj / TextGrid / 图表与表格
+Toolkit ────────┼─> modules/ 共享 Python 后端 ─> .teproj / TextGrid / Collection / 图表与表格
 CLI ────────────┘
-
-PhonRec React 前端 ─> Tauri/Rust 原生桌面后端 (src-tauri/src/main.rs)
-        ├─ 原生桌面能力：低延迟录音采集、实时轻量质量检测、多发音人管理
-        ├─ 工程与导出：.teproj 归档导入/导出、WAV 文件夹导出、字表管理
-        └─ 统一数据契约：与 PhonTracer 共享 project.json v1/v2 结构与声学参数
 ```
 
 ## 主入口与职责
 
 | 入口 | 文件 | 主要职责 |
 |---|---|---|
-| 主程序 | `main.py`、`modules/app.py` | GUI 编排、发音人/条目状态、分析与人工精修复核 |
-| Toolkit | `toolkit.py` | 工程工具、图表/表格批量生成、批处理与受控自定义脚本工作流 |
-| CLI | `cli.py` | 交互式与单次命令、批处理、工程管理与脚本执行，标准 JSON 协议通信 |
-| PhonRec 前端 | `PhonRec/frontend/src/` | 录音任务采集、实时波形与质量反馈、字表导入与发音人交互 |
-| PhonRec 原生层 | `PhonRec/frontend/src-tauri/src/main.rs` | 原生音频设备采集、本地工作区管理、轻量质量规则、.teproj 归档安全打包与解压、系统级关联打开 |
-
-> [!NOTE]
-> 早期版本中独立的 Python FastAPI 分析引擎（`PhonRec/backend/main.py`）已被废弃并移除。当前 `PhonRec` 全面由原生的 Tauri (Rust) 后端驱动，具备开箱即用的本地录音与工程管理能力，并通过统一的 `.teproj` 格式与 `PhonTracer` 实现无缝互通。
+| 主程序 | `main.py`、`modules/app.py` | GUI 编排、发音人/条目状态、声学分析与人工精修复核 |
+| Toolkit | `toolkit.py` | 工程辅助工具、音频拆合、高级字表编辑、批处理与受控自定义脚本工作流 |
+| CLI | `cli.py` | 交互式与单次命令、脚本跑批、工程管理与一键导出打包，标准 JSON 协议通信 |
 
 ## 统一工程数据契约 (.teproj v1/v2)
 
-`PhonTracer` 与 `PhonRec` 的持久化工程核心为 ZIP 归档中的 `project.json` 及关联音频/数据文件。数据契约遵循以下原则：
+`PhonTracer` 的持久化工程核心为 ZIP 归档中的 `project.json` 及关联音频/数据文件。数据契约遵循以下原则：
 
 1. **顶层字表与结构（`groups`）**：
    - 顶层 `groups` 数组保留字表的分组名、组备注、组标签及词项元数据；
-   - 即使词条尚未录音或为空分组，在两端保存时均予以完整保留，避免未录制字表丢失。
+   - 即使词条尚未匹配音频或为空分组，保存时均予以完整保留，避免字表结构丢失。
 
 2. **发音人与条目（`speakers` 与 `items`）**：
    - 事实源由 `speakers[spk_id].items` 统一管理；
@@ -55,17 +45,17 @@ PhonRec React 前端 ─> Tauri/Rust 原生桌面后端 (src-tauri/src/main.rs)
 
 ## 共享事实源
 
-新增能力优先落在以下共享层，避免 GUI、Toolkit、CLI 和 PhonRec 各自实现一套。
+新增能力优先落在以下共享层，避免 GUI、Toolkit 和 CLI 各自实现一套。
 
 | 领域 | 事实源 | 主要消费者 |
 |---|---|---|
 | 软件版本 | `modules/version.py` | 主程序、Toolkit、CLI、发布检查 |
 | 工程保存/导入 | `modules/project_manager.py` | 主程序、CLI 及共享工程工作流 |
 | 工程安全与兼容 | `modules/project_adaptor.py` | 主程序、Toolkit 数据处理、跨版本工程升级 |
-| 高级字表 | `modules/wordlist_v2.py` | GUI、CLI、字表解析与导出 |
+| 高级字表与容错解析 | `modules/wordlist_v2.py`、`modules/core/text_io.py` | GUI、Toolkit、CLI、字表解析与导出 |
 | TextGrid 转换 | `modules/textgrid_converter.py` | Toolkit 与 CLI |
 | 音频核心算法 | `modules/audio_core.py` | GUI、Toolkit、CLI 相关流程 |
-| 导出格式与样式 | `modules/data_utils.py` (ExcelStyleManager) | GUI、CLI、报告生成器 |
+| 导出格式与样式 | `modules/data_utils.py`、`modules/export_service/` | GUI、CLI、报告生成器 |
 | 脚本 API/执行 | `modules/script_api.py`、`modules/script_runner.py` | Toolkit 与 CLI |
 | 受控工程变更 | `modules/project_patch.py` | 数据处理脚本与 Toolkit |
 
@@ -75,7 +65,7 @@ PhonRec React 前端 ─> Tauri/Rust 原生桌面后端 (src-tauri/src/main.rs)
 - `ProjectManager.save_to_workspace()` 先写临时 JSON，再原子替换 `project.json`；导入使用临时工作区、校验、交换与回滚；
 - 工程资源必须位于归档中的 `audio/` 或 `data/`，禁止引用归档外部绝对路径；
 - `note/item_note`、`tags/item_tags`、`aliases/item_aliases`、`meta/item_meta` 统一由字段标准化机制映射，写入使用规范字段；
-- 普通字表（`.txt`）、表格字表（`.csv`）与高级字表（`.ptwl`/`.json`）在导入后均归一化为统一分组条目模型。
+- 普通/草稿字表（`.txt`）、表格字表（`.csv`）与高级字表（`.ptwl`/`.json`）在导入后均归一化为统一分组条目模型。
 
 ## 自定义脚本边界
 
@@ -83,8 +73,7 @@ PhonRec React 前端 ─> Tauri/Rust 原生桌面后端 (src-tauri/src/main.rs)
 
 ## 修改时的最低核对
 
-1. 改工程字段：同步工程规范、Schema（`project.schema.json`）、读写兼容和 GUI/CLI/PhonRec 测试。
+1. 改工程字段：同步工程规范、Schema（`project.schema.json`）、读写兼容和 GUI/CLI 测试。
 2. 改共享算法：检查全部消费者，不在入口层复制实现。
-3. 改 PhonRec 前后端：验证字表导入（`.txt`, `.csv`, `.ptwl`, `.json`）、工程导入导出与 Rust 单元测试。
-4. 改版本：运行 `python scripts/check_release_version.py --expected vX.Y.Z`。
-5. 发布前：执行全量测试门禁（`pytest tests` 与 `cargo test`）。
+3. 改版本：运行 `python scripts/check_release_version.py --expected vX.Y.Z`。
+4. 发布前：执行全量测试门禁（`python -m pytest -q tests`）。

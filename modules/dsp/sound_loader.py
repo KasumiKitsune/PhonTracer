@@ -23,7 +23,7 @@ SILENCE_AMPLITUDE_THRESHOLD = 10 ** (-50 / 20)
 
 
 def repair_wav_header(path) -> bool:
-    """修复旧版 PhonRec 写错的 PCM WAV 平均字节率字段。
+    """修复部分历史录音工具写错的 PCM WAV 平均字节率字段。
 
     旧版录音文件可能把单声道 16-bit WAV 的 ``nAvgBytesPerSec`` 写成
     采样率的四倍。音频数据本身没有损坏，但 libsndfile/Praat 会拒绝读取。
@@ -79,7 +79,7 @@ def repair_wav_header(path) -> bool:
 def load_compatible_sound(path: str) -> parselmouth.Sound:
     """
     鲁棒加载音频为 parselmouth.Sound 对象。
-    0. 若为旧版 PhonRec 错误 WAV 头，优先原地修正 4 字节 byte_rate。
+    0. 若存在异常 WAV 平均字节率头，优先原地修正 4 字节 byte_rate。
     1. 尝试原生 parselmouth.Sound 加载。
     2. 若原生加载失败，尝试用 scipy.io.wavfile 在内存中解码并转换为 Sound 对象（零临时文件）。
     3. 若仍然失败，尝试拷贝至临时文件执行 WAV 头修复，并在加载后立即清理临时文件。

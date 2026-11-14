@@ -11,12 +11,14 @@ import sys
 
 from modules._fallbacks import (
     IS_FALLBACK,
+    Data,
     Formant,
     Intensity,
     Matrix,
     Pitch,
     Sound,
     Spectrogram,
+    TextGrid,
     _PraatSubmodule,
     __version__,
     _decode_pcm_bytes,
@@ -53,6 +55,8 @@ except ImportError:
 
 
 __all__ = [
+    "Data",
+    "TextGrid",
     "Sound",
     "Intensity",
     "Pitch",
