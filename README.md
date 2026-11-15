@@ -15,9 +15,9 @@
 
 ### <img src="https://img.icons8.com/material-rounded/24/000000/info.png" width="20" style="vertical-align: middle;"/> 项目简介
 
-> **PhonTracer** 是一个面向语音学标注与声学分析的桌面工具套件，支持批量提取和人工复核声调 `F0`、共振峰 `F1/F2`，并提供 `.teproj` 工程保存、异常提示、多说话人管理、科学图表导出和命令行工作台。
+> **PhonTracer** 是一个面向语音学标注与声学分析的桌面工具套件，支持批量提取和人工复核声调 `F0`、元音共振峰 `F1/F2`（含可选 `F3`），并提供 `.teproj` 工程归档、异常筛查、多发音人隔离管理、科学图表与研究报告导出，以及命令行批处理工作台。
 
-项目底层通过 [Parselmouth](https://parselmouth.readthedocs.io/) 调用 **Praat** 的声学分析能力，适合需要“自动提取 + 可视化复核 + 批量导出”工作流的研究和教学场景。
+项目底层通过 [Parselmouth](https://parselmouth.readthedocs.io/) 调用 **Praat** 的声学分析引擎，适合需要“自动提取 + 声谱图复核 + 批量制图与导出”的实验语音学、方言调查与教学场景。前端田野调查与多发音人字表采录可配合同系列工具 **[PhonAcq](https://github.com/KasumiKitsune/PhonAcq)** 使用，其导出的 `.teproj` 工程包或标准 `.zip` 归档包可直接载入本软件继续精修与出图。
 
 ---
 
@@ -60,16 +60,15 @@
 
 ### <img src="https://img.icons8.com/material-rounded/24/000000/star.png" width="20" style="vertical-align: middle;"/> 核心能力
 
-- **双分析模式**：支持声调 `F0` 与共振峰 `F1/F2` 提取，可按任务切换分析模式。
-- **自动分析与人工复核结合**：在声谱图中查看轮廓、试听音频、调整边界，并使用橡皮擦工具删除明显异常的分析点。
-- **两类导入流程**：支持“长音频 + 字表”切分，也支持批量导入独立音频文件。
-- **Praat 生态互操作**：支持导入和导出 `TextGrid` 及一键导出包含音频、标注、基频与共振峰的 `.Collection` 集合文件。
-- **高级字表 (`.ptwl`) 与容错草稿解析**：支持带结构的 JSON 格式高级字表及人类随手记录的草稿 `.txt`/`.csv` 字表。导入后，组名、组标签、组备注、词项别名、自定义科研字段和人工复核状态将随 `.teproj` 穿透并附加于每个切分项，可在画图、导出或自定义脚本中调用。
-- **发音人多维隔离**：每位发音人拥有独立的工作区、F0 与共振峰参数；支持单条目参数隔离（局部参数微调不污染同发音人的其他词项），并提供右键属性窗口核对参数来源。
-- **异常提示**：在项目树中提示边界问题、分析点缺失、跳变异常和跨边界拆分风险，并提供项目树右侧状态短标签（如 `+N` 等）辅助定位需复核条目。
-- **科学图表分组规则**：支持按“词项标签”、“组标签”、“复核状态”或“自定义科研字段”临时对图表重组上色；对符合特定格式的二字组数据自动支持连读变调方阵、调类效应时程图、音节时长对比图和均值热图。
-- **自定义脚本沙箱与 AI 协作**：Toolkit 内置受控 Python 执行沙箱（可使用 numpy, scipy, matplotlib，禁用系统访问和未允许的库），支持一键生成工程概要 AI 提示词，由 AI 协作生成绘图代码，并支持将执行记录写入 `.teproj` 以供归档。
-- **工程归档与报告生成**：支持将完整状态保存为 `.teproj`。在 Toolkit 或 CLI 中可直接导出包含工程 SHA-256 文件指纹、统计摘要、ANOVA 分析与脚本记录的研究方法报告。
+- **双分析模式**：支持声调 `F0` 与元音共振峰 `F1/F2`（可叠加显示与导出 `F3`）提取，可按任务随时切换。
+- **声谱图交互复核**：同屏查看宽带声谱图、轮廓轨迹与顶部波形缩略条；支持红线边界过零点吸附拖拽、双音节内界联动调整、单字胶囊点按试听、`Alt + 左键` 一键修复八度跳变，以及圆形橡皮擦涂抹剔除/恢复异常散点。
+- **多源导入与 Praat 互操作**：支持直接打开 [PhonAcq](https://github.com/KasumiKitsune/PhonAcq) 导出的 `.teproj` 工程包、“长音频 + 字表”自动切分、独立音频（`WAV` / `MP3` / `FLAC` / `OGG`）批量匹配，以及双向读写 Praat `TextGrid` 和一键打包音频、标注、Pitch 与 Formant 的 `.Collection` 集合文件。
+- **高级字表 (`.ptwl`) 与草稿容错解析**：支持带分组元数据与自定义科研字段的 `.ptwl` 高级字表，同时兼容带注释、编号、括号或分隔线的日常手打草稿 `.txt` / `.csv` 字表；组标签、词项别名、自定义字段与复核状态随 `.teproj` 保存，可用于图表重分组与脚本统计。
+- **发音人多维隔离与单条调参**：每位发音人拥有独立音频工作区与声学参数；对个别特殊词条单独重算参数时自动开启参数隔离（项目树以蓝点 `•` 标识），不改动同发音人其余词条，右键「属性」即可核对参数来源。
+- **异常筛查与质控区分**：项目树自动标记边界异常、有效点不足、相邻点跳变与跨边界切分风险，支持一键筛选待复核词条；单样本叠置质检图明确区分红色声学警告实线与琥珀色组内统计偏离（`>2.8σ`）参考虚线。
+- **多版式科学图表导出**：内置**中文期刊、国际期刊、汇报演示**三套版式预设，支持按词项标签、组标签、复核状态或自定义字段重新分组上色。声调模式涵盖分组均值轨迹（`Hz` / 五度 `T` 值与赵元任五度标尺双轴）、单样本质检图、16 组合连读变调方阵、调类效应量（$\eta^2$）时程图、音节物理时长图与均值热图；共振峰模式涵盖 `Hz / Lobanov / Bark / ERB / Mel` 舌位空间图（含 VSA 面积）、复韵母动态轨迹与滑移图、核密度热图及 Pillai 合并度矩阵。
+- **自定义脚本沙箱与内置高阶模板**：`Toolkit` 与 `PhonTracerCLI` 内置受控 Python 沙箱（开放 `numpy`、`scipy`、`pandas`、`matplotlib` 与受控 `parselmouth` 接口，屏蔽任意系统访问与未授权模块），支持通过声明式 `PARAMS` 自动生成界面参数控件，输出图表（`Figure`）、统计表（`Table`）或受控工程补丁（`ProjectPatch`）。内置嗓音发声态（`H1-H2 / CPP / HNR`）、擦音频谱四阶矩（`COG`）、基频八度跳变自动诊断重算等模板，并可一键复制工程结构说明供 AI 辅助编写脚本。
+- **工程归档与研究方法报告**：`.teproj` 完整保存音频副本、边界、手工修整状态与脚本运行记录；在 `Toolkit` 或 `CLI` 中可直接导出含工程 SHA-256 指纹、参数表、组间统计（ANOVA / 效应量）的研究方法报告（`MD` + `XLSX`）。
 
 ---
 
@@ -83,17 +82,17 @@
   </tr>
   <tr>
     <td><b>PhonTracer</b></td>
-    <td>主桌面程序：导入、分析、人工复核、异常检查、参数隔离、工程保存和导出。</td>
+    <td>主桌面程序：语料导入、F0 / 共振峰提取、声谱图人工复核、异常筛查、单条参数隔离、科学图表导出与工程保存。</td>
     <td>Windows x64 / ARM64、macOS</td>
   </tr>
   <tr>
     <td><b>Toolkit</b></td>
-    <td>独立处理工作台：音频合并、长音频切分、高级字表 (.ptwl) 编辑、TextGrid 转换、自定义 Python 脚本沙箱运行及研究方法报告生成。</td>
+    <td>六合一独立工具箱：音频合并（保持原采样率）、长音频自适应静音切分、TextGrid 转换器、高级字表 (<code>.ptwl</code>) 编辑器、工程预览与研究方法报告导出、自定义 Python 脚本沙箱。</td>
     <td>Windows x64 / ARM64、macOS</td>
   </tr>
   <tr>
     <td><b>PhonTracerCLI</b></td>
-    <td>面向批处理与 AI 代理的命令行交互式/静默执行工作台，支持全流程 `--script-file` 跑批、`export_bundle` 一站式交付与自定义脚本库指令。</td>
+    <td>面向批处理与自动化代理的命令行工作台，覆盖完整工程分析、<code>fix_warnings</code> 异常修复、<code>stats</code> 统计、<code>export_bundle</code> 一站式交付、<code>run_script</code> 沙箱脚本与 <code>tool_*</code> 音频字表工具。</td>
     <td>随 Windows 套件发布（源码跨平台运行）</td>
   </tr>
 </table>
@@ -111,58 +110,59 @@ flowchart LR
     classDef ui fill:#E8F5E9,stroke:#43A047,stroke-width:2px,color:#000
     classDef export fill:#F3E5F5,stroke:#8E24AA,stroke-width:2px,color:#000
 
-    A["音频、字表(TXT/.ptwl)或 TextGrid"]:::input --> B{"选择导入方式"}:::route
+    A["音频、字表(TXT/CSV/.ptwl)、TextGrid 或 PhonAcq 导出包"]:::input --> B{"选择导入方式"}:::route
     B --> C["长音频切分"]:::route
     B --> D["独立音频批量导入"]:::route
-    B --> E["TextGrid 导入"]:::route
+    B --> E["TextGrid / PhonAcq .teproj 载入"]:::route
     C --> F{"选择分析模式"}:::core
     D --> F
     E --> F
     F --> G["声调 F0"]:::core
-    F --> H["共振峰 F1/F2"]:::core
+    F --> H["共振峰 F1/F2 (+F3)"]:::core
     G --> I["声谱图试听与人工复核"]:::ui
     H --> I
-    I --> J["异常提示与条目检查"]:::ui
-    J --> K["TXT、TextGrid、Collection、XLSX、图表导出"]:::export
+    I --> J["异常筛查与单条调参"]:::ui
+    J --> K["TXT、CSV、XLSX、TextGrid、Collection、图表与报告"]:::export
     I --> L["保存 .teproj 工程"]:::export
 ```
 
-**一个典型工作流如下：**
+**典型工作流如下：**
 
-1. 创建或切换发音人，并设置适合该发音人的分析参数。
-2. 导入长音频和字表（普通/草稿字表或 `.ptwl` 高级字表）、批量导入独立音频，或载入已有 TextGrid。
-3. 选择声调 `F0` 或共振峰 `F1/F2` 模式并执行分析。
-4. 在声谱图中试听音频、检查分段边界和分析点，必要时通过橡皮擦/剔除点工具手动修正。
-5. 根据项目树中的异常提示或右键属性窗口复核可疑条目的底层配置。
-6. 导出所需的数据报告、自定义分组科学图表、Praat `.Collection` 或 `TextGrid`。
-7. 将当前工作保存为 `.teproj` 工程，或载入 Toolkit 进行高级字表编辑、沙盒脚本绘图和生成归档报告。
+1. 创建或切换发音人，按性别预设或发音人音域估计配置分析参数（若使用 PhonAcq 导出的 `.teproj` 可直接打开跳过切分步骤）。
+2. 导入长音频与字表（普通/草稿文本、CSV 或 `.ptwl` 高级字表）、批量导入独立音频，或载入已有 `TextGrid`。
+3. 选择声调 `F0` 或共振峰 `F1/F2` 模式执行批量提取。
+4. 在声谱图中点按试听、微调红色切分边界，必要时用橡皮擦/剔除点工具或 `Alt + 左键` 修整异常散点。
+5. 利用项目树异常筛选定位待查词条，对个别发声特殊的词条单独调参重算。
+6. 选择版式预设与分组维度，导出科学图表、源数据表格、Praat `.Collection` 或 `TextGrid`。
+7. 保存为 `.teproj` 工程归档，或在 `Toolkit` / `PhonTracerCLI` 中运行高阶脚本并生成研究方法报告。
 
 ---
 
 ### <img src="https://img.icons8.com/material-rounded/24/000000/settings.png" width="20" style="vertical-align: middle;"/> 分析模式
 
 #### 声调 F0
-- 默认通过 Parselmouth 调用 Praat 自相关音高分析。
-- 支持设置音高下限、音高上限、静音阈值、前端跳过比例和浊音阈值。
-- 支持按发音人估计推荐 F0 范围（提供保守、推荐、精细三档）。
-- 支持在声谱图中检查轮廓，并删除明显异常的 F0 点。
-- 对无法可靠测量的片段保留缺失值，避免将嘎裂声等异常发声误当作稳定 F0。
+- 底层通过 Parselmouth 调用 Praat 自相关（Autocorrelation）音高分析算法。
+- 支持配置**音高下限 (`floor`)**、**音高上限 (`ceiling`)**、**浊音阈值 (`voicing_thresh`)**、**VAD 能量阈值 (`db`)**、**跳过声母时长 (`skip_front`，秒)**、**静音裁剪 (`trim_silence`)** 与**归一化采样点数 (`pts`，默认 11 点)**。
+- 支持按当前发音人语料自动估计基频分布并推荐参数（提供保守、推荐、精细三档）。
+- 支持在声谱图中通过 `Alt + 左键` 修正单点八度跳变，或用橡皮擦涂抹剔除异常散点。
+- 对嘎裂声、清化段等无法可靠测量的片段保留缺失值，避免强行插值引入伪影。
 
 #### 共振峰 F1/F2
-- 通过 Parselmouth 调用 Praat 的 Burg 共振峰分析。
-- 支持提取和显示 `F1`、`F2`，内部同时保留 `F3` 数据用于导出和检查。
-- 支持在声谱图中检查共振峰轨迹，并删除明显异常的分析点（采用点定位算法）。
-- 支持根据当前发音人的样本生成参数建议。
+- 底层通过 Parselmouth 调用 Praat 的 Burg 线性预测共振峰分析算法。
+- 默认提取并显示 `F1`、`F2` 轨迹，勾选「显示 F3」后可同屏叠加检视并同步导出 `F3` 数据。
+- 支持在声谱图中使用「剔除点」工具按最近点定位剔除异常共振峰散点，并实时更新采样预览。
+- 支持根据当前发音人样本分布自动给出共振峰上限等参数建议。
 
 **共振峰主要参数说明：**
 
 | 参数 | 内部字段 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| 共振峰分析上限 | `formant_max_hz` | `5500` | 控制 Praat Burg 搜索范围，并非 F2 数值上限 |
-| 共振峰数量 | `formant_count` | `5` | Praat Burg 分析参数 |
-| 窗长 | `formant_window_length` | `0.025` | 单位为秒 |
-| 预加重 | `formant_pre_emphasis` | `50` | 单位为赫兹 |
-| 采样策略 | `formant_sample_strategy` | `整段11点` | 控制导出时的采样位置 |
+| 共振峰分析上限 | `formant_max_hz` | `5500` | 控制 Praat Burg 搜索频率上限（通常男声约 `5000`、女声约 `5500`），并非 F2 截断值 |
+| 共振峰数量 | `formant_count` | `5` | Praat Burg 线性预测阶数对应的共振峰个数 |
+| 窗长 | `formant_window_length` | `0.025` | 分析高斯窗半宽对应时长（秒） |
+| 预加重 | `formant_pre_emphasis` | `50` | 高频预加重起始频率（Hz） |
+| 采样策略 | `formant_sample_strategy` | `整段11点` | 可选 `整段11点`（复韵母动态轨迹）或 `中段均值`（单元音稳态格局） |
+| 显示 F3 | `show_f3` | `False` | 是否在声谱图中叠加绘制 `F3` 轨迹并纳入导出表格 |
 
 ---
 
@@ -170,43 +170,44 @@ flowchart LR
 
 #### 输入方式
 
-PhonTracer 支持三类常见输入流程：
+PhonTracer 支持四类常见输入流程：
 
 | 输入方式 | 适用场景 | 说明 |
 | --- | --- | --- |
-| **长音频 + 字表** | 连续录音按词条拆分 | 支持普通/草稿文本（分组名/词项）、CSV 与高级字表 `.ptwl` 格式 |
-| **独立音频批量导入** | 每个词条已有单独音频文件 | 支持 `WAV` 和 `MP3` 文件，提供模糊匹配和顺序匹配模式 |
-| **TextGrid 导入** | 已有 Praat 标注或需要继续复核 | 支持载入已有分段信息，并在当前工程中继续分析 |
+| **PhonAcq 工程直接交接** | 使用 [PhonAcq](https://github.com/KasumiKitsune/PhonAcq) 完成现场采录 | 直接打开 PhonAcq 导出的 `.teproj` 工程包（或导入其标准 `.zip` 归档中的 `.wav`、`.TextGrid` 与字表），免去手工重命名与二次对齐 |
+| **长音频 + 字表** | 连续录音按词条自动拆分 | 支持普通/草稿文本（自动识别注释、编号与分组标题）、CSV 与高级字表 `.ptwl` 格式 |
+| **独立音频批量导入** | 每个词条已有单独音频文件 | 支持 `WAV`、`MP3`、`FLAC`、`OGG` 文件，提供文件名模糊匹配和顺序匹配模式 |
+| **TextGrid 导入** | 已有 Praat 标注或需继续复核 | 支持载入已有分段边界与词字标注，在当前工程中继续提取与修整 |
 
 #### 人工复核与异常提示
 
-自动提取不是最终结论。PhonTracer 将分析结果放回可试听、可编辑的声谱图界面，帮助用户完成复核：
+自动提取不是最终结论。PhonTracer 将分析结果放回可试听、可编辑的声谱图界面，方便逐条核查：
 
-- 播放当前音频并查看声谱图
-- 调整词条和字符边界（鼠标左右拖拽红蓝虚线）
-- 检查 F0 轮廓或共振峰轨迹，利用滚轮调节十字准星感应半径进行异常点剔除
-- 在项目树中定位“需要检查”的条目（根据状态短标签快速定位）
+- **视野与试听**：鼠标滚轮缩放时间轴、右键拖拽平移视野、点击顶部波形导航条快速定位；点击音节胶囊或双击字区间即可单独试听该音节，也可拉出局部选区循环试听。
+- **边界精修**：拖拽红色边界线实时微调起止时间（自动吸附过零点）；多音节词条内部重合边界按拖拽方向自动区分前字终点或后字起点，按住 `Shift` 拖拽可同步平移相邻两字共享分界线。
+- **散点修整**：开启「橡皮擦 / 剔除点」后，滚轮调节圆形感应半径，左键涂抹剔除异常点，右键（或 `Shift + 左键`）局部恢复原始散点；F0 模式下支持 `Alt + 左键` 一键折半/翻倍修正八度跳变点，全程支持 `Ctrl + Z` 撤销。
+- **异常定位**：利用项目树右侧状态标签与异常筛选按钮快速定位待复核词条。
 
 > [!NOTE]
-> 项目树会针对边界异常、分析点缺失、有效点比例不足、跳变异常以及跨边界拆分风险给出提示。提示用于辅助人工检查，不应被理解为自动质量认证。
+> 项目树会针对边界过短/重叠、分析点缺失、有效点比例偏低、相邻点剧烈跳变以及跨边界拆分风险给出提示。提示用于辅助人工检查，不代表自动质量认证。
 
 ---
 
 ### <img src="https://img.icons8.com/material-rounded/24/000000/save.png" width="20" style="vertical-align: middle;"/> 工程保存与恢复
 
-PhonTracer 使用 `.teproj` 作为可移植工程归档格式。工程可保存：
+PhonTracer 使用 `.teproj` 作为可移植工程归档格式。单个工程文件内完整保存：
 
-- 发音人和参数设置
+- 多发音人档案、全局参数与单条隔离参数配置
 - 导入的音频副本
-- 条目、分组、边界信息及高级字表元数据
-- F0 与共振峰分析结果
-- 人工删除或调整后的分析状态
-- 自定义脚本的执行记录、源码及运行日志
+- 词条、分组、音节内部分界及 `.ptwl` 高级字表元数据
+- F0 与共振峰提取结果
+- 人工擦除、恢复或边界微调后的复核状态
+- 自定义脚本源码、参数记录及运行日志
 
-导入已有工程时，程序会先显示预览；如果当前工作区已有内容，可选择覆盖或叠加导入。
+导入已有 `.teproj` 时会先弹出工程概览预览；若当前工作区已有语料，可选择覆盖当前工作区或合并追加发音人。
 
 > [!TIP]
-> 启用自动保存后，程序会将当前状态写入内部恢复工作区，并在下次启动时提供恢复提示。需要跨设备传输、迁移或分享时，请显式导出 `.teproj` 工程。
+> 启用自动保存后，程序会将当前状态定期写入本地恢复工作区，并在异常退出后下次启动时提示恢复。需要跨设备迁移、长期归档或协作分享时，请显式保存 `.teproj` 工程文件。
 
 ---
 
@@ -214,11 +215,12 @@ PhonTracer 使用 `.teproj` 作为可移植工程归档格式。工程可保存�
 
 | 类别 | 格式 | 适用场景 |
 | --- | --- | --- |
-| **文本数据** | `TXT` | 轻量查看和后续脚本处理；文本结果采用制表符分隔 |
-| **Praat 互操作** | `TextGrid`、`.Collection` | 导出标准三层 `groups / words / chars` TextGrid 或一键打包音频、标注、Pitch 与 Formant 的 `.Collection` |
-| **表格分析** | `XLSX` | 包含数据和分析结果页，自动在 Excel 底层注入基频 T 值活公式和共振峰均值/离散度活公式，保留高级字表元数据 |
-| **科学图表** | `PNG`、`SVG`、`PDF` | 支持当前/分发音人/整合导出，支持自定义分组重新上色与自动分页 |
-| **工程归档** | `.teproj` | 保存完整分析状态、缓存、指纹及脚本运行历史 |
+| **文本与源数据** | `TXT`、`CSV` | 制表符分隔文本及科学图表配套绘图源数据表，便于接入 R / Python 后续统计 |
+| **Praat 互操作** | `TextGrid`、`.Collection` | 导出标准三层 `groups / words / chars` TextGrid，或一键打包音频、标注、修整后 Pitch 与 Formant 的 `.Collection` |
+| **Excel 动态报表** | `XLSX` | 包含原始测量与统计汇总页，自动写入基频五度 `T` 值换算活公式与共振峰均值/离散度公式，保留高级字表自定义字段 |
+| **科学图表** | `PNG`、`SVG`、`PDF` | 支持当前发音人 / 分发音人 / 多人整合导出，内置三套出版预设，支持自定义分组重上色与多组自动分页 |
+| **研究方法报告** | `MD`、`XLSX` | 在 Toolkit「工程预览」或 CLI 中导出含 SHA-256 文件指纹、提取参数、ANOVA 统计摘要与脚本记录的方法说明及数据审计档案 |
+| **工程归档** | `.teproj` | 单文件保存完整音频、边界、复核状态与自定义脚本历史 |
 
 ---
 
@@ -226,17 +228,17 @@ PhonTracer 使用 `.teproj` 作为可移植工程归档格式。工程可保存�
 
 #### 安装
 
-请优先从 [GitHub Releases](https://github.com/KasumiKitsune/PhonTracer/releases) 下载对应平台与用途的已构建发布资产：
+请从 [GitHub Releases](https://github.com/KasumiKitsune/PhonTracer/releases) 下载对应平台与用途的发布包：
 
 | 用途 | 平台 | 发布资产 | 内容与说明 |
 |---|---|---|---|
-| 主套件安装 | Windows x64 | `PhonTracer_Setup_Windows_x64.exe` | PhonTracer、Toolkit 与 PhonTracerCLI；注册 `.teproj`、`.ptwl` 文件关联 |
-| 主套件便携 | Windows x64 | `PhonTracer_Suite-Windows-x64.zip` | 同上，解压后直接运行 |
-| 主套件安装 | Windows ARM64 | `PhonTracer_Setup_Windows_ARM64.exe` | 原生 ARM64 安装包 |
-| 主套件便携 | Windows ARM64 | `PhonTracer_Suite-Windows-ARM64.zip` | 原生 ARM64 便携压缩包 |
-| 主套件 | macOS Apple Silicon | `PhonTracer_Suite-macOS.dmg` | PhonTracer 与 Toolkit（ARM64） |
+| 主套件安装 | Windows x64 | `PhonTracer_Setup_Windows_x64.exe` | PhonTracer、Toolkit 与 PhonTracerCLI；自动注册 `.teproj`、`.ptwl` 文件关联 |
+| 主套件便携 | Windows x64 | `PhonTracer_Suite-Windows-x64.zip` | 同上，免安装解压即用 |
+| 主套件安装 | Windows ARM64 | `PhonTracer_Setup_Windows_ARM64.exe` | 原生 Windows ARM64 安装程序 |
+| 主套件便携 | Windows ARM64 | `PhonTracer_Suite-Windows-ARM64.zip` | 原生 Windows ARM64 便携压缩包 |
+| 主套件 | macOS Apple Silicon | `PhonTracer_Suite-macOS.dmg` | PhonTracer 与 Toolkit（原生 M 系列芯片构建） |
 
-Windows 便携版解压后可直接运行 `PhonTracer.exe`、`Toolkit.exe` 或 `PhonTracerCLI.exe`。macOS 用户打开 DMG 后将 `.app` 拖入“应用程序”目录即可使用。
+Windows 便携版解压后可直接运行 `PhonTracer.exe`、`Toolkit.exe` 或 `PhonTracerCLI.exe`。macOS 用户打开 DMG 后将应用拖入“应用程序”目录即可；若首次打开提示“无法验证开发者”，可在“系统设置 → 隐私与安全性”中点击“仍要打开”，或对应用执行 `xattr -cr`。
 
 #### 从源码运行
 
@@ -249,7 +251,7 @@ python -m pip install -r requirements.txt
 python main.py
 ```
 
-其他入口的启动方式：
+其他入口启动方式：
 ```bash
 python toolkit.py
 python cli.py
@@ -257,23 +259,38 @@ python cli.py
 
 #### Windows CLI 示例
 
-打包后的命令行执行示例（支持 `--script-file` 全流程跑批、单项执行回显与受控脚本管理）：
+命令行工作台输出结构化 JSON，支持交互式会话、单条指令执行与 `--script-file` 全流程批处理：
 ```powershell
-# 查询状态与获取帮助
+# 查看内置工作流指南与全部指令说明
 PhonTracerCLI.exe --version
 PhonTracerCLI.exe agent_guide
 PhonTracerCLI.exe help all
 PhonTracerCLI.exe help tools
 
-# 单次剧本跑批与一站式闭环导出
+# 对已有工程执行自动异常修复、分组统计与全套产物一键交付
+PhonTracerCLI.exe --project session.teproj fix_warnings --apply scope=all
+PhonTracerCLI.exe --project session.teproj export_bundle ./deliverables scope=integrated format=png
+
+# 按批处理剧本一次性完成切分、提取、质检与打包导出
 PhonTracerCLI.exe --project session.teproj --script-file pipeline.txt
 ```
 
 ---
 
+### <img src="https://img.icons8.com/material-rounded/24/000000/link.png" width="20" style="vertical-align: middle;"/> 相关项目与工具链联动
+
+PhonTracer 可与同作者开发的上下游开源工具配合，组成**「田野/实验采录 → 边界与散点精修 → 出版制图与 Praat 互审」**的完整工作流：
+
+- **[PhonAcq — 田野语音与方言字表采录系统](https://github.com/KasumiKitsune/PhonAcq)**（[在线导览](https://kasumikitsune.github.io/PhonAcq/) ｜ [安装包下载](https://github.com/KasumiKitsune/PhonAcq/releases)）  
+  支持 **Android 手机/平板、Windows 与 macOS** 的方言调查与语音实验前端采录工具，提供多人独立建档、文字/图片词卡看读引导、局域网双设备无线遥控与现场信噪比/削波质检。采录完成后可**一键导出 PhonTracer `.teproj` 工程包**（或标准 `.wav` + `.TextGrid` + `wordlist.txt` 归档包），直接在 PhonTracer 中打开复核边界、修整异常散点、批量生成声学图表与研究方法报告。
+- **[Praat 简体中文汉化版 (praat-simplified-chinese)](https://github.com/KasumiKitsune/praat-simplified-chinese)**  
+  语音学分析软件 Praat 的简体中文本地化与日常交互改进维护版，可直接载入 PhonTracer 一键导出的 `.Collection` 集合文件（内含音频、三层 `TextGrid`、修整后 `Pitch` 与 `Formant` 对象）或标准 `TextGrid` 进行跨工具核验。
+
+---
+
 ### <img src="https://img.icons8.com/material-rounded/24/000000/book.png" width="20" style="vertical-align: middle;"/> 详细手册与更多资源
 
-README 只提供快速概览。完整操作步骤、参数说明和进阶工作流请查看：
+README 仅提供功能概览。完整操作步骤、声学参数调优说明和进阶图表解读请查阅随软件附带的使用手册：
 - 📖 **[完整使用手册（合订本）](assets/manual/manual.md)**
 - 📄 **[图文交互使用手册](assets/manual/manual.html)**
 
@@ -286,8 +303,8 @@ python scripts/check_release_version.py --expected v1.0.0
 ```
 
 #### 更新与发布
-- 可在软件的“关于”窗口中手动检查 GitHub Releases 更新。
-- GitHub Actions 会在推送版本标签时基于 `PhonTracer_Suite.spec` 自动构建跨平台发布套件。
+- 可在主程序顶部菜单「关于」窗口中手动检查 GitHub Releases 新版本。
+- 推送版本标签（如 `v1.0.0`）时，GitHub Actions 会基于 `PhonTracer_Suite.spec` 自动构建 Windows x64、Windows ARM64 与 macOS Apple Silicon 发布资产。
 
 #### 核心文档与工程格式
 
@@ -299,11 +316,11 @@ python scripts/check_release_version.py --expected v1.0.0
 
 ### <img src="https://img.icons8.com/material-rounded/24/000000/error.png" width="20" style="vertical-align: middle;"/> 已知边界
 
-- 自动分析结果会受到录音质量、发音人参数和分段边界影响，正式使用前仍应人工复核。
-- F0 范围估计和共振峰参数建议用于辅助配置，不是最终分析结论。
-- 主程序与 `Toolkit` 的拖拽行为不同：主程序支持窗口级拖拽，`Toolkit` 为规避 GIL 锁冲突限制了外部文件拖入，请使用界面按钮导入。
-- 自动保存用于内部恢复；需要归档、迁移或分享时，请显式导出 `.teproj` 工程。
-- 本软件纯单机离线运行，零遥测、不上传任何录音与工程数据（主程序本地工作区与设置默认位于 `~/.phon_tracer/`）；Toolkit 自定义脚本为进程内执行，请仅运行可信脚本。
+- 自动提取结果受录音信噪比、发音人音域/声道参数与切分边界影响，正式统计或发表前仍应人工复核。
+- 发音人 F0 范围估计与共振峰参数建议仅用于辅助初始配置，不替代研究者结合语图的判断。
+- 主程序支持直接拖入文件打开；`Toolkit` 为规避底层多线程图形锁冲突禁用了窗口拖拽，请通过界面按钮选择文件。
+- 自动保存仅用于意外中断后的本机恢复；跨设备迁移或长期归档请显式保存 `.teproj` 工程。
+- 本软件纯单机离线运行，零遥测、不上传任何语料与工程数据（本地配置与恢复缓存默认位于 `~/.phon_tracer/`）；自定义脚本沙箱在当前进程内运行，请仅执行可信脚本。
 
 ---
 
