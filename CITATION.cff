@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+title: PhonTracer
+message: "如果您在语音学实验、方言声学调查或学术论文中使用了 PhonTracer，欢迎按以下元数据引用本软件。"
+type: software
+authors:
+  - name: KasumiKitsune
+    email: "screwyneko@gmail.com"
+    website: "https://github.com/KasumiKitsune"
+abstract: "PhonTracer 是一款面向语音学标注与声学分析的开源本地桌面工具套件，基于 Parselmouth (Praat) 提供声调 F0 与元音共振峰 F1/F2/F3 批量提取、宽带声谱图边界与散点人工复核、多发音人参数隔离、出版级声学图表导出、受控 Python 脚本沙箱及命令行批处理工作流。"
+repository-code: "https://github.com/KasumiKitsune/PhonTracer"
+license: GPL-3.0-or-later
+version: "1.0.0"
+date-released: "2026-11-15"
+keywords:
+  - phonetics
+  - acoustic-phonetics
+  - linguistics
+  - dialectology
+  - f0
+  - formants
+  - tone
+  - praat
+  - parselmouth
