@@ -39,6 +39,12 @@ def collect_versions() -> dict[str, str]:
         "README 发布徽章": _match_version(
             "README.md", r"img\.shields\.io/badge/release-v(.+?)-blue\.svg"
         ),
+        "CITATION.cff 引用元数据": _match_version(
+            "CITATION.cff", r'^version:\s*["\']?([^"\'\r\n]+)["\']?'
+        ),
+        "论文使用指南版本声明": _match_version(
+            "docs/PAPER_USAGE_GUIDE.md", r"当前版本\s*\*\*v([0-9A-Za-z.+-]+)\*\*"
+        ),
     }
 
 

@@ -1,79 +1,79 @@
-# PhonTracer 架构与事实源
+# PhonTracer 架构与共享事实源
 
-本文面向维护者，说明主程序、Toolkit、CLI 与共享后端之间的边界与数据契约。
+本文面向维护者与二次开发者，说明主程序、Toolkit、CLI 与共享后端子包之间的职责边界及持久化数据契约。
 
 ## 组件关系
 
 ```text
-PhonTracer GUI ─┐
-Toolkit ────────┼─> modules/ 共享 Python 后端 ─> .teproj / TextGrid / Collection / 图表与表格
-CLI ────────────┘
+PhonTracer GUI (main.py / modules/gui/) ────────┐
+Toolkit (toolkit.py / modules/toolkit_ui/) ─────┼─> modules/ 共享后端子包 ─> .teproj / TextGrid / Collection / 图表与报告
+PhonTracerCLI (cli.py / modules/cli_app/) ──────┘
 ```
 
 ## 主入口与职责
 
-| 入口 | 文件 | 主要职责 |
+| 入口 | 顶层文件与界面包 | 主要职责 |
 |---|---|---|
-| 主程序 | `main.py`、`modules/app.py` | GUI 编排、发音人/条目状态、声学分析与人工精修复核 |
-| Toolkit | `toolkit.py` | 工程辅助工具、音频拆合、高级字表编辑、批处理与受控自定义脚本工作流 |
-| CLI | `cli.py` | 交互式与单次命令、脚本跑批、工程管理与一键导出打包，标准 JSON 协议通信 |
+| 主程序 (`PhonTracer`) | `main.py`、`modules/app.py`、`modules/gui/` | 桌面主界面编排、多发音人/条目状态管理、声谱图交互复核、参数隔离与科学图表导出 |
+| 独立工具箱 (`Toolkit`) | `toolkit.py`、`modules/toolkit_ui/` | 音频合并与自适应切分、TextGrid 转换、高级字表（`.ptwl`）编辑、工程预览与方法报告生成、自定义脚本沙箱面板 |
+| 命令行工作台 (`PhonTracerCLI`) | `cli.py`、`modules/cli_app/` | 交互式会话、单次命令与 `--script-file` 批处理、异常自动修复、`export_bundle` 一站式交付，全程输出标准 JSON |
 
-## 统一工程数据契约 (.teproj v1/v2)
+## 统一工程数据契约 (`.teproj` 1.0)
 
-`PhonTracer` 的持久化工程核心为 ZIP 归档中的 `project.json` 及关联音频/数据文件。数据契约遵循以下原则：
+`PhonTracer` 的持久化工程为 ZIP 归档（格式版本 `1.0`），核心由根目录 `project.json` 与 `audio/`、`data/` 资源目录构成：
 
-1. **顶层字表与结构（`groups`）**：
-   - 顶层 `groups` 数组保留字表的分组名、组备注、组标签及词项元数据；
-   - 即使词条尚未匹配音频或为空分组，保存时均予以完整保留，避免字表结构丢失。
+1. **顶层统一字表与分组结构（`groups`）**：
+   - 顶层 `groups` 数组保存分组名、组备注、组标签及词项级元数据（对应 `.ptwl` 高级字表结构）；
+   - 即使词条尚未关联录音或分组为空，保存时均完整保留，避免多发音人对照采录或分批分析时丢失字表结构。
 
-2. **发音人与条目（`speakers` 与 `items`）**：
-   - 事实源由 `speakers[spk_id].items` 统一管理；
-   - 每个发音人包含 `id`, `name`, `tab_mode`（多条独立音频 / 单条长音频），以及分组顺序列表 `project_groups`；
-   - 长音频模式下，全量基频缓存采用发音人级单一共享文件 `data/{spk_id}_long_pitch.npz`，避免各条目重复打包相同基频导致工程体积膨胀。
+2. **发音人与条目事实源（`speakers` 与 `items`）**：
+   - 运行时与持久化的核心条目事实源由 `speakers[spk_id].items` 统一维护；
+   - 每位发音人包含独立 `id`、`name`、`last_params`、`tab_mode`（`多条独立音频` / `单条长音频`）与分组顺序 `project_groups`；
+   - 长音频模式下，整段基频缓存在发音人级共享文件 `data/{spk_id}_long_pitch.npz` 中只存一份，条目仅保存局部窗口切片缓存，避免工程体积膨胀。
 
-3. **按需覆盖参数（`param_overrides`）**：
-   - 单条目的声学参数仅在用户发生个别微调时记录差异至 `item["param_overrides"]`，不再每条冗余复制全套默认参数。
+3. **单条参数按需覆盖（`param_overrides`）**：
+   - 单条目的声学参数仅在与所属发音人 `last_params` 不同时将差异键写入 `item["param_overrides"]`，不每条冗余复制默认参数，同时保证局部重算不污染其他词条。
 
-4. **运行态临时字段排除**：
-   - 保存至磁盘时，统一剥离临时运行态缓存字段（如 `preview_f0`, `preview_formants`, `warnings`, `has_empty_data`），保证归档轻量可移植。
+4. **运行态临时字段剥离**：
+   - 写入磁盘时统一剔除运行态对象与临时预览缓存（如 `snd`、`pitch`、`formant`、`preview_f0`、`preview_formants`、`warnings`、`has_empty_data`、`_dirty_*`），保持归档轻量可移植。
 
-5. **条目边界与切分契约**：
-   - 词条音段包含宏观时间 `macro_start`/`macro_end` 与微观人工边界 `start`/`end`；
-   - 多音节切分包含 `chars_bounds` 与 `inner_splits`，用户手动精修标记 `is_manual_edited` 在切换模式与保存时严格受到保护。
+5. **时间边界与手工精修保护**：
+   - 条目同时维护宏观切片边界 `macro_start`/`macro_end`、静音裁剪前边界 `raw_start`/`raw_end` 与当前有效边界 `start`/`end`；
+   - 多音节词条维护逐字区间 `chars_bounds` 与内部分界 `inner_splits`，手工调整边界或擦除散点后置位 `is_manual_edited = True`，在模式切换与工程保存中受保护。
 
-详细 JSON 校验规则见 [project.schema.json](project.schema.json)。
+完整容器限制、字段约定与兼容规则见 [`.teproj` 工程格式 1.0](PROJECT_FORMAT_V1.md) 与 [project.schema.json](project.schema.json)。
 
-## 共享事实源
+## 共享事实源与模块化子包
 
-新增能力优先落在以下共享层，避免 GUI、Toolkit 和 CLI 各自实现一套。
+新增或修改核心能力时应落在共享后端子包中，避免在 GUI、Toolkit 与 CLI 各自复制逻辑（顶层同名 `.py` 文件作为向后兼容门面保留导出）：
 
-| 领域 | 事实源 | 主要消费者 |
-|---|---|---|
-| 软件版本 | `modules/version.py` | 主程序、Toolkit、CLI、发布检查 |
-| 工程保存/导入 | `modules/project_manager.py` | 主程序、CLI 及共享工程工作流 |
-| 工程安全与兼容 | `modules/project_adaptor.py` | 主程序、Toolkit 数据处理、跨版本工程升级 |
-| 高级字表与容错解析 | `modules/wordlist_v2.py`、`modules/core/text_io.py` | GUI、Toolkit、CLI、字表解析与导出 |
-| TextGrid 转换 | `modules/textgrid_converter.py` | Toolkit 与 CLI |
-| 音频核心算法 | `modules/audio_core.py` | GUI、Toolkit、CLI 相关流程 |
-| 导出格式与样式 | `modules/data_utils.py`、`modules/export_service/` | GUI、CLI、报告生成器 |
-| 脚本 API/执行 | `modules/script_api.py`、`modules/script_runner.py` | Toolkit 与 CLI |
-| 受控工程变更 | `modules/project_patch.py` | 数据处理脚本与 Toolkit |
+| 领域 | 底层实现子包 / 模块 | 兼容门面文件 | 主要消费者 |
+|---|---|---|---|
+| 软件版本单一事实源 | `modules/version.py` | — | 主程序、Toolkit、CLI、安装包与发布校验脚本 |
+| 工程仓储、锁与安全迁移 | `modules/storage/`（`project_repository`、`schema_migrator`、`archive_security`、`workspace_lock`） | `modules/project_manager.py`、`modules/project_adaptor.py` | 主程序、Toolkit、CLI |
+| 声学信号处理与静音切分 | `modules/dsp/`（`sound_loader`、`pitch_tracker`、`formant_tracker`、`vad_splitter`） | `modules/audio_core.py` | 主程序、Toolkit、CLI |
+| 高级字表与草稿容错解析 | `modules/wordlist/`、`modules/core/text_io.py` | `modules/wordlist_v2.py`、`modules/wordlist_editor.py` | 主程序、Toolkit、CLI |
+| 科学图表引擎与导出服务 | `modules/chart_engine/`、`modules/export_service/` | `modules/acoustic_exporter.py`、`modules/data_utils.py` | 主程序、CLI、`export_bundle` |
+| 异常筛查与研究方法报告 | `modules/anomaly_detection.py`、`modules/reporting/` | `modules/report_generator.py` | 主程序项目树、Toolkit 工程预览、CLI |
+| 自定义脚本沙箱与内置库 | `modules/scripting/`（`sandbox_runner`、`builtin_scripts_catalog`、`context_api`） | `modules/script_runner.py`、`modules/script_api.py` | Toolkit 自定义脚本页签、CLI `run_script` |
+| 受控工程补丁写回 | `modules/project_patch.py` | — | 数据处理类沙箱脚本、Toolkit 与 CLI |
+| TextGrid 双向转换 | `modules/textgrid_converter.py` | — | 主程序、Toolkit、CLI |
 
 ## 状态与持久化原则
 
-- 当前工程内存事实源是 `speaker_manager.speakers[*].items`；界面树只是视图，不作为持久化事实源；
-- `ProjectManager.save_to_workspace()` 先写临时 JSON，再原子替换 `project.json`；导入使用临时工作区、校验、交换与回滚；
-- 工程资源必须位于归档中的 `audio/` 或 `data/`，禁止引用归档外部绝对路径；
-- `note/item_note`、`tags/item_tags`、`aliases/item_aliases`、`meta/item_meta` 统一由字段标准化机制映射，写入使用规范字段；
-- 普通/草稿字表（`.txt`）、表格字表（`.csv`）与高级字表（`.ptwl`/`.json`）在导入后均归一化为统一分组条目模型。
+- 运行时内存事实源为 `speaker_manager.speakers[*].items`；界面树控件仅作视图投影，不充当持久化事实源；
+- `ProjectManager.save_to_workspace()` 先写入 `.tmp` 临时文件并校验可序列化性，再原子替换 `project.json`；工程导入先在独立临时目录完成安全与资源校验，通过后再原子切换工作区，失败即回滚；
+- 归档内所有音频与缓存路径必须位于 `audio/` 或 `data/` 相对路径下，严禁写入宿主机绝对路径；
+- 历史别名字段 `item_note / item_tags / item_aliases / item_meta` 在持久化时统一归一化为 `note / tags / aliases / meta`；
+- 普通/草稿文本字表（`.txt`）、表格字表（`.csv`）与高级字表（`.ptwl`）导入后统一转换为相同的分组词项内存模型。
 
-## 自定义脚本边界
+## 自定义脚本沙箱边界
 
-脚本以 `def run(ctx):` 为入口，获取只读数据快照，并通过 `FigureResult`、`TableResult` 或 `ProjectPatchResult` 返回结果。工程修改由受控操作清单统一验证和写回。执行器依靠严格的 AST 语法检查（拦截私有属性和双下划线访问）、内置函数白名单与纯函数命名空间，确保沙箱安全。
+自定义脚本以 `def run(ctx):` 为入口，可选声明顶层 `PARAMS` 列表（由静态解析器提取并自动渲染界面参数控件或校验 CLI 入参）。脚本接收只读工程数据快照，允许导入白名单科学计算模块（`numpy`、`scipy`、`pandas`、`matplotlib`、受控 `parselmouth` 及安全标准库子集），并通过 `FigureResult`、`TableResult` 或 `ProjectPatchResult` 返回结果；任何针对工程数据的修改均须封装为受控补丁操作并通过 `modules/project_patch.py` 校验后写回。执行器通过 AST 语法静态审查（拦截双下划线属性、动态导入与文件/网络 I/O）及受限内置函数表保障执行边界。
 
-## 修改时的最低核对
+## 修改时的最低核对清单
 
-1. 改工程字段：同步工程规范、Schema（`project.schema.json`）、读写兼容和 GUI/CLI 测试。
-2. 改共享算法：检查全部消费者，不在入口层复制实现。
-3. 改版本：运行 `python scripts/check_release_version.py --expected vX.Y.Z`。
-4. 发布前：执行全量测试门禁（`python -m pytest -q tests`）。
+1. **变更工程字段**：同步更新 `docs/PROJECT_FORMAT_V1.md`、`docs/project.schema.json`、`modules/storage/schema_migrator.py` 及读写回滚测试。
+2. **变更共享算法或导出口径**：核对 GUI、Toolkit、CLI 三个入口行为一致，不在界面层硬编码分叉逻辑。
+3. **变更软件版本**：同步 `modules/version.py`、`installer.iss`、`README.md` 与 `CITATION.cff`，并运行 `python scripts/check_release_version.py --expected vX.Y.Z`。
+4. **发布与提交门禁**：运行 `python -m compileall -q main.py cli.py toolkit.py modules tests` 与 `python -m pytest -q tests`。

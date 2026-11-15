@@ -6,8 +6,8 @@
   "type": "object",
   "required": ["speakers"],
   "properties": {
-    "version": {"type": ["string", "number"], "description": "工程格式版本，如 '1.0' 或 '2.0'"},
-    "format_version": {"type": ["string", "number"], "description": "格式版本号"},
+    "version": {"type": ["string", "number"], "description": "工程格式版本，当前稳定版本为 '1.0'"},
+    "format_version": {"type": ["string", "number"], "description": "历史兼容格式版本号"},
     "software_version": {"type": "string"},
     "report_format_version": {"type": "string"},
     "save_time": {"type": "string"},
@@ -91,6 +91,7 @@
         "manual_segments": {"type": "array"},
         "last_selected_iid": {"type": ["string", "null"]},
         "speaker_meta": {"type": "object"},
+        "wordlist_doc": {"type": "object"},
         "items": {
           "type": "object",
           "additionalProperties": {"$ref": "#/$defs/item"}
