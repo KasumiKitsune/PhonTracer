@@ -274,8 +274,8 @@ PhonTracerCLI.exe --project session.teproj --script-file pipeline.txt
 ### <img src="https://img.icons8.com/material-rounded/24/000000/book.png" width="20" style="vertical-align: middle;"/> 详细手册与更多资源
 
 README 只提供快速概览。完整操作步骤、参数说明和进阶工作流请查看：
-- 📖 **[详细用户手册](assets/manual/manual.md)**
-- 📄 **[详细 HTML 用户手册](assets/manual/manual.html)**
+- 📖 **[完整使用手册（合订本）](assets/manual/manual.md)**
+- 📄 **[图文交互使用手册](assets/manual/manual.html)**
 
 #### 验证与测试
 
